@@ -34,6 +34,7 @@ pub enum Quality {
 
 pub struct Live {
     cam: CameraConfig,
+    relay: Arc<crate::relay::Relay>,
     pub quality: Quality,
     fps: Mutex<(u32, Instant, f32)>,
     env: Arc<RuntimeEnv>,
@@ -49,11 +50,13 @@ impl Live {
         cam: CameraConfig,
         env: Arc<RuntimeEnv>,
         quality: Quality,
+        relay: Arc<crate::relay::Relay>,
         cancel: CancellationToken,
     ) -> Arc<Self> {
         let use_gpu = env.hardware.hwaccel != "none";
         Arc::new(Self {
             cam,
+            relay,
             quality,
             fps: Mutex::new((0, Instant::now(), 0.0)),
             env,
@@ -126,36 +129,48 @@ impl Live {
 
     /// A full-resolution JPEG from the main stream.
     pub async fn snapshot(&self) -> Result<Bytes> {
-        let out = tokio::time::timeout(
-            Duration::from_secs(20),
-            Command::new(&self.env.ffmpeg_path)
-                .args(["-hide_banner", "-loglevel", "error"])
-                .args(ffmpeg::input_args(&self.cam.url, &self.cam.rtsp_transport))
-                .args([
-                    "-frames:v",
-                    "1",
-                    "-q:v",
-                    "2",
-                    "-f",
-                    "image2pipe",
-                    "-c:v",
-                    "mjpeg",
-                    "pipe:1",
-                ])
-                .stdin(Stdio::null())
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
-        .context("timed out grabbing snapshot")?
-        .context("running ffmpeg")?;
-        if out.stdout.is_empty() {
-            bail!(
-                "no image from camera: {}",
-                redact(String::from_utf8_lossy(&out.stderr).trim(), &self.cam.url)
-            );
+        // Uses the shared camera connection (no extra session on the camera).
+        let mut child = Command::new(&self.env.ffmpeg_path)
+            .args(["-hide_banner", "-loglevel", "error"])
+            .args(crate::relay::pipe_input_args())
+            .args([
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                "-f",
+                "image2pipe",
+                "-c:v",
+                "mjpeg",
+                "pipe:1",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .context("running ffmpeg")?;
+        let stop = CancellationToken::new();
+        let _feed = crate::relay::feed(
+            self.relay.subscribe(),
+            child.stdin.take().unwrap(),
+            stop.clone(),
+        );
+        let mut out = Vec::new();
+        let mut stdout = child.stdout.take().unwrap();
+        let r = tokio::time::timeout(Duration::from_secs(25), stdout.read_to_end(&mut out)).await;
+        stop.cancel();
+        let _ = child.kill().await;
+        r.context("timed out waiting for a picture from the camera")??;
+        if out.is_empty() {
+            let err = self
+                .relay
+                .status()
+                .error
+                .unwrap_or_else(|| "no picture".into());
+            bail!("no image from camera: {}", redact(&err, &self.cam.url));
         }
-        Ok(Bytes::from(out.stdout))
+        Ok(Bytes::from(out))
     }
 
     fn wanted(&self) -> bool {
@@ -217,22 +232,29 @@ impl Live {
         }
         let url = self.url().to_string();
         let mut cmd = Command::new(&self.env.ffmpeg_path);
-        cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error"]);
+        cmd.args(["-hide_banner", "-loglevel", "error"]);
         if use_gpu {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
         let mut child = cmd
             .args(["-fflags", "nobuffer", "-flags", "low_delay"])
-            .args(ffmpeg::input_args(&url, &self.cam.rtsp_transport))
+            .args(crate::relay::pipe_input_args())
             .args(["-an", "-vf", &vf, "-q:v", &live.quality.to_string()])
             .args(["-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .context("starting ffmpeg for live view")?;
         let mut stdout = child.stdout.take().context("no stdout")?;
+        let stop_feed = CancellationToken::new();
+        let _feed = crate::relay::feed(
+            self.relay.subscribe(),
+            child.stdin.take().context("no stdin")?,
+            stop_feed.clone(),
+        );
+        let _stop_on_exit = stop_feed.drop_guard();
         if let Some(stderr) = child.stderr.take() {
             let name = self.cam.name.clone();
             tokio::spawn(async move {

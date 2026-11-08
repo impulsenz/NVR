@@ -453,15 +453,6 @@ pub async fn probe_streams(ffmpeg: &str, url: &str, transport: &str) -> Result<V
     Ok(streams)
 }
 
-/// The first video stream's details.
-pub async fn video_info(ffmpeg: &str, url: &str, transport: &str) -> Option<StreamInfo> {
-    probe_streams(ffmpeg, url, transport)
-        .await
-        .ok()?
-        .into_iter()
-        .find(|s| s.kind == "video")
-}
-
 pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
     let info = probe_streams(ffmpeg, url, transport);
     let snap = async {

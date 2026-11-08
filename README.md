@@ -139,6 +139,12 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15 -t 30 -c:v libx264 -pix_fmt yu
 
 ## Notes
 
+- **One connection per camera stream:** the NVR connects to each stream once and shares it between
+  recording, the alert buffer, motion detection, AI and the live view. Many cameras (TP-Link Tapo, many
+  Hikvision/Dahua models) only allow 2–3 connections at a time and refuse more with errors like
+  *453 Not Enough Bandwidth*. If you still see that, close other apps that view the camera (the
+  manufacturer's app, another NVR, VLC) or restart the camera.
+
 - **H.265 cameras:** recording works, but not every browser plays H.265. Turn on *Convert recordings to
   H.264* for the camera, or download the file and use VLC. Previews and thumbnails work either way.
 - **Cloud AI** (Gemini, OpenAI…) sends camera pictures to that service. Set a requests-per-minute limit for
@@ -150,10 +156,11 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15 -t 30 -c:v libx264 -pix_fmt yu
 ## How it works
 
 ```
-camera ─ main stream ─► ffmpeg (copy) ─► 24/7 files            ─┐
-       │              └► ffmpeg (copy) ─► .buffer/ (rolling) ─► alert clips
-       └ sub-stream ──► ffmpeg (RGB, 5 fps) ─► motion detector ─► AI ─► events + thumbnails
-                     └► ffmpeg (JPEG) ─► WebSocket ─► browser grid  (HD likewise, on demand)
+camera ─ main stream ─► relay (1 connection) ─┬► 24/7 files
+                                              ├► .buffer/ (rolling) ─► alert clips
+                                              └► JPEG ─► WebSocket ─► browser (HD view)
+       └ sub-stream ──► relay (1 connection) ─┬► RGB 5 fps ─► motion detector ─► AI ─► alerts + thumbnails
+                                              └► JPEG ─► WebSocket ─► browser grid
 ```
 
 | File | Purpose |
@@ -164,6 +171,7 @@ camera ─ main stream ─► ffmpeg (copy) ─► 24/7 files            ─┐
 | `src/detect.rs` | Motion detection and event lifecycle |
 | `src/ai.rs` | AI providers (built-in YOLOX, CodeProject.AI/DeepStack, Ollama, Gemini, OpenAI-compatible) |
 | `src/events.rs` | Alert storage |
+| `src/relay.rs` | One shared connection per camera stream, fanned out to all users |
 | `src/live.rs` | Live JPEG streams |
 | `src/library.rs` | Recording search, timelines, export ranges |
 | `src/storage.rs` | Files, usage, retention |

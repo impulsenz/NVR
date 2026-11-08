@@ -103,8 +103,26 @@ document.addEventListener('click', (e) => {
 // Camera state helpers
 // ======================================================================
 function cam(id) { return status && status.cameras.find(c => c.id === id); }
+// Problems connecting to the camera itself (shared connection).
+function streamErrors(c) {
+  const out = [];
+  for (const [k, label] of [['main', 'Main stream'], ['sub', 'Sub-stream']]) {
+    const s = c.streams && c.streams[k];
+    if (s && s.state === 'retrying' && s.error) out.push(`${label}: ${explainError(s.error)}${s.retry_in ? ` (retrying in ${s.retry_in}s)` : ''}`);
+  }
+  return out;
+}
+// Plain-language hints for common camera replies.
+function explainError(e) {
+  if (/453|Not Enough Bandwidth/i.test(e)) return e + ' — the camera has too many connections open. Close other apps/NVRs viewing it, or restart the camera.';
+  if (/401|Unauthorized/i.test(e)) return e + ' — wrong username or password.';
+  if (/404|Not Found/i.test(e)) return e + ' — wrong stream path; try another URL format.';
+  if (/Connection refused|timed out|No route/i.test(e)) return e + ' — camera not reachable; check the IP address and that RTSP is turned on.';
+  return e;
+}
 function camState(c) {
   if (!c.enabled) return {cls: 'disabled', text: 'Disabled'};
+  if (c.streams && c.streams.main && c.streams.main.state === 'retrying') return {cls: 'retrying', text: 'Offline'};
   const rec = c.recorder || c.buffer;
   const st = rec ? rec.state : null;
   if (st === 'connecting') return {cls: 'connecting', text: 'Connecting'};
@@ -634,8 +652,8 @@ function updateFocus() {
     <dt>Detection</dt><dd>${!c.detection ? 'Off' : d ? (d.running ? `${d.motion ? 'Motion now' : 'Watching'}${c.ai ? ' + AI' : ''}` : 'Starting…') : 'Starting…'}</dd>
     ${d && d.last_event ? `<dt>Last alert</dt><dd>${fmtDate(d.last_event)}</dd>` : ''}
     <dt>Reconnects</dt><dd>${r ? r.restarts : 0}</dd>`;
-  const errs = [];
-  if (r && r.last_error && r.state !== 'recording') errs.push(r.last_error);
+  const errs = streamErrors(c);
+  if (!errs.length && r && r.last_error && r.state !== 'recording') errs.push(r.last_error);
   if (r && r.gpu_fallback) errs.push('GPU failed, using CPU: ' + (r.gpu_error || ''));
   if (d && d.ai_error) errs.push('AI: ' + d.ai_error);
   if (d && d.error) errs.push('Detection: ' + d.error);
@@ -1208,8 +1226,8 @@ function settingsTick() {
   }
 }
 function camErr(c) {
-  const r = c.recorder || c.buffer, d = c.detect, out = [];
-  if (r && r.last_error && r.state !== 'recording') out.push(r.last_error);
+  const r = c.recorder || c.buffer, d = c.detect, out = streamErrors(c);
+  if (!out.length && r && r.last_error && r.state !== 'recording') out.push(r.last_error);
   if (r && r.gpu_fallback) out.push('GPU failed – using CPU');
   if (d && d.ai_error) out.push('AI: ' + d.ai_error);
   return out.length ? `<div class="sub err">${esc(out.join(' · '))}</div>` : '';
@@ -1445,7 +1463,7 @@ async function testCamera() {
     try {
       const [r, pv] = await Promise.all([api('api/probe', {method: 'POST', json: {url, rtsp_transport: transport}}), api('api/preview', {method: 'POST', json: {url, rtsp_transport: transport}})]);
       const info = $('pv-info-' + i), msg = $('pv-msg-' + i);
-      if (!r.ok) { msg.innerHTML = `<span class="err">✗ ${esc(r.error || 'Could not connect')}</span>`; info.innerHTML = `<b>${label}</b>`; return; }
+      if (!r.ok) { msg.innerHTML = `<span class="err">✗ ${esc(explainError(r.error || 'Could not connect'))}</span>`; info.innerHTML = `<b>${label}</b>`; return; }
       const img = $('pv-' + i);
       img.onload = () => msg.hidden = true;
       img.src = pv.url; previewImgs.push(img);

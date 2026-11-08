@@ -13,6 +13,7 @@ mod live;
 mod logs;
 mod manager;
 mod recorder;
+mod relay;
 mod storage;
 mod sysmon;
 mod web;

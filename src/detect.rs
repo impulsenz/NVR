@@ -53,7 +53,7 @@ pub struct Detector {
     status: Mutex<DetectStatus>,
     latest: Mutex<Option<Frame>>,
     /// (width, height) of the sub-stream, if known.
-    source_size: Option<(u32, u32)>,
+    relay: Arc<crate::relay::Relay>,
 }
 
 struct Active {
@@ -70,7 +70,7 @@ impl Detector {
         ai: Arc<AiHandle>,
         store: Arc<EventStore>,
         buffer: Option<Arc<EventBuffer>>,
-        source_size: Option<(u32, u32)>,
+        relay: Arc<crate::relay::Relay>,
     ) -> Arc<Self> {
         Arc::new(Self {
             cam,
@@ -80,7 +80,7 @@ impl Detector {
             buffer,
             status: Mutex::new(DetectStatus::default()),
             latest: Mutex::new(None),
-            source_size,
+            relay,
         })
     }
 
@@ -93,8 +93,14 @@ impl Detector {
         self.latest.lock().unwrap().clone()
     }
 
-    fn frame_size(&self) -> (u32, u32) {
-        let (sw, sh) = self.source_size.unwrap_or((16, 9));
+    /// Analysis size: 640 px wide, keeping the sub-stream's shape.
+    async fn frame_size(&self) -> (u32, u32) {
+        // Holding a subscription makes the relay connect.
+        let _connect = self.relay.subscribe();
+        let info = self.relay.wait_info(Duration::from_secs(30)).await;
+        let (sw, sh) = info
+            .and_then(|i| Some((i.width?, i.height?)))
+            .unwrap_or((16, 9));
         let w = ANALYSIS_WIDTH.min(sw.max(2)) & !1;
         let h = (((w as f32 * sh as f32 / sw.max(1) as f32).round() as u32).max(2)) & !1;
         (w, h)
@@ -147,15 +153,15 @@ impl Detector {
         active: &mut Option<Active>,
     ) -> Result<()> {
         let d = &self.cam.detect;
-        let (w, h) = self.frame_size();
+        let (w, h) = self.frame_size().await;
         let url = self.cam.live_url().to_string();
         let mut cmd = tokio::process::Command::new(&self.env.ffmpeg_path);
-        cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error"]);
+        cmd.args(["-hide_banner", "-loglevel", "error"]);
         if use_gpu {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
         let mut child = cmd
-            .args(ffmpeg::input_args(&url, &self.cam.rtsp_transport))
+            .args(crate::relay::pipe_input_args())
             .args([
                 "-an",
                 "-vf",
@@ -166,13 +172,20 @@ impl Detector {
                 "rawvideo",
                 "pipe:1",
             ])
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .context("starting ffmpeg for detection")?;
         let mut stdout = child.stdout.take().context("no stdout")?;
+        let stop_feed = CancellationToken::new();
+        let _feed = crate::relay::feed(
+            self.relay.subscribe(),
+            child.stdin.take().context("no stdin")?,
+            stop_feed.clone(),
+        );
+        let _stop_on_exit = stop_feed.drop_guard();
         if let Some(stderr) = child.stderr.take() {
             let name = self.cam.name.clone();
             tokio::spawn(async move {

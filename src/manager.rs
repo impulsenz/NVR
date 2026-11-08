@@ -10,9 +10,9 @@ use crate::config::{
 };
 use crate::detect::Detector;
 use crate::events::EventStore;
-use crate::ffmpeg::{self, StreamInfo};
 use crate::live::{Live, Quality};
 use crate::recorder::{RecSpec, Recorder};
+use crate::relay::Relay;
 use crate::storage::{self, CameraUsage};
 use crate::sysmon::Monitor;
 use anyhow::{Context, Result, bail};
@@ -59,8 +59,9 @@ pub struct CameraRuntime {
     pub live_sub: Arc<Live>,
     pub live_main: Arc<Live>,
     pub events: Arc<EventStore>,
-    pub info_main: Mutex<Option<StreamInfo>>,
-    pub info_sub: Mutex<Option<StreamInfo>>,
+    /// Shared camera connections (the same one twice when there is no sub-stream).
+    pub relay_main: Arc<Relay>,
+    pub relay_sub: Arc<Relay>,
     cancel: CancellationToken,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -77,6 +78,28 @@ impl CameraRuntime {
         let mut tasks = Vec::new();
         let segment = cfg.segment_seconds(env.segment_seconds);
 
+        // One connection per camera stream, shared by everything below.
+        let relay_main = Relay::new(
+            &cfg.name,
+            "main stream",
+            &cfg.url,
+            &cfg.rtsp_transport,
+            &env.ffmpeg_path,
+            cancel.clone(),
+        );
+        let relay_sub = if cfg.has_sub() {
+            Relay::new(
+                &cfg.name,
+                "sub-stream",
+                &cfg.live_url,
+                &cfg.rtsp_transport,
+                &env.ffmpeg_path,
+                cancel.clone(),
+            )
+        } else {
+            relay_main.clone()
+        };
+
         let recorder = cfg.record_mode.continuous_stream().map(|use_sub| {
             let spec = RecSpec {
                 label: if use_sub && cfg.has_sub() {
@@ -84,10 +107,10 @@ impl CameraRuntime {
                 } else {
                     "recording"
                 },
-                url: if use_sub {
-                    cfg.live_url().to_string()
+                relay: if use_sub {
+                    relay_sub.clone()
                 } else {
-                    cfg.url.clone()
+                    relay_main.clone()
                 },
                 dir: dir.clone(),
                 prefix: cfg.id.clone(),
@@ -105,7 +128,7 @@ impl CameraRuntime {
             );
             let spec = RecSpec {
                 label: "event buffer",
-                url: cfg.url.clone(),
+                relay: relay_main.clone(),
                 dir: buf.dir.clone(),
                 prefix: buffer::PREFIX.into(),
                 segment_seconds: buffer::BUFFER_SEGMENT_SECONDS,
@@ -127,66 +150,53 @@ impl CameraRuntime {
             tasks.push(tokio::spawn(r.clone().run()));
         }
 
-        let live_main = Live::new(cfg.clone(), env.clone(), Quality::Main, cancel.clone());
+        let live_main = Live::new(
+            cfg.clone(),
+            env.clone(),
+            Quality::Main,
+            relay_main.clone(),
+            cancel.clone(),
+        );
         let live_sub = if cfg.has_sub() {
-            Live::new(cfg.clone(), env.clone(), Quality::Sub, cancel.clone())
+            Live::new(
+                cfg.clone(),
+                env.clone(),
+                Quality::Sub,
+                relay_sub.clone(),
+                cancel.clone(),
+            )
         } else {
             live_main.clone()
         };
 
-        let rt = Arc::new(Self {
+        let detector = (cfg.detection_enabled()).then(|| {
+            Detector::new(
+                cfg.clone(),
+                env.clone(),
+                ai,
+                events.clone(),
+                event_buffer,
+                relay_sub.clone(),
+            )
+        });
+        if let Some(d) = &detector {
+            tasks.push(tokio::spawn(d.clone().run(cancel.clone())));
+        }
+
+        Arc::new(Self {
             dir,
             recorder,
             buffer_recorder,
-            detector: Mutex::new(None),
+            detector: Mutex::new(detector),
             live_sub,
             live_main,
             events,
-            info_main: Mutex::new(None),
-            info_sub: Mutex::new(None),
-            cancel: cancel.clone(),
+            relay_main,
+            relay_sub,
+            cancel,
             tasks: Mutex::new(tasks),
             cfg,
-        });
-
-        // Learn the streams' size and frame rate, then start detection
-        // (which needs the sub-stream's picture size).
-        let me = rt.clone();
-        let task = tokio::spawn(async move {
-            if !me.cfg.enabled {
-                return;
-            }
-            let c = &me.cfg;
-            let (main, sub) = tokio::join!(
-                ffmpeg::video_info(&env.ffmpeg_path, &c.url, &c.rtsp_transport),
-                async {
-                    if c.has_sub() {
-                        ffmpeg::video_info(&env.ffmpeg_path, &c.live_url, &c.rtsp_transport).await
-                    } else {
-                        None
-                    }
-                }
-            );
-            let sub = sub.or_else(|| main.clone());
-            *me.info_main.lock().unwrap() = main;
-            *me.info_sub.lock().unwrap() = sub.clone();
-            if me.cancel.is_cancelled() || !c.detection_enabled() {
-                return;
-            }
-            let size = sub.and_then(|s| Some((s.width?, s.height?)));
-            let det = Detector::new(
-                c.clone(),
-                env.clone(),
-                ai,
-                me.events.clone(),
-                event_buffer,
-                size,
-            );
-            *me.detector.lock().unwrap() = Some(det.clone());
-            det.run(me.cancel.clone()).await;
-        });
-        rt.tasks.lock().unwrap().push(task);
-        rt
+        })
     }
 
     /// Stop recording (finishing the current files), detection and live view.

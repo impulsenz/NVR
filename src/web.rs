@@ -145,7 +145,11 @@ async fn status(State(m): App) -> Response {
                 "detect": c.detector().map(|d| d.status()),
                 "live_fps": { "sub": c.live_sub.fps(), "main": c.live_main.fps() },
                 "viewers": c.live_sub.viewers() + c.live_main.viewers(),
-                "info": { "main": *c.info_main.lock().unwrap(), "sub": *c.info_sub.lock().unwrap() },
+                "info": { "main": c.relay_main.info(), "sub": c.relay_sub.info() },
+                "streams": {
+                    "main": c.relay_main.status(),
+                    "sub": c.cfg.has_sub().then(|| c.relay_sub.status()),
+                },
             })
         })
         .collect();
@@ -363,11 +367,51 @@ struct StreamReq {
     rtsp_transport: String,
 }
 
+/// A running camera connection for this URL, if the NVR already has one.
+/// Using it avoids opening another session on the camera (many cameras
+/// only allow two or three).
+fn running_stream(m: &Manager, url: &str) -> Option<(Arc<crate::manager::CameraRuntime>, Quality)> {
+    m.cameras().into_iter().find_map(|c| {
+        if c.cfg.url == url {
+            Some((c, Quality::Main))
+        } else if c.cfg.has_sub() && c.cfg.live_url == url {
+            Some((c, Quality::Sub))
+        } else {
+            None
+        }
+    })
+}
+
 async fn probe(State(m): App, Json(req): Json<StreamReq>) -> Response {
     if req.url.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "enter a stream URL first");
     }
     let ffmpeg = m.config().server.ffmpeg_path;
+    if let Some((c, q)) = running_stream(&m, req.url.trim()) {
+        let relay = if q == Quality::Main {
+            c.relay_main.clone()
+        } else {
+            c.relay_sub.clone()
+        };
+        let _connect = relay.subscribe();
+        let info = relay.wait_info(Duration::from_secs(20)).await;
+        let mut res = ffmpeg::ProbeResult {
+            ok: info.is_some(),
+            ..Default::default()
+        };
+        match info {
+            Some(i) => res.streams.push(i),
+            None => {
+                res.error = Some(
+                    relay
+                        .status()
+                        .error
+                        .unwrap_or_else(|| "no picture from the camera yet".into()),
+                )
+            }
+        }
+        return Json(res).into_response();
+    }
     Json(ffmpeg::probe(&ffmpeg, req.url.trim(), &req.rtsp_transport).await).into_response()
 }
 
@@ -375,6 +419,12 @@ async fn probe(State(m): App, Json(req): Json<StreamReq>) -> Response {
 async fn start_preview(State(m): App, Json(req): Json<StreamReq>) -> Response {
     if req.url.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "enter a stream URL first");
+    }
+    // Already connected: show the NVR's own live stream instead of a new session.
+    if let Some((c, q)) = running_stream(&m, req.url.trim()) {
+        let q = if q == Quality::Main { "main" } else { "sub" };
+        return Json(json!({ "url": format!("live/{}/stream.mjpeg?q={q}", c.cfg.id) }))
+            .into_response();
     }
     let token = format!(
         "{:x}{:x}",
@@ -518,34 +568,11 @@ async fn grab_frame(
 ) -> anyhow::Result<crate::imgutil::Frame> {
     let ffmpeg = m.config().server.ffmpeg_path;
     let (w, h) = (640u32, 360u32);
-    let out = tokio::time::timeout(
-        Duration::from_secs(20),
-        tokio::process::Command::new(ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error"])
-            .args(ffmpeg::input_args(c.cfg.live_url(), &c.cfg.rtsp_transport))
-            .args([
-                "-frames:v",
-                "1",
-                "-vf",
-                &format!("scale={w}:{h}"),
-                "-pix_fmt",
-                "rgb24",
-                "-f",
-                "rawvideo",
-                "pipe:1",
-            ])
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await??;
-    if out.stdout.len() != (w * h * 3) as usize {
-        anyhow::bail!("could not get a picture from the camera");
-    }
+    let rgb = crate::relay::grab_rgb(&c.relay_sub, &ffmpeg, w, h).await?;
     Ok(crate::imgutil::Frame {
         width: w,
         height: h,
-        rgb: Arc::new(out.stdout),
+        rgb: Arc::new(rgb),
     })
 }
 

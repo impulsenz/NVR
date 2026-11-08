@@ -11,8 +11,8 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -56,11 +56,12 @@ struct Inner {
 }
 
 /// What one recorder writes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RecSpec {
     /// "continuous" or "buffer" (shown in logs).
     pub label: &'static str,
-    pub url: String,
+    /// Shared camera connection this recorder reads from.
+    pub relay: Arc<crate::relay::Relay>,
     pub dir: std::path::PathBuf,
     /// File name prefix (files are `<prefix>_YYYY-MM-DD_HH-MM-SS.mp4`).
     pub prefix: String,
@@ -165,7 +166,7 @@ impl Recorder {
             .join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", spec.prefix));
 
         let mut cmd = Command::new(&env.ffmpeg_path);
-        // stdin stays open so we can send "q" for a clean stop.
+        // Input comes from the shared camera connection via stdin.
         cmd.args([
             "-hide_banner",
             "-loglevel",
@@ -199,10 +200,10 @@ impl Recorder {
             }
         }
         cmd.args(["-fflags", "+genpts"])
-            .args(ffmpeg::input_args(&spec.url, &cam.rtsp_transport))
+            .args(crate::relay::pipe_input_args())
             .args(["-map", "0:v:0"]);
         if cam.record_audio {
-            cmd.args(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "64k"]);
+            cmd.args(["-map", "0:a:0?", "-c:a", "copy"]);
         } else {
             cmd.arg("-an");
         }
@@ -260,7 +261,7 @@ impl Recorder {
 
             self.set_state(RecState::Connecting);
             let use_gpu = self.use_gpu.load(Ordering::SeqCst);
-            info!("{tag}: connecting to {}", mask_url(&self.spec.url));
+            info!("{tag}: starting ({})", mask_url(self.spec.relay.url()));
             let (mut child, gpu_desc) = match self.spawn_ffmpeg(use_gpu) {
                 Ok(c) => c,
                 Err(e) => {
@@ -279,8 +280,11 @@ impl Recorder {
                 s.gpu = gpu_desc;
                 s.recorded_seconds = 0.0;
             });
-            // `Child::wait()` closes stdin, so keep it separately for the "q" command.
-            let stdin = child.stdin.take();
+            // Feed the camera stream in; closing it makes ffmpeg finish its file.
+            let stop_feed = CancellationToken::new();
+            let _feeder = child.stdin.take().map(|stdin| {
+                crate::relay::feed(self.spec.relay.subscribe(), stdin, stop_feed.clone())
+            });
             let started = Instant::now();
             self.inner.lock().unwrap().last_progress = Instant::now();
             if let Some(stdout) = child.stdout.take() {
@@ -308,7 +312,7 @@ impl Recorder {
             let reason = match outcome {
                 Exit::Stopped | Exit::Cancelled => {
                     info!("{tag}: stopping");
-                    graceful_stop(&mut child, stdin).await;
+                    graceful_stop(&mut child, &stop_feed).await;
                     self.set_state(RecState::Idle);
                     if matches!(outcome, Exit::Cancelled) {
                         return;
@@ -430,11 +434,9 @@ enum Exit {
 }
 
 /// Ask ffmpeg to quit cleanly (so the current file is finalized), then kill it.
-async fn graceful_stop(child: &mut Child, stdin: Option<ChildStdin>) {
-    if let Some(mut stdin) = stdin {
-        let _ = stdin.write_all(b"q").await;
-        let _ = stdin.flush().await;
-    }
+async fn graceful_stop(child: &mut Child, stop_feed: &CancellationToken) {
+    // End of input: ffmpeg writes out the rest of the file and exits.
+    stop_feed.cancel();
     if tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await
         .is_err()
