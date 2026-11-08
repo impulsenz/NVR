@@ -944,6 +944,31 @@ fn iou(a: &Detection, b: &Detection) -> f32 {
     if union <= 0.0 { 0.0 } else { inter / union }
 }
 
+/// Two boxes that are most likely the same thing (a cat also detected as a
+/// person, or the same object a moment later).
+pub fn same_object(a: &Detection, b: &Detection) -> bool {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.w).min(b.x + b.w);
+    let y1 = (a.y + a.h).min(b.y + b.h);
+    let inter = (x1 - x0).max(0.0) * (y1 - y0).max(0.0);
+    let smaller = (a.w * a.h).min(b.w * b.h);
+    iou(a, b) > 0.45 || (smaller > 0.0 && inter / smaller > 0.75)
+}
+
+/// One answer per object: when the same object is recognized as two
+/// things (cat 80%, person 60%), keep only the more confident one.
+pub fn best_per_object(mut dets: Vec<Detection>) -> Vec<Detection> {
+    dets.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let mut keep: Vec<Detection> = Vec::new();
+    for d in dets {
+        if !keep.iter().any(|k| same_object(k, &d)) {
+            keep.push(d);
+        }
+    }
+    keep
+}
+
 /// Non-maximum suppression per label.
 pub fn nms(mut dets: Vec<Detection>, thr: f32) -> Vec<Detection> {
     dets.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -1002,6 +1027,26 @@ mod tests {
         assert_eq!(normalize_label("bus"), "bus");
         assert_eq!(normalize_label("Bicycle"), "bicycle");
         assert_eq!(normalize_label("vehicle"), "car");
+    }
+
+    #[test]
+    fn one_label_per_object() {
+        let d = |l: &str, s: f32, x: f32| Detection {
+            label: l.into(),
+            score: s,
+            x,
+            y: 0.2,
+            w: 0.2,
+            h: 0.3,
+            desc: String::new(),
+        };
+        let k = best_per_object(vec![
+            d("person", 0.6, 0.1),
+            d("cat", 0.8, 0.11),
+            d("dog", 0.7, 0.6),
+        ]);
+        let labels: Vec<&str> = k.iter().map(|x| x.label.as_str()).collect();
+        assert_eq!(labels, ["cat", "dog"]);
     }
 
     #[test]

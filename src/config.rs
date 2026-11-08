@@ -46,6 +46,8 @@ pub struct Config {
     pub ai: AiConfig,
     pub cloud: CloudConfig,
     pub dashboard: DashboardConfig,
+    /// Saved recording / motion / AI settings to apply to cameras.
+    pub profiles: Vec<Profile>,
     pub cameras: Vec<CameraConfig>,
 
     // Version 0.1 single-camera format; migrated on load.
@@ -596,6 +598,43 @@ impl Default for PtzConfig {
             speed: 0.5,
             invert_pan: false,
             invert_tilt: false,
+        }
+    }
+}
+
+/// A named set of recording, motion and AI settings that can be applied to
+/// any camera (the camera's own detection mask is kept).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Profile {
+    pub name: String,
+    pub record_mode: RecordMode,
+    pub schedule_enabled: bool,
+    pub schedule: Schedule,
+    pub record_audio: bool,
+    pub transcode: bool,
+    pub record_fps: u32,
+    pub segment_seconds: u64,
+    pub retention_days: u64,
+    pub max_storage_gb: f64,
+    pub detect: DetectConfig,
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        let c = CameraConfig::default();
+        Self {
+            name: String::new(),
+            record_mode: c.record_mode,
+            schedule_enabled: c.schedule_enabled,
+            schedule: c.schedule,
+            record_audio: c.record_audio,
+            transcode: c.transcode,
+            record_fps: c.record_fps,
+            segment_seconds: c.segment_seconds,
+            retention_days: c.retention_days,
+            max_storage_gb: c.max_storage_gb,
+            detect: c.detect,
         }
     }
 }

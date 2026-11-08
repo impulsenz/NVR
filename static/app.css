@@ -349,3 +349,6 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
 #sys-legend span { cursor: pointer; user-select: none; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
 #sys-legend span.off { opacity: .4; text-decoration: line-through; }
 #sys-legend span:hover { border-color: var(--accent); }
+.profile-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--accent2); border-radius: 8px; }
+.profile-bar select { max-width: 240px; }
+.profile-bar .hint { flex-basis: 100%; margin: 0; }

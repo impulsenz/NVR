@@ -522,6 +522,19 @@ impl Manager {
         self.commit(cfg)
     }
 
+    pub async fn update_profiles(&self, mut p: Vec<crate::config::Profile>) -> Result<()> {
+        let _g = self.edit.lock().await;
+        for x in &mut p {
+            x.name = x.name.trim().to_string();
+            anyhow::ensure!(!x.name.is_empty(), "a profile needs a name");
+            // The mask belongs to a camera's view, not to a profile.
+            x.detect.mask.clear();
+        }
+        let mut cfg = self.config();
+        cfg.profiles = p;
+        self.commit(cfg)
+    }
+
     /// Apply settings. Returns true if a program restart is needed.
     pub async fn update_settings(&self, up: SettingsUpdate) -> Result<bool> {
         let _g = self.edit.lock().await;

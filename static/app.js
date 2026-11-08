@@ -2015,6 +2015,12 @@ async function openCameraDialog(id, clone) {
   $('f-cam').innerHTML = `
     <div class="head"><h2>${clone ? 'Clone camera' : id ? 'Edit camera' : 'Add camera'}</h2><button type="button" class="small" data-close>✕</button></div>
     <div class="body">
+      <div class="profile-bar"><b>Profile</b>
+        <select id="c-prof"><option value="">Choose a saved profile…</option></select>
+        <button type="button" class="small" id="c-prof-apply" title="Fill in this profile's recording, motion and AI settings">Apply</button>
+        <button type="button" class="small" id="c-prof-save" title="Save this camera's recording, motion and AI settings as a profile">💾 Save as profile…</button>
+        <button type="button" class="small" id="c-prof-del" title="Delete the chosen profile">✕</button>
+        <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
       <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
@@ -2080,7 +2086,7 @@ async function openCameraDialog(id, clone) {
         <div><div class="row"><input type="range" id="d-contrast" min="4" max="100" value="${c.detect.min_contrast}" style="flex:1"><span id="d-contrast-v" class="muted" style="width:40px">${c.detect.min_contrast}</span></div>
           <div class="hint">How different a pixel must be from the background to count as changed. Lower = more sensitive (night/IR may need lower); higher ignores noise and small light changes.</div></div>
         <label for="d-objpx">Min. object size</label>
-        <div><div class="row"><input type="number" id="d-objpx" min="0" max="230400" step="50" value="${c.detect.min_object_px}" style="width:120px"><span class="muted">pixels (of a 640×360 picture)</span></div>
+        <div><div class="row"><input type="number" id="d-objpx" step="any" min="0" max="230400" value="${c.detect.min_object_px}" style="width:120px"><span class="muted">pixels (of a 640×360 picture)</span></div>
           <div class="hint">Moving areas smaller than this are ignored (rain, insects, noise). For scale: a person filling a quarter of the picture height ≈ 2,000 px; far away ≈ 200 px. Use the live readout below to choose.</div></div>
         <label for="d-make">Make time</label>
         <div class="row"><input type="number" id="d-make" min="0" max="30" step="0.1" value="${c.detect.make_time_ms / 1000}" style="width:120px"><span class="muted">seconds of motion before it triggers</span></div>
@@ -2147,6 +2153,14 @@ async function openCameraDialog(id, clone) {
     f.querySelectorAll('#c-tabs button').forEach(x => x.classList.toggle('active', x === b));
     f.querySelectorAll('[data-tab]').forEach(t => t.hidden = t.dataset.tab !== b.dataset.t);
   });
+  setupProfiles();
+  // A field the browser rejects may be on a hidden tab: show that tab and say why.
+  f.addEventListener('invalid', (e) => {
+    const tab = e.target.closest('[data-tab]');
+    if (tab && tab.hidden) f.querySelector(`#c-tabs button[data-t="${tab.dataset.tab}"]`).click();
+    $('c-err').hidden = false;
+    $('c-err').textContent = `${(f.querySelector(`label[for="${e.target.id}"]`) || {}).textContent || 'A field'}: ${e.target.validationMessage}`;
+  }, true);
   const syncSched = () => f.querySelectorAll('.sched').forEach(e => e.hidden = !chk('c-sched-on'));
   $('c-sched-on').onchange = syncSched; syncSched();
   // Object recognition runs only on motion, so it needs motion detection.
@@ -2359,6 +2373,60 @@ function collectCamera() {
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int')},
   };
+}
+// ---------- recording profiles ----------
+const PROFILE_KEYS = ['record_mode', 'schedule_enabled', 'schedule', 'record_audio', 'transcode', 'record_fps', 'segment_seconds', 'retention_days', 'max_storage_gb', 'detect'];
+function setupProfiles() {
+  const sel = $('c-prof'), msg = (t) => $('c-prof-msg').textContent = t;
+  const list = () => (settings && settings.profiles) || [];
+  const fill = (cur) => {
+    sel.innerHTML = '<option value="">Choose a saved profile…</option>' + list().map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('');
+    if (cur != null) sel.value = String(cur);
+  };
+  fill();
+  const save = async (profiles) => { await api('api/profiles', {method: 'PUT', json: profiles}); settings.profiles = profiles; };
+  $('c-prof-apply').onclick = () => {
+    const p = list()[+sel.value];
+    if (sel.value === '' || !p) return msg('Choose a profile first.');
+    applyProfile(p);
+    msg(`Applied “${p.name}” — check the Recording and Motion & AI tabs, then Save camera.`);
+  };
+  sel.onchange = () => { if (sel.value !== '') $('c-prof-apply').click(); };
+  $('c-prof-save').onclick = async () => {
+    const cur = sel.value !== '' ? list()[+sel.value] : null;
+    const name = (prompt('Profile name (an existing name is replaced):', cur ? cur.name : '') || '').trim();
+    if (!name) return;
+    const body = collectCamera(), p = {name};
+    for (const k of PROFILE_KEYS) p[k] = JSON.parse(JSON.stringify(body[k]));
+    p.detect.mask = '';
+    const profiles = list().filter(x => x.name.toLowerCase() !== name.toLowerCase()).concat([p]);
+    try { await save(profiles); fill(profiles.length - 1); msg(`Saved profile “${name}”. Choose it when editing any camera.`); } catch (e) { msg(e.message); }
+  };
+  $('c-prof-del').onclick = async () => {
+    const p = list()[+sel.value];
+    if (sel.value === '' || !p || !confirm(`Delete the profile “${p.name}”? Cameras keep their settings.`)) return;
+    try { await save(list().filter(x => x !== p)); fill(); msg(`Deleted “${p.name}”.`); } catch (e) { msg(e.message); }
+  };
+}
+// Put a profile's settings into the camera form (the camera's mask stays).
+function applyProfile(p) {
+  const set = (id, v) => { const el = $(id); if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = String(v); };
+  const r = document.querySelector(`input[name=c-mode][value="${p.record_mode}"]`); if (r) r.checked = true;
+  set('c-sched-on', p.schedule_enabled);
+  document.querySelectorAll('#c-days input').forEach(i => i.checked = p.schedule.days.includes(+i.value));
+  set('c-start', p.schedule.start); set('c-end', p.schedule.end);
+  set('c-audio', p.record_audio); set('c-transcode', p.transcode); set('c-fps', p.record_fps);
+  set('c-seg', p.segment_seconds); if ($('c-seg').value === '') $('c-seg').value = '0';
+  set('c-ret', p.retention_days); set('c-max', p.max_storage_gb);
+  const d = p.detect;
+  set('d-motion', d.motion); set('d-contrast', d.min_contrast); set('d-objpx', d.min_object_px); set('d-make', d.make_time_ms / 1000);
+  set('d-travel', d.min_travel_px); set('d-ai', d.ai); set('d-conf', Math.round(d.min_confidence * 100));
+  if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
+  document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
+  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval);
+  // Let the form update anything that depends on these (hidden sections, hints).
+  for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
+  $('d-objpx') && $('d-objpx').dispatchEvent(new Event('input', {bubbles: true}));
 }
 async function finishSave(body) {
   const err = (m) => { $('c-err').hidden = false; $('c-err').textContent = m; };

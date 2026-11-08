@@ -61,6 +61,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/logs/download", get(download_logs))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/dashboard", put(put_dashboard))
+        .route("/api/profiles", get(get_profiles).put(put_profiles))
         .route("/api/config/export", get(export_config))
         .route("/api/config/import", post(import_config))
         .route("/api/cameras", get(list_cameras).post(add_camera))
@@ -279,6 +280,17 @@ async fn get_settings(State(m): App) -> Response {
 async fn put_settings(State(m): App, Json(up): Json<SettingsUpdate>) -> Response {
     match m.update_settings(up).await {
         Ok(restart) => Json(json!({ "ok": true, "restart_required": restart })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn get_profiles(State(m): App) -> Response {
+    Json(m.config().profiles).into_response()
+}
+
+async fn put_profiles(State(m): App, Json(p): Json<Vec<crate::config::Profile>>) -> Response {
+    match m.update_profiles(p).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => bad(e),
     }
 }

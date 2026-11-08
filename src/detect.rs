@@ -119,6 +119,8 @@ struct Active {
     thumb_at: Instant,
     /// Largest motion seen, for picking the motion thumbnail.
     motion_best: f32,
+    /// Recent recognitions (to settle one label per object).
+    seen: Vec<(Detection, Instant)>,
 }
 
 impl Detector {
@@ -473,6 +475,7 @@ impl Detector {
             thumb_score: -1.0,
             thumb_at: Instant::now() - Duration::from_secs(10),
             motion_best: 0.0,
+            seen: Vec::new(),
         }
     }
 
@@ -528,15 +531,54 @@ impl Detector {
                 return;
             }
         };
-        let hits: Vec<Detection> = dets
+        // The same object recognized as two things: keep the more confident
+        // one (before choosing which objects alert, so a cat that also
+        // looks a bit like a person counts as a cat).
+        let mut hits: Vec<Detection> = crate::ai::best_per_object(dets)
             .into_iter()
             .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
             .collect();
+        // ...and across the pictures of this alert.
+        if let Some(a) = active.as_mut() {
+            a.seen
+                .retain(|(_, t)| t.elapsed() < Duration::from_secs(15));
+            hits.retain(|h| {
+                !a.seen.iter().any(|(s, _)| {
+                    s.label != h.label && s.score > h.score && crate::ai::same_object(s, h)
+                })
+            });
+            for h in &hits {
+                // A more confident answer for something already labelled
+                // differently: that earlier label was wrong.
+                let wrong: Vec<String> = a
+                    .seen
+                    .iter()
+                    .filter(|(s, _)| {
+                        s.label != h.label && s.score < h.score && crate::ai::same_object(s, h)
+                    })
+                    .map(|(s, _)| s.label.clone())
+                    .collect();
+                for w in wrong {
+                    let elsewhere = a
+                        .seen
+                        .iter()
+                        .any(|(s, _)| s.label == w && !crate::ai::same_object(s, h));
+                    if !elsewhere {
+                        a.event.labels.retain(|l| l.label != w);
+                    }
+                    a.seen
+                        .retain(|(s, _)| !(s.label == w && crate::ai::same_object(s, h)));
+                }
+            }
+        }
         if hits.is_empty() {
             return;
         }
         let now = Local::now();
         let a = active.get_or_insert_with(|| self.new_event(now));
+        for h in &hits {
+            a.seen.push((h.clone(), Instant::now()));
+        }
         a.last_activity = now;
         let mut new_labels = Vec::new();
         let mut changed = !a.qualified;
