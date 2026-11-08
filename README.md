@@ -14,7 +14,7 @@ viewing, finding footage, and managing everything, all from the browser.
 - Always running: grid pictures come from each camera's sub-stream over one WebSocket and keep
   updating while you use other pages, so switching back is instant.
 - Full-quality streams are **preloaded in the background**: opening a camera shows HD immediately.
-- Click a camera for a big view with its **recent alerts and recordings** beside it, a **timeline** under it
+- Click a camera for a big view with its **recent alerts** beside it (recordings are on the timeline), a **timeline** under it
   with symbols for what was detected (🚶 person, 🚗 car, 🐈 cat …), **quick quality / frame-rate options**,
   an **Edit camera** button, and **pan / tilt / zoom** controls with presets (ONVIF).
 - Overlays you can configure globally or per camera (camera settings → On-screen display): camera name,

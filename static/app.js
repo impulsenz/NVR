@@ -8,7 +8,8 @@ const enc = encodeURIComponent;
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehicle', motorcycle:'vehicle', bicycle:'vehicle',
   dog:'animal', cat:'animal', bird:'animal', horse:'animal', cow:'animal', sheep:'animal', bear:'animal'};
-const FILTER_TYPES = [['recording','Recordings'],['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],['bus','Bus'],
+// Alert types. Plain recordings aren't listed: they are on the timeline.
+const FILTER_TYPES = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],['bus','Bus'],
   ['motorcycle','Motorcycle'],['bicycle','Bicycle'],['dog','Dog'],['cat','Cat'],['bird','Bird'],['other','Other objects']];
 
 let status = null, settings = null, cameraCfgs = [], sysinfo = null;
@@ -1019,7 +1020,7 @@ function showLive(id) {
   const surf = $('focus-surface');
   bindFocusImage(c);
   $('focus-snap').href = 'snapshot/' + enc(c.id);
-  $('focus-recs').href = '#recordings/' + enc(c.id);
+  $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
   setupQuickView(c);
   setupPtz(c);
@@ -1230,18 +1231,19 @@ async function loadActivity() {
   const id = focusId, box = $('focus-activity');
   if (!id) return;
   const f = $('focus-filter').value;
-  const types = f === 'events' ? 'motion,' + FILTER_TYPES.map(t => t[0]).filter(t => t !== 'recording').join(',') : f;
+  const ai = FILTER_TYPES.map(t => t[0]).filter(t => t !== 'motion');
+  const types = f === 'ai' ? ai.join(',') : f === 'motion' ? 'motion' : ['motion', ...ai].join(',');
   const from = new Date(Date.now() - 7 * 86400000).toISOString();
   let items = [];
   try { items = await api(`api/recordings?cameras=${enc(id)}&from=${enc(from)}&limit=80${types ? '&types=' + enc(types) : ''}`); } catch (e) {}
   if (focusId !== id) return;
-  box.innerHTML = items.length ? '' : '<div class="empty" style="padding:20px">Nothing recorded yet.</div>';
+  box.innerHTML = items.length ? '' : '<div class="empty" style="padding:20px">No alerts in the last 7 days. Recordings are on the timeline.</div>';
   for (const it of items) {
     const row = document.createElement('div');
     row.className = 'act';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     row.innerHTML = `<img loading="lazy" src="${esc(it.thumb || '')}" alt="" onerror="this.style.visibility='hidden'">
-      <div class="meta"><div>${it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>'}</div>
+      <div class="meta"><div>${labelTags(it.event.labels, it.event.motion)}</div>
       <div class="muted">${fmtDate(it.start)} · ${fmtDur(dur)}</div></div>`;
     row.onclick = () => { box.querySelectorAll('.act').forEach(a => a.classList.remove('active')); row.classList.add('active'); playInFocus(it); };
     if (!it.play && !it.pending) row.style.opacity = .5;
@@ -1374,7 +1376,7 @@ function renderFilters() {
   // Types
   $('f-types').innerHTML = '<span class="muted" style="padding:3px 4px">Show:</span>' + FILTER_TYPES.map(([k, v]) =>
     `<label><input type="checkbox" value="${k}" ${rec.types.has(k) ? 'checked' : ''}>${v}</label>`).join('') +
-    (rec.types.size ? '<button class="small" id="f-types-clear">Show everything</button>' : '');
+    (rec.types.size ? '<button class="small" id="f-types-clear">All alerts</button>' : '');
   $('f-types').querySelectorAll('input').forEach(i => i.onchange = () => { i.checked ? rec.types.add(i.value) : rec.types.delete(i.value); renderFilters(); loadRecordings(); });
   const clr = $('f-types-clear'); if (clr) clr.onclick = () => { rec.types.clear(); renderFilters(); loadRecordings(); };
 }
@@ -1429,7 +1431,8 @@ const Calendar = {
 async function loadRecordings() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString(), limit: 2000});
   if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
-  if (rec.types.size) q.set('types', [...rec.types].join(','));
+  // Alerts only (plain recordings are on the Timeline tab).
+  q.set('types', (rec.types.size ? [...rec.types] : FILTER_TYPES.map(t => t[0])).join(','));
   if (rec.todFrom) q.set('tod_from', rec.todFrom);
   if (rec.todTo) q.set('tod_to', rec.todTo);
   if (rec.q) q.set('q', rec.q);
@@ -1441,8 +1444,8 @@ async function loadRecordings() {
 function renderRecordings() {
   const box = $('rec-cards'), items = rec.items;
   const ev = items.filter(i => i.kind === 'event').length;
-  $('rec-count').textContent = items.length ? `${items.length} items · ${ev} alerts · ${items.length - ev} recordings` : '';
-  if (!items.length) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">${rec.q ? `No alerts match “${esc(rec.q)}” in this date range. Try a wider date range, fewer words, or another colour (cameras often see white as silver/grey).` : 'Nothing found for these filters.'}</div>`; return; }
+  $('rec-count').textContent = items.length ? `${ev} alert${ev === 1 ? '' : 's'} · recordings are on the Timeline tab` : '';
+  if (!items.length) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">${rec.q ? `No alerts match “${esc(rec.q)}” in this date range. Try a wider date range, fewer words, or another colour (cameras often see white as silver/grey).` : 'No alerts for these filters. Continuous recordings are on the Timeline tab.'}</div>`; return; }
   box.innerHTML = '';
   let day = '';
   for (const it of items) {

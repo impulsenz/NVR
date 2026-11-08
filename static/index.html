@@ -106,8 +106,8 @@
             <div class="err" id="focus-err" style="margin-top:8px" hidden></div>
           </div>
           <div class="card">
-            <div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Recent activity</h2>
-              <select id="focus-filter"><option value="">Everything</option><option value="events">Alerts only</option><option value="recording">Recordings only</option></select></div>
+            <div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Recent alerts</h2>
+              <select id="focus-filter"><option value="">All alerts</option><option value="ai">Recognized objects</option><option value="motion">Motion only</option></select></div>
             <div class="side-list" id="focus-activity"></div>
           </div>
         </div>
@@ -119,7 +119,7 @@
   <section id="page-recordings" hidden>
     <div class="filters">
       <div class="tabs" style="margin:0;border:0">
-        <button data-mode="list" class="active">Alerts &amp; recordings</button>
+        <button data-mode="list" class="active">Alerts</button>
         <button data-mode="timeline">Timeline</button>
       </div>
       <span class="spacer"></span>
