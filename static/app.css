@@ -410,3 +410,9 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
   #focus-player-controls:empty { display: none; }
   .focus-actions { margin-top: 0 !important; }
 }
+
+/* Data saver button (in the navigation) */
+nav a.ds { margin-left: auto; color: var(--muted); font-size: 13px; }
+nav a.ds.on { color: var(--green); }
+@media (min-width: 761px) { nav a.ds .ni { display: inline; font-size: 14px; } nav { flex: 1; } }
+@media (max-width: 760px) { nav a.ds { margin-left: 0; font-size: 11px; } }

@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     info!("web interface on http://{listen}");
 
     tokio::select! {
-        res = axum::serve(listener, web::router(mgr.clone())) => {
+        res = axum::serve(listener, web::router(mgr.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()) => {
             if let Err(e) = res { error!("server error: {e}"); }
         }
         _ = shutdown_signal() => info!("shutting down"),

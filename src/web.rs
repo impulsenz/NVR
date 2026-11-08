@@ -62,6 +62,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/dashboard", put(put_dashboard))
         .route("/api/profiles", get(get_profiles).put(put_profiles))
+        .route("/api/client", get(client_info))
         .route("/api/config/export", get(export_config))
         .route("/api/config/import", post(import_config))
         .route("/api/cameras", get(list_cameras).post(add_camera))
@@ -281,6 +282,59 @@ async fn put_settings(State(m): App, Json(up): Json<SettingsUpdate>) -> Response
     match m.update_settings(up).await {
         Ok(restart) => Json(json!({ "ok": true, "restart_required": restart })).into_response(),
         Err(e) => bad(e),
+    }
+}
+
+/// Where this browser connects from, so it can use the data saver
+/// automatically away from home (Tailscale, the internet).
+async fn client_info(
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let mut ip = addr.ip();
+    // Behind a proxy on this computer (e.g. `tailscale serve`): the real client.
+    if ip.is_loopback()
+        && let Some(f) = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .and_then(|v| v.trim().parse().ok())
+    {
+        ip = f;
+    }
+    Json(json!({ "ip": ip.to_string(), "remote": is_remote(ip) })).into_response()
+}
+
+/// Not on the home network: Tailscale addresses and anything public.
+pub fn is_remote(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+        v4 => v4,
+    };
+    match ip {
+        IpAddr::V4(v) => {
+            let o = v.octets();
+            // Tailscale (100.64.0.0/10) counts as remote.
+            if o[0] == 100 && (64..128).contains(&o[1]) {
+                return true;
+            }
+            !(v.is_loopback() || v.is_private() || v.is_link_local() || v.is_unspecified())
+        }
+        IpAddr::V6(v) => {
+            let s = v.segments();
+            // Tailscale fd7a:115c:a1e0::/48 counts as remote.
+            if s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0 {
+                return true;
+            }
+            !(v.is_loopback()
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xffc0) == 0xfe80
+                || v.is_unspecified())
+        }
     }
 }
 
@@ -1039,6 +1093,9 @@ async fn serve_event_file(
 struct PlayQuery {
     #[serde(default)]
     t: f64,
+    /// Data saver: small, low-bitrate stream for slow or metered connections.
+    #[serde(default)]
+    lite: bool,
 }
 
 /// Play a recording converted to H.264 on the fly, for browsers that cannot
@@ -1084,10 +1141,22 @@ async fn play_converted(
             "-map",
             "0:a:0?",
             "-vf",
-            "scale='min(1920,iw)':-2",
+            if q.lite {
+                "fps='min(15,source_fps)',scale='min(854,iw)':-2"
+            } else {
+                "scale='min(1920,iw)':-2"
+            },
         ])
         .args(out)
-        .args(["-c:a", "aac", "-b:a", "96k"])
+        // Data saver: about 0.7 Mbit/s instead of several (later options win).
+        .args(if q.lite {
+            vec![
+                "-b:v", "600k", "-maxrate", "700k", "-bufsize", "1400k", "-c:a", "aac", "-b:a",
+                "48k", "-ac", "1",
+            ]
+        } else {
+            vec!["-c:a", "aac", "-b:a", "96k"]
+        })
         .args([
             "-f",
             "mp4",
@@ -1438,6 +1507,9 @@ struct WsSub {
     camera: String,
     q: Quality,
     fps: f32,
+    /// Data saver: smaller, more compressed pictures.
+    #[serde(default)]
+    lite: bool,
 }
 
 #[derive(Deserialize)]
@@ -1520,6 +1592,18 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
                 continue;
             }
             last = Instant::now();
+            let jpg = if sub.lite {
+                // Data saver: grid pictures 480 px, full view 960 px, more compressed.
+                let (w, q) = if qb == 1 { (960, 50) } else { (480, 45) };
+                match tokio::task::spawn_blocking(move || crate::imgutil::shrink_jpeg(&jpg, w, q))
+                    .await
+                {
+                    Ok(Ok(small)) => Bytes::from(small),
+                    _ => continue,
+                }
+            } else {
+                jpg
+            };
             let mut msg = Vec::with_capacity(jpg.len() + id.len() + 2);
             msg.push(qb);
             msg.push(id.len() as u8);
@@ -1570,4 +1654,24 @@ async fn basic_auth(State(m): App, req: Request, next: Next) -> Response {
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::is_remote;
+
+    #[test]
+    fn home_or_away() {
+        let r = |s: &str| is_remote(s.parse().unwrap());
+        assert!(!r("192.168.1.20"));
+        assert!(!r("10.0.0.5"));
+        assert!(!r("127.0.0.1"));
+        assert!(!r("::1"));
+        assert!(!r("fe80::1"));
+        assert!(!r("::ffff:192.168.1.9"));
+        assert!(r("100.101.102.103")); // Tailscale
+        assert!(r("fd7a:115c:a1e0::1")); // Tailscale IPv6
+        assert!(r("203.0.113.7"));
+        assert!(r("2001:db8::1"));
+    }
 }

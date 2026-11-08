@@ -103,6 +103,10 @@ viewing, finding footage, and managing everything, all from the browser.
 - GPU acceleration (NVIDIA, Intel, AMD, Apple) with automatic CPU fallback.
 - Optional login.
 - **Phone friendly**: bottom tab bar, large buttons, and the camera picture stays on screen while you scroll.
+- **Data saver for remote viewing** (Tailscale, VPN, the internet): smaller live pictures at fewer frames
+  per second, no background streams, and recordings streamed as light 480p video (about 0.7 Mbit/s).
+  *Auto* turns it on whenever the browser connects from outside the home network; the 📶 button in the
+  menu switches between Auto, On and Off for that browser.
 
 ## Install
 

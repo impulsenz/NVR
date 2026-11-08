@@ -165,6 +165,9 @@ const Live = {
   },
   onFrame(buf) {
     const b = new Uint8Array(buf);
+    dsStats.bytes += b.length;
+    const now = performance.now();
+    if (now - dsStats.since > 5000) { dsStats.rate = dsStats.bytes * 1000 / (now - dsStats.since); dsStats.bytes = 0; dsStats.since = now; applyDataSaver(); }
     const q = b[0] ? 'main' : 'sub';
     const n = b[1];
     const id = new TextDecoder().decode(b.subarray(2, 2 + n));
@@ -211,16 +214,25 @@ function updateSubscriptions() {
   for (const c of status.cameras) {
     if (!c.enabled) continue;
     const v = c.view || {};
-    const gridFps = v.grid_fps || l.fps, hdFps = v.hd_fps || l.hd_fps;
+    // Data saver: at most 2 pictures a second in the grid and 4 when a camera is open.
+    const gridFps = dataSaver ? Math.min(2, v.grid_fps || l.fps) : (v.grid_fps || l.fps);
+    const hdFps = dataSaver ? Math.min(4, v.hd_fps || l.hd_fps) : (v.hd_fps || l.hd_fps);
     const focused = page === 'live' && ((focusId === c.id && !focusPlayback) || (wall && wallSolo === c.id));
     // Grid picture: sub-stream normally, full quality if chosen for this camera.
+    // Data saver: only pictures that are on screen (the grid isn't kept
+    // running in the background), and an opened camera only in HD.
+    const shown = page === 'live' && !focusId
+      || (page === 'settings' && typeof section !== 'undefined' && section === 'cameras')
+      || ($('cam-dialog').open && editingId === c.id);
+    if (dataSaver && !focused && !shown) continue;
     if (v.grid_quality === 'main') subs.push({camera: c.id, q: 'main', fps: focused ? hdFps : gridFps});
     else {
-      subs.push({camera: c.id, q: 'sub', fps: gridFps});
+      if (!(dataSaver && focused)) subs.push({camera: c.id, q: 'sub', fps: gridFps});
       if (focused) subs.push({camera: c.id, q: 'main', fps: hdFps});
-      else if (l.preload_hd_streams) subs.push({camera: c.id, q: 'main', fps: 1});
+      else if (l.preload_hd_streams && !dataSaver) subs.push({camera: c.id, q: 'main', fps: 1});
     }
   }
+  if (dataSaver) subs.forEach(x => x.lite = true);
   Live.setWanted(subs);
 }
 
@@ -354,6 +366,34 @@ function convertedUrl(url) {
   const m = String(url).match(/^media\/([^/]+)\/(rec|events)\/([^?]+)/);
   return m ? `media/${m[1]}/play/${m[2] === 'events' ? 'clip' : 'rec'}/${m[3]}` : null;
 }
+// URL of the converted stream starting at `t` seconds (small and light with the data saver).
+function convertedAt(url, t) { return convertedUrl(url) + '?t=' + t.toFixed(2) + (dataSaver ? '&lite=true' : ''); }
+
+// ---------- data saver (remote viewing) ----------
+// Auto: on when this browser connects from outside the home network
+// (Tailscale, the internet). Smaller live pictures, fewer frames per second,
+// and recordings streamed as small low-bitrate video.
+let dataSaver = false, dsMode = store_get('data-saver', 'auto'), dsRemote = false;
+const dsStats = {bytes: 0, since: performance.now(), rate: 0};
+function applyDataSaver() {
+  const was = dataSaver;
+  dataSaver = dsMode === 'on' || (dsMode === 'auto' && dsRemote);
+  const b = $('ds-btn');
+  if (b) {
+    b.classList.toggle('on', dataSaver);
+    const mode = {auto: 'Auto', on: 'On', off: 'Off'}[dsMode];
+    $('ds-label').textContent = window.innerWidth > 760 ? `Data saver: ${mode}${dsMode === 'auto' ? (dataSaver ? ' (on)' : ' (off)') : ''}` : 'Saver';
+    b.title = `Data saver: ${mode}${dsMode === 'auto' ? ` — ${dsRemote ? 'away from home, so it is on' : 'on the home network, so it is off'}` : ''}.\n`
+      + 'Smaller live pictures, fewer frames per second and light video for recordings, for slow or mobile connections.\nClick to switch Auto → On → Off.'
+      + (dsStats.rate ? `\nLive video now: ${fmtRate(dsStats.rate)}` : '');
+  }
+  if (was !== dataSaver && typeof updateSubscriptions === 'function') updateSubscriptions();
+}
+function fmtRate(bps) { const m = bps * 8 / 1e6; return m >= 1 ? m.toFixed(1) + ' Mbit/s' : Math.round(bps * 8 / 1000) + ' kbit/s'; }
+async function detectRemote() {
+  try { dsRemote = !!(await api('api/client')).remote; } catch (e) {}
+  applyDataSaver();
+}
 // Cameras whose recordings this browser can't play directly.
 const noNativePlayback = new Set(store_get('no-native', []));
 function store_get(k, d) { try { const v = localStorage.getItem('nvr-' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
@@ -459,7 +499,7 @@ class Player {
     if (!this.tc) { this.video.currentTime = t; if (play) this.video.play().catch(() => {}); return; }
     const wasPlaying = play ?? !this.video.paused;
     this.base = Math.max(0, t);
-    this.video.src = convertedUrl(this.item.url) + '?t=' + this.base.toFixed(2);
+    this.video.src = convertedAt(this.item.url, this.base);
     this.video.playbackRate = +this.box.querySelector('.p-speed').value;
     if (wasPlaying) this.video.play().catch(() => {});
     this.paint();
@@ -479,7 +519,7 @@ class Player {
     if (this.msg) this.msg.hidden = true;
     const start = item.offset || 0;
     // Known not to play here: go straight to the converted stream.
-    this.tc = noNativePlayback.has(item.camera) && !!convertedUrl(item.url);
+    this.tc = (dataSaver || noNativePlayback.has(item.camera)) && !!convertedUrl(item.url);
     this.base = 0;
     if (this.tc) {
       this.seekTo(start, autoplay);
@@ -1451,7 +1491,7 @@ function buildTimelineVideos() {
     el.querySelector('.solo-off').onclick = (e) => { e.stopPropagation(); tlSolo(null); };
     el._vids = [...el.querySelectorAll('video')];
     el._active = 0;
-    el._tc = noNativePlayback.has(c.camera);
+    el._tc = dataSaver || noNativePlayback.has(c.camera);
     // Fall back to converted playback if this browser can't play the files.
     const fallback = (v) => { if (!el._tc && convertedUrl(v.dataset.url || '')) { el._tc = true; markNoNative(c.camera); el._vids.forEach(x => delete x.dataset.url); tlSync(true); } };
     for (const v of el._vids) {
@@ -1507,7 +1547,7 @@ function tlSync(force) {
       const cur = (v._base || 0) + v.currentTime;
       if (v.dataset.url !== s.url || force || Math.abs(cur - want) > Math.max(3, tl.speed * 2)) {
         v.dataset.url = s.url; v._base = want;
-        v.src = convertedUrl(s.url) + '?t=' + want.toFixed(2);
+        v.src = convertedAt(s.url, want);
       }
       v.playbackRate = tl.speed;
       if (tl.playing && v.paused) v.play().catch(() => {});
@@ -2805,3 +2845,13 @@ async function renderInfo(body) {
 Live.connect();
 setInterval(refreshStatus, 2000);
 refreshStatus().then(route);
+
+$('ds-btn').onclick = (e) => {
+  e.preventDefault();
+  dsMode = {auto: 'on', on: 'off', off: 'auto'}[dsMode];
+  try { localStorage.setItem('nvr-data-saver', JSON.stringify(dsMode)); } catch (err) {}
+  applyDataSaver();
+  toast(`Data saver: ${{auto: 'Auto (on away from home)', on: 'On', off: 'Off'}[dsMode]}. Live view changes now; recordings from the next one you open.`);
+};
+window.addEventListener('resize', applyDataSaver);
+detectRemote();

@@ -38,6 +38,26 @@ impl Frame {
     }
 }
 
+/// Make a picture smaller for slow connections: decode, scale down to at
+/// most `max_w` pixels wide and encode again at `quality`.
+pub fn shrink_jpeg(jpg: &[u8], max_w: u32, quality: u8) -> Result<Vec<u8>> {
+    let mut d = jpeg_decoder::Decoder::new(jpg);
+    let pixels = d.decode()?;
+    let info = d.info().ok_or_else(|| anyhow::anyhow!("no picture info"))?;
+    let (w, h) = (info.width as u32, info.height as u32);
+    let rgb = match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => pixels,
+        jpeg_decoder::PixelFormat::L8 => pixels.iter().flat_map(|&v| [v, v, v]).collect(),
+        f => anyhow::bail!("unsupported picture format {f:?}"),
+    };
+    let f = Frame {
+        width: w,
+        height: h,
+        rgb: Arc::new(rgb),
+    };
+    f.fit(max_w.max(160)).jpeg(quality)
+}
+
 pub fn encode_jpeg(rgb: &[u8], w: u32, h: u32, quality: u8) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let enc = jpeg_encoder::Encoder::new(&mut out, quality);
@@ -87,6 +107,8 @@ mod tests {
         assert_eq!(r.rgb.len(), 32 * 24 * 3);
         let j = f.jpeg(80).unwrap();
         assert_eq!(&j[..2], &[0xFF, 0xD8]);
+        let small = shrink_jpeg(&j, 32, 50).unwrap();
+        assert!(small.len() < j.len());
         assert_eq!(f.fit(32).width, 32);
     }
 }
