@@ -1,11 +1,11 @@
 //! Recording files on disk: listing, deletion and retention clean-up.
+//! Layout: `<storage.dir>/<camera id>/<camera id>_YYYY-MM-DD_HH-MM-SS.mp4`.
 
-use crate::config::Config;
+use crate::config::StorageConfig;
 use anyhow::{Result, bail};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
@@ -26,7 +26,21 @@ pub struct StorageInfo {
     pub disk_total_bytes: Option<u64>,
 }
 
-/// All recordings, newest first.
+fn valid_component(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('.')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+}
+
+pub fn camera_dir(root: &Path, id: &str) -> Result<PathBuf> {
+    if !valid_component(id) {
+        bail!("invalid camera id");
+    }
+    Ok(root.join(id))
+}
+
+/// All recordings in one folder, newest first.
 pub fn list(dir: &Path) -> Vec<Recording> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -56,7 +70,7 @@ pub fn list(dir: &Path) -> Vec<Recording> {
     out
 }
 
-/// File names look like `front-door_2026-11-08_14-05-00.mp4`.
+/// File names end in `_YYYY-MM-DD_HH-MM-SS.mp4`.
 fn parse_start(name: &str) -> Option<DateTime<Local>> {
     let stem = name.strip_suffix(".mp4")?;
     let ts = stem.get(stem.len().checked_sub(19)?..)?;
@@ -64,14 +78,9 @@ fn parse_start(name: &str) -> Option<DateTime<Local>> {
     Local.from_local_datetime(&naive).earliest()
 }
 
-/// Resolve a user-supplied file name to a path inside the recordings dir.
+/// Resolve a user-supplied file name to a path inside `dir`.
 pub fn resolve(dir: &Path, name: &str) -> Result<PathBuf> {
-    let valid = name.ends_with(".mp4")
-        && !name.starts_with('.')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
-    if !valid {
+    if !name.ends_with(".mp4") || !valid_component(name) {
         bail!("invalid recording name");
     }
     let path = dir.join(name);
@@ -81,19 +90,42 @@ pub fn resolve(dir: &Path, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn info(dir: &Path) -> StorageInfo {
+/// Sub-folders of the recordings root (one per camera, including removed ones).
+fn camera_dirs(root: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(root)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Total size of one folder's recordings.
+pub fn usage(dir: &Path) -> (usize, u64) {
     let recs = list(dir);
-    let (free, total) = disk_space(dir);
+    (recs.len(), recs.iter().map(|r| r.size).sum())
+}
+
+pub fn info(root: &Path) -> StorageInfo {
+    let (mut count, mut used) = (0, 0);
+    for d in camera_dirs(root) {
+        let (c, u) = usage(&d);
+        count += c;
+        used += u;
+    }
+    let (free, total) = disk_space(root);
     StorageInfo {
-        count: recs.len(),
-        used_bytes: recs.iter().map(|r| r.size).sum(),
+        count,
+        used_bytes: used,
         disk_free_bytes: free,
         disk_total_bytes: total,
     }
 }
 
 #[cfg(unix)]
-fn disk_space(dir: &Path) -> (Option<u64>, Option<u64>) {
+pub fn disk_space(dir: &Path) -> (Option<u64>, Option<u64>) {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     let Ok(c) = CString::new(dir.as_os_str().as_bytes()) else {
@@ -112,72 +144,86 @@ fn disk_space(dir: &Path) -> (Option<u64>, Option<u64>) {
 }
 
 #[cfg(not(unix))]
-fn disk_space(_dir: &Path) -> (Option<u64>, Option<u64>) {
+pub fn disk_space(_dir: &Path) -> (Option<u64>, Option<u64>) {
     (None, None)
 }
 
-/// Apply retention rules once. The newest file (possibly still being written) is never deleted.
-pub fn cleanup(cfg: &Config) -> usize {
-    let dir = &cfg.recording.dir;
-    let mut recs = list(dir);
-    if recs.len() <= 1 {
-        return 0;
+/// Move recordings from the 0.1 layout (files directly in the root) into
+/// per-camera folders.
+pub fn migrate_flat_files(root: &Path, camera_ids: &[String]) {
+    for r in list(root) {
+        if let Some(id) = camera_ids
+            .iter()
+            .find(|id| r.name.starts_with(&format!("{id}_")))
+        {
+            let dir = root.join(id);
+            if std::fs::create_dir_all(&dir).is_ok() {
+                let _ = std::fs::rename(root.join(&r.name), dir.join(&r.name));
+            }
+        }
     }
-    recs.remove(0); // keep newest
-    recs.reverse(); // oldest first
+}
+
+/// Apply retention rules once across all cameras. The newest file in each
+/// camera folder (possibly still being written) is never deleted.
+pub fn cleanup(cfg: &StorageConfig) -> usize {
+    let root = &cfg.dir;
+    let mut all: Vec<(PathBuf, Recording)> = Vec::new();
+    for d in camera_dirs(root) {
+        let mut recs = list(&d);
+        if !recs.is_empty() {
+            recs.remove(0); // keep newest
+        }
+        all.extend(recs.into_iter().map(|r| (d.join(&r.name), r)));
+    }
+    all.sort_by_key(|a| a.1.start); // oldest first
 
     let mut removed = 0;
-    let mut remove = |r: &Recording, why: &str| match std::fs::remove_file(dir.join(&r.name)) {
+    let mut remove = |path: &Path, why: &str| match std::fs::remove_file(path) {
         Ok(()) => {
-            info!("retention: deleted {} ({why})", r.name);
+            info!("retention: deleted {} ({why})", path.display());
             removed += 1;
             true
         }
         Err(e) => {
-            warn!("retention: could not delete {}: {e}", r.name);
+            warn!("retention: could not delete {}: {e}", path.display());
             false
         }
     };
 
     let mut kept = Vec::new();
-    if cfg.recording.retention_days > 0 {
-        let max_age = Duration::from_secs(cfg.recording.retention_days * 86_400);
-        let now = SystemTime::now();
-        for r in recs {
-            let age = now
-                .duration_since(SystemTime::from(r.modified))
-                .unwrap_or_default();
-            if age > max_age && remove(&r, "older than retention period") {
-                continue;
-            }
-            kept.push(r);
+    let max_age = Duration::from_secs(cfg.retention_days * 86_400);
+    let now = SystemTime::now();
+    for (path, r) in all {
+        let age = now
+            .duration_since(SystemTime::from(r.modified))
+            .unwrap_or_default();
+        if cfg.retention_days > 0 && age > max_age && remove(&path, "older than retention period") {
+            continue;
         }
-    } else {
-        kept = recs;
+        kept.push((path, r));
     }
 
-    if cfg.recording.max_storage_gb > 0.0 {
-        let limit = (cfg.recording.max_storage_gb * 1024.0 * 1024.0 * 1024.0) as u64;
-        let mut used: u64 = list(dir).iter().map(|r| r.size).sum();
-        for r in &kept {
-            if used <= limit {
-                break;
-            }
-            if remove(r, "storage limit reached") {
+    let gb = |x: f64| (x * 1024.0 * 1024.0 * 1024.0) as u64;
+    let mut kept = kept.into_iter();
+    if cfg.max_storage_gb > 0.0 {
+        let limit = gb(cfg.max_storage_gb);
+        let mut used = info(root).used_bytes;
+        while used > limit {
+            let Some((path, r)) = kept.next() else { break };
+            if remove(&path, "storage limit reached") {
                 used = used.saturating_sub(r.size);
             }
         }
     }
-    removed
-}
-
-pub async fn retention_task(cfg: Arc<Config>) {
-    let mut tick = tokio::time::interval(Duration::from_secs(600));
-    loop {
-        tick.tick().await;
-        let cfg = cfg.clone();
-        let _ = tokio::task::spawn_blocking(move || cleanup(&cfg)).await;
+    if cfg.min_free_gb > 0.0 {
+        let min_free = gb(cfg.min_free_gb);
+        while disk_space(root).0.is_some_and(|free| free < min_free) {
+            let Some((path, _)) = kept.next() else { break };
+            remove(&path, "disk almost full");
+        }
     }
+    removed
 }
 
 #[cfg(test)]
@@ -200,25 +246,36 @@ mod tests {
         assert!(resolve(&dir, "../etc/passwd.mp4").is_err());
         assert!(resolve(&dir, "a/b.mp4").is_err());
         assert!(resolve(&dir, "x.txt").is_err());
+        assert!(camera_dir(&dir, "..").is_err());
+        assert!(camera_dir(&dir, "a/b").is_err());
     }
 
     #[test]
-    fn storage_limit_deletes_oldest_but_keeps_newest() {
-        let dir = std::env::temp_dir().join(format!("nvr-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        for t in ["10-00-00", "10-05-00", "10-10-00"] {
+    fn storage_limit_deletes_oldest_across_cameras_but_keeps_newest() {
+        let root = std::env::temp_dir().join(format!("nvr-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (cam, t) in [
+            ("a", "10-00-00"),
+            ("b", "10-02-00"),
+            ("a", "10-05-00"),
+            ("b", "10-10-00"),
+        ] {
+            std::fs::create_dir_all(root.join(cam)).unwrap();
             std::fs::write(
-                dir.join(format!("cam_2026-01-01_{t}.mp4")),
+                root.join(cam).join(format!("{cam}_2026-01-01_{t}.mp4")),
                 vec![0u8; 1 << 20],
             )
             .unwrap();
         }
-        let mut cfg = Config::default();
-        cfg.recording.dir = dir.clone();
-        cfg.recording.max_storage_gb = 1.5 / 1024.0; // 1.5 MB
+        let cfg = StorageConfig {
+            dir: root.clone(),
+            max_storage_gb: 2.5 / 1024.0, // 2.5 MB
+            min_free_gb: 0.0,
+            ..Default::default()
+        };
         assert_eq!(cleanup(&cfg), 2);
-        let left: Vec<_> = list(&dir).into_iter().map(|r| r.name).collect();
-        assert_eq!(left, vec!["cam_2026-01-01_10-10-00.mp4"]);
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(list(&root.join("a")).len(), 1);
+        assert_eq!(list(&root.join("b"))[0].name, "b_2026-01-01_10-10-00.mp4");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

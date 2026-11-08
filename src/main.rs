@@ -1,76 +1,63 @@
-//! A small home NVR: records one IP camera to disk and serves a web interface.
+//! A small home NVR: records IP cameras to disk and serves a web interface.
 
 mod config;
+mod ffmpeg;
 mod live;
+mod manager;
 mod recorder;
 mod storage;
 mod web;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
 
     let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "nvr.toml".into()));
-    if !path.exists() {
-        std::fs::write(&path, config::EXAMPLE_CONFIG)
-            .with_context(|| format!("writing example config to {}", path.display()))?;
-        eprintln!(
-            "Created an example config at {}.\nEdit it with your camera's RTSP URL, then run nvr again.",
-            path.display()
-        );
-        return Ok(());
+    let (cfg, needs_save) = config::Config::load_or_create(&path)?;
+    if needs_save {
+        cfg.save(&path)?;
+        info!("wrote {}", path.display());
     }
-    let cfg = Arc::new(config::Config::load(&path)?);
-    std::fs::create_dir_all(&cfg.recording.dir)
-        .with_context(|| format!("creating {}", cfg.recording.dir.display()))?;
-    check_ffmpeg(&cfg.server.ffmpeg_path).await?;
+    std::fs::create_dir_all(&cfg.storage.dir)
+        .with_context(|| format!("creating {}", cfg.storage.dir.display()))?;
+    let ids: Vec<String> = cfg.cameras.iter().map(|c| c.id.clone()).collect();
+    storage::migrate_flat_files(&cfg.storage.dir, &ids);
 
+    let caps = ffmpeg::capabilities(&cfg.server.ffmpeg_path).await;
+    if caps.ffmpeg_version.is_empty() {
+        warn!(
+            "ffmpeg not found at \"{}\" — install ffmpeg or set the path in Settings",
+            cfg.server.ffmpeg_path
+        );
+    } else {
+        info!("{}", caps.ffmpeg_version);
+    }
     info!(
-        "camera \"{}\" at {}",
-        cfg.camera.name,
-        config::mask_url(&cfg.camera.url)
+        "{} camera(s); recordings in {}",
+        cfg.cameras.len(),
+        cfg.storage.dir.display()
     );
-    info!("recordings in {}", cfg.recording.dir.display());
 
-    let recorder = recorder::Recorder::new(cfg.clone());
-    tokio::spawn(recorder.clone().run());
-    tokio::spawn(storage::retention_task(cfg.clone()));
+    let listen = cfg.server.listen.clone();
+    let mgr = manager::Manager::new(path, cfg);
+    tokio::spawn(mgr.clone().retention_task());
 
-    let state = web::AppState {
-        cfg: cfg.clone(),
-        recorder: recorder.clone(),
-        live: live::Live::new(cfg.clone()),
-    };
-    let listener = tokio::net::TcpListener::bind(&cfg.server.listen)
+    let listener = tokio::net::TcpListener::bind(&listen)
         .await
-        .with_context(|| format!("binding {}", cfg.server.listen))?;
-    info!("web interface on http://{}", cfg.server.listen);
+        .with_context(|| format!("binding {listen}"))?;
+    info!("web interface on http://{listen}");
 
     tokio::select! {
-        res = axum::serve(listener, web::router(state)) => {
+        res = axum::serve(listener, web::router(mgr.clone())) => {
             if let Err(e) = res { error!("server error: {e}"); }
         }
         _ = shutdown_signal() => info!("shutting down"),
     }
-    recorder.shutdown().await;
-    Ok(())
-}
-
-async fn check_ffmpeg(path: &str) -> Result<()> {
-    let out = tokio::process::Command::new(path)
-        .arg("-version")
-        .output()
-        .await
-        .with_context(|| {
-            format!("ffmpeg not found at \"{path}\" — install ffmpeg or set server.ffmpeg_path")
-        })?;
-    let first = String::from_utf8_lossy(&out.stdout);
-    info!("{}", first.lines().next().unwrap_or("ffmpeg"));
+    mgr.shutdown().await;
     Ok(())
 }
 
