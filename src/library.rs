@@ -60,7 +60,133 @@ pub struct Query {
     pub tod: Option<(NaiveTime, NaiveTime)>,
     /// "recording", "motion", "other" and object labels. Empty = everything.
     pub types: HashSet<String>,
+    /// Words searched for (see `parse_text`). Empty = no text search.
+    pub text: Vec<Term>,
     pub limit: usize,
+}
+
+/// One part of a text search.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Term {
+    /// An object, optionally with a colour: "red van" → colours [red],
+    /// labels [car, truck], word "van".
+    Object {
+        colors: Vec<&'static str>,
+        labels: Vec<&'static str>,
+        word: String,
+    },
+    /// A colour on its own ("red"): any object of that colour.
+    Color(Vec<&'static str>),
+    /// Anything else: matched against descriptions, labels, camera name.
+    Word(String),
+}
+
+/// Colours a searched colour also accepts (pictures of a white car often
+/// measure as silver, etc.).
+fn color_matches(c: &str) -> Option<Vec<&'static str>> {
+    Some(match c {
+        "red" | "maroon" => vec!["red", "pink"],
+        "pink" => vec!["pink", "red"],
+        "orange" => vec!["orange", "brown", "red"],
+        "yellow" | "gold" => vec!["yellow", "orange"],
+        "green" => vec!["green"],
+        "blue" | "navy" => vec!["blue"],
+        "purple" | "violet" => vec!["purple", "pink", "blue"],
+        "brown" | "tan" | "beige" => vec!["brown", "beige", "orange"],
+        "black" | "dark" => vec!["black", "grey"],
+        "white" => vec!["white", "silver"],
+        "grey" | "gray" => vec!["grey", "silver"],
+        "silver" => vec!["silver", "grey", "white"],
+        _ => return None,
+    })
+}
+
+/// Object words people search for, and the detector labels they mean.
+fn object_labels(w: &str) -> Option<Vec<&'static str>> {
+    let w = w.strip_suffix("es").filter(|x| x.ends_with("bus")).unwrap_or(w);
+    let w = if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") && w != "bus" { &w[..w.len() - 1] } else { w };
+    Some(match w {
+        "person" | "people" | "man" | "men" | "woman" | "women" | "kid" | "child" | "children" | "human"
+        | "someone" | "guy" | "lady" | "courier" | "postman" | "visitor" | "pedestrian" => vec!["person"],
+        "car" | "sedan" | "hatchback" | "suv" | "wagon" | "taxi" | "auto" | "automobile" => vec!["car"],
+        "van" | "ute" | "pickup" | "4x4" => vec!["car", "truck"],
+        "truck" | "lorry" => vec!["truck"],
+        "bus" | "coach" => vec!["bus"],
+        "vehicle" => vec!["car", "truck", "bus", "motorcycle"],
+        "motorcycle" | "motorbike" | "scooter" => vec!["motorcycle"],
+        "bike" => vec!["bicycle", "motorcycle"],
+        "bicycle" | "cyclist" => vec!["bicycle"],
+        "dog" | "puppy" | "pup" => vec!["dog"],
+        "cat" | "kitten" | "kitty" => vec!["cat"],
+        "bird" => vec!["bird"],
+        "animal" | "pet" => vec!["dog", "cat", "bird", "horse", "sheep", "cow", "bear"],
+        "horse" => vec!["horse"],
+        "cow" => vec!["cow"],
+        "sheep" => vec!["sheep"],
+        "bag" => vec!["backpack", "handbag", "suitcase"],
+        "backpack" => vec!["backpack"],
+        "suitcase" => vec!["suitcase"],
+        "umbrella" => vec!["umbrella"],
+        _ => return None,
+    })
+}
+
+/// Understand a search like "red van", "white car person", "black cat".
+pub fn parse_text(q: &str) -> Vec<Term> {
+    const SKIP: &[&str] = &["a", "an", "the", "with", "of", "in", "on", "and", "or", "at", "coloured", "colored"];
+    let mut out = Vec::new();
+    let mut colors: Vec<&'static str> = Vec::new();
+    for w in q
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty() && !SKIP.contains(w))
+    {
+        if let Some(c) = color_matches(w) {
+            colors.extend(c);
+        } else if let Some(labels) = object_labels(w) {
+            out.push(Term::Object {
+                colors: std::mem::take(&mut colors),
+                labels,
+                word: w.to_string(),
+            });
+        } else {
+            out.push(Term::Word(w.to_string()));
+        }
+    }
+    if !colors.is_empty() {
+        out.push(Term::Color(colors));
+    }
+    out
+}
+
+/// Does an event match every part of a text search?
+pub fn text_matches(e: &Event, camera_name: &str, terms: &[Term]) -> bool {
+    let desc = e.desc.to_lowercase();
+    // Description parts ("white delivery van; man in red jacket").
+    let parts: Vec<&str> = desc.split(';').map(str::trim).collect();
+    let has_word = |text: &str, w: &str| text.split(|c: char| !c.is_alphanumeric()).any(|x| x == w || x.strip_suffix('s') == Some(w));
+    terms.iter().all(|t| match t {
+        Term::Object { colors, labels, word } => {
+            let by_label = e.labels.iter().any(|l| {
+                labels.contains(&l.label.as_str())
+                    && (colors.is_empty() || l.color.as_deref().is_some_and(|c| colors.contains(&c)))
+            });
+            let by_desc = parts.iter().any(|p| {
+                (has_word(p, word) || labels.iter().any(|l| has_word(p, l)))
+                    && (colors.is_empty() || colors.iter().any(|c| has_word(p, c)))
+            });
+            by_label || by_desc
+        }
+        Term::Color(colors) => {
+            e.labels.iter().any(|l| l.color.as_deref().is_some_and(|c| colors.contains(&c)))
+                || colors.iter().any(|c| has_word(&desc, c))
+        }
+        Term::Word(w) => {
+            has_word(&desc, w)
+                || e.labels.iter().any(|l| l.label.contains(w.as_str()))
+                || camera_name.to_lowercase().contains(w.as_str())
+        }
+    })
 }
 
 fn enc(s: &str) -> String {
@@ -160,7 +286,8 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
         }
         let id = &rt.cfg.id;
         let recs = recordings(&rt);
-        if q.types.is_empty() || q.types.contains("recording") {
+        // A text search only finds alerts.
+        if q.text.is_empty() && (q.types.is_empty() || q.types.contains("recording")) {
             for r in recs
                 .iter()
                 .filter(|r| r.end >= q.from && r.start <= q.to && in_tod(r.start, q.tod))
@@ -188,7 +315,10 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             }
         }
         for e in rt.events.between(q.from, q.to) {
-            if !in_tod(e.start, q.tod) || !event_matches(&e, &q.types) {
+            if !in_tod(e.start, q.tod)
+                || !event_matches(&e, &q.types)
+                || (!q.text.is_empty() && !text_matches(&e, &rt.cfg.name, &q.text))
+            {
                 continue;
             }
             let play = play_at(&rt, &recs, Some(&e), e.start);
@@ -355,4 +485,52 @@ pub fn export_parts(
     }
     parts.retain(|p| p.2 > p.1);
     parts
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+    use crate::events::Label;
+
+    fn ev(labels: &[(&str, Option<&str>)], desc: &str) -> Event {
+        Event {
+            id: "e".into(),
+            camera: "c".into(),
+            start: Local::now(),
+            end: Local::now(),
+            labels: labels
+                .iter()
+                .map(|(l, c)| Label { label: l.to_string(), score: 0.9, color: c.map(str::to_string) })
+                .collect(),
+            motion: true,
+            thumb: None,
+            clip: None,
+            clip_start: None,
+            focus: None,
+            desc: desc.into(),
+        }
+    }
+
+    #[test]
+    fn searches() {
+        let m = |e: &Event, q: &str| text_matches(e, "Front Door", &parse_text(q));
+        let white_car = ev(&[("car", Some("white"))], "");
+        assert!(m(&white_car, "white van"));
+        assert!(m(&white_car, "silver car"));
+        assert!(!m(&white_car, "red van"));
+        assert!(!m(&white_car, "black cat"));
+        let cat = ev(&[("cat", Some("black"))], "");
+        assert!(m(&cat, "black cat"));
+        assert!(m(&cat, "Black Cats"));
+        assert!(m(&cat, "kitten"));
+        assert!(!m(&cat, "white cat"));
+        // From a language model's description.
+        let van = ev(&[("car", Some("grey"))], "red delivery van; man in blue jacket");
+        assert!(m(&van, "red van"));
+        assert!(m(&van, "delivery"));
+        assert!(m(&van, "front door van"));
+        assert!(!m(&van, "ladder"));
+        assert!(m(&ev(&[("person", None)], ""), "people"));
+        assert!(m(&ev(&[("bus", None)], ""), "buses"));
+    }
 }

@@ -859,6 +859,9 @@ struct SearchQuery {
     tod_to: Option<String>,
     #[serde(default)]
     types: String,
+    /// Words to search for ("red van", "black cat").
+    #[serde(default)]
+    q: String,
     limit: Option<usize>,
 }
 
@@ -901,6 +904,7 @@ async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
         to,
         tod,
         types: split_list(&q.types).into_iter().collect(),
+        text: library::parse_text(&q.q),
         limit: q.limit.unwrap_or(500).min(5000),
     };
     let items = tokio::task::spawn_blocking(move || library::search(&m, &lq))

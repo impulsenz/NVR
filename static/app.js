@@ -87,8 +87,17 @@ function fullscreen(el) {
   else (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el);
 }
 
+const COLOR_CSS = {black: '#111', white: '#f5f5f5', grey: '#777', silver: '#c0c4c8', red: '#dc2626', orange: '#f97316', yellow: '#facc15',
+  green: '#16a34a', blue: '#2563eb', purple: '#9333ea', pink: '#ec4899', brown: '#8b5a2b', beige: '#d6c7a1'};
+// Zoom a whole-picture thumbnail into the recognized object (the box stays the same size).
+function zoomStyle(f) {
+  if (!f) return '';
+  const [x, y, w, h] = f, s = Math.min(3, Math.max(1, 0.55 / Math.max(w, h * 0.9, 0.01)));
+  if (s < 1.05) return '';
+  return `transform-origin:${((x + w / 2) * 100).toFixed(1)}% ${((y + h / 2) * 100).toFixed(1)}%;transform:scale(${s.toFixed(2)})`;
+}
 function labelTags(labels, motion) {
-  if (labels && labels.length) return labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}">${esc(l.label)} ${Math.round(l.score * 100)}%</span>`).join('');
+  if (labels && labels.length) return labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}">${l.color ? esc(l.color) + ' ' : ''}${esc(l.label)} ${Math.round(l.score * 100)}%</span>`).join('');
   return motion ? '<span class="tag motion">motion</span>' : '';
 }
 
@@ -220,6 +229,16 @@ function updateSubscriptions() {
 const LABEL_ICON = {person: '🚶', car: '🚗', truck: '🚚', bus: '🚌', motorcycle: '🏍️', bicycle: '🚲', dog: '🐕', cat: '🐈', bird: '🐦',
   horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', motion: '〰️'};
 const labelIcon = (l) => LABEL_ICON[l] || '🔷';
+// What the timeline colours and symbols mean.
+function legendHtml(kind) {
+  const objs = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat', 'bird'];
+  const bars = kind === 'tl'
+    ? [['<i class="lg-bar rec"></i>', 'Recording'], ['<i class="lg-bar clip"></i>', 'HD alert clip'], ['<i class="lg-bar ev"></i>', 'Alert (AI)'], ['<i class="lg-bar mo"></i>', 'Motion only']]
+    : [['<i class="lg-bar rec"></i>', 'Recording'], ['<i class="lg-bar clip"></i>', 'HD alert clip'], ['<i class="lg-tick"></i>', 'Motion only']];
+  return bars.map(([i, t]) => `<span>${i}${t}</span>`).join('') + '<span class="lg-sep"></span>'
+    + objs.map(o => `<span>${labelIcon(o)} ${o}</span>`).join('') + `<span>${labelIcon('?')} other</span>`;
+}
+document.querySelectorAll('[data-legend]').forEach(el => el.innerHTML = legendHtml(el.dataset.legend));
 // On-screen display: the camera's own settings, or the global ones.
 function osdFor(c) {
   if (c.osd && c.osd.custom) return c.osd;
@@ -1040,11 +1059,11 @@ const camTl = {
     for (const e of this.data.events) {
       const x = pct(new Date(e.start).getTime());
       if (x < 0 || x > 100) continue;
-      if (!e.labels.length) { lane += `<div class="mo" style="left:${x}%" title="Motion ${fmtTime(e.start)}"></div>`; continue; }
+      if (!e.labels.length) { lane += `<div class="mo" style="left:${x}%" data-t="${new Date(e.start).getTime()}" title="Motion ${fmtTime(e.start)} — click to watch"></div>`; continue; }
       const icon = labelIcon(e.labels[0].label);
       if (last[icon] != null && Math.abs(last[icon] - x) < 1.2) continue;
       last[icon] = x;
-      lane += `<span class="ic" style="left:${x}%" data-t="${new Date(e.start).getTime()}" title="${esc(e.labels.map(l => l.label).join(', '))} ${fmtTime(e.start)}">${icon}</span>`;
+      lane += `<span class="ic" style="left:${x}%" data-t="${new Date(e.start).getTime()}" title="${esc(e.labels.map(l => l.label).join(', '))} ${fmtTime(e.start)} — click to watch">${icon}</span>`;
     }
     const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
     lb.innerHTML = lane + '<div class="head" hidden></div>';
@@ -1080,7 +1099,7 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   });
   lane.addEventListener('pointerleave', () => { lane.querySelector('.preview').hidden = true; });
   lane.addEventListener('click', (e) => {
-    const icon = e.target.closest('.ic');
+    const icon = e.target.closest('.ic, .mo');
     camTl.playAt(icon ? +icon.dataset.t - 3000 : tAt(e)[0]);
   });
 })();
@@ -1209,7 +1228,7 @@ $('focus-back').onclick = () => location.hash = '#live';
 // ======================================================================
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const endOfDay = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
-const rec = {mode: 'list', cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '', types: new Set(), items: []};
+const rec = {mode: 'list', cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '', types: new Set(), items: [], q: ''};
 let recPlayer = null;
 
 function showRecordings(camId, mode) {
@@ -1229,6 +1248,13 @@ function setRecMode(mode) {
   else { $('rec-player').hidden = true; if (recPlayer) recPlayer.stop(); loadTimeline(); }
 }
 document.querySelectorAll('#page-recordings .tabs button').forEach(b => b.onclick = () => setRecMode(b.dataset.mode));
+// Search box: as you type (after a short pause) or on Enter.
+{
+  let t = null;
+  const go = () => { clearTimeout(t); const v = $('f-q').value.trim(); if (v === rec.q) return; rec.q = v; if (rec.mode !== 'list') setRecMode('list'); else loadRecordings(); };
+  $('f-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 500); });
+  $('f-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+}
 $('f-refresh').onclick = () => rec.mode === 'list' ? loadRecordings() : loadTimeline();
 // Full screen for browsing recordings (timeline videos get the whole width).
 async function recFullscreen(on) {
@@ -1324,6 +1350,7 @@ async function loadRecordings() {
   if (rec.types.size) q.set('types', [...rec.types].join(','));
   if (rec.todFrom) q.set('tod_from', rec.todFrom);
   if (rec.todTo) q.set('tod_to', rec.todTo);
+  if (rec.q) q.set('q', rec.q);
   $('rec-count').textContent = 'Loading…';
   try { rec.items = await api('api/recordings?' + q); } catch (e) { rec.items = []; toast(e.message, true); }
   renderRecordings();
@@ -1333,7 +1360,7 @@ function renderRecordings() {
   const box = $('rec-cards'), items = rec.items;
   const ev = items.filter(i => i.kind === 'event').length;
   $('rec-count').textContent = items.length ? `${items.length} items · ${ev} alerts · ${items.length - ev} recordings` : '';
-  if (!items.length) { box.innerHTML = '<div class="empty" style="grid-column:1/-1">Nothing found for these filters.</div>'; return; }
+  if (!items.length) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">${rec.q ? `No alerts match “${esc(rec.q)}” in this date range. Try a wider date range, fewer words, or another colour (cameras often see white as silver/grey).` : 'Nothing found for these filters.'}</div>`; return; }
   box.innerHTML = '';
   let day = '';
   for (const it of items) {
@@ -1343,13 +1370,13 @@ function renderRecordings() {
     card.className = 'rc';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
-    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc(l.label)} ${Math.round(l.score * 100)}%">${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
-    card.innerHTML = `<div class="thumb">${it.thumb ? `<img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.remove()">` : ''}
+    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc((l.color ? l.color + ' ' : '') + l.label)} ${Math.round(l.score * 100)}%">${l.color ? `<i class="cdot" style="background:${COLOR_CSS[l.color] || l.color}"></i>` : ''}${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
+    card.innerHTML = `<div class="thumb">${it.thumb ? `<img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.remove()" style="${zoomStyle(it.event && it.event.focus)}">` : ''}
         <div class="tags">${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
         <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
-    card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}`;
+    card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && it.event.desc ? '\n' + it.event.desc : ''}`;
     card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
       e.stopPropagation();
@@ -1376,7 +1403,7 @@ function playItem(it, card) {
   $('rp-info').innerHTML = `<h2>${it.kind === 'event' ? 'Alert' : 'Recording'}</h2>
     ${it.kind === 'event' && it.thumb ? `<img src="${esc(it.thumb)}" style="width:100%;border-radius:6px;margin-bottom:8px" alt="">` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
-    ${it.kind === 'event' ? `<dt>Detected</dt><dd>${labelTags(it.event.labels, it.event.motion) || '–'}</dd><dt>Video</dt><dd>${it.event.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
+    ${it.kind === 'event' ? `<dt>Detected</dt><dd>${labelTags(it.event.labels, it.event.motion) || '–'}</dd>${it.event.desc ? `<dt>Description</dt><dd>${esc(it.event.desc)}</dd>` : ''}<dt>Video</dt><dd>${it.event.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
     ${it.size ? `<dt>Size</dt><dd>${fmtBytes(it.size)}</dd>` : ''}</dl>
     <div class="hint" style="margin-top:10px">Hover over the bar under the video to preview any moment. Use <b>[ Start</b> and <b>End ]</b> (or drag the orange handles) to cut out a clip.</div>
     <div class="actions"><a class="btn small" href="#recordings/${enc(it.camera)}/timeline" onclick="tl.jump='${it.start}'">Open in timeline</a></div>`;
@@ -1419,8 +1446,9 @@ function buildTimelineVideos() {
     el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video>
       <div class="sprite" hidden></div><div class="msg" hidden>No recording</div>
       <div class="ov tl"><span class="ovtext name">${esc(c.name)}</span><span class="ovtext tl-t"></span></div>
-      <div class="ov tr"><button type="button" class="fsbtn">⛶</button></div>`;
+      <div class="ov tr"><button type="button" class="small solo-off" hidden>▦ All cameras</button><button type="button" class="fsbtn">⛶</button></div>`;
     el.querySelector('.fsbtn').onclick = () => fullscreen(el);
+    el.querySelector('.solo-off').onclick = (e) => { e.stopPropagation(); tlSolo(null); };
     el._vids = [...el.querySelectorAll('video')];
     el._active = 0;
     el._tc = noNativePlayback.has(c.camera);
@@ -1432,6 +1460,8 @@ function buildTimelineVideos() {
     }
     box.appendChild(el);
   }
+  if (tl.solo && !tl.data.some(c => c.camera === tl.solo)) tl.solo = null;
+  tlSolo(tl.solo);
 }
 const activeVideo = (el) => el._vids[el._active];
 function showVideo(el, i) {
@@ -1543,6 +1573,22 @@ $('tl-fwd10').onclick = () => { tl.T += 10000; tlSync(true); };
 function allEvents() { return tl.data.flatMap(c => c.events).map(e => new Date(e.start).getTime()).sort((a, b) => a - b); }
 $('tl-prev-ev').onclick = () => { const e = allEvents().filter(t => t < tl.T - 4000).pop(); if (e) jumpTo(e - 3000); };
 $('tl-next-ev').onclick = () => { const e = allEvents().find(t => t > tl.T + 4000); if (e) jumpTo(e - 3000); };
+// Watch one alert: that camera's video large (others hidden), from just before it.
+function tlShowEvent(camId, T) {
+  tlSolo(camId);
+  jumpTo(T - 3000);
+  tlPlay(true);
+}
+function tlSolo(camId) {
+  tl.solo = camId || null;
+  const box = $('tl-videos');
+  box.classList.toggle('solo', !!tl.solo);
+  box.querySelectorAll('.surface').forEach(el => {
+    el.classList.toggle('solo', el.dataset.cam === tl.solo);
+    const b = el.querySelector('.solo-off'); if (b) b.hidden = el.dataset.cam !== tl.solo;
+  });
+  $('tl').querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
+}
 function jumpTo(T) { tl.T = T; if (T < tl.winStart || T > tl.winStart + tl.zoom * 1000) centerWindow(); drawTimeline(); tlSync(true); }
 $('tl-in').onclick = () => { tl.inT = tl.T; if (tl.outT != null && tl.outT <= tl.inT) tl.outT = null; drawTimeline(); };
 $('tl-out').onclick = () => { tl.outT = tl.T; if (tl.inT == null || tl.inT >= tl.outT) tl.inT = tl.outT - 30000; drawTimeline(); };
@@ -1569,13 +1615,13 @@ function drawTimeline() {
       const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime());
       if (b < 0 || a > 100) continue;
       const tip = e.labels.length ? e.labels.map(l => l.label).join(', ') : 'motion';
-      lane += `<div class="ev ${e.labels.length ? '' : 'motion'}" style="left:${Math.max(0, a)}%;width:${Math.max(0.3, b - a)}%" title="${esc(tip)} ${fmtTime(e.start)}" data-t="${new Date(e.start).getTime()}">${e.labels.length ? `<span class="ic">${labelIcon(e.labels[0].label)}</span>` : ''}</div>`;
+      lane += `<div class="ev ${e.labels.length ? '' : 'motion'}" style="left:${Math.max(0, a)}%;width:${Math.max(0.3, b - a)}%" title="${esc(tip)} ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" data-cam="${esc(c.camera)}">${e.labels.length ? `<span class="ic">${labelIcon(e.labels[0].label)}</span>` : ''}</div>`;
     }
     rows += `<div class="tl-row"><div class="label" title="${esc(c.name)}">${esc(c.name)}</div><div class="lane">${lane}</div></div>`;
   }
   const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="left:calc(120px + (100% - 120px) * ${pct(tl.inT) / 100});width:calc((100% - 120px) * ${(pct(tl.outT) - pct(tl.inT)) / 100})"></div>` : '';
   box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"></div>`;
-  box.querySelectorAll('.ev').forEach(e => e.onclick = (ev) => { ev.stopPropagation(); jumpTo(+e.dataset.t - 3000); });
+  box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
   // Clip export
   const has = tl.inT != null && tl.outT != null;
   $('tl-clear').hidden = !has;
@@ -1601,6 +1647,9 @@ function drawHead() {
     return tl.winStart + Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1) * tl.zoom * 1000;
   };
   box.addEventListener('pointerdown', (e) => {
+    // An alert marker or symbol: watch that alert on that camera.
+    const mark = e.target.closest('.ev');
+    if (mark) { e.preventDefault(); tlShowEvent(mark.dataset.cam, +mark.dataset.t); return; }
     const t = tAt(e); if (t == null || e.clientX < box.querySelector('.lane').getBoundingClientRect().left) return;
     drag = true; was = tl.playing; if (was) tlPlay(false);
     box.setPointerCapture(e.pointerId);

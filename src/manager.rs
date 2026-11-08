@@ -777,6 +777,7 @@ impl Manager {
 
     /// Periodic housekeeping: retention, usage statistics, temp files.
     pub async fn housekeeping(self: Arc<Self>) {
+        tokio::spawn(backfill_colors(self.clone()));
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         let mut n = 0u64;
         loop {
@@ -812,5 +813,54 @@ impl Manager {
                 .retain(|_, v| v.2.elapsed() < Duration::from_secs(1800));
             n += 1;
         }
+    }
+}
+
+/// Alerts saved before colours were recorded: estimate each object's colour
+/// from the middle of its thumbnail (once, in the background), so a search
+/// like "white car" also finds them.
+async fn backfill_colors(mgr: Arc<Manager>) {
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let ffmpeg = mgr.config().server.ffmpeg_path.clone();
+    let cutoff = chrono::Local::now() - chrono::Duration::days(60);
+    let mut done = 0;
+    for store in mgr.event_stores().into_values() {
+        for mut e in store.all() {
+            if e.start < cutoff || e.labels.is_empty() || e.labels.iter().any(|l| l.color.is_some()) {
+                continue;
+            }
+            let Some(thumb) = &e.thumb else { continue };
+            let (w, h) = (160u32, 90u32);
+            let Ok(out) = tokio::process::Command::new(&ffmpeg)
+                .args(["-hide_banner", "-loglevel", "error", "-i"])
+                .arg(store.dir().join(thumb))
+                .args(["-vf", &format!("scale={w}:{h}"), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output()
+                .await
+            else {
+                return; // no ffmpeg
+            };
+            if out.stdout.len() != (w * h * 3) as usize {
+                continue;
+            }
+            let f = crate::imgutil::Frame { width: w, height: h, rgb: std::sync::Arc::new(out.stdout) };
+            // Older thumbnails were cropped around the main object.
+            let (x, y, bw, bh) = match e.focus {
+                Some([x, y, bw, bh]) => (x, y, bw, bh),
+                None => (0.3, 0.2, 0.4, 0.6),
+            };
+            let c = f.color_name(x, y, bw, bh).map(str::to_string);
+            if let Some(first) = e.labels.first_mut() {
+                first.color = c;
+            }
+            store.save(e);
+            done += 1;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    if done > 0 {
+        info!("estimated colours for {done} earlier alert(s) (for search)");
     }
 }

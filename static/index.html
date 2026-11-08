@@ -94,7 +94,8 @@
               <button type="button" class="small" id="ctl-now">Now</button></div>
             <div class="ctl-axis" id="ctl-axis"></div>
             <div class="ctl-lane" id="ctl-lane"><div class="preview" hidden><div class="img"></div><div class="t"></div></div></div>
-            <div class="hint">Click to play from that moment. Symbols show what the AI saw (🚶 person, 🚗 car, 🐈 cat …); orange ticks are motion.</div>
+            <div class="legend" data-legend="cam"></div>
+            <div class="hint">Click anywhere to play from that moment, or click a symbol to watch that alert.</div>
           </div>
         </div>
         <div>
@@ -121,6 +122,7 @@
         <button data-mode="timeline">Timeline</button>
       </div>
       <span class="spacer"></span>
+      <input type="search" id="f-q" placeholder="🔍 Search: red van, black cat, person…" title="Search alerts by what was seen: object, colour, or words from the AI description" style="width:260px">
       <div class="dropdown">
         <button id="f-cams-btn">All cameras ▾</button>
         <div class="popover" id="f-cams-pop" hidden style="min-width:220px"></div>
@@ -172,6 +174,7 @@
         <span id="tl-export" class="row"></span>
       </div>
       <div class="tl" id="tl"></div>
+      <div class="legend" data-legend="tl"></div>
       <div class="sprite-progress" id="tl-sp" hidden><span>Time-lapse previews</span><div class="bar"><div id="tl-sp-bar" style="width:0"></div></div><span id="tl-sp-t"></span></div>
       <div class="hint">Drag across the timeline to scrub: every camera shows a quick preview of that moment. Release to play from there.</div>
     </div>
