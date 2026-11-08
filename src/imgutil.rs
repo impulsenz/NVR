@@ -16,50 +16,6 @@ impl Frame {
         encode_jpeg(&self.rgb, self.width, self.height, quality)
     }
 
-    /// Crop around a normalized box with a fixed picture shape (`aspect` = w/h),
-    /// so thumbnails are uniform. The box is padded, made at least
-    /// `min_frac` of the frame width, and kept inside the frame.
-    pub fn crop_aspect(
-        &self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        pad: f32,
-        min_frac: f32,
-        aspect: f32,
-    ) -> Frame {
-        let (fw, fh) = (self.width as f32, self.height as f32);
-        let mut cw = (w * fw * (1.0 + 2.0 * pad)).max(fw * min_frac);
-        let mut ch = h * fh * (1.0 + 2.0 * pad);
-        if cw / ch.max(1.0) < aspect {
-            cw = ch * aspect;
-        } else {
-            ch = cw / aspect;
-        }
-        // Too big for the frame: shrink while keeping the shape.
-        let k = (fw / cw).min(fh / ch).min(1.0);
-        let (cw, ch) = ((cw * k).max(16.0), (ch * k).max(16.0));
-        let cx = (x + w / 2.0) * fw;
-        let cy = (y + h / 2.0) * fh;
-        let x0 = (cx - cw / 2.0).clamp(0.0, (fw - cw).max(0.0)) as u32;
-        let y0 = (cy - ch / 2.0).clamp(0.0, (fh - ch).max(0.0)) as u32;
-        let (cw, ch) = (
-            (cw as u32).min(self.width - x0),
-            (ch as u32).min(self.height - y0),
-        );
-        let mut out = Vec::with_capacity((cw * ch * 3) as usize);
-        for row in y0..y0 + ch {
-            let start = ((row * self.width + x0) * 3) as usize;
-            out.extend_from_slice(&self.rgb[start..start + (cw * 3) as usize]);
-        }
-        Frame {
-            width: cw,
-            height: ch,
-            rgb: Arc::new(out),
-        }
-    }
-
     /// Bilinear resize.
     pub fn resize(&self, w: u32, h: u32) -> Frame {
         Frame {
@@ -127,21 +83,162 @@ mod tests {
             height: h,
             rgb: Arc::new(rgb),
         };
-        let c = f.crop_aspect(0.9, 0.9, 0.2, 0.2, 0.1, 0.2, 16.0 / 9.0);
-        assert!(c.width <= w && c.height <= h && c.width >= 10);
-        assert_eq!(c.rgb.len() as u32, c.width * c.height * 3);
         let r = f.resize(32, 24);
         assert_eq!(r.rgb.len(), 32 * 24 * 3);
         let j = f.jpeg(80).unwrap();
         assert_eq!(&j[..2], &[0xFF, 0xD8]);
         assert_eq!(f.fit(32).width, 32);
-        // A tall box still gives a 16:9 picture.
-        let t = f.crop_aspect(0.4, 0.1, 0.05, 0.8, 0.1, 0.3, 16.0 / 9.0);
-        assert!(
-            (t.width as f32 / t.height as f32 - 16.0 / 9.0).abs() < 0.15,
-            "{}x{}",
-            t.width,
-            t.height
-        );
+    }
+}
+
+const COLOR_WORDS: &[&str] = &[
+    "black", "white", "grey", "gray", "silver", "red", "orange", "yellow", "green", "blue",
+    "purple", "pink", "brown", "beige", "gold", "tan", "maroon", "navy",
+];
+
+/// The first colour word in a description, normalized ("gray" → "grey").
+pub fn color_word(text: &str) -> Option<&'static str> {
+    text.split(|c: char| !c.is_alphabetic())
+        .map(|w| w.to_lowercase())
+        .find_map(|w| {
+            COLOR_WORDS
+                .iter()
+                .find(|c| **c == w)
+                .map(|c| normalize_color(c))
+        })
+}
+
+pub fn normalize_color(c: &str) -> &'static str {
+    match c {
+        "gray" | "grey" => "grey",
+        "silver" => "silver",
+        "tan" | "beige" => "beige",
+        "maroon" => "red",
+        "navy" => "blue",
+        "gold" => "yellow",
+        other => COLOR_WORDS
+            .iter()
+            .find(|w| **w == other)
+            .copied()
+            .unwrap_or("grey"),
+    }
+}
+
+/// Name a pixel's colour (HSV buckets).
+fn pixel_color(r: u8, g: u8, b: u8) -> &'static str {
+    let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let v = max;
+    let d = max - min;
+    let s = if max > 0.0 { d / max } else { 0.0 };
+    if v < 0.22 {
+        return "black";
+    }
+    if s < 0.18 {
+        return if v > 0.72 {
+            "white"
+        } else if v > 0.45 {
+            "silver"
+        } else {
+            "grey"
+        };
+    }
+    let h = if d == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / d) % 6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    match h {
+        h if !(15.0..330.0).contains(&h) => {
+            if s < 0.45 && v > 0.6 {
+                "pink"
+            } else {
+                "red"
+            }
+        }
+        h if h < 40.0 => {
+            if v < 0.6 {
+                "brown"
+            } else {
+                "orange"
+            }
+        }
+        h if h < 70.0 => {
+            if v < 0.5 {
+                "brown"
+            } else {
+                "yellow"
+            }
+        }
+        h if h < 165.0 => "green",
+        h if h < 255.0 => "blue",
+        h if h < 290.0 => "purple",
+        _ => "pink",
+    }
+}
+
+impl Frame {
+    /// The main colour of an object: the most common colour name in the
+    /// middle of its box (the edges are usually background).
+    pub fn color_name(&self, x: f32, y: f32, w: f32, h: f32) -> Option<&'static str> {
+        let (fw, fh) = (self.width as f32, self.height as f32);
+        let x0 = ((x + w * 0.2) * fw).clamp(0.0, fw - 1.0) as u32;
+        let x1 = ((x + w * 0.8) * fw).clamp(0.0, fw) as u32;
+        let y0 = ((y + h * 0.2) * fh).clamp(0.0, fh - 1.0) as u32;
+        let y1 = ((y + h * 0.8) * fh).clamp(0.0, fh) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let step = (((x1 - x0) * (y1 - y0)) as f32 / 4000.0).sqrt().max(1.0) as u32;
+        let mut counts: std::collections::HashMap<&'static str, u32> = Default::default();
+        for yy in (y0..y1).step_by(step as usize) {
+            for xx in (x0..x1).step_by(step as usize) {
+                let i = ((yy * self.width + xx) * 3) as usize;
+                let c = pixel_color(self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]);
+                *counts.entry(c).or_default() += 1;
+            }
+        }
+        // Colourful pixels count a bit more: a red car has grey windows
+        // and black tyres, but it is still "red".
+        counts
+            .into_iter()
+            .map(|(c, n)| {
+                let w = if matches!(c, "black" | "white" | "grey" | "silver") {
+                    1.0
+                } else {
+                    1.6
+                };
+                (c, n as f32 * w)
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(c, _)| c)
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn names_colours() {
+        assert_eq!(pixel_color(200, 30, 30), "red");
+        assert_eq!(pixel_color(240, 240, 240), "white");
+        assert_eq!(pixel_color(20, 20, 25), "black");
+        assert_eq!(pixel_color(30, 60, 200), "blue");
+        assert_eq!(pixel_color(140, 140, 140), "silver");
+        assert_eq!(color_word("A White delivery van"), Some("white"));
+        assert_eq!(color_word("gray cat"), Some("grey"));
+        let f = Frame {
+            width: 4,
+            height: 4,
+            rgb: Arc::new([200u8, 20, 20].repeat(16)),
+        };
+        assert_eq!(f.color_name(0.0, 0.0, 1.0, 1.0), Some("red"));
     }
 }

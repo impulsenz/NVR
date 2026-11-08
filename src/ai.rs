@@ -130,6 +130,8 @@ pub struct Detection {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Short description from a language model ("white delivery van").
+    pub desc: String,
 }
 
 #[derive(Debug)]
@@ -446,6 +448,7 @@ impl Ai {
                             y: y0 / fh,
                             w: (x1 - x0) / fw,
                             h: (y1 - y0) / fh,
+                            desc: String::new(),
                         })
                     })
                     .collect()
@@ -705,8 +708,11 @@ fn llm_prompt() -> String {
     format!(
         "You are the object detector of a home security camera. List every clearly visible object in the image \
          that is one of: {}. Reply with JSON only, in this form: \
-         {{\"objects\": [{{\"label\": \"person\", \"confidence\": 0.9, \"box_2d\": [ymin, xmin, ymax, xmax]}}]}} \
-         where box_2d is scaled 0 to 1000 and label is one of the words above. Reply {{\"objects\": []}} if there are none.",
+         {{\"objects\": [{{\"label\": \"car\", \"confidence\": 0.9, \"box_2d\": [ymin, xmin, ymax, xmax], \
+         \"color\": \"white\", \"description\": \"white delivery van\"}}]}} \
+         where box_2d is scaled 0 to 1000, label is one of the words above, color is the object's main colour \
+         in one plain word, and description is 2 to 6 words that would help someone search for it later \
+         (colour, kind, clothing, what it carries). Reply {{\"objects\": []}} if there are none.",
         SECURITY_OBJECTS.join(", ")
     )
 }
@@ -792,6 +798,13 @@ pub fn parse_llm(text: &str) -> Result<Vec<Detection>> {
                     h = (y1 - y0).clamp(0.0, 1.0 - y);
                 }
             }
+            let mut desc = it["description"].as_str().unwrap_or("").trim().to_string();
+            if let Some(c) = it["color"].as_str().or_else(|| it["colour"].as_str()) {
+                let c = c.trim().to_lowercase();
+                if !c.is_empty() && !desc.to_lowercase().contains(&c) {
+                    desc = format!("{c} {desc}").trim().to_string();
+                }
+            }
             Some(Detection {
                 label: normalize_label(label),
                 score: score.clamp(0.0, 1.0),
@@ -799,6 +812,7 @@ pub fn parse_llm(text: &str) -> Result<Vec<Detection>> {
                 y,
                 w,
                 h,
+                desc: desc.chars().take(80).collect(),
             })
         })
         .collect())
@@ -896,6 +910,7 @@ impl Yolox {
                         y: y0,
                         w: (w / fw).min(1.0 - x0),
                         h: (h / fh).min(1.0 - y0),
+                        desc: String::new(),
                     });
                 }
             }
@@ -983,6 +998,7 @@ mod tests {
             y: 0.1,
             w: 0.2,
             h: 0.5,
+            desc: String::new(),
         };
         let k = nms(vec![d(0.8, 0.1), d(0.9, 0.11), d(0.7, 0.6)], 0.45);
         assert_eq!(k.len(), 2);

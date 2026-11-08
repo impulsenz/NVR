@@ -199,6 +199,9 @@ impl EventBuffer {
         let out_dir = self.store.dir().to_path_buf();
         std::fs::create_dir_all(&out_dir)?;
         let name = format!("{event_id}.mp4");
+        // Written under a temporary name and renamed when complete, so a
+        // crash or power cut never leaves a broken clip behind.
+        let part = out_dir.join(format!("{event_id}{}", crate::mp4fix::PART_SUFFIX));
         let list = self.dir.join(format!("{event_id}.txt"));
         let text: String = parts
             .iter()
@@ -222,7 +225,7 @@ impl EventBuffer {
                 .arg(&list)
                 .args(["-c", "copy", "-movflags", "+faststart"])
                 .args(crate::ffmpeg::hevc_tag(&self.ffmpeg, &parts[0].path).await)
-                .arg(out_dir.join(&name))
+                .arg(&part)
                 .stdin(std::process::Stdio::null())
                 .kill_on_drop(true)
                 .output(),
@@ -230,6 +233,7 @@ impl EventBuffer {
         .await??;
         let _ = std::fs::remove_file(&list);
         if !out.status.success() {
+            let _ = std::fs::remove_file(&part);
             anyhow::bail!(
                 "{}",
                 String::from_utf8_lossy(&out.stderr)
@@ -238,6 +242,7 @@ impl EventBuffer {
                     .unwrap_or("ffmpeg failed")
             );
         }
+        crate::mp4fix::commit(&part, &out_dir.join(&name))?;
         let secs = (parts.last().unwrap().end - parts[0].start).num_seconds();
         info!(target: "event", "[{}] saved {}s full-quality clip for event {}", self.name, secs, event_id);
         Ok(name)

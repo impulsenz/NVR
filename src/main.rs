@@ -13,6 +13,7 @@ mod library;
 mod live;
 mod logs;
 mod manager;
+mod mp4fix;
 mod onvif;
 mod recorder;
 mod relay;
@@ -59,6 +60,15 @@ async fn main() -> Result<()> {
         .with_context(|| format!("creating {}", cfg.storage.dir.display()))?;
     let ids: Vec<String> = cfg.cameras.iter().map(|c| c.id.clone()).collect();
     storage::migrate_flat_files(&cfg.storage.dir, &ids);
+    // After a crash or power cut: cut incomplete data off the end of the
+    // newest recordings so every file plays.
+    let mut fixed = 0;
+    for cam in &cfg.cameras {
+        fixed += mp4fix::repair_dir(&cfg.camera_dir(cam), 72);
+    }
+    if fixed > 0 {
+        warn!("repaired {fixed} recording(s) left incomplete by an unexpected stop");
+    }
 
     let caps = ffmpeg::capabilities(&cfg.server.ffmpeg_path).await;
     if caps.ffmpeg_version.is_empty() {

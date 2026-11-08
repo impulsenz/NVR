@@ -27,6 +27,52 @@ use tracing::{info, warn};
 /// Events longer than this are split.
 const MAX_EVENT_SECONDS: i64 = 600;
 const ANALYSIS_WIDTH: u32 = 640;
+/// How long a frame waits before analysis, so late damage reports still apply.
+const ANALYSIS_DELAY: Duration = Duration::from_millis(700);
+
+/// Spots frames with a sudden colour cast. Damaged H.264/H.265 frames come
+/// out green (missing colour data) or smeared; a real scene changes colour
+/// gradually (except day/night switches, which are accepted after a while).
+#[derive(Default)]
+pub struct TintCheck {
+    baseline: Option<f32>,
+    odd_frames: u32,
+}
+
+impl TintCheck {
+    /// Average "greenness" (G minus the mean of R and B), sampled.
+    pub fn green(f: &Frame) -> f32 {
+        let px = f.rgb.chunks_exact(3).step_by(7);
+        let (mut sum, mut n) = (0f32, 0u32);
+        for p in px {
+            sum += p[1] as f32 - (p[0] as f32 + p[2] as f32) / 2.0;
+            n += 1;
+        }
+        if n == 0 { 0.0 } else { sum / n as f32 }
+    }
+
+    /// True if this frame looks broken.
+    pub fn check(&mut self, f: &Frame) -> bool {
+        let g = Self::green(f);
+        let Some(base) = self.baseline else {
+            self.baseline = Some(g);
+            return false;
+        };
+        if g > base + 14.0 {
+            self.odd_frames += 1;
+            // Still "odd" after ~10 s: the scene really changed (e.g. the
+            // camera switched from night to colour mode).
+            if self.odd_frames > 50 {
+                self.baseline = Some(g);
+                self.odd_frames = 0;
+            }
+            return true;
+        }
+        self.odd_frames = 0;
+        self.baseline = Some(base * 0.97 + g * 0.03);
+        false
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct DetectStatus {
@@ -176,7 +222,8 @@ impl Detector {
         let (w, h) = self.frame_size().await;
         let url = self.cam.live_url().to_string();
         let mut cmd = tokio::process::Command::new(&self.env.ffmpeg_path);
-        cmd.args(["-hide_banner", "-loglevel", "error"]);
+        // Warnings too: damaged-frame reports are often only warnings.
+        cmd.args(["-hide_banner", "-loglevel", "warning"]);
         if use_gpu {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
@@ -216,6 +263,15 @@ impl Detector {
                 let mut lines = BufReader::new(stderr).lines();
                 let mut filter = ffmpeg::StderrFilter::default();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    // Lost or corrupt stream data: the next frames are broken.
+                    let l = line.to_ascii_lowercase();
+                    if l.contains("[mpegts") || l.contains("corrupt") || l.contains("concealing") {
+                        *damaged.lock().unwrap() = Some(Instant::now());
+                        continue;
+                    }
+                    if l.contains("deprecated") {
+                        continue;
+                    }
                     let before = filter.decode_warnings;
                     if let Some(msg) = filter.filter(&line) {
                         warn!("[{name}] detection ffmpeg: {}", redact(&msg, &url));
@@ -245,6 +301,8 @@ impl Detector {
         let mut fps_count = 0u32;
         let mut fps_since = Instant::now();
         let mut tick = tokio::time::interval(Duration::from_secs(1));
+        let mut pending: std::collections::VecDeque<(Frame, Instant)> = Default::default();
+        let mut tint = TintCheck::default();
 
         loop {
             let mut buf = vec![0u8; frame_len];
@@ -271,6 +329,15 @@ impl Detector {
                 height: h,
                 rgb: Arc::new(buf),
             };
+            // The live grid gets every frame right away.
+            *self.latest.lock().unwrap() = Some(frame.clone());
+            self.frames.send_replace(Some(frame.clone()));
+            // A sudden colour cast (typically green) is a broken frame even
+            // when the decoder said nothing.
+            if tint.check(&frame) {
+                *damaged_at.lock().unwrap() = Some(Instant::now());
+            }
+            pending.push_back((frame, Instant::now()));
             fps_count += 1;
             if fps_since.elapsed() >= Duration::from_secs(5) {
                 self.status.lock().unwrap().fps =
@@ -279,56 +346,64 @@ impl Detector {
                 fps_since = Instant::now();
             }
 
-            let damaged = damaged_at
-                .lock()
-                .unwrap()
-                .is_some_and(|t| t.elapsed() < Duration::from_millis(1500));
-            if damaged {
-                // Keep the event alive but don't learn from or save broken frames.
-                self.check_end(active);
-                continue;
-            }
-            *self.latest.lock().unwrap() = Some(frame.clone());
-            self.frames.send_replace(Some(frame.clone()));
-            let m = motion.feed(&frame.rgb);
-            let moving = d.motion && m.as_ref().is_some_and(|m| m.moving);
+            // Frames are analysed a moment after they arrive: the decoder
+            // reports damage on a separate channel, sometimes after the
+            // broken frame itself has come out.
+            while pending
+                .front()
+                .is_some_and(|(_, at)| at.elapsed() >= ANALYSIS_DELAY)
             {
-                let mut s = self.status.lock().unwrap();
-                s.motion = moving;
-                s.motion_level = m.as_ref().map(|m| m.fraction).unwrap_or(0.0);
-                s.objects = m.as_ref().map(|m| m.objects.clone()).unwrap_or_default();
-                s.biggest_px = m.as_ref().map(|m| m.biggest).unwrap_or(0);
-                if peak_at.elapsed() > Duration::from_secs(3) {
-                    s.peak_px = 0;
+                let (frame, at) = pending.pop_front().unwrap();
+                let damaged = damaged_at
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|t| t + Duration::from_millis(1500) >= at);
+                if damaged {
+                    // Keep the event alive but don't learn from or save broken
+                    // frames; start the motion background afresh afterwards.
+                    motion.restart();
+                    continue;
                 }
-                if s.biggest_px >= s.peak_px {
-                    s.peak_px = s.biggest_px;
-                    peak_at = Instant::now();
+                let m = motion.feed(&frame.rgb);
+                let moving = d.motion && m.as_ref().is_some_and(|m| m.moving);
+                {
+                    let mut s = self.status.lock().unwrap();
+                    s.motion = moving;
+                    s.motion_level = m.as_ref().map(|m| m.fraction).unwrap_or(0.0);
+                    s.objects = m.as_ref().map(|m| m.objects.clone()).unwrap_or_default();
+                    s.biggest_px = m.as_ref().map(|m| m.biggest).unwrap_or(0);
+                    if peak_at.elapsed() > Duration::from_secs(3) {
+                        s.peak_px = 0;
+                    }
+                    if s.biggest_px >= s.peak_px {
+                        s.peak_px = s.biggest_px;
+                        peak_at = Instant::now();
+                    }
                 }
-            }
-            let now = Local::now();
-            if moving && let Some(o) = m.as_ref().and_then(|m| m.objects.first()) {
-                // Thumbnail around the biggest moving object.
-                self.on_motion(active, now, &frame, (o.x, o.y, o.w, o.h), o.size as f32);
-            }
+                let now = Local::now();
+                if moving && let Some(o) = m.as_ref().and_then(|m| m.objects.first()) {
+                    // Thumbnail around the biggest moving object.
+                    self.on_motion(active, now, &frame, (o.x, o.y, o.w, o.h), o.size as f32);
+                }
 
-            // Object recognition only while motion is happening: no motion,
-            // nothing is sent to the AI.
-            let ai = self.ai.get();
-            if d.ai
-                && ai.enabled()
-                && !ai_busy
-                && moving
-                && last_ai.elapsed().as_secs_f64() >= d.ai_interval
-            {
-                ai_busy = true;
-                last_ai = Instant::now();
-                let tx = ai_tx.clone();
-                let f = frame.clone();
-                tokio::spawn(async move {
-                    let res = ai.detect(&f).await;
-                    let _ = tx.send((f, res)).await;
-                });
+                // Object recognition only while motion is happening: no motion,
+                // nothing is sent to the AI.
+                let ai = self.ai.get();
+                if d.ai
+                    && ai.enabled()
+                    && !ai_busy
+                    && moving
+                    && last_ai.elapsed().as_secs_f64() >= d.ai_interval
+                {
+                    ai_busy = true;
+                    last_ai = Instant::now();
+                    let tx = ai_tx.clone();
+                    let f = frame.clone();
+                    tokio::spawn(async move {
+                        let res = ai.detect(&f).await;
+                        let _ = tx.send((f, res)).await;
+                    });
+                }
             }
             self.check_end(active);
         }
@@ -354,6 +429,8 @@ impl Detector {
                 thumb: None,
                 clip: None,
                 clip_start: None,
+                focus: None,
+                desc: String::new(),
             },
             last_activity: now,
             qualified: false,
@@ -428,10 +505,28 @@ impl Detector {
         let mut new_labels = Vec::new();
         let mut changed = !a.qualified;
         for h in &hits {
+            // The object's colour: from the language model's description if
+            // it gave one, otherwise measured from the pixels in its box.
+            let color = crate::imgutil::color_word(&h.desc)
+                .map(str::to_string)
+                .or_else(|| frame.color_name(h.x, h.y, h.w, h.h).map(str::to_string));
+            if !h.desc.is_empty()
+                && !a.event.desc.to_lowercase().contains(&h.desc.to_lowercase())
+                && a.event.desc.len() < 300
+            {
+                if !a.event.desc.is_empty() {
+                    a.event.desc.push_str("; ");
+                }
+                a.event.desc.push_str(&h.desc);
+                changed = true;
+            }
             match a.event.labels.iter_mut().find(|l| l.label == h.label) {
                 Some(l) => {
                     if h.score > l.score + 0.05 {
                         changed = true;
+                    }
+                    if h.score > l.score || l.color.is_none() {
+                        l.color = color.or(l.color.take());
                     }
                     l.score = l.score.max(h.score);
                 }
@@ -439,6 +534,7 @@ impl Detector {
                     a.event.labels.push(Label {
                         label: h.label.clone(),
                         score: h.score,
+                        color,
                     });
                     new_labels.push(format!("{} {:.0}%", h.label, h.score * 100.0));
                     changed = true;
@@ -475,12 +571,9 @@ impl Detector {
         (x, y, w, h): (f32, f32, f32, f32),
         score: f32,
     ) {
-        // Same 16:9 shape for every thumbnail; at least 40% of the frame for
-        // motion (context), 25% around a recognized object.
-        let min_frac = if score > 0.0 { 0.25 } else { 0.4 };
-        let crop = frame
-            .crop_aspect(x, y, w, h, 0.2, min_frac, 16.0 / 9.0)
-            .fit(480);
+        // The whole picture; for a recognized object the page zooms into
+        // `focus` (the card keeps its size).
+        let crop = frame.fit(640);
         let name = format!("{}.jpg", a.event.id);
         let dir = self.store.dir();
         let _ = std::fs::create_dir_all(dir);
@@ -491,6 +584,7 @@ impl Detector {
             && std::fs::rename(&tmp, dir.join(&name)).is_ok()
         {
             a.event.thumb = Some(name);
+            a.event.focus = (score > 0.0).then_some([x, y, w, h]);
             a.thumb_score = score;
             a.thumb_at = Instant::now();
         }
@@ -661,6 +755,12 @@ impl MotionDetector {
             }
         }
         g
+    }
+
+    /// Forget the background (after broken frames).
+    pub fn restart(&mut self) {
+        self.frames = 0;
+        self.reset();
     }
 
     pub fn feed(&mut self, rgb: &[u8]) -> Option<MotionResult> {

@@ -338,6 +338,14 @@ impl Recorder {
                 }
             };
             warn!("{tag}: {reason}; retrying in {}s", backoff.as_secs());
+            // The file it was writing may end mid-way: make it playable.
+            {
+                let (dir, prefix) = (self.spec.dir.clone(), self.spec.prefix.clone());
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::mp4fix::repair_recent(&dir, &prefix, 30)
+                })
+                .await;
+            }
 
             // GPU fallback: two failures in a row before any video was
             // recorded while using the GPU → switch this camera to the CPU.

@@ -11,6 +11,9 @@ use std::sync::RwLock;
 pub struct Label {
     pub label: String,
     pub score: f32,
+    /// Main colour of the object ("red", "white"...), for search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -34,6 +37,13 @@ pub struct Event {
     /// Wall-clock time of the clip's first frame.
     #[serde(default)]
     pub clip_start: Option<DateTime<Local>>,
+    /// Area of the thumbnail to zoom into (x, y, w, h as 0..1 of the picture):
+    /// the recognized object. The thumbnail itself is the whole picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<[f32; 4]>,
+    /// Short description from a language-model AI (for search).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub desc: String,
 }
 
 impl Event {
@@ -79,13 +89,31 @@ impl EventStore {
 
     fn append_line(&self, e: &Event) {
         let _ = std::fs::create_dir_all(&self.dir);
+        let path = self.dir.join("events.jsonl");
+        // If the last write was cut off by a crash or power cut, start on a
+        // new line so this event is not glued to the broken one (broken
+        // lines are skipped when loading).
+        let torn = std::fs::File::open(&path)
+            .and_then(|mut f| {
+                use std::io::{Read, Seek, SeekFrom};
+                if f.seek(SeekFrom::End(0))? == 0 {
+                    return Ok(false);
+                }
+                f.seek(SeekFrom::End(-1))?;
+                let mut b = [0u8; 1];
+                f.read_exact(&mut b)?;
+                Ok(b[0] != b'\n')
+            })
+            .unwrap_or(false);
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.dir.join("events.jsonl"))
+            .open(&path)
             && let Ok(line) = serde_json::to_string(e)
         {
-            let _ = writeln!(f, "{line}");
+            let nl = if torn { "\n" } else { "" };
+            let _ = write!(f, "{nl}{line}\n");
+            let _ = f.sync_data();
         }
     }
 
@@ -146,7 +174,9 @@ impl EventStore {
                 .map(|l| l + "\n")
                 .collect();
             let tmp = self.dir.join("events.jsonl.tmp");
-            if std::fs::write(&tmp, text).is_ok() {
+            if std::fs::write(&tmp, text).is_ok()
+                && std::fs::File::open(&tmp).and_then(|f| f.sync_all()).is_ok()
+            {
                 let _ = std::fs::rename(&tmp, self.dir.join("events.jsonl"));
             }
         }
@@ -179,11 +209,14 @@ mod tests {
             thumb: None,
             clip: None,
             clip_start: None,
+            focus: None,
+            desc: String::new(),
         };
         s.save(e.clone());
         e.labels.push(Label {
             label: "person".into(),
             score: 0.9,
+            color: None,
         });
         s.save(e.clone());
         let s2 = EventStore::open(&dir);

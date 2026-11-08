@@ -180,12 +180,15 @@ mod tests {
             thumb: Some(format!("{id}.jpg")),
             clip: Some(format!("{id}.mp4")),
             clip_start: None,
+            focus: None,
+            desc: String::new(),
         };
         store.save(ev(
             "ev-person",
             vec![Label {
                 label: "person".into(),
                 score: 0.9,
+                color: None,
             }],
         ));
         store.save(ev("ev-motion", vec![]));
