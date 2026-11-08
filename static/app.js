@@ -491,6 +491,8 @@ function renderDash() {
   unbinders.clear();
   dash.innerHTML = '';
   dash.classList.toggle('editing', editing);
+  dash.classList.remove('fit-stretch', 'fit-crop', 'fit-fit');
+  dash.classList.add('fit-' + (status.display.tile_fit || 'stretch'));
   for (const t of layout) {
     const c = cam(t.camera);
     if (!c) continue;
@@ -1542,6 +1544,11 @@ function renderDisplay(body) {
     <label for="o-fmt">Date &amp; time format</label><div><select id="o-fmt">${CLOCK_FORMATS.map(f => `<option ${f === d.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom" ${custom ? 'selected' : ''}>Custom…</option></select>
       <input type="text" id="o-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
       <div class="hint">Preview: <b id="o-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>
+    <label for="o-tilefit">Video in dashboard tiles</label><div><select id="o-tilefit">
+      <option value="stretch" ${d.tile_fit === 'stretch' ? 'selected' : ''}>Stretch to fill the box</option>
+      <option value="crop" ${d.tile_fit === 'crop' ? 'selected' : ''}>Zoom to fill (trims the edges)</option>
+      <option value="fit" ${d.tile_fit === 'fit' ? 'selected' : ''}>Show the whole picture (black bars)</option></select>
+      <div class="hint">For cameras whose picture shape differs from the tile (e.g. 4:3 sub-streams).</div></div>
     <span></span><label class="check"><input type="checkbox" id="o-name" ${d.show_name ? 'checked' : ''}> Show camera name</label>
     <span></span><label class="check"><input type="checkbox" id="o-fps" ${d.show_fps ? 'checked' : ''}> Show frames per second and stream details</label>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
@@ -1554,7 +1561,7 @@ function renderDisplay(body) {
     saveSettings({
       live: {fps: num('l-fps'), width: num('l-width'), quality: num('l-q'), hd_fps: num('l-hd'), preload_hd: chk('l-pre')},
       display: {fullscreen_corners: [...document.querySelectorAll('#o-fs input:checked')].map(i => i.value), show_clock: chk('o-clock'),
-        clock_corner: val('o-corner'), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss', show_name: chk('o-name'), show_fps: chk('o-fps')},
+        clock_corner: val('o-corner'), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss', show_name: chk('o-name'), show_fps: chk('o-fps'), tile_fit: val('o-tilefit')},
     }, 'Saved').then(() => renderDash());
   };
 }

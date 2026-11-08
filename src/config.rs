@@ -145,6 +145,8 @@ pub struct DisplayConfig {
     pub clock_format: String,
     pub show_name: bool,
     pub show_fps: bool,
+    /// How video fills the dashboard tiles: "stretch", "crop" (zoom) or "fit" (black bars).
+    pub tile_fit: String,
 }
 
 impl Default for DisplayConfig {
@@ -156,6 +158,7 @@ impl Default for DisplayConfig {
             clock_format: "DD/MM/YYYY HH:mm:ss".into(),
             show_name: true,
             show_fps: false,
+            tile_fit: "stretch".into(),
         }
     }
 }
@@ -683,6 +686,9 @@ impl Config {
         }
         if d.clock_format.trim().is_empty() {
             bail!("clock format cannot be empty");
+        }
+        if !["stretch", "crop", "fit"].contains(&d.tile_fit.as_str()) {
+            bail!("tile fit must be stretch, crop or fit");
         }
         if !HWACCELS.contains(&self.hardware.hwaccel.as_str()) {
             bail!("unknown hardware decoder \"{}\"", self.hardware.hwaccel);

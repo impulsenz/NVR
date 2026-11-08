@@ -109,6 +109,8 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 
 /* dashboard */
 #dash { position: relative; width: 100%; user-select: none; }
+#dash.fit-stretch .tile > img { object-fit: fill; }
+#dash.fit-crop .tile > img { object-fit: cover; }
 .tile { position: absolute; cursor: pointer; transition: box-shadow .15s; }
 .tile:hover { border-color: var(--accent); }
 .tile.event { box-shadow: 0 0 0 2px var(--purple); }
