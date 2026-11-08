@@ -1114,7 +1114,7 @@ function updateFocus() {
   const btn = $('focus-rec');
   btn.hidden = !r || !c.enabled;
   if (r) {
-    btn.textContent = r.paused ? 'Resume recording' : 'Pause recording';
+    btn.innerHTML = r.paused ? '<i class="bi">⏺</i><span>Resume recording</span>' : '<i class="bi">⏸</i><span>Pause recording</span>';
     btn.className = r.paused ? 'primary' : '';
     btn.onclick = async () => {
       if (!r.paused && !confirm(`Pause recording for ${c.name}?\nIt resumes automatically when the NVR restarts.`)) return;

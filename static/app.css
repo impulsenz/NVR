@@ -23,8 +23,8 @@ nav a.active { color: var(--text); border-bottom-color: var(--accent); }
 .badge.warn { background: var(--amber); color: #111; }
 .spacer { flex: 1; }
 #clock { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-@media (max-width: 760px) { #clock { display: none; } nav a { padding: 0 8px; } header { gap: 8px; } }
-@media (max-width: 520px) { header h1 { display: none; } header { padding: 0 6px; } nav a { padding: 0 7px; } }
+nav .ni, .bi { display: none; font-style: normal; }
+.focus-actions .bi { display: inline; margin-right: 5px; }
 main { padding: 16px; max-width: 1800px; margin: 0 auto; }
 
 /* controls */
@@ -352,3 +352,61 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
 .profile-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--accent2); border-radius: 8px; }
 .profile-bar select { max-width: 240px; }
 .profile-bar .hint { flex-basis: 100%; margin: 0; }
+
+/* ===================== Phones ===================== */
+@media (max-width: 760px) {
+  /* Navigation as a tab bar at the bottom, within thumb reach. */
+  header { position: fixed; top: auto; bottom: 0; left: 0; right: 0; height: calc(60px + env(safe-area-inset-bottom));
+    padding: 0 0 env(safe-area-inset-bottom); border-bottom: 0; border-top: 1px solid var(--border); gap: 0; }
+  header h1, #clock, header .spacer { display: none; }
+  nav { width: 100%; gap: 0; }
+  nav a { flex: 1; flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px; font-size: 11px;
+    border-bottom: 0; border-top: 2px solid transparent; position: relative; }
+  nav a.active { border-top-color: var(--accent); border-bottom: 0; }
+  nav .ni { display: block; font-size: 20px; line-height: 1; }
+  nav .badge { position: absolute; top: 4px; left: calc(50% + 6px); }
+  body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  main { padding: 8px; }
+  .card { padding: 12px; }
+
+  /* Bigger touch targets; 16px text stops phones zooming into fields. */
+  button, .btn { min-height: 44px; padding: 8px 14px; font-size: 15px; }
+  button.small, .btn.small { min-height: 38px; padding: 6px 12px; font-size: 14px; }
+  select, input[type=text], input[type=password], input[type=number], input[type=time], input[type=date], input[type=search], textarea { min-height: 44px; font-size: 16px; }
+  .check input, .chips input { width: 20px; height: 20px; }
+  .fsbtn { min-width: 40px; min-height: 40px; font-size: 18px; }
+
+  /* Camera view: the picture edge to edge and kept on screen while scrolling. */
+  #live-focus .two > div:first-child { display: contents; }
+  #focus-surface { margin: -8px -8px 0; border-radius: 0; position: sticky; top: 0; z-index: 6; }
+  .focus-actions { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .focus-actions > * { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    min-height: 58px; padding: 6px 4px; font-size: 12px; text-align: center; }
+  .focus-actions > [hidden] { display: none; }
+  .focus-actions .bi { margin: 0; font-size: 20px; }
+  #focus-quick { display: grid !important; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+
+  /* Timelines: taller lanes and bigger symbols to tap. */
+  .ctl-lane { height: 64px; }
+  .ctl-lane .ic { font-size: 22px; top: 0; }
+  .tl-row { height: 44px; }
+  .tl-row .label { width: 84px; }
+  .tl-row .ev .ic { font-size: 18px; top: -2px; }
+  .legend { font-size: 13px; }
+
+  /* Recordings: filters wrap, search takes the full width. */
+  .filters { flex-wrap: wrap; gap: 6px; }
+  #f-q { width: 100% !important; order: 10; }
+  .rc .thumb .tools { opacity: 1; }
+  .rc .thumb .tools .btn, .rc .thumb .tools button { min-height: 34px; min-width: 34px; }
+  dialog { max-height: calc(100vh - 16px); }
+}
+/* Phone turned sideways: the video uses the whole screen height. */
+@media (max-height: 500px) and (orientation: landscape) and (max-width: 1000px) {
+  #focus-surface { height: calc(100vh - 70px); aspect-ratio: auto; position: static; margin: 0; }
+}
+@media (max-width: 760px) {
+  #live-focus .two { gap: 8px; }
+  #focus-player-controls:empty { display: none; }
+  .focus-actions { margin-top: 0 !important; }
+}

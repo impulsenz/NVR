@@ -40,7 +40,11 @@ viewing, finding footage, and managing everything, all from the browser.
   optionally moving existing recordings there.
 - **Cloud backup** with rclone (Google Drive, OneDrive, Dropbox, S3, B2, …): only verified AI alerts,
   all alerts, or everything.
-- Recordings survive power cuts, and cameras reconnect automatically.
+- **Crash and power-cut safe**: recordings are written in small self-contained pieces; after an
+  unexpected stop the NVR cuts any incomplete piece off the end so every file plays. Alert clips are
+  written under a temporary name and only appear when complete. Cameras reconnect automatically.
+- **Recording profiles**: save a camera's recording, motion and AI settings as a named profile and apply
+  it to other cameras in one click.
 
 **Motion detection & AI**
 - Blue Iris-style motion detection: **min. contrast**, **min. object size** in pixels, **make time**,
@@ -55,18 +59,28 @@ viewing, finding footage, and managing everything, all from the browser.
   - **Any OpenAI-compatible API**: OpenAI, OpenRouter, Groq, LM Studio, …
 - Choose which objects alert (person, car, dog, …), the minimum confidence, and whether *any motion*
   or *only recognized objects* make an alert.
-- Each alert gets a **thumbnail cropped around the detected object**.
+- Each alert gets a **thumbnail of the whole picture** that zooms in on the recognized object.
+- Damaged video frames (lost network packets, green or smeared pictures) are skipped, so they don't
+  cause false alerts or broken thumbnails.
+- If the same object is recognized as two things (a cat also seen as a person), only the more
+  confident answer is kept.
+- Each recognized object gets a **colour**; language-model AIs also add a short description.
 - "Test on this camera" shows the camera's picture with detection boxes.
 
 **Recordings**
 - **Calendar** to pick a single day or a range, optionally limited to a time of day.
 - Filter by **camera(s)** and **alert type** (tick any of Person, Car, Truck, Dog, Motion, Recordings, …).
+- **Search** alerts by what was seen: "red van", "white car", "black cat", "person", or words from the
+  AI's description.
 - Cards with **previews**: the alert thumbnail, or a frame from the recording.
 - Player with a **scrub bar that previews frames as you move along it**, and fast seeking.
 - **Clip export**: mark a start and end (buttons or drag the handles) and download just that part.
 - **Full-screen mode** for browsing recordings.
 - **Multi-camera timeline**: watch several cameras at the same moment (files play on without gaps), scrub across all of them at once
   (each shows a quick time-lapse preview), jump between alerts, and export the same time range from each camera.
+  Click an alert symbol to watch that alert on that camera. Legends explain the colours and symbols.
+- Time-lapse previews for the last 24 hours are prepared in the background, so they're ready when you
+  open the timeline (older days are prepared when you open them).
 
 **System & logs**
 - **CPU, GPU and memory** usage with graphs (1 hour to 30 days, kept across restarts), so you can see if
@@ -76,6 +90,9 @@ viewing, finding footage, and managing everything, all from the browser.
   an estimate of **how many days of recording fit** with your current settings.
 - **Logs page**: errors, warnings, alerts and camera events, filterable by level, type, camera and text.
   Also saved to `nvr-data/nvr.log`.
+- Click the graph's legend to show or hide lines; memory used by the NVR is shown next to the computer's.
+- **Smart CPU/GPU use**: motion-detection decoding moves to the GPU when the CPU stays overloaded (and
+  back), the built-in AI slows down under heavy load, and background jobs run at low priority.
 
 **Setup**
 - Add, edit, **clone** and delete cameras in the browser.
@@ -85,6 +102,7 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Export / import your whole setup** (cameras, settings, layout) to restore after a reinstall.
 - GPU acceleration (NVIDIA, Intel, AMD, Apple) with automatic CPU fallback.
 - Optional login.
+- **Phone friendly**: bottom tab bar, large buttons, and the camera picture stays on screen while you scroll.
 
 ## Install
 
