@@ -230,6 +230,7 @@ impl EventBuffer {
                 ])
                 .arg(&list)
                 .args(["-c", "copy", "-movflags", "+faststart"])
+                .args(crate::ffmpeg::hevc_tag(&self.ffmpeg, &parts[0].path).await)
                 .arg(out_dir.join(&name))
                 .stdin(std::process::Stdio::null())
                 .kill_on_drop(true)

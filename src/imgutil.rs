@@ -19,7 +19,16 @@ impl Frame {
     /// Crop around a normalized box with a fixed picture shape (`aspect` = w/h),
     /// so thumbnails are uniform. The box is padded, made at least
     /// `min_frac` of the frame width, and kept inside the frame.
-    pub fn crop_aspect(&self, x: f32, y: f32, w: f32, h: f32, pad: f32, min_frac: f32, aspect: f32) -> Frame {
+    pub fn crop_aspect(
+        &self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        pad: f32,
+        min_frac: f32,
+        aspect: f32,
+    ) -> Frame {
         let (fw, fh) = (self.width as f32, self.height as f32);
         let mut cw = (w * fw * (1.0 + 2.0 * pad)).max(fw * min_frac);
         let mut ch = h * fh * (1.0 + 2.0 * pad);
@@ -35,13 +44,20 @@ impl Frame {
         let cy = (y + h / 2.0) * fh;
         let x0 = (cx - cw / 2.0).clamp(0.0, (fw - cw).max(0.0)) as u32;
         let y0 = (cy - ch / 2.0).clamp(0.0, (fh - ch).max(0.0)) as u32;
-        let (cw, ch) = ((cw as u32).min(self.width - x0), (ch as u32).min(self.height - y0));
+        let (cw, ch) = (
+            (cw as u32).min(self.width - x0),
+            (ch as u32).min(self.height - y0),
+        );
         let mut out = Vec::with_capacity((cw * ch * 3) as usize);
         for row in y0..y0 + ch {
             let start = ((row * self.width + x0) * 3) as usize;
             out.extend_from_slice(&self.rgb[start..start + (cw * 3) as usize]);
         }
-        Frame { width: cw, height: ch, rgb: Arc::new(out) }
+        Frame {
+            width: cw,
+            height: ch,
+            rgb: Arc::new(out),
+        }
     }
 
     /// Bilinear resize.
@@ -121,6 +137,11 @@ mod tests {
         assert_eq!(f.fit(32).width, 32);
         // A tall box still gives a 16:9 picture.
         let t = f.crop_aspect(0.4, 0.1, 0.05, 0.8, 0.1, 0.3, 16.0 / 9.0);
-        assert!((t.width as f32 / t.height as f32 - 16.0 / 9.0).abs() < 0.15, "{}x{}", t.width, t.height);
+        assert!(
+            (t.width as f32 / t.height as f32 - 16.0 / 9.0).abs() < 0.15,
+            "{}x{}",
+            t.width,
+            t.height
+        );
     }
 }

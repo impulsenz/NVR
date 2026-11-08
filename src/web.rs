@@ -89,11 +89,14 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/preview/{token}", get(preview_stream))
         .route("/api/hw-test", post(hw_test))
         .route("/api/ai/test", post(ai_test))
+        .route("/api/ai/models", post(ai_models))
+        .route("/api/cameras/{id}/motion", get(camera_motion))
         .route("/api/cloud/test", post(cloud_test))
         .route("/api/live/ws", get(live_ws))
         .route("/media/{id}/rec/{name}", get(serve_recording))
         .route("/media/{id}/events/{name}", get(serve_event_file))
         .route("/media/{id}/thumb/{name}", get(recording_thumb))
+        .route("/media/{id}/play/{kind}/{name}", get(play_converted))
         .route("/media/{id}/sprite/{kind}/{name}", get(sprite_image))
         .route("/live/{id}/stream.mjpeg", get(live_mjpeg))
         .route("/live/{id}/frame.jpg", get(live_frame))
@@ -556,6 +559,43 @@ struct AiTestReq {
     ai: Option<crate::config::AiConfig>,
 }
 
+/// Models available from the chosen AI provider (key from the form or the saved one).
+async fn ai_models(State(m): App, Json(mut cfg): Json<crate::config::AiConfig>) -> Response {
+    if cfg.api_key.is_empty() {
+        cfg.api_key = m.config().ai.api_key;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap_or_default();
+    match crate::ai::list_models(&client, &cfg).await {
+        Ok(mut list) => {
+            list.sort();
+            let suggested = (cfg.provider == "gemini")
+                .then(|| crate::ai::pick_gemini(&list))
+                .flatten();
+            Json(json!({ "models": list, "suggested": suggested })).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+/// Live motion readout for one camera (polled while tuning or showing boxes).
+async fn camera_motion(State(m): App, Path(id): Path<String>) -> Response {
+    let c = camera!(m, id);
+    let d = c.detector().map(|d| d.status());
+    Json(json!({
+        "running": d.as_ref().is_some_and(|d| d.running),
+        "moving": d.as_ref().is_some_and(|d| d.motion),
+        "objects": d.as_ref().map(|d| d.objects.clone()).unwrap_or_default(),
+        "biggest_px": d.as_ref().map(|d| d.biggest_px).unwrap_or(0),
+        "peak_px": d.as_ref().map(|d| d.peak_px).unwrap_or(0),
+        "min_object_px": c.cfg.detect.min_object_px,
+        "labels": d.as_ref().map(|d| d.active_labels.clone()).unwrap_or_default(),
+    }))
+    .into_response()
+}
+
 /// Run object recognition once on a camera's current picture.
 async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
     let c = camera!(m, req.camera);
@@ -792,6 +832,91 @@ async fn serve_event_file(
     }
 }
 
+#[derive(Deserialize)]
+struct PlayQuery {
+    #[serde(default)]
+    t: f64,
+}
+
+/// Play a recording converted to H.264 on the fly, for browsers that cannot
+/// play the camera's own format (usually H.265). Starts at `t` seconds; the
+/// player asks again with a new `t` when seeking.
+async fn play_converted(
+    State(m): App,
+    Path((id, kind, name)): Path<(String, String, String)>,
+    Query(q): Query<PlayQuery>,
+) -> Response {
+    let c = camera!(m, id);
+    let src = match media_path(&c, &kind, &name) {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::NOT_FOUND, e),
+    };
+    let cfg = m.config();
+    let hw = &cfg.hardware;
+    let gpu = hw.uses_gpu();
+    let encoder = if gpu {
+        hw.resolved_encoder()
+    } else {
+        "libx264"
+    };
+    let (pre, mut out) = ffmpeg::encoder_args(encoder, hw, false);
+    if encoder == "libx264" {
+        // Speed matters more than size here.
+        if let Some(i) = out.iter().position(|a| a == "veryfast") {
+            out[i] = "superfast".into();
+        }
+    }
+    let mut cmd = tokio::process::Command::new(&cfg.server.ffmpeg_path);
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    if gpu {
+        cmd.args(ffmpeg::decode_args(hw, false));
+    }
+    let child = cmd
+        .args(pre)
+        .args(["-ss", &format!("{:.3}", q.t.max(0.0)), "-i"])
+        .arg(&src)
+        .args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-vf",
+            "scale='min(1920,iw)':-2",
+        ])
+        .args(out)
+        .args(["-c:a", "aac", "-b:a", "96k"])
+        .args([
+            "-f",
+            "mp4",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof",
+            "pipe:1",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let stdout = child.stdout.take().unwrap();
+    // The ffmpeg process lives as long as the response body (browser disconnect ends it).
+    let stream = futures_util::stream::unfold(
+        (tokio_util::io::ReaderStream::new(stdout), child),
+        |(mut r, c)| async move {
+            use futures_util::StreamExt;
+            r.next().await.map(|x| (x, (r, c)))
+        },
+    );
+    Response::builder()
+        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
 /// Resolve "rec"/"clip" + name to a file of the camera.
 fn media_path(
     c: &crate::manager::CameraRuntime,
@@ -851,7 +976,9 @@ async fn ensure_sprite(
     let prefix = dir.join(format!("{name}.sprite"));
     let first = dir.join(format!("{name}.sprite-000.jpg"));
     let meta = dir.join(format!("{name}.sprite.json"));
-    let load = || -> Option<ffmpeg::SpriteInfo> { serde_json::from_slice(&std::fs::read(&meta).ok()?).ok() };
+    let load = || -> Option<ffmpeg::SpriteInfo> {
+        serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()
+    };
     if fresh(&first, &src)
         && let Some(i) = load()
     {
@@ -878,7 +1005,10 @@ async fn ensure_sprite(
     Ok((prefix, info))
 }
 
-async fn sprite_info(State(m): App, Path((id, kind, name)): Path<(String, String, String)>) -> Response {
+async fn sprite_info(
+    State(m): App,
+    Path((id, kind, name)): Path<(String, String, String)>,
+) -> Response {
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
         Ok((_, info)) => Json(json!({
@@ -908,7 +1038,10 @@ async fn sprite_image(
             let file = PathBuf::from(format!("{}-{:03}.jpg", prefix.display(), q.page));
             let mut res = serve_file(file, req, None, false).await;
             // Pages are versioned in their URL, so they can be cached for long.
-            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=86400"));
+            res.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("max-age=86400"),
+            );
             res
         }
         Ok(_) => err(StatusCode::NOT_FOUND, "no such page"),

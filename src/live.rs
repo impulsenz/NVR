@@ -58,7 +58,8 @@ impl Live {
         cancel: CancellationToken,
     ) -> Arc<Self> {
         // The GPU is only worth it for full-quality streams (see HardwareConfig).
-        let use_gpu = env.hardware.hwaccel != "none" && (quality == Quality::Main || env.hardware.gpu_substreams);
+        let use_gpu = env.hardware.hwaccel != "none"
+            && (quality == Quality::Main || env.hardware.gpu_substreams);
         Arc::new(Self {
             cam,
             relay,
@@ -250,7 +251,9 @@ impl Live {
                 }
                 _ = self.cancel.cancelled() => return Ok(got),
             }
-            let Some(frame) = rx.borrow_and_update().clone() else { continue };
+            let Some(frame) = rx.borrow_and_update().clone() else {
+                continue;
+            };
             let jpg = tokio::task::spawn_blocking(move || frame.jpeg(quality)).await??;
             got = true;
             self.publish(Bytes::from(jpg));
@@ -291,7 +294,12 @@ impl Live {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
         let mut child = cmd
-            .args(["-fflags", "nobuffer+discardcorrupt", "-flags", "+low_delay-output_corrupt"])
+            .args([
+                "-fflags",
+                "nobuffer+discardcorrupt",
+                "-flags",
+                "+low_delay-output_corrupt",
+            ])
             .args(crate::relay::pipe_input_args())
             .args(["-an", "-vf", &vf, "-q:v", &live.quality.to_string()])
             .args(["-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])

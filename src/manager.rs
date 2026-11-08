@@ -151,16 +151,37 @@ impl CameraRuntime {
         }
 
         let detector = (cfg.detection_enabled()).then(|| {
-            Detector::new(cfg.clone(), env.clone(), ai, events.clone(), event_buffer, relay_sub.clone())
+            Detector::new(
+                cfg.clone(),
+                env.clone(),
+                ai,
+                events.clone(),
+                event_buffer,
+                relay_sub.clone(),
+            )
         });
         if let Some(d) = &detector {
             tasks.push(tokio::spawn(d.clone().run(cancel.clone())));
         }
 
         // HD view: decodes the main stream only while someone has a camera open.
-        let live_main = Live::new(cfg.clone(), env.clone(), Quality::Main, relay_main.clone(), None, cancel.clone());
+        let live_main = Live::new(
+            cfg.clone(),
+            env.clone(),
+            Quality::Main,
+            relay_main.clone(),
+            None,
+            cancel.clone(),
+        );
         // Grid view: reuses the motion detector's frames when detection is on.
-        let live_sub = Live::new(cfg.clone(), env.clone(), Quality::Sub, relay_sub.clone(), detector.clone(), cancel.clone());
+        let live_sub = Live::new(
+            cfg.clone(),
+            env.clone(),
+            Quality::Sub,
+            relay_sub.clone(),
+            detector.clone(),
+            cancel.clone(),
+        );
 
         Arc::new(Self {
             dir,
@@ -388,7 +409,12 @@ impl Manager {
         Ok(cam)
     }
 
-    pub async fn update_camera(&self, id: &str, mut cam: CameraConfig, move_recordings: bool) -> Result<CameraConfig> {
+    pub async fn update_camera(
+        &self,
+        id: &str,
+        mut cam: CameraConfig,
+        move_recordings: bool,
+    ) -> Result<CameraConfig> {
         let _g = self.edit.lock().await;
         let mut cfg = self.config();
         let old_cfg = cfg.clone();
@@ -401,7 +427,11 @@ impl Manager {
         *slot = cam.clone();
         self.commit(cfg.clone())?;
         info!("updated camera \"{}\"", cam.name);
-        let moved = if move_recordings { self.move_camera_dirs(&old_cfg, &cfg, Some(id)).await } else { Ok(()) };
+        let moved = if move_recordings {
+            self.move_camera_dirs(&old_cfg, &cfg, Some(id)).await
+        } else {
+            Ok(())
+        };
         self.restart_camera(&cam).await;
         moved?;
         Ok(cam)
@@ -532,7 +562,9 @@ impl Manager {
             if only.is_some_and(|o| o != cam.id) {
                 continue;
             }
-            let Some(prev) = old.cameras.iter().find(|c| c.id == cam.id) else { continue };
+            let Some(prev) = old.cameras.iter().find(|c| c.id == cam.id) else {
+                continue;
+            };
             let (from, to) = (old.camera_dir(prev), new.camera_dir(cam));
             if from != to && from.exists() {
                 if let Some(rt) = self.camera(&cam.id) {
@@ -547,7 +579,10 @@ impl Manager {
             if let Ok(rd) = std::fs::read_dir(&old.storage.dir) {
                 for e in rd.flatten() {
                     let p = e.path();
-                    if p.is_dir() && !jobs.iter().any(|j| j.0 == p) && !new.cameras.iter().any(|c| new.camera_dir(c) == p) {
+                    if p.is_dir()
+                        && !jobs.iter().any(|j| j.0 == p)
+                        && !new.cameras.iter().any(|c| new.camera_dir(c) == p)
+                    {
                         jobs.push((p.clone(), new.storage.dir.join(e.file_name())));
                     }
                 }
@@ -558,7 +593,8 @@ impl Manager {
         }
         tokio::task::spawn_blocking(move || -> Result<()> {
             for (from, to) in jobs {
-                crate::fsbrowse::move_tree(&from, &to).with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+                crate::fsbrowse::move_tree(&from, &to)
+                    .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
             }
             Ok(())
         })
@@ -567,7 +603,11 @@ impl Manager {
 
     async fn apply(&self, old: Config, cfg: Config, move_recordings: bool) -> Result<bool> {
         self.commit(cfg.clone())?;
-        let moved = if move_recordings { self.move_camera_dirs(&old, &cfg, None).await } else { Ok(()) };
+        let moved = if move_recordings {
+            self.move_camera_dirs(&old, &cfg, None).await
+        } else {
+            Ok(())
+        };
         if cfg.ai != old.ai {
             self.ai.replace(cfg.ai.clone(), &self.data_dir);
         }

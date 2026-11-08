@@ -178,6 +178,10 @@ impl Recorder {
 
         let mut gpu_desc = None;
         let mut out_args = vec!["-c:v".to_string(), "copy".to_string()];
+        // Copied H.265 must be tagged "hvc1" or Apple devices (Safari) refuse to play it.
+        if self.spec.relay.info().is_some_and(|i| i.codec == "hevc") {
+            out_args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
+        }
         if cam.reencode() {
             let hw = &env.hardware;
             let (encoder, keep) = if use_gpu {
@@ -260,6 +264,14 @@ impl Recorder {
             }
 
             self.set_state(RecState::Connecting);
+            // Learn the stream's codec first (needed to tag H.265 correctly).
+            if self.spec.relay.info().is_none() {
+                let _connect = self.spec.relay.subscribe();
+                tokio::select! {
+                    _ = self.spec.relay.wait_info(Duration::from_secs(15)) => {}
+                    _ = self.cancel.cancelled() => { self.set_state(RecState::Idle); return; }
+                }
+            }
             let use_gpu = self.use_gpu.load(Ordering::SeqCst);
             info!("{tag}: starting ({})", mask_url(self.spec.relay.url()));
             let (mut child, gpu_desc) = match self.spawn_ffmpeg(use_gpu) {

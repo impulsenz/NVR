@@ -300,10 +300,26 @@ function preloadSprite(sp) {
 // Shared recording player: custom scrubber with frame previews, speed,
 // clip start/end handles and clip download, auto-advance to next file.
 // ======================================================================
+// URL that plays a recording converted to H.264 on the fly (for browsers that
+// can't play the camera's format, usually H.265), or null.
+function convertedUrl(url) {
+  const m = String(url).match(/^media\/([^/]+)\/(rec|events)\/([^?]+)/);
+  return m ? `media/${m[1]}/play/${m[2] === 'events' ? 'clip' : 'rec'}/${m[3]}` : null;
+}
+// Cameras whose recordings this browser can't play directly.
+const noNativePlayback = new Set(store_get('no-native', []));
+function store_get(k, d) { try { const v = localStorage.getItem('nvr-' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
+function markNoNative(camId) {
+  noNativePlayback.add(camId);
+  try { localStorage.setItem('nvr-no-native', JSON.stringify([...noNativePlayback])); } catch (e) {}
+}
+
 class Player {
   constructor(video, controls, msgEl) {
     this.video = video; this.box = controls; this.msg = msgEl;
     this.item = null; this.sprite = null; this.inT = null; this.outT = null; this.marks = [];
+    // tc: playing a converted stream that starts at `base` seconds into the file.
+    this.tc = false; this.base = 0;
     video.controls = false;
     video.addEventListener('timeupdate', () => this.paint());
     video.addEventListener('play', () => this.paintButtons());
@@ -311,9 +327,15 @@ class Player {
     video.addEventListener('loadedmetadata', () => { this.paint(); });
     video.addEventListener('ended', () => this.next());
     video.addEventListener('error', () => {
-      if (!video.getAttribute('src') || !this.msg) return;
+      if (!video.getAttribute('src') || !this.item) return;
+      if (!this.tc && convertedUrl(this.item.url)) return this.useConverted();
+      if (!this.msg) return;
       this.msg.hidden = false;
-      this.msg.textContent = 'This browser cannot play this recording (it may be H.265). Use Download and play it in VLC, or turn on “Convert recordings to H.264” for this camera.';
+      this.msg.textContent = 'This recording could not be played. Use Download and play it in VLC.';
+    });
+    // Some browsers "play" unsupported video as sound only: no picture size.
+    video.addEventListener('loadeddata', () => {
+      if (!this.tc && this.item && video.videoWidth === 0 && convertedUrl(this.item.url)) this.useConverted();
     });
     video.addEventListener('playing', () => { if (this.msg) this.msg.hidden = true; });
     video.addEventListener('click', () => video.paused ? video.play() : video.pause());
@@ -341,28 +363,57 @@ class Player {
     this.el = {scrub: q('.scrub'), fill: q('.fill'), head: q('.head'), sel: q('.sel'), hin: q('.handle.in'), hout: q('.handle.out'),
       prev: q('.preview'), pimg: q('.preview .img'), pt: q('.preview .t'), time: q('.p-time'), play: q('.p-play'), clip: q('.p-clip')};
     q('.p-play').onclick = () => this.video.paused ? this.video.play() : this.video.pause();
-    q('.p-back').onclick = () => this.video.currentTime = Math.max(0, this.video.currentTime - 10);
-    q('.p-fwd').onclick = () => this.video.currentTime = Math.min(this.dur(), this.video.currentTime + 10);
+    q('.p-back').onclick = () => this.seekTo(Math.max(0, this.cur() - 10));
+    q('.p-fwd').onclick = () => this.seekTo(Math.min(this.dur(), this.cur() + 10));
     q('.p-speed').onchange = (e) => this.video.playbackRate = +e.target.value;
-    q('.p-in').onclick = () => { this.inT = this.video.currentTime; if (this.outT != null && this.outT <= this.inT) this.outT = null; this.paint(); };
-    q('.p-out').onclick = () => { this.outT = this.video.currentTime; if (this.inT == null || this.inT >= this.outT) this.inT = Math.max(0, this.outT - 30); this.paint(); };
+    q('.p-in').onclick = () => { this.inT = this.cur(); if (this.outT != null && this.outT <= this.inT) this.outT = null; this.paint(); };
+    q('.p-out').onclick = () => { this.outT = this.cur(); if (this.inT == null || this.inT >= this.outT) this.inT = Math.max(0, this.outT - 30); this.paint(); };
     q('.p-mute').onclick = (e) => { this.video.muted = !this.video.muted; e.target.textContent = this.video.muted ? '🔇' : '🔊'; };
     q('.p-fs').onclick = () => fullscreen(this.video.parentElement);
     this.el.clip.onclick = () => this.downloadClip();
     this.dl = q('.p-dl');
     this.wireScrub();
   }
-  dur() { const d = this.video.duration; return isFinite(d) && d > 0 ? d : (this.sprite ? this.sprite.info.duration : 0); }
+  dur() {
+    if (this.tc) return this.sprite ? this.sprite.info.duration : this.base + (isFinite(this.video.duration) ? this.video.duration : 0);
+    const d = this.video.duration; return isFinite(d) && d > 0 ? d : (this.sprite ? this.sprite.info.duration : 0);
+  }
+  // Position in the recording, in seconds.
+  cur() { return this.base + this.video.currentTime; }
+  seekTo(t, play) {
+    if (!this.tc) { this.video.currentTime = t; if (play) this.video.play().catch(() => {}); return; }
+    const wasPlaying = play ?? !this.video.paused;
+    this.base = Math.max(0, t);
+    this.video.src = convertedUrl(this.item.url) + '?t=' + this.base.toFixed(2);
+    this.video.playbackRate = +this.box.querySelector('.p-speed').value;
+    if (wasPlaying) this.video.play().catch(() => {});
+    this.paint();
+  }
+  // Switch to the converted stream, keeping the position.
+  useConverted() {
+    const t = this.tc ? this.cur() : (this.video.currentTime || this.item.offset || 0);
+    this.tc = true;
+    markNoNative(this.item.camera);
+    if (this.msg) { this.msg.hidden = false; this.msg.textContent = 'Converting for this browser…'; }
+    this.seekTo(t, true);
+  }
   wallAt(t) { return new Date(new Date(this.item.file_start).getTime() + t * 1000); }
   async load(item, autoplay = true) {
     if (!this.el) this.build();
     this.item = item; this.inT = this.outT = null; this.sprite = null;
     if (this.msg) this.msg.hidden = true;
-    this.video.src = item.url;
-    this.video.playbackRate = +this.box.querySelector('.p-speed').value;
     const start = item.offset || 0;
-    const seek = () => { this.video.currentTime = start; if (autoplay) this.video.play().catch(() => {}); };
-    if (this.video.readyState >= 1) seek(); else this.video.addEventListener('loadedmetadata', seek, {once: true});
+    // Known not to play here: go straight to the converted stream.
+    this.tc = noNativePlayback.has(item.camera) && !!convertedUrl(item.url);
+    this.base = 0;
+    if (this.tc) {
+      this.seekTo(start, autoplay);
+    } else {
+      this.video.src = item.url;
+      this.video.playbackRate = +this.box.querySelector('.p-speed').value;
+      const seek = () => { this.video.currentTime = start; if (autoplay) this.video.play().catch(() => {}); };
+      if (this.video.readyState >= 1) seek(); else this.video.addEventListener('loadedmetadata', seek, {once: true});
+    }
     this.dl.href = item.url + '?download=1';
     this.marks = item.marks || [];
     this.paint();
@@ -373,7 +424,7 @@ class Player {
   paintButtons() { if (this.el) this.el.play.textContent = this.video.paused ? '▶' : '❚❚'; }
   paint() {
     if (!this.el || !this.item) return;
-    const d = this.dur() || 1, t = this.video.currentTime, pct = (x) => Math.min(100, Math.max(0, x / d * 100)) + '%';
+    const d = this.dur() || 1, t = this.cur(), pct = (x) => Math.min(100, Math.max(0, x / d * 100)) + '%';
     this.el.fill.style.width = pct(t);
     this.el.head.style.left = pct(t);
     this.el.time.textContent = `${fmtTime(this.wallAt(t))} · ${fmtClock(t)} / ${fmtClock(d)}`;
@@ -409,7 +460,8 @@ class Player {
       if (!drag) return;
       if (drag === 'head') {
         // Seek while dragging, but not more often than the browser can keep up.
-        if (performance.now() - lastSeek > 120) { this.video.currentTime = t; lastSeek = performance.now(); }
+        // Seek while dragging (direct playback only; converted playback seeks on release).
+        if (!this.tc && performance.now() - lastSeek > 120) { this.video.currentTime = t; lastSeek = performance.now(); }
         this.el.head.style.left = (t / this.dur() * 100) + '%';
       } else if (drag === 'in') { this.inT = Math.min(t, (this.outT ?? this.dur()) - 1); this.paint(); }
       else if (drag === 'out') { this.outT = Math.max(t, (this.inT ?? 0) + 1); this.paint(); }
@@ -419,11 +471,11 @@ class Player {
       if (!this.item) return;
       sc.setPointerCapture(e.pointerId);
       drag = e.target.classList.contains('in') ? 'in' : e.target.classList.contains('out') ? 'out' : 'head';
-      if (drag === 'head') { this.wasPlaying = !this.video.paused; this.video.pause(); this.video.currentTime = tAt(e)[0]; }
+      if (drag === 'head') { this.wasPlaying = !this.video.paused; this.video.pause(); if (!this.tc) this.video.currentTime = tAt(e)[0]; }
     });
     const end = (e) => {
       if (!drag) return;
-      if (drag === 'head') { this.video.currentTime = tAt(e)[0]; if (this.wasPlaying) this.video.play().catch(() => {}); }
+      if (drag === 'head') this.seekTo(tAt(e)[0], this.wasPlaying);
       drag = null; this.el.prev.hidden = true; this.paint();
     };
     sc.addEventListener('pointerup', end);
@@ -901,6 +953,30 @@ function stopFocusPlayback(resub = true) {
   if (resub) updateSubscriptions();
 }
 $('focus-live').onclick = () => stopFocusPlayback();
+
+// "Show motion": boxes around moving objects, with their size in pixels.
+let focusMotionTimer = null;
+$('focus-motion').onclick = () => {
+  const on = !focusMotionTimer;
+  $('focus-motion').classList.toggle('on', on);
+  // (SVG elements have no .hidden property: use the attribute.)
+  $('focus-boxes').toggleAttribute('hidden', !on);
+  $('focus-motion-info').hidden = !on;
+  clearInterval(focusMotionTimer); focusMotionTimer = null;
+  if (on) focusMotionTimer = setInterval(updateFocusMotion, 400);
+};
+async function updateFocusMotion() {
+  if (page !== 'live' || !focusId || focusPlayback) { $('focus-boxes').innerHTML = ''; return; }
+  const m = await api(`api/cameras/${enc(focusId)}/motion`).catch(() => null);
+  if (!m) return;
+  // Place the box layer over the picture (it is letterboxed inside the frame).
+  const img = $('focus-img'), sv = $('focus-boxes'), W = img.clientWidth, H = img.clientHeight;
+  const iw = img.naturalWidth || 16, ih = img.naturalHeight || 9, k = Math.min(W / iw, H / ih);
+  Object.assign(sv.style, {left: (W - iw * k) / 2 + 'px', top: (H - ih * k) / 2 + 'px', width: iw * k + 'px', height: ih * k + 'px'});
+  sv.innerHTML = m.objects.map(o => `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="none" stroke="${m.moving ? '#ef4444' : '#f59e0b'}" stroke-width="2" vector-effect="non-scaling-stroke"/>`).join('');
+  $('focus-motion-info').textContent = !m.running ? 'Motion detection is off for this camera'
+    : `Biggest moving object: ${m.biggest_px.toLocaleString()} px · needs ${m.min_object_px.toLocaleString()} px` + (m.moving ? ' · MOTION' : '');
+}
 $('focus-back').onclick = () => location.hash = '#live';
 
 // ======================================================================
@@ -1104,6 +1180,12 @@ function buildTimelineVideos() {
       <div class="ov tl"><span class="ovtext name">${esc(c.name)}</span><span class="ovtext tl-t"></span></div>
       <div class="ov tr"><button type="button" class="fsbtn">⛶</button></div>`;
     el.querySelector('.fsbtn').onclick = () => fullscreen(el);
+    // Fall back to converted playback if this browser can't play the files.
+    const v = el.querySelector('video');
+    v._tc = noNativePlayback.has(c.camera);
+    const fallback = () => { if (!v._tc && convertedUrl(v.dataset.url || '')) { v._tc = true; markNoNative(c.camera); delete v.dataset.url; tlSync(true); } };
+    v.addEventListener('error', fallback);
+    v.addEventListener('loadeddata', () => { if (v.videoWidth === 0) fallback(); });
     box.appendChild(el);
   }
 }
@@ -1135,6 +1217,18 @@ function tlSync(force) {
     if (!s) { msg.hidden = false; v.pause(); v.style.visibility = 'hidden'; continue; }
     msg.hidden = true; v.style.visibility = '';
     const want = (tl.T - new Date(s.start).getTime()) / 1000;
+    if (v._tc) {
+      // Converted stream: restart it at the wanted time when needed.
+      const cur = (v._base || 0) + v.currentTime;
+      if (v.dataset.url !== s.url || force || Math.abs(cur - want) > Math.max(3, tl.speed * 2)) {
+        v.dataset.url = s.url; v._base = want;
+        v.src = convertedUrl(s.url) + '?t=' + want.toFixed(2);
+      }
+      v.playbackRate = tl.speed;
+      if (tl.playing && v.paused) v.play().catch(() => {});
+      if (!tl.playing && !v.paused) v.pause();
+      continue;
+    }
     if (v.dataset.url !== s.url) {
       v.dataset.url = s.url; v.src = s.url;
       v.addEventListener('loadedmetadata', () => { v.currentTime = want; v.playbackRate = tl.speed; if (tl.playing) v.play().catch(() => {}); }, {once: true});
@@ -1509,12 +1603,13 @@ function brandUrl(brand, which) {
 // Put the quick-setup IP, port and login into an existing stream URL,
 // keeping its path (e.g. /Streaming/Channels/102).
 function rewriteUrl(u) {
-  const m = u.trim().match(/^(rtsps?:\/\/)(?:[^@\/]*@)?([^:\/?#]+)(?::(\d+))?(.*)$/i);
+  const m = u.trim().match(/^(rtsps?:\/\/)(?:([^@\/]*)@)?([^:\/?#]+)(?::(\d+))?(.*)$/i);
   if (!m) return u;
-  const ip = val('q-ip').trim() || m[2], port = val('q-port').trim() || m[3];
+  const ip = val('q-ip').trim() || m[3], port = val('q-port').trim() || m[4];
   const user = val('q-user').trim(), pass = $('q-pass').value;
-  const auth = user ? `${enc(user)}${pass ? ':' + enc(pass) : ''}@` : '';
-  return `${m[1]}${auth}${ip}${port ? ':' + port : ''}${m[4]}`;
+  // Keep the URL's own login unless a new one is typed.
+  const auth = user ? `${enc(user)}${pass ? ':' + enc(pass) : ''}@` : (m[2] ? m[2] + '@' : '');
+  return `${m[1]}${auth}${ip}${port ? ':' + port : ''}${m[5]}`;
 }
 // Fill the quick-setup fields from an existing URL.
 function parseUrl(u) {
@@ -1537,7 +1632,7 @@ async function openCameraDialog(id, clone) {
     name: '', enabled: true, url: '', live_url: '', rtsp_transport: 'tcp', record_mode: 'continuous', schedule_enabled: false,
     schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, transcode: false, record_fps: 0,
     segment_seconds: 0, storage_dir: '', retention_days: 0, max_storage_gb: 0,
-    detect: {motion: true, sensitivity: 50, ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1}};
   if (clone) c.name = c.name + ' (copy)';
   const q = parseUrl(c.url) || {};
   const objs = (sysinfo && sysinfo.ai_objects) || ['person','car','truck','bus','motorcycle','bicycle','dog','cat','bird'];
@@ -1608,8 +1703,24 @@ async function openCameraDialog(id, clone) {
 
       <div data-tab="detection" class="form" hidden>
         <span></span><label class="check"><input type="checkbox" id="d-motion" ${c.detect.motion ? 'checked' : ''}> Motion detection</label>
-        <label for="d-sens">Motion sensitivity</label>
-        <div class="row"><input type="range" id="d-sens" min="1" max="100" value="${c.detect.sensitivity}" style="flex:1"><span id="d-sens-v" class="muted" style="width:40px">${c.detect.sensitivity}</span></div>
+        <label for="d-contrast">Min. contrast</label>
+        <div><div class="row"><input type="range" id="d-contrast" min="4" max="100" value="${c.detect.min_contrast}" style="flex:1"><span id="d-contrast-v" class="muted" style="width:40px">${c.detect.min_contrast}</span></div>
+          <div class="hint">How different a pixel must be from the background to count as changed. Lower = more sensitive (night/IR may need lower); higher ignores noise and small light changes.</div></div>
+        <label for="d-objpx">Min. object size</label>
+        <div><div class="row"><input type="number" id="d-objpx" min="0" max="230400" step="50" value="${c.detect.min_object_px}" style="width:120px"><span class="muted">pixels (of a 640×360 picture)</span></div>
+          <div class="hint">Moving areas smaller than this are ignored (rain, insects, noise). For scale: a person filling a quarter of the picture height ≈ 2,000 px; far away ≈ 200 px. Use the live readout below to choose.</div></div>
+        <label for="d-make">Make time</label>
+        <div class="row"><input type="number" id="d-make" min="0" max="30" step="0.1" value="${c.detect.make_time_ms / 1000}" style="width:120px"><span class="muted">seconds of motion before it triggers</span></div>
+        <label for="d-travel">Object must travel</label>
+        <div class="row"><input type="number" id="d-travel" min="0" max="640" step="10" value="${c.detect.min_travel_px}" style="width:120px"><span class="muted">pixels (0 = off). Ignores trees and flags moving in place.</span></div>
+        <label>Ignore areas</label>
+        <div><div class="surface" id="d-mask" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair">
+            <img alt="" id="d-mask-img" style="object-fit:fill"><div class="msg" id="d-mask-msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div>
+            <div id="d-mask-grid" style="position:absolute;inset:0;display:grid;grid-template-columns:repeat(32,1fr);grid-template-rows:repeat(18,1fr)"></div>
+            <svg id="d-mask-boxes" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
+          <div class="row" style="margin-top:6px"><button type="button" class="small" id="d-mask-clear">Clear</button><button type="button" class="small" id="d-mask-invert">Invert</button>
+            <span class="hint" style="margin:0">Drag over the picture to mark areas to ignore (red). Drag again to unmark.</span></div>
+          <div id="d-meter" class="hint" style="margin-top:8px"></div></div>
         <span></span><div><label class="check"><input type="checkbox" id="d-ai" ${c.detect.ai ? 'checked' : ''}> Object recognition (AI)</label>
           <div class="hint">${aiOn ? `Uses <b>${esc(settings.ai.provider)}</b>. Pictures are only sent to the AI while motion is seen (needs motion detection).` : '<span class="warnc">No AI is set up yet.</span> Choose one in Settings → Object recognition.'}</div></div>
         <label>Alert on</label>
@@ -1643,7 +1754,8 @@ async function openCameraDialog(id, clone) {
   // Object recognition runs only on motion, so it needs motion detection.
   $('d-ai').onchange = () => { if (chk('d-ai')) $('d-motion').checked = true; };
   $('d-motion').onchange = () => { if (!chk('d-motion')) $('d-ai').checked = false; };
-  $('d-sens').oninput = () => $('d-sens-v').textContent = val('d-sens');
+  $('d-contrast').oninput = () => $('d-contrast-v').textContent = val('d-contrast');
+  setupMaskEditor(c.detect.mask, id && !clone ? id : null);
   $('d-conf').oninput = () => $('d-conf-v').textContent = val('d-conf') + '%';
   $('q-brand').onchange = () => {
     const b = val('q-brand'); if (!b) return;
@@ -1671,7 +1783,59 @@ async function openCameraDialog(id, clone) {
   $('cam-dialog').showModal();
 }
 function closeCameraDialog() { stopPreviews(); $('cam-dialog').close(); }
-$('cam-dialog').addEventListener('close', stopPreviews);
+$('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMeter(); });
+
+// ---------- motion mask editor & live motion readout ----------
+let maskCells = [], maskUnbind = null, meterTimer = null;
+const MASK_W = 32, MASK_H = 18;
+function maskValue() { return maskCells.some(x => x) ? maskCells.map(x => x ? '1' : '0').join('') : ''; }
+function setupMaskEditor(mask, camId) {
+  maskCells = mask && mask.length === MASK_W * MASK_H ? [...mask].map(c => c === '1') : new Array(MASK_W * MASK_H).fill(false);
+  const grid = $('d-mask-grid');
+  grid.innerHTML = maskCells.map((on, i) => `<div data-i="${i}" style="${on ? 'background:rgba(239,68,68,.45)' : ''};border:1px solid rgba(255,255,255,.06)"></div>`).join('');
+  const paint = () => grid.querySelectorAll('[data-i]').forEach(d => d.style.background = maskCells[+d.dataset.i] ? 'rgba(239,68,68,.45)' : '');
+  let mode = null;
+  const cellAt = (e) => { const r = grid.getBoundingClientRect(); const x = Math.floor((e.clientX - r.left) / r.width * MASK_W), y = Math.floor((e.clientY - r.top) / r.height * MASK_H);
+    return x >= 0 && x < MASK_W && y >= 0 && y < MASK_H ? y * MASK_W + x : -1; };
+  // 3×3-cell brush.
+  const set = (e) => {
+    const i = cellAt(e); if (i < 0) return;
+    const cx = i % MASK_W, cy = Math.floor(i / MASK_W);
+    let changed = false;
+    for (let y = Math.max(0, cy - 1); y <= Math.min(MASK_H - 1, cy + 1); y++)
+      for (let x = Math.max(0, cx - 1); x <= Math.min(MASK_W - 1, cx + 1); x++)
+        if (maskCells[y * MASK_W + x] !== mode) { maskCells[y * MASK_W + x] = mode; changed = true; }
+    if (changed) paint();
+  };
+  grid.onpointerdown = (e) => { const i = cellAt(e); if (i < 0) return; mode = !maskCells[i]; grid.setPointerCapture(e.pointerId); set(e); };
+  grid.onpointermove = (e) => { if (mode !== null) set(e); };
+  grid.onpointerup = grid.onpointercancel = () => { mode = null; };
+  $('d-mask-clear').onclick = () => { maskCells.fill(false); paint(); };
+  $('d-mask-invert').onclick = () => { maskCells = maskCells.map(x => !x); paint(); };
+  if (maskUnbind) maskUnbind();
+  maskUnbind = null;
+  stopMotionMeter();
+  if (camId) {
+    const img = $('d-mask-img');
+    img.onload = () => $('d-mask-msg').hidden = true;
+    maskUnbind = Live.bind(img, camId, 'sub');
+    meterTimer = setInterval(() => updateMotionMeter(camId), 500);
+  }
+}
+function stopMotionMeter() { clearInterval(meterTimer); meterTimer = null; if (maskUnbind) { maskUnbind(); maskUnbind = null; } }
+async function updateMotionMeter(camId) {
+  const m = await api(`api/cameras/${enc(camId)}/motion`).catch(() => null);
+  if (!m || !$('d-meter')) return;
+  const need = m.min_object_px;
+  $('d-meter').innerHTML = !m.running ? 'Live readout: motion detection is not running for this camera (turn it on and save).' :
+    `Live readout (saved settings): biggest moving area now <b>${m.biggest_px.toLocaleString()} px</b>, peak in the last 3 s <b>${m.peak_px.toLocaleString()} px</b>; an alert needs ≥ ${need.toLocaleString()} px — ` +
+    (m.moving ? '<span class="ok">triggering</span>' : m.peak_px >= need ? '<span class="warnc">big enough (waiting for make time / travel)</span>' : 'too small');
+  drawMotionBoxes($('d-mask-boxes'), m.objects, 1, 1);
+}
+// Boxes around moving objects, in an SVG whose viewBox is 0..1.
+function drawMotionBoxes(svg, objects, sx, sy) {
+  svg.innerHTML = (objects || []).map(o => `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="none" stroke="#f59e0b" stroke-width="2" vector-effect="non-scaling-stroke"/>`).join('');
+}
 
 async function testCamera() {
   const btn = $('c-test'), out = $('c-probe');
@@ -1709,7 +1873,8 @@ async function saveCamera(ev) {
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
-    detect: {motion: chk('d-motion'), sensitivity: num('d-sens'), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
+    detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
+      make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int')},
   };
   const err = (m) => { $('c-err').hidden = false; $('c-err').textContent = m; };
@@ -1883,7 +2048,8 @@ function renderAi(body) {
         <option value="yolox_s" ${a.builtin_model === 'yolox_s' ? 'selected' : ''}>Small — most accurate (≈300 ms)</option></select></div>
       <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
       <label class="p-key" for="ai-key">API key</label><div class="p-key"><input type="password" id="ai-key" autocomplete="new-password" placeholder="${a.has_key ? 'Saved – leave empty to keep' : ''}"><div class="hint" id="ai-key-hint"></div></div>
-      <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><input type="text" id="ai-mname" value="${esc(a.model)}"><div class="hint" id="ai-model-hint"></div></div>
+      <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><div class="row"><input type="text" id="ai-mname" value="${esc(a.model)}" list="ai-models" style="flex:1"><button type="button" id="ai-list">List models</button></div>
+        <datalist id="ai-models"></datalist><div class="hint" id="ai-model-hint"></div><div class="hint" id="ai-list-out"></div></div>
       <label class="p-any" for="ai-rate">Limit</label><div class="p-any row"><input type="number" id="ai-rate" min="0" value="${a.max_per_minute}" style="width:110px"><span class="muted">requests per minute, all cameras together (0 = no limit). Keeps free cloud tiers within quota.</span></div>
       <label class="p-any" for="ai-timeout">Timeout</label><div class="p-any row"><input type="number" id="ai-timeout" min="1" max="300" value="${a.timeout_seconds}" style="width:110px"><span class="muted">seconds</span></div>
     </div>
@@ -1895,7 +2061,7 @@ function renderAi(body) {
   const hints = {
     deepstack: ['http://192.168.1.20:32168', 'CodeProject.AI uses port 32168, DeepStack usually 80 or 5000.', '', ''],
     ollama: ['http://192.168.1.20:11434', 'Ollama listens on port 11434. Start it with OLLAMA_HOST=0.0.0.0 to allow other computers.', 'qwen2.5vl', 'Run “ollama pull qwen2.5vl” (or llava, llama3.2-vision) on that computer first.'],
-    gemini: ['', '', 'gemini-2.5-flash', 'Leave empty for gemini-2.5-flash.'],
+    gemini: ['', '', 'automatic (newest Flash model)', 'Leave empty to use the newest Flash model automatically (it switches by itself when Google retires one).'],
     openai: ['https://api.openai.com/v1', 'Base URL ending in /v1, e.g. https://openrouter.ai/api/v1 or http://192.168.1.20:1234/v1 (LM Studio).', 'gpt-4o-mini', 'A model that accepts images.'],
   };
   const sync = () => {
@@ -1918,6 +2084,15 @@ function renderAi(body) {
       ` · ${s.requests} checks${s.failures ? `, ${s.failures} failed` : ''}${s.last_ms != null ? ` · last took ${s.last_ms} ms` : ''}${s.error ? `<br><span class="err">${esc(s.error)}</span>` : ''}`;
   };
   showStatus();
+  $('ai-list').onclick = async () => {
+    const out = $('ai-list-out');
+    out.textContent = 'Asking the provider…';
+    try {
+      const r = await api('api/ai/models', {method: 'POST', json: form()});
+      $('ai-models').innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join('');
+      out.innerHTML = r.models.length ? `${r.models.length} models available${r.suggested ? ` — automatic choice: <b>${esc(r.suggested)}</b>` : ''}. Click the model box to pick one.` : 'No models found.';
+    } catch (e) { out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  };
   $('f-ai').onsubmit = async (e) => { e.preventDefault(); await saveSettings({ai: form()}, 'AI settings saved'); showStatus(); };
   $('ai-test').onclick = async () => {
     const btn = $('ai-test'), out = $('ai-result');

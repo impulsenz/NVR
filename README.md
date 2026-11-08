@@ -8,6 +8,9 @@ viewing, finding footage, and managing everything, all from the browser.
 
 **Live view**
 - Dashboard of all cameras that you can **drag, drop and resize** (Live → Edit layout).
+- **Camera groups** (Live → Groups…): switch between sets of cameras, or show all.
+- **Full-screen video wall**: fills the whole screen, with its own layout per group, click a camera to
+  enlarge it (HD), arrow keys to switch groups, and optional automatic cycling through groups.
 - Always running: grid pictures come from each camera's sub-stream over one WebSocket and keep
   updating while you use other pages, so switching back is instant.
 - Full-quality streams are **preloaded in the background**: opening a camera shows HD immediately.
@@ -30,11 +33,17 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Storage folder per camera**: another drive, a NAS (`\\NAS\cameras`, `/mnt/nas`) or a synced cloud
   folder (Google Drive / OneDrive for desktop).
 - Per-camera **retention days** and **GB limit**, plus global limits and a minimum free disk space.
-- **Cloud backup** with rclone (Google Drive, OneDrive, Dropbox, S3, B2, …): alerts only, or everything.
+- **Choose where recordings go** with a folder browser (any drive, NAS share or synced cloud folder),
+  optionally moving existing recordings there.
+- **Cloud backup** with rclone (Google Drive, OneDrive, Dropbox, S3, B2, …): only verified AI alerts,
+  all alerts, or everything.
 - Recordings survive power cuts, and cameras reconnect automatically.
 
 **Motion detection & AI**
-- Built-in motion detection with adjustable sensitivity. It ignores lighting changes.
+- Blue Iris-style motion detection: **min. contrast**, **min. object size** in pixels, **make time**,
+  **object must travel**, and **areas to ignore** painted on the picture. A live readout shows how big
+  the moving objects are, and *Show motion* draws boxes around them. Lighting changes are ignored.
+- AI checks run **only while there is motion**: no motion, nothing is sent to the AI.
 - Object recognition, with a choice of AI:
   - **Built-in**: a YOLOX model runs on this computer's CPU. It's free and private, and the model downloads automatically.
   - **AI server on your network**: CodeProject.AI Server or DeepStack, which can use another computer's GPU.
@@ -138,6 +147,14 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15 -t 30 -c:v libx264 -pix_fmt yu
 ```
 
 ## Notes
+
+- **Playing recordings on other devices:** if a browser can't play the camera's format (usually H.265),
+  the NVR converts the recording to H.264 on the fly while it plays (using the GPU if set up). H.265 files
+  are tagged so Apple devices (Safari) can play them directly.
+- **GPU/CPU use:** each camera's sub-stream is decoded once (for motion detection, and reused for the
+  live grid); a full-quality stream is decoded only while you watch that camera. Background HD preloading
+  is off by default (Settings → Live view).
+- **Gemini:** leave the model empty to use the newest Flash model automatically, or use *List models*.
 
 - **One connection per camera stream:** the NVR connects to each stream once and shares it between
   recording, the alert buffer, motion detection, AI and the live view. Many cameras (TP-Link Tapo, many

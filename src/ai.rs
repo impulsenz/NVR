@@ -195,6 +195,8 @@ pub struct Ai {
     model: Mutex<Option<Arc<Yolox>>>,
     status: Mutex<AiStatus>,
     recent: Mutex<VecDeque<Instant>>,
+    /// Gemini model picked automatically (when none is set).
+    gemini_auto: Mutex<Option<String>>,
     busy: tokio::sync::Semaphore,
 }
 
@@ -217,6 +219,7 @@ impl Ai {
             model: Mutex::new(None),
             status: Mutex::new(status),
             recent: Mutex::new(VecDeque::new()),
+            gemini_auto: Mutex::new(None),
         });
         if ai.cfg.provider == "builtin" {
             ai.clone().prepare_builtin();
@@ -478,12 +481,30 @@ impl Ai {
         parse_llm(v["message"]["content"].as_str().unwrap_or(""))
     }
 
+    /// The Gemini model to use: the one set, or the newest available Flash
+    /// model (Google retires old versions, so names are not hard-coded).
+    async fn gemini_model(&self) -> Result<String> {
+        if !self.cfg.model.trim().is_empty() {
+            return Ok(self
+                .cfg
+                .model
+                .trim()
+                .trim_start_matches("models/")
+                .to_string());
+        }
+        if let Some(m) = self.gemini_auto.lock().unwrap().clone() {
+            return Ok(m);
+        }
+        let models = list_models(&self.client, &self.cfg)
+            .await
+            .unwrap_or_default();
+        let m = pick_gemini(&models).unwrap_or_else(|| "gemini-flash-latest".into());
+        info!("AI: using Gemini model {m}");
+        *self.gemini_auto.lock().unwrap() = Some(m.clone());
+        Ok(m)
+    }
+
     async fn detect_gemini(&self, frame: &Frame) -> Result<Vec<Detection>> {
-        let model = if self.cfg.model.is_empty() {
-            "gemini-2.5-flash"
-        } else {
-            &self.cfg.model
-        };
         let body = json!({
             "contents": [{"parts": [
                 {"inline_data": {"mime_type": "image/jpeg", "data": Self::jpeg_b64(frame)?}},
@@ -491,30 +512,46 @@ impl Ai {
             ]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         });
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        );
-        let resp = self
-            .client
-            .post(&url)
-            .header("x-goog-api-key", self.cfg.api_key.trim())
-            .json(&body)
-            .send()
-            .await
-            .context("cannot reach Gemini")?;
-        let status = resp.status();
-        let v: Value = resp.json().await.unwrap_or(Value::Null);
-        if !status.is_success() {
-            bail!(
-                "Gemini {status}: {}",
-                v["error"]["message"].as_str().unwrap_or("request failed")
+        // If an automatically picked model has been retired, pick again once.
+        for attempt in 0..2 {
+            let model = self.gemini_model().await?;
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             );
+            let resp = self
+                .client
+                .post(&url)
+                .header("x-goog-api-key", self.cfg.api_key.trim())
+                .json(&body)
+                .send()
+                .await
+                .context("cannot reach Gemini")?;
+            let status = resp.status();
+            let v: Value = resp.json().await.unwrap_or(Value::Null);
+            if status == reqwest::StatusCode::NOT_FOUND
+                && self.cfg.model.trim().is_empty()
+                && attempt == 0
+            {
+                warn!("AI: Gemini model {model} is not available; choosing another");
+                *self.gemini_auto.lock().unwrap() = None;
+                continue;
+            }
+            if !status.is_success() {
+                let msg = v["error"]["message"].as_str().unwrap_or("request failed");
+                if status == reqwest::StatusCode::NOT_FOUND {
+                    bail!(
+                        "Gemini model \"{model}\" is not available: {msg} — clear the model name to pick one automatically, or use “List models”."
+                    );
+                }
+                bail!("Gemini {status}: {msg}");
+            }
+            let text: String = v["candidates"][0]["content"]["parts"]
+                .as_array()
+                .map(|p| p.iter().filter_map(|x| x["text"].as_str()).collect())
+                .unwrap_or_default();
+            return parse_llm(&text);
         }
-        let text: String = v["candidates"][0]["content"]["parts"]
-            .as_array()
-            .map(|p| p.iter().filter_map(|x| x["text"].as_str()).collect())
-            .unwrap_or_default();
-        parse_llm(&text)
+        bail!("no Gemini model available for this API key")
     }
 
     async fn detect_openai(&self, frame: &Frame) -> Result<Vec<Detection>> {
@@ -550,6 +587,118 @@ impl Ai {
         }
         parse_llm(v["choices"][0]["message"]["content"].as_str().unwrap_or(""))
     }
+}
+
+/// Model names offered by the configured provider (for the settings page).
+pub async fn list_models(client: &reqwest::Client, cfg: &AiConfig) -> Result<Vec<String>> {
+    let base = {
+        let u = cfg.url.trim().trim_end_matches('/').to_string();
+        if u.contains("://") {
+            u
+        } else {
+            format!("http://{u}")
+        }
+    };
+    match cfg.provider.as_str() {
+        "gemini" => {
+            let v: Value = client
+                .get("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000")
+                .header("x-goog-api-key", cfg.api_key.trim())
+                .send()
+                .await
+                .context("cannot reach Gemini")?
+                .error_for_status()
+                .context("Gemini refused the request (check the API key)")?
+                .json()
+                .await?;
+            Ok(v["models"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter(|m| {
+                            m["supportedGenerationMethods"]
+                                .as_array()
+                                .is_some_and(|x| x.iter().any(|y| y == "generateContent"))
+                        })
+                        .filter_map(|m| m["name"].as_str())
+                        .map(|n| n.trim_start_matches("models/").to_string())
+                        .collect()
+                })
+                .unwrap_or_default())
+        }
+        "ollama" => {
+            let v: Value = client
+                .get(format!("{base}/api/tags"))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            Ok(v["models"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| m["name"].as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default())
+        }
+        "openai" => {
+            let mut req = client.get(format!("{base}/models"));
+            if !cfg.api_key.is_empty() {
+                req = req.bearer_auth(cfg.api_key.trim());
+            }
+            let v: Value = req.send().await?.error_for_status()?.json().await?;
+            Ok(v["data"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| m["id"].as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default())
+        }
+        _ => Ok(vec![]),
+    }
+}
+
+/// Newest stable general-purpose Flash model, e.g. "gemini-3.8-flash".
+pub fn pick_gemini(models: &[String]) -> Option<String> {
+    let version = |n: &str| -> f32 {
+        n.trim_start_matches("gemini-")
+            .split('-')
+            .next()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0)
+    };
+    let skip = [
+        "lite",
+        "image",
+        "tts",
+        "live",
+        "audio",
+        "embedding",
+        "exp",
+        "thinking",
+        "native",
+        "robotics",
+        "computer",
+    ];
+    let mut c: Vec<&String> = models
+        .iter()
+        .filter(|m| {
+            m.starts_with("gemini-") && m.contains("flash") && !skip.iter().any(|s| m.contains(s))
+        })
+        .collect();
+    // Stable before preview (previews change and are retired quickly), then
+    // the newest version, then the shortest name.
+    c.sort_by(|a, b| {
+        a.contains("preview")
+            .cmp(&b.contains("preview"))
+            .then(version(b).total_cmp(&version(a)))
+            .then(a.len().cmp(&b.len()))
+    });
+    c.first().map(|s| s.to_string())
 }
 
 fn llm_prompt() -> String {
@@ -792,6 +941,29 @@ mod tests {
         assert_eq!(parse_llm("[{\"name\":\"car\"}]").unwrap()[0].label, "car");
         assert!(parse_llm("{\"objects\": []}").unwrap().is_empty());
         assert!(parse_llm("no idea").is_err());
+    }
+
+    #[test]
+    fn picks_newest_gemini_flash() {
+        let m: Vec<String> = [
+            "gemini-2.5-flash",
+            "gemini-3.8-flash",
+            "gemini-3.8-flash-lite",
+            "gemini-3.9-flash-preview-0901",
+            "gemini-3.8-pro",
+            "gemini-3.8-flash-image",
+            "gemini-flash-latest",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(pick_gemini(&m).as_deref(), Some("gemini-3.8-flash"));
+        let previews: Vec<String> = m.into_iter().filter(|x| x.contains("preview")).collect();
+        assert_eq!(
+            pick_gemini(&previews).as_deref(),
+            Some("gemini-3.9-flash-preview-0901")
+        );
+        assert_eq!(pick_gemini(&[]), None);
     }
 
     #[test]

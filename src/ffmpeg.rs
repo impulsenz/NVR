@@ -503,6 +503,38 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
 
 // ---------- recorded files ----------
 
+/// Video codec of a media file (e.g. "h264", "hevc").
+pub async fn video_codec(ffmpeg: &str, file: &std::path::Path) -> Option<String> {
+    let o = run(
+        Command::new(ffprobe_path(ffmpeg))
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=nw=1:nk=1",
+            ])
+            .arg(file),
+        20,
+    )
+    .await
+    .ok()?;
+    let c = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    (!c.is_empty()).then_some(c)
+}
+
+/// Extra output options so copied H.265 plays on Apple devices.
+pub async fn hevc_tag(ffmpeg: &str, file: &std::path::Path) -> Vec<String> {
+    if video_codec(ffmpeg, file).await.as_deref() == Some("hevc") {
+        vec!["-tag:v".into(), "hvc1".into()]
+    } else {
+        vec![]
+    }
+}
+
 /// Duration of a media file in seconds.
 pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
     let o = run(
@@ -574,8 +606,14 @@ const SPRITE_PER_PAGE: u32 = 25;
 /// Pictures through a recording for scrubbing and time-lapse previews:
 /// pages of 5×5 pictures, 480×270 each, saved as `<prefix>-000.jpg`, ...
 /// Only keyframes are decoded, so this is fast even for long files.
-pub async fn sprite(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::Path) -> Result<SpriteInfo> {
-    let duration = duration(ffmpeg, file).await.context("cannot read recording length")?;
+pub async fn sprite(
+    ffmpeg: &str,
+    file: &std::path::Path,
+    prefix: &std::path::Path,
+) -> Result<SpriteInfo> {
+    let duration = duration(ffmpeg, file)
+        .await
+        .context("cannot read recording length")?;
     let count = ((duration / 2.0).ceil() as u32).clamp(1, 300);
     let interval = (duration / count as f64).max(0.5);
     let (tw, th) = (SPRITE_W, SPRITE_H);
@@ -586,7 +624,15 @@ pub async fn sprite(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::Pa
     let pattern = format!("{}-%03d.jpg", prefix.display());
     let o = run(
         Command::new(ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i"])
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-skip_frame",
+                "nokey",
+                "-i",
+            ])
             .arg(file)
             .args(["-an", "-vf", &vf, "-q:v", "5", "-start_number", "0"])
             .arg(&pattern),
@@ -636,6 +682,10 @@ pub async fn export(
         ));
     }
     std::fs::write(&list, text)?;
+    let tag = match parts.first() {
+        Some(p) => hevc_tag(ffmpeg, &p.0).await,
+        None => vec![],
+    };
     let o = run(
         Command::new(ffmpeg)
             .args([
@@ -658,6 +708,7 @@ pub async fn export(
                 "-avoid_negative_ts",
                 "make_zero",
             ])
+            .args(&tag)
             .arg(out),
         600,
     )

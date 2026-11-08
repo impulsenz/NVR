@@ -84,7 +84,9 @@ fn pending(
     // Event files are named after their event: "<event id>.mp4" / ".jpg".
     let verified = |name: &str| {
         let id = name.rsplit_once('.').map(|x| x.0).unwrap_or(name);
-        store.and_then(|s| s.get(id)).is_some_and(|e| !e.labels.is_empty())
+        store
+            .and_then(|s| s.get(id))
+            .is_some_and(|e| !e.labels.is_empty())
     };
     let mut out = Vec::new();
     let settled = |p: &Path| {
@@ -179,18 +181,40 @@ mod tests {
             clip: Some(format!("{id}.mp4")),
             clip_start: None,
         };
-        store.save(ev("ev-person", vec![Label { label: "person".into(), score: 0.9 }]));
+        store.save(ev(
+            "ev-person",
+            vec![Label {
+                label: "person".into(),
+                score: 0.9,
+            }],
+        ));
         store.save(ev("ev-motion", vec![]));
-        for f in ["ev-person.jpg", "ev-person.mp4", "ev-motion.jpg", "ev-motion.mp4"] {
+        for f in [
+            "ev-person.jpg",
+            "ev-person.mp4",
+            "ev-motion.jpg",
+            "ev-motion.mp4",
+        ] {
             let p = dir.join("events").join(f);
             std::fs::write(&p, b"x").unwrap();
             let old = std::time::SystemTime::now() - Duration::from_secs(120);
-            std::fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&p)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
         }
-        let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new()).into_iter().map(|x| x.1).collect();
+        let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new())
+            .into_iter()
+            .map(|x| x.1)
+            .collect();
         ai.sort();
         assert_eq!(ai, ["events/ev-person.jpg", "events/ev-person.mp4"]);
-        assert_eq!(pending(&dir, "events", Some(&store), &HashSet::new()).len(), 4);
+        assert_eq!(
+            pending(&dir, "events", Some(&store), &HashSet::new()).len(),
+            4
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

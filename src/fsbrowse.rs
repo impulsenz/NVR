@@ -30,7 +30,12 @@ pub struct Listing {
 
 fn place(name: String, p: &Path) -> Place {
     let space = crate::sysmon::disk_space(p);
-    Place { name, path: p.display().to_string(), free_bytes: space.map(|s| s.0), total_bytes: space.map(|s| s.1) }
+    Place {
+        name,
+        path: p.display().to_string(),
+        free_bytes: space.map(|s| s.0),
+        total_bytes: space.map(|s| s.1),
+    }
 }
 
 /// Drives (mount points) and handy starting folders.
@@ -53,11 +58,27 @@ pub fn places() -> Vec<Place> {
             let mp = d.mount_point().to_path_buf();
             let s = mp.display().to_string();
             // Skip system/virtual mounts on Linux and macOS.
-            if ["/boot", "/proc", "/sys", "/dev", "/run", "/snap", "/var/lib", "/System/Volumes"].iter().any(|x| s.starts_with(x)) {
+            if [
+                "/boot",
+                "/proc",
+                "/sys",
+                "/dev",
+                "/run",
+                "/snap",
+                "/var/lib",
+                "/System/Volumes",
+            ]
+            .iter()
+            .any(|x| s.starts_with(x))
+            {
                 continue;
             }
             let label = d.name().to_string_lossy().trim().to_string();
-            let name = if label.is_empty() || label == s { s.clone() } else { format!("{s} ({label})") };
+            let name = if label.is_empty() || label == s {
+                s.clone()
+            } else {
+                format!("{s} ({label})")
+            };
             add(name, mp, &mut out);
         }
     }
@@ -74,10 +95,22 @@ fn writable(dir: &Path) -> bool {
 pub fn list(path: &str) -> Result<Listing> {
     let places = places();
     if path.trim().is_empty() {
-        return Ok(Listing { path: String::new(), parent: None, folders: vec![], places, writable: false, free_bytes: None, total_bytes: None });
+        return Ok(Listing {
+            path: String::new(),
+            parent: None,
+            folders: vec![],
+            places,
+            writable: false,
+            free_bytes: None,
+            total_bytes: None,
+        });
     }
     let p = PathBuf::from(path.trim());
-    let p = if p.is_relative() { std::env::current_dir()?.join(p) } else { p };
+    let p = if p.is_relative() {
+        std::env::current_dir()?.join(p)
+    } else {
+        p
+    };
     if !p.is_dir() {
         bail!("folder not found: {}", p.display());
     }
@@ -88,8 +121,15 @@ pub fn list(path: &str) -> Result<Listing> {
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            let hidden = name.starts_with('.') || name.starts_with('$') || name == "System Volume Information";
-            (!hidden).then(|| Place { path: e.path().display().to_string(), name, free_bytes: None, total_bytes: None })
+            let hidden = name.starts_with('.')
+                || name.starts_with('$')
+                || name == "System Volume Information";
+            (!hidden).then(|| Place {
+                path: e.path().display().to_string(),
+                name,
+                free_bytes: None,
+                total_bytes: None,
+            })
         })
         .take(3000)
         .collect();
@@ -109,12 +149,19 @@ pub fn list(path: &str) -> Result<Listing> {
 /// Windows canonical paths start with \\?\ — show them normally.
 fn display(p: &Path) -> String {
     let s = p.display().to_string();
-    s.strip_prefix(r"\\?\UNC\").map(|r| format!(r"\\{r}")).or_else(|| s.strip_prefix(r"\\?\").map(String::from)).unwrap_or(s)
+    s.strip_prefix(r"\\?\UNC\")
+        .map(|r| format!(r"\\{r}"))
+        .or_else(|| s.strip_prefix(r"\\?\").map(String::from))
+        .unwrap_or(s)
 }
 
 pub fn mkdir(parent: &str, name: &str) -> Result<String> {
     let name = name.trim();
-    if name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) || name == "." || name == ".." {
+    if name.is_empty()
+        || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+        || name == "."
+        || name == ".."
+    {
         bail!("invalid folder name");
     }
     let p = Path::new(parent.trim()).join(name);
@@ -141,7 +188,13 @@ pub fn move_tree(src: &Path, dst: &Path) -> Result<MoveReport> {
     }
     move_inner(src, dst, &mut r)?;
     let _ = remove_empty_dirs(src);
-    info!("moved {} files ({} MB) from {} to {}", r.files, r.bytes / 1_000_000, src.display(), dst.display());
+    info!(
+        "moved {} files ({} MB) from {} to {}",
+        r.files,
+        r.bytes / 1_000_000,
+        src.display(),
+        dst.display()
+    );
     Ok(r)
 }
 
@@ -161,10 +214,17 @@ fn move_inner(src: &Path, dst: &Path, r: &mut MoveReport) -> Result<()> {
             if name == "events.jsonl" || name == ".cloud-uploaded" {
                 let text = std::fs::read(&from)?;
                 use std::io::Write;
-                std::fs::OpenOptions::new().append(true).open(&to)?.write_all(&text)?;
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&to)?
+                    .write_all(&text)?;
                 std::fs::remove_file(&from)?;
             } else {
-                warn!("not moving {}: {} already exists", from.display(), to.display());
+                warn!(
+                    "not moving {}: {} already exists",
+                    from.display(),
+                    to.display()
+                );
                 r.skipped += 1;
             }
             continue;
@@ -207,16 +267,29 @@ mod tests {
 
         let l = list(base.to_str().unwrap()).unwrap();
         assert!(l.writable);
-        assert_eq!(l.folders.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["new", "old"]);
+        assert_eq!(
+            l.folders
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            ["new", "old"]
+        );
         assert!(!places().is_empty());
         assert!(mkdir(base.to_str().unwrap(), "../x").is_err());
-        assert!(mkdir(base.to_str().unwrap(), "made").unwrap().ends_with("made"));
+        assert!(
+            mkdir(base.to_str().unwrap(), "made")
+                .unwrap()
+                .ends_with("made")
+        );
 
         let r = move_tree(&src, &dst).unwrap();
         assert_eq!(r.files, 1);
         assert!(!src.exists());
         assert!(dst.join("cam_2026-01-01_00-00-00.mp4").exists());
-        assert_eq!(std::fs::read_to_string(dst.join("events/events.jsonl")).unwrap(), "{\"b\":2}\n{\"a\":1}\n");
+        assert_eq!(
+            std::fs::read_to_string(dst.join("events/events.jsonl")).unwrap(),
+            "{\"b\":2}\n{\"a\":1}\n"
+        );
         assert!(move_tree(&base.join("new"), &base.join("new/inner")).is_err());
         std::fs::remove_dir_all(&base).unwrap();
     }

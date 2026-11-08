@@ -53,6 +53,8 @@
             <img id="focus-img" alt="">
             <video id="focus-video" playsinline hidden></video>
             <div class="msg" id="focus-msg"></div>
+            <svg id="focus-boxes" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute;pointer-events:none;z-index:1" hidden></svg>
+            <div id="focus-motion-info" class="ovtext" style="position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:2" hidden></div>
           </div>
           <div id="focus-player-controls"></div>
           <div class="row" style="margin-top:10px">
@@ -61,6 +63,7 @@
             <button id="focus-rec"></button>
             <a class="btn" id="focus-snap">Snapshot</a>
             <a class="btn" id="focus-recs">All recordings</a>
+            <button id="focus-motion" title="Draw boxes around moving objects with their size">Show motion</button>
             <button id="focus-edit">Camera settings</button>
           </div>
         </div>

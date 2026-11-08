@@ -311,7 +311,11 @@ impl DashboardConfig {
                 bail!("camera group \"{}\" has an invalid id", g.name);
             }
         }
-        let tiles = self.tiles.iter().chain(&self.fullscreen_tiles).chain(self.groups.iter().flat_map(|g| g.tiles.iter().chain(&g.fullscreen_tiles)));
+        let tiles = self.tiles.iter().chain(&self.fullscreen_tiles).chain(
+            self.groups
+                .iter()
+                .flat_map(|g| g.tiles.iter().chain(&g.fullscreen_tiles)),
+        );
         for t in tiles {
             if t.w == 0 || t.h == 0 || t.x + t.w > 12 || t.h > 48 || t.y > 200 {
                 bail!("invalid layout tile for camera {}", t.camera);
@@ -579,7 +583,9 @@ impl CameraConfig {
         if d.min_object_px > 230_400 || d.make_time_ms > 30_000 || d.min_travel_px > 640 {
             bail!("motion object size, make time or travel distance is out of range");
         }
-        if !d.mask.is_empty() && (d.mask.len() != MASK_W * MASK_H || d.mask.chars().any(|c| c != '0' && c != '1')) {
+        if !d.mask.is_empty()
+            && (d.mask.len() != MASK_W * MASK_H || d.mask.chars().any(|c| c != '0' && c != '1'))
+        {
             bail!("invalid motion mask");
         }
         if !(0.05..=1.0).contains(&d.min_confidence) {
