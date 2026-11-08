@@ -2121,7 +2121,7 @@ async function openCameraDialog(id, clone) {
         <button type="button" class="small" id="c-prof-save" title="Save this camera's recording, motion and AI settings as a profile">💾 Save as profile…</button>
         <button type="button" class="small" id="c-prof-del" title="Delete the chosen profile">✕</button>
         <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
@@ -2242,6 +2242,7 @@ async function openCameraDialog(id, clone) {
         <span></span><div class="row"><label class="check"><input type="checkbox" id="p-inv-pan" ${c.ptz.invert_pan ? 'checked' : ''}> Reverse left/right</label><label class="check"><input type="checkbox" id="p-inv-tilt" ${c.ptz.invert_tilt ? 'checked' : ''}> Reverse up/down</label></div>
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
+      <div data-tab="device" hidden><div id="dv-body"></div></div>
       <div class="err" id="c-err" style="margin-top:12px" hidden></div>
     </div>
     <div class="foot"><button type="button" data-close>Cancel</button><button class="primary" id="c-save">Save camera</button></div>`;
@@ -2252,7 +2253,9 @@ async function openCameraDialog(id, clone) {
   f.querySelectorAll('#c-tabs button').forEach(b => b.onclick = () => {
     f.querySelectorAll('#c-tabs button').forEach(x => x.classList.toggle('active', x === b));
     f.querySelectorAll('[data-tab]').forEach(t => t.hidden = t.dataset.tab !== b.dataset.t);
+    if (b.dataset.t === 'device' && !deviceLoaded) loadDeviceTab();
   });
+  deviceLoaded = false;
   setupProfiles();
   // A field the browser rejects may be on a hidden tab: show that tab and say why.
   f.addEventListener('invalid', (e) => {
@@ -2474,6 +2477,130 @@ function collectCamera() {
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int')},
   };
 }
+// ---------- camera's own settings over ONVIF ----------
+let deviceLoaded = false, deviceReport = null;
+const prefixMask = (p) => { const m = p ? (0xffffffff << (32 - p)) >>> 0 : 0; return [24, 16, 8, 0].map(s => (m >>> s) & 255).join('.'); };
+async function loadDeviceTab() {
+  const box = $('dv-body');
+  if (!editingId) { box.innerHTML = '<div class="hint">Save the camera first, then its own settings can be changed here.</div>'; return; }
+  deviceLoaded = true;
+  box.innerHTML = '<div class="hint"><span class="spinner small"></span> Asking the camera for its settings (ONVIF)…</div>';
+  let res;
+  try { res = await api(`api/cameras/${enc(editingId)}/device`); } catch (e) {
+    box.innerHTML = `<div class="err">${esc(e.message)}</div>`; deviceLoaded = false; return;
+  }
+  const r = deviceReport = res.report, er = r.errors || {};
+  const na = (k) => er[k] ? `<div class="hint">Not available on this camera: ${esc(er[k])}</div>` : '';
+  const intro = `<div class="hint" style="margin-bottom:10px">These are the camera's own settings, changed directly on the camera over ONVIF (${esc(res.address)}).
+    The address, port and login come from the <b>Pan / tilt / zoom</b> tab (blank there = from the stream URL). Each section is saved to the camera on its own button.
+    <button type="button" class="small" id="dv-reload" style="margin-left:6px">↻ Reload</button></div>`;
+  if (er.connection) {
+    box.innerHTML = intro + `<div class="err">Could not reach the camera: ${esc(er.connection)}</div>
+      <div class="hint">Check that ONVIF is turned on in the camera (some brands need a separate ONVIF user) and the port on the Pan / tilt / zoom tab (80 for most, 2020 for Tapo, 8000 for Reolink).</div>`;
+    $('dv-reload').onclick = loadDeviceTab; deviceLoaded = false; return;
+  }
+  const i = r.info || {}, n = r.network, t = r.time, im = r.imaging;
+  let h = intro;
+  h += `<div class="dv-sec"><h3>Device</h3><dl class="kv">
+    <dt>Make &amp; model</dt><dd>${esc(i.manufacturer)} ${esc(i.model)}</dd><dt>Firmware</dt><dd>${esc(i.firmware) || '–'}</dd>
+    <dt>Serial number</dt><dd>${esc(i.serial) || '–'}</dd>${n && n.mac ? `<dt>MAC address</dt><dd>${esc(n.mac)}</dd>` : ''}</dl>
+    <button type="button" id="dv-reboot">⟳ Restart camera</button></div>`;
+  // Network
+  h += `<div class="dv-sec"><h3>Network</h3>${na('network')}`;
+  if (n) h += `<div class="form">
+    <label>Address</label><div class="row"><label class="check"><input type="radio" name="dv-dhcp" value="0" ${n.dhcp ? '' : 'checked'}> Fixed (static)</label><label class="check"><input type="radio" name="dv-dhcp" value="1" ${n.dhcp ? 'checked' : ''}> Automatic (DHCP)</label></div>
+    <label for="dv-ip">IP address</label><div><input type="text" id="dv-ip" value="${esc(n.ip)}" placeholder="192.168.1.64"></div>
+    <label for="dv-prefix">Subnet mask</label><div><select id="dv-prefix">${Array.from({length: 17}, (_, k) => 16 + k).map(p => `<option value="${p}" ${p === n.prefix ? 'selected' : ''}>${prefixMask(p)} (/${p})</option>`).join('')}</select></div>
+    <label for="dv-gw">Gateway (router)</label><div><input type="text" id="dv-gw" value="${esc(n.gateway)}" placeholder="192.168.1.1"></div>
+    <label for="dv-dns">DNS servers</label><div><input type="text" id="dv-dns" value="${esc((n.dns || []).join(', '))}" placeholder="192.168.1.1, 8.8.8.8"></div>
+    <label for="dv-host">Host name</label><div><input type="text" id="dv-host" value="${esc(n.hostname)}"></div>
+    <span></span><div><label class="check"><input type="checkbox" id="dv-upd" checked> Also change this camera's stream addresses in the NVR</label>
+      <div class="hint">Changing the address makes the camera reconnect (some restart). Make sure the new address is free and on your network, or you'll have to find the camera again.</div></div>
+    <span></span><div><button type="button" class="primary" id="dv-net-save">Save network settings to camera</button></div></div>`;
+  h += '</div>';
+  // Time
+  h += `<div class="dv-sec"><h3>Date &amp; time</h3>${na('time')}`;
+  if (t) {
+    const cam = t.utc ? new Date(t.utc) : null, diff = cam ? Math.round((cam - new Date(res.computer_utc)) / 1000) : null;
+    h += `<div class="form">
+      <label>Camera clock</label><div>${cam ? `${fmtDate(cam)} — ${Math.abs(diff) < 3 ? '<span class="ok">matches this computer</span>' : `<span class="warnc">${fmtDur(Math.abs(diff))} ${diff > 0 ? 'ahead of' : 'behind'} this computer</span>`}` : '–'}
+        <div class="hint">A wrong camera clock can make ONVIF logins fail and puts the wrong time on the picture.</div></div>
+      <label for="dv-ntp">Time server</label><div><input type="text" id="dv-ntp" value="${esc((t.ntp || []).join(', '))}" placeholder="pool.ntp.org"></div>
+      <label for="dv-mode">Keep time from</label><div><select id="dv-mode"><option value="NTP" ${t.mode !== 'Manual' ? 'selected' : ''}>The time server (recommended)</option><option value="Manual" ${t.mode === 'Manual' ? 'selected' : ''}>Its own clock</option></select></div>
+      <label for="dv-tz">Time zone</label><div><input type="text" id="dv-tz" value="${esc(t.tz)}" placeholder="e.g. NZST-12NZDT,M9.5.0,M4.1.0/3">
+        <div class="hint">In the camera's format (POSIX). Common: <a href="javascript:void 0" data-tz="NZST-12NZDT,M9.5.0,M4.1.0/3">New Zealand</a> · <a href="javascript:void 0" data-tz="AEST-10AEDT,M10.1.0,M4.1.0/3">Sydney</a> · <a href="javascript:void 0" data-tz="GMT0BST,M3.5.0/1,M10.5.0">UK</a> · <a href="javascript:void 0" data-tz="EST5EDT,M3.2.0,M11.1.0">US Eastern</a> · <a href="javascript:void 0" data-tz="PST8PDT,M3.2.0,M11.1.0">US Pacific</a> · <a href="javascript:void 0" data-tz="CET-1CEST,M3.5.0,M10.5.0/3">Central Europe</a></div></div>
+      <span></span><div class="row"><button type="button" class="primary" id="dv-time-save">Save time settings</button><button type="button" id="dv-time-sync">Set camera clock to this computer's time</button></div></div>`;
+  }
+  h += '</div>';
+  // Video
+  h += `<div class="dv-sec"><h3>Video streams</h3>${na('video')}`;
+  (r.video || []).forEach((v, k) => {
+    const res2 = v.resolutions.length ? v.resolutions : [[v.width, v.height]];
+    const fpsOpts = v.fps_options.length ? v.fps_options : Array.from(new Set([1, 2, 5, 8, 10, 12, 15, 20, 25, 30, v.fps])).filter(x => !v.fps_max || (x >= (v.fps_min || 1) && x <= v.fps_max)).sort((a, b) => a - b);
+    h += `<div class="dv-stream" data-k="${k}"><b>${k === 0 ? 'Stream 1 (main)' : k === 1 ? 'Stream 2 (sub)' : 'Stream ' + (k + 1)}</b> <span class="muted">${esc(v.name)}</span>
+      <div class="form">
+        <label>Video format</label><div>${v.encodings.length > 1 ? `<select class="dv-enc">${v.encodings.map(e => `<option ${e === v.encoding ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>` : esc(v.encoding)}</div>
+        <label>Resolution</label><div><select class="dv-res">${res2.map(([w, hh]) => `<option value="${w}x${hh}" ${w === v.width && hh === v.height ? 'selected' : ''}>${w} × ${hh}</option>`).join('')}</select></div>
+        <label>Frame rate</label><div><select class="dv-fps">${fpsOpts.map(x => `<option value="${x}" ${x == v.fps ? 'selected' : ''}>${x} fps</option>`).join('')}</select></div>
+        <label>Bitrate</label><div class="row"><input type="number" class="dv-br" value="${v.bitrate}" min="${v.bitrate_min || 32}" ${v.bitrate_max ? `max="${v.bitrate_max}"` : ''} style="width:120px"><span class="muted">kbit/s${v.bitrate_max ? ` (${v.bitrate_min}–${v.bitrate_max})` : ''}</span></div>
+        <label>Keyframe interval</label><div class="row"><input type="number" class="dv-gov" value="${v.gov || ''}" min="1" max="400" style="width:120px"><span class="muted">frames (about ${v.fps ? Math.max(1, Math.round((v.gov || 0) / v.fps)) : '?'} s; 1–2 s seeks and starts fastest)</span></div>
+        <span></span><div><button type="button" class="dv-video-save">Save stream ${k + 1} to camera</button></div></div></div>`;
+  });
+  h += '</div>';
+  // Picture
+  h += `<div class="dv-sec"><h3>Picture</h3>${na('imaging')}`;
+  if (im) {
+    const sl = (key, label) => im[key] == null ? '' : (() => { const [lo, hi] = (im.ranges || {})[key] || [0, 100]; return `<label>${label}</label><div class="row"><input type="range" id="dv-${key}" min="${lo}" max="${hi}" value="${im[key]}" style="flex:1"><span class="muted" style="width:40px" id="dv-${key}-v">${im[key]}</span></div>`; })();
+    const irName = {AUTO: 'Automatic day / night', ON: 'Day (colour)', OFF: 'Night (black & white, infrared)'};
+    h += `<div class="form">${sl('brightness', 'Brightness')}${sl('contrast', 'Contrast')}${sl('saturation', 'Colour')}${sl('sharpness', 'Sharpness')}
+      ${im.ir_cut != null ? `<label>Day / night</label><div><select id="dv-ir">${(im.ir_modes.length ? im.ir_modes : ['AUTO', 'ON', 'OFF']).map(m => `<option value="${m}" ${m === im.ir_cut ? 'selected' : ''}>${irName[m] || m}</option>`).join('')}</select></div>` : ''}
+      <span></span><div><button type="button" class="primary" id="dv-img-save">Save picture settings to camera</button></div></div>`;
+  }
+  h += '</div>';
+  box.innerHTML = h;
+  const busy = async (btn, fn) => { const t0 = btn.textContent; btn.disabled = true; btn.textContent = 'Saving…'; try { await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; btn.textContent = t0; } };
+  const url = (p) => `api/cameras/${enc(editingId)}/device/${p}`;
+  $('dv-reload').onclick = loadDeviceTab;
+  $('dv-reboot').onclick = () => { if (confirm('Restart the camera now? It will be offline for about a minute.')) busy($('dv-reboot'), async () => { await api(url('reboot'), {method: 'POST'}); toast('The camera is restarting.'); }); };
+  box.querySelectorAll('[data-tz]').forEach(a => a.onclick = () => $('dv-tz').value = a.dataset.tz);
+  box.querySelectorAll('input[type=range]').forEach(el => el.oninput = () => { const v = $(el.id + '-v'); if (v) v.textContent = el.value; });
+  const syncDhcp = () => { const d = document.querySelector('input[name=dv-dhcp]:checked'); if (!d) return; ['dv-ip', 'dv-prefix', 'dv-gw', 'dv-dns'].forEach(x => $(x).disabled = d.value === '1'); };
+  box.querySelectorAll('input[name=dv-dhcp]').forEach(x => x.onchange = syncDhcp); syncDhcp();
+  if ($('dv-net-save')) $('dv-net-save').onclick = () => {
+    const dhcp = document.querySelector('input[name=dv-dhcp]:checked').value === '1';
+    const body = {token: n.token, mac: n.mac, dhcp, ip: val('dv-ip').trim(), prefix: +val('dv-prefix'), gateway: val('dv-gw').trim(),
+      dns: val('dv-dns').split(/[,\s]+/).filter(Boolean), dns_dhcp: n.dns_dhcp, hostname: val('dv-host').trim(), update_nvr: chk('dv-upd')};
+    const changing = dhcp !== n.dhcp || body.ip !== n.ip || body.prefix !== n.prefix;
+    if (changing && !confirm((dhcp ? 'Switch the camera to an automatic (DHCP) address? Its address may change and the NVR will lose it until you enter the new address.'
+      : `Change the camera's address from ${n.ip} to ${body.ip}?`) + '\n\nSome cameras restart to apply a new address; that is done automatically.')) return;
+    busy($('dv-net-save'), async () => {
+      const r2 = await api(url('network'), {method: 'PUT', json: body});
+      toast('Network settings saved on the camera' + (r2.nvr_updated ? '; the NVR now uses the new address' : '')
+        + (r2.restarted ? '. The camera is restarting to apply them (about a minute).' : r2.reboot_needed ? '. Restart the camera for them to apply.' : '.'));
+      if (r2.nvr_updated) { await loadSettings().catch(() => {}); const c2 = cameraCfgs.find(x => x.id === editingId); if (c2) { $('c-url').value = c2.url; $('c-live').value = c2.live_url; $('p-host').value = c2.ptz.host; } }
+    });
+  };
+  const timeBody = () => ({mode: val('dv-mode'), tz: val('dv-tz').trim(), ntp_dhcp: false, ntp: val('dv-ntp').split(/[,\s]+/).filter(Boolean)});
+  if ($('dv-time-save')) $('dv-time-save').onclick = () => busy($('dv-time-save'), async () => { await api(url('time'), {method: 'PUT', json: timeBody()}); toast('Time settings saved on the camera.'); });
+  if ($('dv-time-sync')) $('dv-time-sync').onclick = () => busy($('dv-time-sync'), async () => { await api(url('time'), {method: 'PUT', json: {...timeBody(), sync_clock: true}}); toast("The camera's clock now matches this computer."); loadDeviceTab(); });
+  box.querySelectorAll('.dv-stream').forEach(el => {
+    const v = r.video[+el.dataset.k];
+    el.querySelector('.dv-video-save').onclick = (e) => {
+      const [w, hh] = el.querySelector('.dv-res').value.split('x').map(Number), enc2 = el.querySelector('.dv-enc');
+      busy(e.target, async () => {
+        await api(url('video'), {method: 'PUT', json: {token: v.token, width: w, height: hh, fps: +el.querySelector('.dv-fps').value, bitrate: Math.round(+el.querySelector('.dv-br').value),
+          gov: Math.round(+el.querySelector('.dv-gov').value) || 0, encoding: enc2 ? enc2.value : ''}});
+        toast(`Stream ${+el.dataset.k + 1} saved on the camera. The NVR reconnects to it automatically.`);
+      });
+    };
+  });
+  if ($('dv-img-save')) $('dv-img-save').onclick = () => busy($('dv-img-save'), async () => {
+    const g = (k) => $('dv-' + k) ? +$('dv-' + k).value : null;
+    await api(url('imaging'), {method: 'PUT', json: {brightness: g('brightness'), contrast: g('contrast'), saturation: g('saturation'), sharpness: g('sharpness'), ir_cut: $('dv-ir') ? $('dv-ir').value : null}});
+    toast('Picture settings saved on the camera.');
+  });
+}
+
 // ---------- recording profiles ----------
 const PROFILE_KEYS = ['record_mode', 'schedule_enabled', 'schedule', 'record_audio', 'transcode', 'record_fps', 'segment_seconds', 'retention_days', 'max_storage_gb', 'detect'];
 function setupProfiles() {

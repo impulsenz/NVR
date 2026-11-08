@@ -60,7 +60,7 @@ impl Target {
         })
     }
 
-    fn device_url(&self) -> String {
+    pub(crate) fn device_url(&self) -> String {
         format!("http://{}:{}/onvif/device_service", self.host, self.port)
     }
 }
@@ -110,7 +110,7 @@ fn pct_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -239,7 +239,13 @@ impl Default for Onvif {
 }
 
 impl Onvif {
-    async fn call(&self, t: &Target, url: &str, action: &str, body: &str) -> Result<String> {
+    pub(crate) async fn call(
+        &self,
+        t: &Target,
+        url: &str,
+        action: &str,
+        body: &str,
+    ) -> Result<String> {
         let created = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();

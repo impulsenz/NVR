@@ -432,3 +432,12 @@ nav a.ds.on { color: var(--green); }
 .review { position: relative; margin-bottom: 8px; border-radius: 6px; overflow: hidden; }
 .review img { width: 100%; display: block; }
 body.no-boxes .bxs { display: none; }
+
+/* Camera settings (ONVIF) tab */
+.dv-sec { border-top: 1px solid var(--border); padding: 12px 0 6px; }
+.dv-sec h3 { margin: 0 0 8px; }
+.dv-stream { background: var(--panel2); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 10px; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; }
+.spinner.small { width: 14px; height: 14px; border-width: 2px; display: inline-block; vertical-align: -2px; }

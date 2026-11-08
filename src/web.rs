@@ -73,6 +73,12 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/pause", post(pause))
         .route("/api/cameras/{id}/view", put(set_view))
         .route("/api/cameras/{id}/ptz/move", post(ptz_move))
+        .route("/api/cameras/{id}/device", get(device_get))
+        .route("/api/cameras/{id}/device/network", put(device_network))
+        .route("/api/cameras/{id}/device/time", put(device_time))
+        .route("/api/cameras/{id}/device/video", put(device_video))
+        .route("/api/cameras/{id}/device/imaging", put(device_imaging))
+        .route("/api/cameras/{id}/device/reboot", post(device_reboot))
         .route("/api/cameras/{id}/ptz/stop", post(ptz_stop))
         .route(
             "/api/cameras/{id}/ptz/presets",
@@ -504,6 +510,139 @@ async fn set_view(
 }
 
 // ---------- PTZ ----------
+
+/// ONVIF connection for camera settings: the address and login from the
+/// PTZ tab, or else from the stream URL (PTZ need not be turned on).
+fn device_target(m: &Manager, id: &str) -> anyhow::Result<crate::onvif::Target> {
+    let cfg = m.config();
+    let cam = cfg
+        .cameras
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| anyhow::anyhow!("camera not found"))?;
+    crate::onvif::Target::from(cam, &cam.ptz)
+}
+
+async fn device_get(State(m): App, Path(id): Path<String>) -> Response {
+    let t = match device_target(&m, &id) {
+        Ok(t) => t,
+        Err(e) => return bad(e),
+    };
+    let r = crate::onvif::Onvif::default().device_report(&t).await;
+    Json(json!({ "report": r, "address": format!("{}:{}", t.host, t.port), "computer_utc": chrono::Utc::now() })).into_response()
+}
+
+#[derive(Deserialize)]
+struct NetworkReq {
+    #[serde(flatten)]
+    net: crate::onvif_device::Network,
+    /// Also change the camera's stream addresses in the NVR.
+    #[serde(default)]
+    update_nvr: bool,
+}
+
+async fn device_network(
+    State(m): App,
+    Path(id): Path<String>,
+    Json(r): Json<NetworkReq>,
+) -> Response {
+    let res = async {
+        let t = device_target(&m, &id)?;
+        let onvif = crate::onvif::Onvif::default();
+        let reboot = onvif.set_network(&t, &r.net).await?;
+        // Some cameras only switch address after restarting: restart it now,
+        // on the address it still has.
+        let mut restarted = false;
+        if reboot {
+            restarted = onvif.reboot(&t).await.is_ok();
+        }
+        let new_ip = r.net.ip.trim().to_string();
+        let mut updated = false;
+        if r.update_nvr && !r.net.dhcp && !new_ip.is_empty() && new_ip != t.host {
+            updated = m.change_camera_host(&id, &t.host, &new_ip).await?;
+        }
+        anyhow::Ok(json!({ "ok": true, "reboot_needed": reboot, "restarted": restarted, "nvr_updated": updated }))
+    }
+    .await;
+    match res {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TimeReq {
+    #[serde(flatten)]
+    time: crate::onvif_device::TimeSettings,
+    /// Set the camera's clock to this computer's time now.
+    #[serde(default)]
+    sync_clock: bool,
+}
+
+async fn device_time(State(m): App, Path(id): Path<String>, Json(r): Json<TimeReq>) -> Response {
+    let res = async {
+        let t = device_target(&m, &id)?;
+        crate::onvif::Onvif::default()
+            .set_time(&t, &r.time, r.sync_clock.then(chrono::Utc::now))
+            .await
+    }
+    .await;
+    match res {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn device_video(
+    State(m): App,
+    Path(id): Path<String>,
+    Json(r): Json<crate::onvif_device::VideoChange>,
+) -> Response {
+    let res = async {
+        let t = device_target(&m, &id)?;
+        crate::onvif::Onvif::default().set_video(&t, &r).await?;
+        // New resolution or format: start recording into a new file with it.
+        let m2 = m.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            m2.reconnect_camera(&id).await;
+        });
+        anyhow::Ok(())
+    }
+    .await;
+    match res {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn device_imaging(
+    State(m): App,
+    Path(id): Path<String>,
+    Json(r): Json<crate::onvif_device::ImagingChange>,
+) -> Response {
+    let res = async {
+        let t = device_target(&m, &id)?;
+        crate::onvif::Onvif::default().set_imaging(&t, &r).await
+    }
+    .await;
+    match res {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn device_reboot(State(m): App, Path(id): Path<String>) -> Response {
+    let res = async {
+        let t = device_target(&m, &id)?;
+        crate::onvif::Onvif::default().reboot(&t).await
+    }
+    .await;
+    match res {
+        Ok(msg) => Json(json!({ "ok": true, "message": msg })).into_response(),
+        Err(e) => bad(e),
+    }
+}
 
 fn ptz_target(m: &Manager, id: &str) -> anyhow::Result<crate::onvif::Target> {
     let cfg = m.config();

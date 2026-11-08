@@ -16,6 +16,7 @@ mod logs;
 mod manager;
 mod mp4fix;
 mod onvif;
+mod onvif_device;
 mod recorder;
 mod relay;
 mod storage;

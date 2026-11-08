@@ -450,6 +450,14 @@ impl Manager {
         Ok(cam)
     }
 
+    /// Reconnect a camera from scratch (e.g. after its stream format changed).
+    pub async fn reconnect_camera(&self, id: &str) {
+        if let Some(cam) = self.config().cameras.into_iter().find(|c| c.id == id) {
+            info!("[{}] reconnecting (camera settings changed)", cam.name);
+            self.restart_camera(&cam).await;
+        }
+    }
+
     async fn restart_camera(&self, cam: &CameraConfig) {
         if let Some(old) = self.camera(&cam.id) {
             old.stop().await;
@@ -496,6 +504,27 @@ impl Manager {
             .entry(id.to_string())
             .or_default()
             .clone()
+    }
+
+    /// The camera moved to a new IP address: change it in its stream URLs and
+    /// PTZ address. Returns true if anything changed.
+    pub async fn change_camera_host(&self, id: &str, old: &str, new: &str) -> Result<bool> {
+        let Some(mut cam) = self.config().cameras.into_iter().find(|c| c.id == id) else {
+            bail!("camera not found")
+        };
+        let swap = |url: &str| swap_host(url, old, new);
+        let before = cam.clone();
+        cam.url = swap(&cam.url);
+        cam.live_url = swap(&cam.live_url);
+        if cam.ptz.host.trim() == old {
+            cam.ptz.host = new.to_string();
+        }
+        if cam == before {
+            return Ok(false);
+        }
+        info!("[{}] camera address changed from {old} to {new}", cam.name);
+        self.update_camera(id, cam, false).await?;
+        Ok(true)
     }
 
     /// Change a camera's live-view options without restarting it.
@@ -889,5 +918,61 @@ async fn backfill_colors(mgr: Arc<Manager>) {
     }
     if done > 0 {
         info!("estimated colours for {done} earlier alert(s) (for search)");
+    }
+}
+
+/// Replace the host of a URL (`rtsp://user:pass@HOST:554/path`) if it is `old`.
+pub fn swap_host(url: &str, old: &str, new: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    // The login may contain '@' or '/' in the password: the host follows the last '@' before the path.
+    let path_at = rest.find('/').unwrap_or(rest.len());
+    let at = rest[..path_at]
+        .rfind('@')
+        .or_else(|| rest.rfind('@').filter(|&i| !rest[i..].contains("://")));
+    let (auth, hostpart) = match at {
+        Some(i) => (&rest[..=i], &rest[i + 1..]),
+        None => ("", rest),
+    };
+    let end = hostpart.find([':', '/', '?']).unwrap_or(hostpart.len());
+    if &hostpart[..end] == old {
+        format!("{scheme}://{auth}{new}{}", &hostpart[end..])
+    } else {
+        url.to_string()
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::swap_host;
+
+    #[test]
+    fn swaps_only_the_host() {
+        assert_eq!(
+            swap_host(
+                "rtsp://admin:pw@192.168.1.64:554/Streaming/Channels/101",
+                "192.168.1.64",
+                "192.168.1.70"
+            ),
+            "rtsp://admin:pw@192.168.1.70:554/Streaming/Channels/101"
+        );
+        assert_eq!(
+            swap_host("rtsp://192.168.1.64/stream2", "192.168.1.64", "10.0.0.5"),
+            "rtsp://10.0.0.5/stream2"
+        );
+        assert_eq!(
+            swap_host("rtsp://u:p@ss@192.168.1.64/s", "192.168.1.64", "1.2.3.4"),
+            "rtsp://u:p@ss@1.2.3.4/s"
+        );
+        // A different camera's address is left alone.
+        assert_eq!(
+            swap_host("rtsp://192.168.1.640/s", "192.168.1.64", "1.2.3.4"),
+            "rtsp://192.168.1.640/s"
+        );
+        assert_eq!(
+            swap_host("person.mp4", "192.168.1.64", "1.2.3.4"),
+            "person.mp4"
+        );
     }
 }
