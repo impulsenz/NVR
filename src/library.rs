@@ -103,12 +103,22 @@ fn color_matches(c: &str) -> Option<Vec<&'static str>> {
 
 /// Object words people search for, and the detector labels they mean.
 fn object_labels(w: &str) -> Option<Vec<&'static str>> {
-    let w = w.strip_suffix("es").filter(|x| x.ends_with("bus")).unwrap_or(w);
-    let w = if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") && w != "bus" { &w[..w.len() - 1] } else { w };
+    let w = w
+        .strip_suffix("es")
+        .filter(|x| x.ends_with("bus"))
+        .unwrap_or(w);
+    let w = if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") && w != "bus" {
+        &w[..w.len() - 1]
+    } else {
+        w
+    };
     Some(match w {
-        "person" | "people" | "man" | "men" | "woman" | "women" | "kid" | "child" | "children" | "human"
-        | "someone" | "guy" | "lady" | "courier" | "postman" | "visitor" | "pedestrian" => vec!["person"],
-        "car" | "sedan" | "hatchback" | "suv" | "wagon" | "taxi" | "auto" | "automobile" => vec!["car"],
+        "person" | "people" | "man" | "men" | "woman" | "women" | "kid" | "child" | "children"
+        | "human" | "someone" | "guy" | "lady" | "courier" | "postman" | "visitor"
+        | "pedestrian" => vec!["person"],
+        "car" | "sedan" | "hatchback" | "suv" | "wagon" | "taxi" | "auto" | "automobile" => {
+            vec!["car"]
+        }
         "van" | "ute" | "pickup" | "4x4" => vec!["car", "truck"],
         "truck" | "lorry" => vec!["truck"],
         "bus" | "coach" => vec!["bus"],
@@ -133,7 +143,9 @@ fn object_labels(w: &str) -> Option<Vec<&'static str>> {
 
 /// Understand a search like "red van", "white car person", "black cat".
 pub fn parse_text(q: &str) -> Vec<Term> {
-    const SKIP: &[&str] = &["a", "an", "the", "with", "of", "in", "on", "and", "or", "at", "coloured", "colored"];
+    const SKIP: &[&str] = &[
+        "a", "an", "the", "with", "of", "in", "on", "and", "or", "at", "coloured", "colored",
+    ];
     let mut out = Vec::new();
     let mut colors: Vec<&'static str> = Vec::new();
     for w in q
@@ -164,12 +176,20 @@ pub fn text_matches(e: &Event, camera_name: &str, terms: &[Term]) -> bool {
     let desc = e.desc.to_lowercase();
     // Description parts ("white delivery van; man in red jacket").
     let parts: Vec<&str> = desc.split(';').map(str::trim).collect();
-    let has_word = |text: &str, w: &str| text.split(|c: char| !c.is_alphanumeric()).any(|x| x == w || x.strip_suffix('s') == Some(w));
+    let has_word = |text: &str, w: &str| {
+        text.split(|c: char| !c.is_alphanumeric())
+            .any(|x| x == w || x.strip_suffix('s') == Some(w))
+    };
     terms.iter().all(|t| match t {
-        Term::Object { colors, labels, word } => {
+        Term::Object {
+            colors,
+            labels,
+            word,
+        } => {
             let by_label = e.labels.iter().any(|l| {
                 labels.contains(&l.label.as_str())
-                    && (colors.is_empty() || l.color.as_deref().is_some_and(|c| colors.contains(&c)))
+                    && (colors.is_empty()
+                        || l.color.as_deref().is_some_and(|c| colors.contains(&c)))
             });
             let by_desc = parts.iter().any(|p| {
                 (has_word(p, word) || labels.iter().any(|l| has_word(p, l)))
@@ -178,7 +198,9 @@ pub fn text_matches(e: &Event, camera_name: &str, terms: &[Term]) -> bool {
             by_label || by_desc
         }
         Term::Color(colors) => {
-            e.labels.iter().any(|l| l.color.as_deref().is_some_and(|c| colors.contains(&c)))
+            e.labels
+                .iter()
+                .any(|l| l.color.as_deref().is_some_and(|c| colors.contains(&c)))
                 || colors.iter().any(|c| has_word(&desc, c))
         }
         Term::Word(w) => {
@@ -500,7 +522,11 @@ mod text_tests {
             end: Local::now(),
             labels: labels
                 .iter()
-                .map(|(l, c)| Label { label: l.to_string(), score: 0.9, color: c.map(str::to_string) })
+                .map(|(l, c)| Label {
+                    label: l.to_string(),
+                    score: 0.9,
+                    color: c.map(str::to_string),
+                })
                 .collect(),
             motion: true,
             thumb: None,
@@ -525,7 +551,10 @@ mod text_tests {
         assert!(m(&cat, "kitten"));
         assert!(!m(&cat, "white cat"));
         // From a language model's description.
-        let van = ev(&[("car", Some("grey"))], "red delivery van; man in blue jacket");
+        let van = ev(
+            &[("car", Some("grey"))],
+            "red delivery van; man in blue jacket",
+        );
         assert!(m(&van, "red van"));
         assert!(m(&van, "delivery"));
         assert!(m(&van, "front door van"));

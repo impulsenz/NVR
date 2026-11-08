@@ -558,7 +558,7 @@ pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
 /// A small preview image of a recording.
 pub async fn thumbnail(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path) -> Result<()> {
     let o = run(
-        Command::new(ffmpeg)
+        crate::load::background(&mut Command::new(ffmpeg))
             .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "1", "-i"])
             .arg(file)
             .args([
@@ -623,7 +623,7 @@ pub async fn sprite(
     );
     let pattern = format!("{}-%03d.jpg", prefix.display());
     let o = run(
-        Command::new(ffmpeg)
+        crate::load::background(&mut Command::new(ffmpeg))
             .args([
                 "-hide_banner",
                 "-loglevel",

@@ -174,11 +174,15 @@ impl Detector {
         // Sub-streams are small: the CPU decodes them more cheaply than the
         // GPU (plus copying frames back), unless the user opts in.
         let mut use_gpu = self.env.hardware.hwaccel != "none" && self.env.hardware.gpu_substreams;
+        let mut gpu_failed = false;
         let mut failures = 0;
         let mut active: Option<Active> = None;
         loop {
             let started = Instant::now();
-            let res = self.clone().run_once(use_gpu, &cancel, &mut active).await;
+            let res = self
+                .clone()
+                .run_once(&mut use_gpu, gpu_failed, &cancel, &mut active)
+                .await;
             if cancel.is_cancelled() {
                 if let Some(a) = active.take() {
                     self.finish(a);
@@ -200,6 +204,7 @@ impl Detector {
                         self.cam.name
                     );
                     use_gpu = false;
+                    gpu_failed = true;
                 }
             } else {
                 failures = 0;
@@ -214,10 +219,17 @@ impl Detector {
 
     async fn run_once(
         self: Arc<Self>,
-        use_gpu: bool,
+        use_gpu_now: &mut bool,
+        gpu_failed: bool,
         cancel: &CancellationToken,
         active: &mut Option<Active>,
     ) -> Result<()> {
+        let use_gpu = *use_gpu_now;
+        // Automatic CPU/GPU choice (when a GPU is set up but sub-streams are
+        // not forced onto it): move when one side is overloaded for a while.
+        let auto =
+            self.env.hardware.hwaccel != "none" && !self.env.hardware.gpu_substreams && !gpu_failed;
+        let mut strain_since: Option<Instant> = None;
         let d = &self.cam.detect;
         let (w, h) = self.frame_size().await;
         let url = self.cam.live_url().to_string();
@@ -317,6 +329,24 @@ impl Detector {
                 }
                 _ = tick.tick() => {
                     self.check_end(active);
+                    if auto {
+                        let cur = if use_gpu { crate::load::Pick::Gpu } else { crate::load::Pick::Cpu };
+                        let want = crate::load::pick_decoder(cur);
+                        if want == cur {
+                            strain_since = None;
+                        } else if strain_since.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(60) {
+                            info!(
+                                "[{}] detection: moving video decoding to the {} (CPU {}%, GPU {})",
+                                self.cam.name,
+                                if want == crate::load::Pick::Gpu { "GPU" } else { "CPU" },
+                                crate::load::cpu(),
+                                crate::load::gpu().map(|g| format!("{g}%")).unwrap_or_else(|| "unknown".into())
+                            );
+                            *use_gpu_now = want == crate::load::Pick::Gpu;
+                            let _ = child.kill().await;
+                            return Ok(());
+                        }
+                    }
                     continue;
                 }
                 _ = cancel.cancelled() => {
@@ -393,7 +423,13 @@ impl Detector {
                     && ai.enabled()
                     && !ai_busy
                     && moving
-                    && last_ai.elapsed().as_secs_f64() >= d.ai_interval
+                    && last_ai.elapsed().as_secs_f64()
+                        >= d.ai_interval
+                            * if ai.is_local() {
+                                crate::load::ai_slowdown()
+                            } else {
+                                1.0
+                            }
                 {
                     ai_busy = true;
                     last_ai = Instant::now();

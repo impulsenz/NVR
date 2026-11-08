@@ -11,6 +11,7 @@ mod fsbrowse;
 mod imgutil;
 mod library;
 mod live;
+mod load;
 mod logs;
 mod manager;
 mod mp4fix;
@@ -90,6 +91,7 @@ async fn main() -> Result<()> {
     tokio::spawn(mgr.clone().housekeeping());
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
+    tokio::spawn(web::prebuild_timelapse(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

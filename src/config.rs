@@ -94,6 +94,9 @@ pub struct StorageConfig {
     pub max_storage_gb: f64,
     /// Delete the oldest recordings when free disk space drops below this (0 = off).
     pub min_free_gb: f64,
+    /// Prepare the timeline's time-lapse previews for the last 24 hours in
+    /// the background, so scrubbing is instant.
+    pub prebuild_timelapse: bool,
 }
 
 impl Default for StorageConfig {
@@ -104,6 +107,7 @@ impl Default for StorageConfig {
             retention_days: 14,
             max_storage_gb: 0.0,
             min_free_gb: 5.0,
+            prebuild_timelapse: true,
         }
     }
 }

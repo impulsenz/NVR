@@ -1196,6 +1196,77 @@ async fn ensure_sprite(
     Ok((prefix, info))
 }
 
+/// Background job: keep the time-lapse previews of the last 24 hours ready
+/// for every camera (newest first), one file at a time and only while
+/// nobody is waiting for previews. Older days are still made on demand.
+pub async fn prebuild_timelapse(m: Arc<Manager>) {
+    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    let mut announced = false;
+    loop {
+        let mut built = 0usize;
+        if m.config().storage.prebuild_timelapse {
+            let since = Local::now() - chrono::Duration::hours(24);
+            let mut todo: Vec<(
+                Arc<crate::manager::CameraRuntime>,
+                &'static str,
+                String,
+                DateTime<Local>,
+            )> = Vec::new();
+            for c in m.cameras() {
+                let recs = library::recordings(&c);
+                for r in recs.iter().filter(|r| r.end >= since) {
+                    // Skip the file still being written (it keeps growing).
+                    if (Local::now() - r.end).num_seconds() < 30 {
+                        continue;
+                    }
+                    todo.push((c.clone(), "rec", r.name.clone(), r.start));
+                }
+                for e in c.events.between(since, Local::now()) {
+                    if let Some(clip) = e.clip {
+                        todo.push((c.clone(), "clip", clip, e.start));
+                    }
+                }
+            }
+            todo.sort_by(|a, b| b.3.cmp(&a.3));
+            for (c, kind, name, _) in todo {
+                if !m.config().storage.prebuild_timelapse {
+                    break;
+                }
+                let Ok(src) = media_path(&c, kind, &name) else {
+                    continue;
+                };
+                let first = src
+                    .parent()
+                    .unwrap()
+                    .join(".thumbs")
+                    .join(format!("{name}.sprite-000.jpg"));
+                if fresh(&first, &src) {
+                    continue;
+                }
+                // Only when the computer has room to spare.
+                crate::load::wait_for_cpu(75, std::time::Duration::from_secs(600)).await;
+                // Let people scrubbing the timeline go first.
+                while THUMB_JOBS.available_permits() < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                if !announced {
+                    tracing::info!(
+                        "preparing time-lapse previews for the last 24 hours in the background"
+                    );
+                    announced = true;
+                }
+                if ensure_sprite(&m, &c, kind, &name).await.is_ok() {
+                    built += 1;
+                }
+            }
+        }
+        if built > 0 {
+            tracing::info!("time-lapse previews ready ({built} file(s) prepared)");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+    }
+}
+
 async fn sprite_info(
     State(m): App,
     Path((id, kind, name)): Path<(String, String, String)>,

@@ -1732,8 +1732,11 @@ const SERIES = [
   ['cpu', 'CPU (whole computer)', '#4f8cff'],
   ['nvr_cpu', 'CPU used by NVR', '#22c55e'],
   ['gpu', 'GPU', '#a78bfa'],
-  ['ram', 'Memory', '#f59e0b'],
+  ['ram', 'Memory (whole computer)', '#f59e0b'],
+  ['nvr_ram', 'Memory used by NVR', '#ef4444'],
 ];
+// Graph lines switched off by the viewer (remembered).
+const graphHidden = new Set(store.get('graph-hidden', []));
 
 function showSystem() {
   loadSystem();
@@ -1754,7 +1757,7 @@ async function loadSystem() {
   $('sys-cards').innerHTML =
     card('CPU', s.cpu.toFixed(0) + '%', `${esc(c.cpu_name || 'CPU')} · ${c.cores} threads<br>NVR + ffmpeg: ${s.nvr_cpu.toFixed(1)}%`, s.cpu) +
     card('GPU', s.gpu != null ? s.gpu.toFixed(0) + '%' : '–', s.gpu != null ? `${esc(c.gpu_name || 'GPU')}${c.gpu_temp != null ? ' · ' + c.gpu_temp.toFixed(0) + ' °C' : ''}${s.gpu_mem != null ? ' · memory ' + s.gpu_mem.toFixed(0) + '%' : ''}` : 'No GPU readings available (NVIDIA needs nvidia-smi; AMD on Linux and any GPU on Windows are read automatically).', s.gpu) +
-    card('Memory', s.ram.toFixed(0) + '%', `${fmtBytes(c.ram_used)} of ${fmtBytes(c.ram_total)}`, s.ram) +
+    card('Memory', s.ram.toFixed(0) + '%', `${fmtBytes(c.ram_used)} of ${fmtBytes(c.ram_total)}<br>NVR + ffmpeg: ${fmtBytes(c.nvr_ram_used || 0)} (${(s.nvr_ram || 0).toFixed(1)}%)`, s.ram) +
     card('Disk', disk ? fmtBytes(disk.free_bytes) + ' free' : '–', disk ? `of ${fmtBytes(disk.total_bytes)} · ${esc(disk.path)}` : '', disk ? 100 * (1 - disk.free_bytes / disk.total_bytes) : null) +
     card('Recording rate', fmtBytes(usage.bytes_per_hour) + '/h', `${fmtBytes(usage.bytes_per_day)} per 24 hours`, null) +
     card('Days of recording', usage.days_capacity != null ? (usage.days_capacity < 2 ? usage.days_capacity.toFixed(1) + ' days' : Math.floor(usage.days_capacity) + ' days') : '–',
@@ -1787,21 +1790,30 @@ function drawGraph() {
     g += `<text x="${X(t)}" y="${H - 3}" fill="#8b93a3" font-size="10" text-anchor="middle">${lab}</text>`;
   }
   // CPU peaks as a shaded band
-  g += `<path d="${h.map((p, i) => (i ? 'L' : 'M') + X(p.t) + ',' + Y(p.cpu_max)).join('')}L${X(t1)},${Y(0)}L${X(t0)},${Y(0)}Z" fill="rgba(79,140,255,.12)"/>`;
+  if (!graphHidden.has('cpu_max')) g += `<path d="${h.map((p, i) => (i ? 'L' : 'M') + X(p.t) + ',' + Y(p.cpu_max)).join('')}L${X(t1)},${Y(0)}L${X(t0)},${Y(0)}Z" fill="rgba(79,140,255,.12)"/>`;
   for (const [k, , color] of SERIES) {
+    if (graphHidden.has(k)) continue;
     const pts = h.filter(p => p[k] != null);
     if (pts.length < 2) continue;
     g += `<path d="${pts.map((p, i) => (i ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Y(p[k]).toFixed(1)).join('')}" fill="none" stroke="${color}" stroke-width="1.6"/>`;
   }
   g += '<line id="g-cursor" y1="0" y2="' + (H - 18) + '" stroke="#fff" stroke-opacity=".4" hidden/>';
   svg.innerHTML = g;
-  $('sys-legend').innerHTML = SERIES.filter(([k]) => h.some(p => p[k] != null)).map(([, n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join('') + '<span><i style="background:rgba(79,140,255,.3)"></i>CPU peaks</span>';
+  // Click a legend entry to show or hide that line.
+  $('sys-legend').innerHTML = SERIES.filter(([k]) => h.some(p => p[k] != null)).concat([['cpu_max', 'CPU peaks', 'rgba(79,140,255,.3)']])
+    .map(([k, n, c]) => `<span data-k="${k}" class="${graphHidden.has(k) ? 'off' : ''}" title="Click to show or hide"><i style="background:${c}"></i>${n}</span>`).join('');
+  $('sys-legend').querySelectorAll('span').forEach(el => el.onclick = () => {
+    const k = el.dataset.k;
+    if (graphHidden.has(k)) graphHidden.delete(k); else graphHidden.add(k);
+    store.set('graph-hidden', [...graphHidden]);
+    drawGraph();
+  });
   svg.onmousemove = (e) => {
     const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W;
     const t = t0 + (x - 36) / (W - 40) * (t1 - t0);
     const p = h.reduce((a, b) => Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a);
     const cur = svg.querySelector('#g-cursor'); cur.removeAttribute('hidden'); cur.setAttribute('x1', X(p.t)); cur.setAttribute('x2', X(p.t));
-    $('sys-hover').textContent = `${fmtDate(new Date(p.t * 1000))} — CPU ${p.cpu.toFixed(0)}% (peak ${p.cpu_max.toFixed(0)}%), NVR ${p.nvr_cpu.toFixed(1)}%, memory ${p.ram.toFixed(0)}%` + (p.gpu != null ? `, GPU ${p.gpu.toFixed(0)}%` : '');
+    $('sys-hover').textContent = `${fmtDate(new Date(p.t * 1000))} — CPU ${p.cpu.toFixed(0)}% (peak ${p.cpu_max.toFixed(0)}%), NVR ${p.nvr_cpu.toFixed(1)}%, memory ${p.ram.toFixed(0)}% (NVR ${(p.nvr_ram || 0).toFixed(1)}%)` + (p.gpu != null ? `, GPU ${p.gpu.toFixed(0)}%` : '');
   };
 }
 window.addEventListener('resize', () => { if (page === 'system') drawGraph(); });
@@ -2421,6 +2433,8 @@ async function renderStorage(body) {
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
     <label for="s-max">Maximum storage</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
     <label for="s-free">Keep free on disk</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
+    <span></span><div><label class="check"><input type="checkbox" id="s-tl" ${s.prebuild_timelapse !== false ? 'checked' : ''}> Prepare time-lapse previews for the last 24 hours automatically</label>
+      <div class="hint">The timeline's scrub previews are made in the background (newest first, a little CPU), so they appear instantly. Older days are still made when you open them.</div></div>
   </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>
   <div class="card"><h2>Where each camera saves</h2>
     <table><thead><tr><th>Camera</th><th>Folder</th><th class="hide-sm">Stored</th><th></th></tr></thead><tbody>
@@ -2435,7 +2449,7 @@ async function renderStorage(body) {
     e.preventDefault();
     const moving = !$('s-move-row').hidden && chk('s-move');
     if (moving) toast('Saving and moving recordings… this can take a while for large folders.');
-    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free')}});
+    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), prebuild_timelapse: chk('s-tl')}});
     renderStorage(body);
   };
   const changeCam = async (id, dir) => {

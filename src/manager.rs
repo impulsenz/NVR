@@ -826,15 +826,25 @@ async fn backfill_colors(mgr: Arc<Manager>) {
     let mut done = 0;
     for store in mgr.event_stores().into_values() {
         for mut e in store.all() {
-            if e.start < cutoff || e.labels.is_empty() || e.labels.iter().any(|l| l.color.is_some()) {
+            if e.start < cutoff || e.labels.is_empty() || e.labels.iter().any(|l| l.color.is_some())
+            {
                 continue;
             }
             let Some(thumb) = &e.thumb else { continue };
             let (w, h) = (160u32, 90u32);
-            let Ok(out) = tokio::process::Command::new(&ffmpeg)
+            crate::load::wait_for_cpu(70, Duration::from_secs(600)).await;
+            let Ok(out) = crate::load::background(&mut tokio::process::Command::new(&ffmpeg))
                 .args(["-hide_banner", "-loglevel", "error", "-i"])
                 .arg(store.dir().join(thumb))
-                .args(["-vf", &format!("scale={w}:{h}"), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+                .args([
+                    "-vf",
+                    &format!("scale={w}:{h}"),
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ])
                 .stdin(std::process::Stdio::null())
                 .kill_on_drop(true)
                 .output()
@@ -845,7 +855,11 @@ async fn backfill_colors(mgr: Arc<Manager>) {
             if out.stdout.len() != (w * h * 3) as usize {
                 continue;
             }
-            let f = crate::imgutil::Frame { width: w, height: h, rgb: std::sync::Arc::new(out.stdout) };
+            let f = crate::imgutil::Frame {
+                width: w,
+                height: h,
+                rgb: std::sync::Arc::new(out.stdout),
+            };
             // Older thumbnails were cropped around the main object.
             let (x, y, bw, bh) = match e.focus {
                 Some([x, y, bw, bh]) => (x, y, bw, bh),

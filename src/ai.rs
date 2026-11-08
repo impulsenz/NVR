@@ -214,7 +214,17 @@ impl Ai {
             ..Default::default()
         };
         let ai = Arc::new(Self {
-            busy: tokio::sync::Semaphore::new(if cfg.provider == "builtin" { 2 } else { 4 }),
+            // The built-in AI runs on this computer's processor: at most a
+            // quarter of its cores at once, so recording and live view keep
+            // their share.
+            busy: tokio::sync::Semaphore::new(if cfg.provider == "builtin" {
+                std::thread::available_parallelism()
+                    .map(|n| n.get() / 4)
+                    .unwrap_or(1)
+                    .clamp(1, 4)
+            } else {
+                4
+            }),
             cfg,
             models_dir: data_dir.join("models"),
             client,
@@ -231,6 +241,11 @@ impl Ai {
 
     pub fn enabled(&self) -> bool {
         self.cfg.provider != "none"
+    }
+
+    /// Runs on this computer's processor (not a server or cloud service).
+    pub fn is_local(&self) -> bool {
+        self.cfg.provider == "builtin"
     }
 
     pub fn status(&self) -> AiStatus {

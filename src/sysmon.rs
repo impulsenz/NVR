@@ -26,6 +26,8 @@ pub struct Sample {
     pub nvr_cpu: f32,
     /// RAM in use, %.
     pub ram: f32,
+    /// RAM used by the NVR and its ffmpeg processes, % of the computer's RAM.
+    pub nvr_ram: f32,
     /// GPU utilisation %, if a GPU can be read.
     pub gpu: Option<f32>,
     /// GPU memory in use, %.
@@ -39,6 +41,8 @@ pub struct Current {
     pub cores: usize,
     pub ram_used: u64,
     pub ram_total: u64,
+    /// Bytes of RAM used by the NVR and its ffmpeg processes.
+    pub nvr_ram_used: u64,
     pub gpu_name: Option<String>,
     pub gpu_temp: Option<f32>,
     /// How the GPU is read, e.g. "nvidia-smi".
@@ -52,6 +56,7 @@ pub struct Point {
     pub cpu_max: f32,
     pub nvr_cpu: f32,
     pub ram: f32,
+    pub nvr_ram: f32,
     pub gpu: Option<f32>,
     pub gpu_max: Option<f32>,
     pub gpu_mem: Option<f32>,
@@ -111,6 +116,7 @@ impl Monitor {
                     cpu_max: s.cpu,
                     nvr_cpu: s.nvr_cpu,
                     ram: s.ram,
+                    nvr_ram: s.nvr_ram,
                     gpu: s.gpu,
                     gpu_max: s.gpu,
                     gpu_mem: s.gpu_mem,
@@ -155,10 +161,12 @@ impl Monitor {
             sys.refresh_processes(ProcessesToUpdate::All, true);
             let cores = sys.cpus().len().max(1);
             let mut nvr = 0.0f32;
+            let mut nvr_mem = 0u64;
             if let Some(pid) = pid {
                 for (p_pid, p) in sys.processes() {
                     if *p_pid == pid || p.parent() == Some(pid) {
                         nvr += p.cpu_usage();
+                        nvr_mem += p.memory();
                     }
                 }
             }
@@ -172,9 +180,11 @@ impl Monitor {
                 cpu: sys.global_cpu_usage(),
                 nvr_cpu: (nvr / cores as f32).min(100.0),
                 ram: sys.used_memory() as f32 * 100.0 / total as f32,
+                nvr_ram: (nvr_mem as f32 * 100.0 / total as f32).min(100.0),
                 gpu: last_gpu.as_ref().map(|g| g.util),
                 gpu_mem: last_gpu.as_ref().and_then(|g| g.mem),
             };
+            crate::load::update(s.cpu, s.gpu);
             *self.current.lock().unwrap() = Current {
                 sample: s,
                 cpu_name: sys
@@ -185,6 +195,7 @@ impl Monitor {
                 cores,
                 ram_used: sys.used_memory(),
                 ram_total: total,
+                nvr_ram_used: nvr_mem,
                 gpu_name: last_gpu.as_ref().and_then(|g| g.name.clone()),
                 gpu_temp: last_gpu.as_ref().and_then(|g| g.temp),
                 gpu_source: (source != GpuSource::None).then(|| format!("{source:?}")),
@@ -214,7 +225,7 @@ impl Monitor {
 
     fn append(&self, p: &Point) {
         let line = format!(
-            "{},{:.1},{:.1},{:.1},{:.1},{},{},{}\n",
+            "{},{:.1},{:.1},{:.1},{:.1},{},{},{},{:.2}\n",
             p.t,
             p.cpu,
             p.cpu_max,
@@ -222,7 +233,8 @@ impl Monitor {
             p.ram,
             opt(p.gpu),
             opt(p.gpu_max),
-            opt(p.gpu_mem)
+            opt(p.gpu_mem),
+            p.nvr_ram
         );
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -238,7 +250,7 @@ impl Monitor {
                 .iter()
                 .map(|p| {
                     format!(
-                        "{},{:.1},{:.1},{:.1},{:.1},{},{},{}\n",
+                        "{},{:.1},{:.1},{:.1},{:.1},{},{},{},{:.2}\n",
                         p.t,
                         p.cpu,
                         p.cpu_max,
@@ -246,7 +258,8 @@ impl Monitor {
                         p.ram,
                         opt(p.gpu),
                         opt(p.gpu_max),
-                        opt(p.gpu_mem)
+                        opt(p.gpu_mem),
+                        p.nvr_ram
                     )
                 })
                 .collect();
@@ -277,6 +290,7 @@ fn load_history(file: &std::path::Path) -> VecDeque<Point> {
                 cpu_max: num(f[2])?,
                 nvr_cpu: num(f[3])?,
                 ram: num(f[4])?,
+                nvr_ram: f.get(8).and_then(|x| num(x)).unwrap_or(0.0),
                 gpu: num(f[5]),
                 gpu_max: num(f[6]),
                 gpu_mem: num(f[7]),
@@ -297,6 +311,7 @@ fn aggregate(s: &[Sample]) -> Point {
         cpu_max: s.iter().map(|x| x.cpu).fold(0.0, f32::max),
         nvr_cpu: avg(&|x| x.nvr_cpu),
         ram: avg(&|x| x.ram),
+        nvr_ram: avg(&|x| x.nvr_ram),
         gpu: (!gpus.is_empty()).then(|| gpus.iter().sum::<f32>() / gpus.len() as f32),
         gpu_max: gpus.iter().copied().reduce(f32::max),
         gpu_mem: (!mems.is_empty()).then(|| mems.iter().sum::<f32>() / mems.len() as f32),
@@ -329,6 +344,7 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
                     cpu_max: 0.0,
                     nvr_cpu: 0.0,
                     ram: 0.0,
+                    nvr_ram: 0.0,
                     gpu: zero,
                     gpu_max: zero,
                     gpu_mem: zero,
@@ -342,6 +358,7 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
                 cpu_max: c.iter().map(|p| p.cpu_max).fold(0.0, f32::max),
                 nvr_cpu: c.iter().map(|p| p.nvr_cpu).sum::<f32>() / k,
                 ram: c.iter().map(|p| p.ram).sum::<f32>() / k,
+                nvr_ram: c.iter().map(|p| p.nvr_ram).sum::<f32>() / k,
                 gpu: (!gpus.is_empty())
                     .then(|| gpus.iter().sum::<f32>() / gpus.len() as f32)
                     .or(has_gpu.then_some(0.0)),
@@ -523,6 +540,7 @@ The command completed successfully."#;
             cpu_max: cpu,
             nvr_cpu: 0.0,
             ram: 50.0,
+            nvr_ram: 1.0,
             gpu: None,
             gpu_max: None,
             gpu_mem: None,
