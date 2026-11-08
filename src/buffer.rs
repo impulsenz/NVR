@@ -202,16 +202,7 @@ impl EventBuffer {
         let list = self.dir.join(format!("{event_id}.txt"));
         let text: String = parts
             .iter()
-            .map(|p| {
-                format!(
-                    "file '{}'\n",
-                    p.path
-                        .display()
-                        .to_string()
-                        .replace('\\', "/")
-                        .replace('\'', "'\\''")
-                )
-            })
+            .map(|p| format!("file '{}'\n", crate::ffmpeg::concat_path(&p.path)))
             .collect();
         std::fs::write(&list, text)?;
         let out = tokio::time::timeout(

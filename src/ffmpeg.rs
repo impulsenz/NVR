@@ -663,6 +663,17 @@ pub async fn sprite(
     })
 }
 
+/// A path for an ffmpeg concat list. ffmpeg resolves relative paths in the
+/// list against the list file's own folder, so always write the full path
+/// (with forward slashes, and quotes escaped).
+pub fn concat_path(path: &std::path::Path) -> String {
+    let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    full.display()
+        .to_string()
+        .replace('\\', "/")
+        .replace('\'', "'\\''")
+}
+
 /// Cut `[from, to)` seconds out of a sequence of files into one MP4
 /// (without re-encoding, so cuts snap to the nearest keyframe).
 pub async fn export(
@@ -675,10 +686,7 @@ pub async fn export(
     for (path, inpoint, outpoint) in parts {
         text.push_str(&format!(
             "file '{}'\ninpoint {inpoint:.3}\noutpoint {outpoint:.3}\n",
-            path.display()
-                .to_string()
-                .replace('\\', "/")
-                .replace('\'', "'\\''")
+            concat_path(path)
         ));
     }
     std::fs::write(&list, text)?;

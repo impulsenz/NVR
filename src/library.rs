@@ -328,13 +328,28 @@ pub fn export_parts(
         })
         .collect();
     if parts.is_empty() {
-        // Event-only cameras: use full-quality clips.
-        for e in rt.events.between(from, to) {
-            if let (Some(clip), Some(cs)) = (&e.clip, e.clip_start) {
+        // Event-only cameras: use full-quality clips. Back-to-back clips
+        // overlap (each includes its pre-event buffer), so each clip only
+        // adds the time not already covered.
+        let post = chrono::Duration::seconds(rt.cfg.detect.post_seconds as i64 + 2);
+        let mut clips: Vec<_> = rt
+            .events
+            .between(from, to)
+            .into_iter()
+            .filter_map(|e| {
+                let (clip, cs) = (e.clip.clone()?, e.clip_start?);
                 let p = rt.events.dir().join(clip);
-                if p.exists() {
-                    parts.push((p, secs(cs, from).max(0.0), secs(cs, to).max(0.1)));
-                }
+                p.exists().then_some((p, cs, e.end + post))
+            })
+            .collect();
+        clips.sort_by_key(|c| c.1);
+        let mut covered = from;
+        for (p, cs, ce) in clips {
+            let start = covered.max(cs);
+            let end = to.min(ce);
+            if end > start {
+                parts.push((p, secs(cs, start), secs(cs, end)));
+                covered = end;
             }
         }
     }
