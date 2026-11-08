@@ -97,6 +97,18 @@ function zoomStyle(f) {
   if (s < 1.05) return '';
   return `transform-origin:${((x + w / 2) * 100).toFixed(1)}% ${((y + h / 2) * 100).toFixed(1)}%;transform:scale(${s.toFixed(2)})`;
 }
+// Boxes around what was detected in an alert picture, for review. The
+// picture is the whole camera view, so boxes are placed in % of it.
+let showBoxes = store_get('show-boxes', true);
+document.body.classList.toggle('no-boxes', !showBoxes);
+function boxesHtml(ev, labels) {
+  if (!ev || !ev.boxes || !ev.boxes.length) return '';
+  return '<div class="bxs">' + ev.boxes.map(b => {
+    const motion = b.label === 'motion';
+    const tip = motion ? 'motion' : `${b.label} ${Math.round(b.score * 100)}%`;
+    return `<div class="bx ${motion ? 'motion' : ''} ${b.y < 0.07 ? 'top' : ''}" title="${esc(tip)}" style="left:${(b.x * 100).toFixed(2)}%;top:${(b.y * 100).toFixed(2)}%;width:${(b.w * 100).toFixed(2)}%;height:${(b.h * 100).toFixed(2)}%">${labels ? `<span>${motion ? labelIcon('motion') + ' motion' : labelIcon(b.label) + ' ' + esc(tip)}</span>` : ''}</div>`;
+  }).join('') + '</div>';
+}
 function labelTags(labels, motion) {
   if (labels && labels.length) return labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}">${l.color ? esc(l.color) + ' ' : ''}${esc(l.label)} ${Math.round(l.score * 100)}%</span>`).join('');
   return motion ? '<span class="tag motion">motion</span>' : '';
@@ -1456,7 +1468,7 @@ function renderRecordings() {
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
     const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc((l.color ? l.color + ' ' : '') + l.label)} ${Math.round(l.score * 100)}%">${l.color ? `<i class="cdot" style="background:${COLOR_CSS[l.color] || l.color}"></i>` : ''}${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
-    card.innerHTML = `<div class="thumb">${it.thumb ? `<img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.remove()" style="${zoomStyle(it.event && it.event.focus)}">` : ''}
+    card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw" style="${zoomStyle(it.event && it.event.focus)}"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
         <div class="tags">${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
@@ -1486,12 +1498,15 @@ function playItem(it, card) {
   recPlayer.load({...it.play, camera: it.camera, marks: it.event ? [it.event.start] : []});
   const dur = (new Date(it.end) - new Date(it.start)) / 1000;
   $('rp-info').innerHTML = `<h2>${it.kind === 'event' ? 'Alert' : 'Recording'}</h2>
-    ${it.kind === 'event' && it.thumb ? `<img src="${esc(it.thumb)}" style="width:100%;border-radius:6px;margin-bottom:8px" alt="">` : ''}
+    ${it.kind === 'event' && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(it.event, true)}</div>
+      ${it.event.boxes && it.event.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
     ${it.kind === 'event' ? `<dt>Detected</dt><dd>${labelTags(it.event.labels, it.event.motion) || '–'}</dd>${it.event.desc ? `<dt>Description</dt><dd>${esc(it.event.desc)}</dd>` : ''}<dt>Video</dt><dd>${it.event.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
     ${it.size ? `<dt>Size</dt><dd>${fmtBytes(it.size)}</dd>` : ''}</dl>
     <div class="hint" style="margin-top:10px">Hover over the bar under the video to preview any moment. Use <b>[ Start</b> and <b>End ]</b> (or drag the orange handles) to cut out a clip.</div>
     <div class="actions"><a class="btn small" href="#recordings/${enc(it.camera)}/timeline" onclick="tl.jump='${it.start}'">Open in timeline</a></div>`;
+  const t = $('rp-info').querySelector('.bx-toggle');
+  if (t) t.onchange = () => { showBoxes = t.checked; store.set('show-boxes', showBoxes); document.body.classList.toggle('no-boxes', !showBoxes); };
   $('rec-player').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 

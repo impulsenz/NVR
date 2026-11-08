@@ -62,7 +62,9 @@ viewing, finding footage, and managing everything, all from the browser.
 - Choose which objects alert (person, car, dog, …), the minimum confidence, and whether *any motion*
   or *only recognized objects* make an alert.
 - Each alert gets a **thumbnail of the whole picture** that zooms in on the recognized object.
-- Damaged video frames (lost network packets, green or smeared pictures) are skipped, so they don't
+- **Detection boxes** on alert pictures (green for recognized objects with their label and confidence,
+  dashed orange for motion) so you can check what triggered an alert; switch them off in the alert details.
+- Damaged video frames (lost network packets, green, pink or smeared pictures) are skipped, so they don't
   cause false alerts or broken thumbnails.
 - If the same object is recognized as two things (a cat also seen as a person), only the more
   confident answer is kept.

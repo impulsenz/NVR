@@ -534,6 +534,7 @@ mod text_tests {
             clip_start: None,
             focus: None,
             desc: desc.into(),
+            boxes: Vec::new(),
         }
     }
 

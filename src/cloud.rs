@@ -182,6 +182,7 @@ mod tests {
             clip_start: None,
             focus: None,
             desc: String::new(),
+            boxes: Vec::new(),
         };
         store.save(ev(
             "ev-person",

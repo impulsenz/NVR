@@ -44,6 +44,20 @@ pub struct Event {
     /// Short description from a language-model AI (for search).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub desc: String,
+    /// What was detected in the thumbnail, with boxes (0..1 of the
+    /// picture), so the alert can be reviewed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boxes: Vec<SeenBox>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SeenBox {
+    pub label: String,
+    pub score: f32,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
 }
 
 impl Event {
@@ -211,6 +225,7 @@ mod tests {
             clip_start: None,
             focus: None,
             desc: String::new(),
+            boxes: Vec::new(),
         };
         s.save(e.clone());
         e.labels.push(Label {

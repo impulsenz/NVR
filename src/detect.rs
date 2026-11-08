@@ -9,7 +9,7 @@
 use crate::ai::{AiError, AiHandle, Detection};
 use crate::buffer::EventBuffer;
 use crate::config::{CameraConfig, redact};
-use crate::events::{Event, EventStore, Label};
+use crate::events::{Event, EventStore, Label, SeenBox};
 use crate::ffmpeg;
 use crate::imgutil::Frame;
 use crate::manager::RuntimeEnv;
@@ -30,47 +30,135 @@ const ANALYSIS_WIDTH: u32 = 640;
 /// How long a frame waits before analysis, so late damage reports still apply.
 const ANALYSIS_DELAY: Duration = Duration::from_millis(700);
 
-/// Spots frames with a sudden colour cast. Damaged H.264/H.265 frames come
-/// out green (missing colour data) or smeared; a real scene changes colour
-/// gradually (except day/night switches, which are accepted after a while).
+/// Spots broken frames. Damaged H.264/H.265 frames keep most of their
+/// brightness but get wrong colours (green, pink, smeared colour blocks):
+/// across most of the picture the colour changes while the brightness
+/// hardly does. A real object changes brightness too and covers only part
+/// of the picture. Day/night switches are accepted after a while.
 #[derive(Default)]
 pub struct TintCheck {
-    baseline: Option<f32>,
+    /// Per cell: (brightness, red-green, blue-green), slowly updated.
+    cells: Vec<[f32; 3]>,
     odd_frames: u32,
 }
 
+const TINT_COLS: usize = 16;
+const TINT_ROWS: usize = 9;
+
 impl TintCheck {
-    /// Average "greenness" (G minus the mean of R and B), sampled.
-    pub fn green(f: &Frame) -> f32 {
-        let px = f.rgb.chunks_exact(3).step_by(7);
-        let (mut sum, mut n) = (0f32, 0u32);
-        for p in px {
-            sum += p[1] as f32 - (p[0] as f32 + p[2] as f32) / 2.0;
-            n += 1;
+    fn measure(f: &Frame) -> Vec<[f32; 3]> {
+        let (w, h) = (f.width as usize, f.height as usize);
+        let mut out = vec![[0f32; 3]; TINT_COLS * TINT_ROWS];
+        let mut n = vec![0u32; TINT_COLS * TINT_ROWS];
+        for y in (0..h).step_by(3) {
+            let cy = y * TINT_ROWS / h.max(1);
+            for x in (0..w).step_by(3) {
+                let i = (y * w + x) * 3;
+                let (r, g, b) = (f.rgb[i] as f32, f.rgb[i + 1] as f32, f.rgb[i + 2] as f32);
+                let c = cy * TINT_COLS + x * TINT_COLS / w.max(1);
+                out[c][0] += 0.3 * r + 0.59 * g + 0.11 * b;
+                out[c][1] += r - g;
+                out[c][2] += b - g;
+                n[c] += 1;
+            }
         }
-        if n == 0 { 0.0 } else { sum / n as f32 }
+        for (o, k) in out.iter_mut().zip(n) {
+            let k = k.max(1) as f32;
+            o.iter_mut().for_each(|v| *v /= k);
+        }
+        out
     }
 
     /// True if this frame looks broken.
     pub fn check(&mut self, f: &Frame) -> bool {
-        let g = Self::green(f);
-        let Some(base) = self.baseline else {
-            self.baseline = Some(g);
+        if f.width < 16 || f.height < 9 {
             return false;
-        };
-        if g > base + 14.0 {
+        }
+        let now = Self::measure(f);
+        if self.cells.len() != now.len() {
+            self.cells = now;
+            return false;
+        }
+        let odd = self
+            .cells
+            .iter()
+            .zip(&now)
+            .filter(|(b, c)| {
+                let dl = (c[0] - b[0]).abs();
+                let dc = ((c[1] - b[1]).powi(2) + (c[2] - b[2]).powi(2)).sqrt();
+                dc > 22.0 && dc > dl * 1.2
+            })
+            .count();
+        if odd * 100 >= now.len() * 55 {
             self.odd_frames += 1;
             // Still "odd" after ~10 s: the scene really changed (e.g. the
-            // camera switched from night to colour mode).
+            // camera switched between night and colour mode).
             if self.odd_frames > 50 {
-                self.baseline = Some(g);
+                self.cells = now;
                 self.odd_frames = 0;
             }
             return true;
         }
         self.odd_frames = 0;
-        self.baseline = Some(base * 0.97 + g * 0.03);
+        for (b, c) in self.cells.iter_mut().zip(&now) {
+            for k in 0..3 {
+                b[k] = b[k] * 0.95 + c[k] * 0.05;
+            }
+        }
         false
+    }
+}
+
+#[cfg(test)]
+mod tint_tests {
+    use super::*;
+
+    fn frame(f: impl Fn(usize, usize) -> [u8; 3]) -> Frame {
+        let (w, h) = (160usize, 90usize);
+        let mut rgb = Vec::with_capacity(w * h * 3);
+        for y in 0..h {
+            for x in 0..w {
+                rgb.extend(f(x, y));
+            }
+        }
+        Frame {
+            width: w as u32,
+            height: h as u32,
+            rgb: Arc::new(rgb),
+        }
+    }
+
+    #[test]
+    fn broken_colours_but_not_a_red_van() {
+        // A grey driveway with a white wall.
+        let scene = |x: usize, y: usize| {
+            if y < 30 {
+                [230, 230, 230]
+            } else {
+                [110 + (x % 7) as u8, 110, 112]
+            }
+        };
+        let mut t = TintCheck::default();
+        for _ in 0..5 {
+            assert!(!t.check(&frame(scene)));
+        }
+        // A red van covering the left 40%: a real object.
+        assert!(!t.check(&frame(|x, y| if x < 64 && y > 20 {
+            [200, 40, 35]
+        } else {
+            scene(x, y)
+        })));
+        // Same brightness, colours wrong everywhere (pink / green): broken.
+        assert!(t.check(&frame(|x, y| {
+            let [r, g, b] = scene(x, y);
+            [
+                r.saturating_add(25),
+                g.saturating_sub(30),
+                b.saturating_add(25),
+            ]
+        })));
+        // The normal picture again is fine.
+        assert!(!t.check(&frame(scene)));
     }
 }
 
@@ -469,6 +557,7 @@ impl Detector {
                 clip_start: None,
                 focus: None,
                 desc: String::new(),
+                boxes: Vec::new(),
             },
             last_activity: now,
             qualified: false,
@@ -498,7 +587,16 @@ impl Detector {
             && a.thumb_at.elapsed() > Duration::from_millis(800)
         {
             a.motion_best = fraction;
-            self.save_thumb(a, frame, bbox, 0.0);
+            let (x, y, w, h) = bbox;
+            let boxes = vec![SeenBox {
+                label: "motion".into(),
+                score: 0.0,
+                x,
+                y,
+                w,
+                h,
+            }];
+            self.save_thumb(a, frame, bbox, 0.0, boxes);
         }
         if self.cam.detect.trigger == "motion" && !a.qualified {
             a.qualified = true;
@@ -628,7 +726,24 @@ impl Detector {
         if best.score > a.thumb_score + 0.05
             && (a.thumb_score <= 0.0 || a.thumb_at.elapsed() > Duration::from_secs(1))
         {
-            self.save_thumb(a, &frame, (best.x, best.y, best.w, best.h), best.score);
+            let boxes = hits
+                .iter()
+                .map(|h| SeenBox {
+                    label: h.label.clone(),
+                    score: h.score,
+                    x: h.x,
+                    y: h.y,
+                    w: h.w,
+                    h: h.h,
+                })
+                .collect();
+            self.save_thumb(
+                a,
+                &frame,
+                (best.x, best.y, best.w, best.h),
+                best.score,
+                boxes,
+            );
             changed = true;
         }
         if !new_labels.is_empty() {
@@ -648,6 +763,7 @@ impl Detector {
         frame: &Frame,
         (x, y, w, h): (f32, f32, f32, f32),
         score: f32,
+        boxes: Vec<SeenBox>,
     ) {
         // The whole picture; for a recognized object the page zooms into
         // `focus` (the card keeps its size).
@@ -663,6 +779,7 @@ impl Detector {
         {
             a.event.thumb = Some(name);
             a.event.focus = (score > 0.0).then_some([x, y, w, h]);
+            a.event.boxes = boxes;
             a.thumb_score = score;
             a.thumb_at = Instant::now();
         }
