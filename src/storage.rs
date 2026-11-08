@@ -155,8 +155,14 @@ pub fn migrate_flat_files(root: &Path, camera_ids: &[String]) {
 /// Remove a recording and its cached previews.
 pub fn delete_recording(dir: &Path, name: &str) -> std::io::Result<()> {
     std::fs::remove_file(dir.join(name))?;
-    for suffix in [".jpg", ".sprite.jpg", ".sprite.json"] {
-        let _ = std::fs::remove_file(dir.join(".thumbs").join(format!("{name}{suffix}")));
+    // Cached preview pictures: "<name>.jpg", "<name>.sprite-000.jpg", "<name>.sprite.json", ...
+    if let Ok(rd) = std::fs::read_dir(dir.join(".thumbs")) {
+        let start = format!("{name}.");
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&start) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
     Ok(())
 }

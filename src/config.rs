@@ -28,6 +28,9 @@ pub const ENCODERS: &[&str] = &[
 ];
 pub const AI_PROVIDERS: &[&str] = &["none", "builtin", "deepstack", "ollama", "gemini", "openai"];
 pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s"];
+/// Motion mask grid size.
+pub const MASK_W: usize = 32;
+pub const MASK_H: usize = 18;
 pub const CORNERS: &[&str] = &["tl", "tr", "bl", "br"];
 /// Longest allowed recording file ("one long file").
 pub const MAX_SEGMENT_SECONDS: u64 = 86_400;
@@ -117,8 +120,9 @@ pub struct LiveConfig {
     /// Frame rate of the full-quality view.
     pub hd_fps: u32,
     /// Keep full-quality streams decoding in the background so opening a
-    /// camera is instant (uses more CPU/GPU).
-    pub preload_hd: bool,
+    /// camera is instant. Off by default: it costs a lot of GPU/CPU.
+    /// (Named differently from the 0.3 setting, which defaulted to on.)
+    pub preload_hd_streams: bool,
 }
 
 impl Default for LiveConfig {
@@ -128,7 +132,7 @@ impl Default for LiveConfig {
             width: 960,
             quality: 6,
             hd_fps: 15,
-            preload_hd: true,
+            preload_hd_streams: false,
         }
     }
 }
@@ -172,6 +176,10 @@ pub struct HardwareConfig {
     pub encoder: String,
     /// GPU device (VAAPI only), e.g. /dev/dri/renderD128.
     pub device: String,
+    /// Also decode the low-resolution sub-streams on the GPU. Usually not
+    /// worth it: copying frames back from the GPU costs more than decoding
+    /// small streams on the CPU.
+    pub gpu_substreams: bool,
 }
 
 impl Default for HardwareConfig {
@@ -180,6 +188,7 @@ impl Default for HardwareConfig {
             hwaccel: "none".into(),
             encoder: "auto".into(),
             device: String::new(),
+            gpu_substreams: false,
         }
     }
 }
@@ -253,7 +262,8 @@ pub struct CloudConfig {
     pub rclone_path: String,
     /// rclone destination, e.g. `gdrive:NVR` or `dropbox:Cameras`.
     pub remote: String,
-    /// "events" (alert clips and snapshots) or "all" (every recording).
+    /// "ai" (only alerts confirmed by object recognition), "events" (all alert
+    /// clips and pictures, including motion-only) or "all" (every recording).
     pub upload: String,
 }
 
@@ -272,7 +282,54 @@ impl Default for CloudConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct DashboardConfig {
+    /// Layout of "All cameras".
     pub tiles: Vec<Tile>,
+    /// Layout of "All cameras" in full-screen (video wall) mode.
+    pub fullscreen_tiles: Vec<Tile>,
+    pub groups: Vec<CameraGroup>,
+}
+
+/// A named set of cameras with its own layouts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct CameraGroup {
+    pub id: String,
+    pub name: String,
+    pub cameras: Vec<String>,
+    pub tiles: Vec<Tile>,
+    pub fullscreen_tiles: Vec<Tile>,
+}
+
+impl DashboardConfig {
+    pub fn validate(&self) -> Result<()> {
+        let mut ids = std::collections::HashSet::new();
+        for g in &self.groups {
+            if g.name.trim().is_empty() {
+                bail!("every camera group needs a name");
+            }
+            if g.id.is_empty() || !ids.insert(&g.id) {
+                bail!("camera group \"{}\" has an invalid id", g.name);
+            }
+        }
+        let tiles = self.tiles.iter().chain(&self.fullscreen_tiles).chain(self.groups.iter().flat_map(|g| g.tiles.iter().chain(&g.fullscreen_tiles)));
+        for t in tiles {
+            if t.w == 0 || t.h == 0 || t.x + t.w > 12 || t.h > 48 || t.y > 200 {
+                bail!("invalid layout tile for camera {}", t.camera);
+            }
+        }
+        Ok(())
+    }
+
+    /// Forget a deleted camera everywhere.
+    pub fn remove_camera(&mut self, id: &str) {
+        self.tiles.retain(|t| t.camera != id);
+        self.fullscreen_tiles.retain(|t| t.camera != id);
+        for g in &mut self.groups {
+            g.cameras.retain(|c| c != id);
+            g.tiles.retain(|t| t.camera != id);
+            g.fullscreen_tiles.retain(|t| t.camera != id);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -377,8 +434,18 @@ impl Schedule {
 #[serde(default)]
 pub struct DetectConfig {
     pub motion: bool,
-    /// 1 (only big movements) .. 100 (very sensitive).
-    pub sensitivity: u32,
+    /// Blue Iris-style motion settings (sizes are in pixels of a 640×360 picture):
+    /// how different a pixel must be from the background to count as changed (1–255).
+    pub min_contrast: u32,
+    /// Smallest moving object that counts, in pixels.
+    pub min_object_px: u32,
+    /// Motion must last this long before it triggers.
+    pub make_time_ms: u32,
+    /// The object must move at least this far (0 = off). Ignores trees and
+    /// flags swaying in place.
+    pub min_travel_px: u32,
+    /// Areas to ignore: 32×18 grid, row by row, '1' = ignore. Empty = none.
+    pub mask: String,
     /// Run object recognition on motion.
     pub ai: bool,
     /// Objects that count as an alert, e.g. person, car, dog.
@@ -401,7 +468,11 @@ impl Default for DetectConfig {
     fn default() -> Self {
         Self {
             motion: true,
-            sensitivity: 50,
+            min_contrast: 24,
+            min_object_px: 300,
+            make_time_ms: 500,
+            min_travel_px: 0,
+            mask: String::new(),
             ai: false,
             objects: vec![
                 "person".into(),
@@ -502,8 +573,14 @@ impl CameraConfig {
             bail!("storage limit cannot be negative");
         }
         let d = &self.detect;
-        if !(1..=100).contains(&d.sensitivity) {
-            bail!("motion sensitivity must be 1 to 100");
+        if !(1..=255).contains(&d.min_contrast) {
+            bail!("motion contrast must be 1 to 255");
+        }
+        if d.min_object_px > 230_400 || d.make_time_ms > 30_000 || d.min_travel_px > 640 {
+            bail!("motion object size, make time or travel distance is out of range");
+        }
+        if !d.mask.is_empty() && (d.mask.len() != MASK_W * MASK_H || d.mask.chars().any(|c| c != '0' && c != '1')) {
+            bail!("invalid motion mask");
         }
         if !(0.05..=1.0).contains(&d.min_confidence) {
             bail!("minimum confidence must be between 5% and 100%");
@@ -519,6 +596,9 @@ impl CameraConfig {
         }
         if self.record_mode.event_clips() && !d.motion && !d.ai {
             bail!("this recording mode needs motion detection or object recognition turned on");
+        }
+        if d.ai && !d.motion {
+            bail!("object recognition only runs when motion is seen: turn on motion detection");
         }
         if d.trigger == "objects" && !d.ai {
             bail!("alerts on objects need object recognition turned on");
@@ -646,6 +726,11 @@ impl Config {
             changed = true;
         }
         for c in &mut self.cameras {
+            // Object recognition only runs on motion now.
+            if c.detect.ai && !c.detect.motion {
+                c.detect.motion = true;
+                changed = true;
+            }
             if c.record_mode == RecordMode::Scheduled {
                 c.record_mode = RecordMode::Continuous;
                 c.schedule_enabled = true;
@@ -717,9 +802,10 @@ impl Config {
         if self.cloud.enabled && self.cloud.remote.trim().is_empty() {
             bail!("enter an rclone destination such as gdrive:NVR");
         }
-        if !["events", "all"].contains(&self.cloud.upload.as_str()) {
-            bail!("cloud upload must be events or all");
+        if !["ai", "events", "all"].contains(&self.cloud.upload.as_str()) {
+            bail!("cloud upload must be ai, events or all");
         }
+        self.dashboard.validate()?;
         if self.server.listen.parse::<std::net::SocketAddr>().is_err() {
             bail!("listen address must look like 0.0.0.0:8080");
         }

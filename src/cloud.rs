@@ -72,7 +72,20 @@ fn mark_uploaded(dir: &Path, rel: &str) {
 }
 
 /// Files ready to upload: (path, relative name).
-fn pending(dir: &Path, all: bool, done: &HashSet<String>) -> Vec<(PathBuf, String)> {
+/// `mode`: "ai" = only alerts confirmed by object recognition, "events" =
+/// every alert, "all" = alerts plus all continuous recordings.
+fn pending(
+    dir: &Path,
+    mode: &str,
+    store: Option<&crate::events::EventStore>,
+    done: &HashSet<String>,
+) -> Vec<(PathBuf, String)> {
+    let all = mode == "all";
+    // Event files are named after their event: "<event id>.mp4" / ".jpg".
+    let verified = |name: &str| {
+        let id = name.rsplit_once('.').map(|x| x.0).unwrap_or(name);
+        store.and_then(|s| s.get(id)).is_some_and(|e| !e.labels.is_empty())
+    };
     let mut out = Vec::new();
     let settled = |p: &Path| {
         p.metadata()
@@ -87,6 +100,7 @@ fn pending(dir: &Path, all: bool, done: &HashSet<String>) -> Vec<(PathBuf, Strin
             if (name.ends_with(".mp4") || name.ends_with(".jpg"))
                 && !done.contains(&rel)
                 && settled(&e.path())
+                && (mode != "ai" || verified(&name))
             {
                 out.push((e.path(), rel));
             }
@@ -115,10 +129,12 @@ pub async fn run(mgr: Arc<Manager>) {
             continue;
         }
         let remote = cfg.cloud.remote.trim().trim_end_matches('/').to_string();
+        let stores = mgr.event_stores();
         for cam in &cfg.cameras {
             let dir = cfg.camera_dir(cam);
             let done = uploaded_list(&dir);
-            for (path, rel) in pending(&dir, cfg.cloud.upload == "all", &done) {
+            let store = stores.get(&cam.id).map(|s| s.as_ref());
+            for (path, rel) in pending(&dir, &cfg.cloud.upload, store, &done) {
                 let dest = format!("{remote}/{}/{rel}", cam.id);
                 let src = path.display().to_string();
                 match rclone(&cfg.cloud, &["copyto", &src, &dest], 3600).await {
@@ -138,5 +154,43 @@ pub async fn run(mgr: Arc<Manager>) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{Event, EventStore, Label};
+
+    #[test]
+    fn ai_mode_uploads_only_recognized_alerts() {
+        let dir = std::env::temp_dir().join(format!("nvr-cloud-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = EventStore::open(&dir);
+        let now = chrono::Local::now();
+        let ev = |id: &str, labels: Vec<Label>| Event {
+            id: id.into(),
+            camera: "c".into(),
+            start: now,
+            end: now,
+            labels,
+            motion: true,
+            thumb: Some(format!("{id}.jpg")),
+            clip: Some(format!("{id}.mp4")),
+            clip_start: None,
+        };
+        store.save(ev("ev-person", vec![Label { label: "person".into(), score: 0.9 }]));
+        store.save(ev("ev-motion", vec![]));
+        for f in ["ev-person.jpg", "ev-person.mp4", "ev-motion.jpg", "ev-motion.mp4"] {
+            let p = dir.join("events").join(f);
+            std::fs::write(&p, b"x").unwrap();
+            let old = std::time::SystemTime::now() - Duration::from_secs(120);
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+        }
+        let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new()).into_iter().map(|x| x.1).collect();
+        ai.sort();
+        assert_eq!(ai, ["events/ev-person.jpg", "events/ev-person.mp4"]);
+        assert_eq!(pending(&dir, "events", Some(&store), &HashSet::new()).len(), 4);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

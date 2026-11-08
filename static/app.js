@@ -199,9 +199,9 @@ function updateSubscriptions() {
   for (const c of status.cameras) {
     if (!c.enabled) continue;
     subs.push({camera: c.id, q: 'sub', fps: l.fps});
-    const focused = page === 'live' && focusId === c.id && !focusPlayback;
+    const focused = page === 'live' && ((focusId === c.id && !focusPlayback) || (wall && wallSolo === c.id));
     if (focused) subs.push({camera: c.id, q: 'main', fps: l.hd_fps});
-    else if (l.preload_hd && c.has_sub) subs.push({camera: c.id, q: 'main', fps: 1});
+    else if (l.preload_hd_streams) subs.push({camera: c.id, q: 'main', fps: 1});
   }
   Live.setWanted(subs);
 }
@@ -248,6 +248,7 @@ const PAGES = ['live', 'recordings', 'system', 'logs', 'settings'];
 function route() {
   const [p, sub, extra] = (location.hash.slice(1) || 'live').split('/');
   page = PAGES.includes(p) ? p : 'live';
+  if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
   if (page !== 'recordings') pauseAllPlayback();
@@ -273,6 +274,26 @@ async function refreshStatus() {
   dashSync();
   if (page === 'live' && focusId) updateFocus();
   if (page === 'settings') settingsTick();
+}
+
+// Show sprite picture `n` (scrubbing preview) as the background of `el`
+// (W×H px), centered and letterboxed. Sprites come in pages of pictures.
+function spriteStyle(el, sp, n, W, H) {
+  const i = sp.info;
+  n = Math.min(i.count - 1, Math.max(0, n));
+  const page = Math.floor(n / i.per_page), k = n % i.per_page;
+  const col = k % i.columns, row = Math.floor(k / i.columns), rows = i.per_page / i.columns;
+  const z = Math.min(W / i.tile_width, H / i.tile_height);
+  const ox = (W - i.tile_width * z) / 2, oy = (H - i.tile_height * z) / 2;
+  el.style.backgroundImage = `url("${sp.url}${page}")`;
+  el.style.backgroundSize = `${i.columns * i.tile_width * z}px ${rows * i.tile_height * z}px`;
+  el.style.backgroundPosition = `${ox - col * i.tile_width * z}px ${oy - row * i.tile_height * z}px`;
+  return {ox, oy};
+}
+function preloadSprite(sp) {
+  if (!sp) return sp;
+  for (let p = 0; p < sp.info.pages; p++) new Image().src = sp.url + p;
+  return sp;
 }
 
 // ======================================================================
@@ -346,8 +367,7 @@ class Player {
     this.marks = item.marks || [];
     this.paint();
     const kind = item.kind === 'clip' ? 'clip' : 'rec';
-    try { this.sprite = await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`); } catch (e) { this.sprite = null; }
-    if (this.sprite) { const im = new Image(); im.src = this.sprite.url; }
+    try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
   }
   stop() { this.video.pause(); this.video.removeAttribute('src'); this.video.load(); this.item = null; }
   paintButtons() { if (this.el) this.el.play.textContent = this.video.paused ? '▶' : '❚❚'; }
@@ -376,14 +396,7 @@ class Player {
     p.hidden = false;
     p.style.left = Math.min(Math.max(x, 100), this.el.scrub.clientWidth - 100) + 'px';
     this.el.pt.textContent = fmtTime(this.wallAt(t)) + ' · ' + fmtClock(t);
-    if (s) {
-      const i = s.info, n = Math.min(i.count - 1, Math.max(0, Math.floor(t / i.interval)));
-      const col = n % i.columns, row = Math.floor(n / i.columns), k = 192 / i.tile_width;
-      const rows = Math.ceil(i.count / i.columns);
-      this.el.pimg.style.backgroundImage = `url("${s.url}")`;
-      this.el.pimg.style.backgroundSize = `${i.columns * i.tile_width * k}px ${rows * i.tile_height * k}px`;
-      this.el.pimg.style.backgroundPosition = `-${col * 192}px -${row * 108}px`;
-    }
+    if (s) spriteStyle(this.el.pimg, s, Math.floor(t / s.info.interval), 192, 108);
   }
   wireScrub() {
     const sc = this.el.scrub;
@@ -441,20 +454,55 @@ function pauseAllPlayback() {
 // ======================================================================
 // Live dashboard
 // ======================================================================
-let focusId = null, focusPlayback = null, editing = false, layout = [], layoutBackup = null, dashIds = '';
+let focusId = null, focusPlayback = null, editing = false, layout = [], dashIds = '';
 const unbinders = new Map();
+const store = {
+  get: (k, d) => { try { const v = localStorage.getItem('nvr-' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set: (k, v) => { try { localStorage.setItem('nvr-' + k, JSON.stringify(v)); } catch (e) {} },
+};
+// Camera group shown ('' = all cameras), video-wall state, and the camera
+// enlarged on the wall (click a tile; click again to go back).
+let groupId = store.get('group', ''), wall = false, wallSolo = null;
 
+const groups = () => (status && status.dashboard.groups) || [];
+const group = () => groups().find(g => g.id === groupId) || null;
+function viewCams() {
+  const g = group();
+  if (!g) return status.cameras;
+  return g.cameras.map(id => cam(id)).filter(Boolean);
+}
+const layoutKey = () => wall ? 'fullscreen_tiles' : 'tiles';
+
+// Grid layout: 12 columns. Normal view: rows are 16:9 for square units.
+// Video wall: the layout is scaled to exactly fill the screen.
 function defaultLayout(cams) {
-  const n = cams.length, cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4, w = 12 / cols;
-  return cams.map((c, i) => ({camera: c.id, x: (i % cols) * w, y: Math.floor(i / cols) * w, w, h: w}));
+  const n = cams.length;
+  if (!n) return [];
+  if (!wall) {
+    const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4, w = 12 / cols;
+    return cams.map((c, i) => ({camera: c.id, x: (i % cols) * w, y: Math.floor(i / cols) * w, w, h: w}));
+  }
+  // Pick the columns × rows that give each 16:9 picture the most screen.
+  const W = window.innerWidth, H = window.innerHeight;
+  let best = null;
+  for (const c of [1, 2, 3, 4, 6]) for (const r of [1, 2, 3, 4, 6]) {
+    if (c * r < n) continue;
+    const tw = W / c, th = H / r, vw = Math.min(tw, th * 16 / 9), vh = vw * 9 / 16;
+    const score = vw * vh - (c * r - n) * 1; // prefer fewer empty cells on ties
+    if (!best || score > best.score + 1) best = {c, r, score};
+  }
+  const w = 12 / best.c, h = 12 / best.r;
+  return cams.map((c, i) => ({camera: c.id, x: (i % best.c) * w, y: Math.floor(i / best.c) * h, w, h}));
 }
 function currentLayout() {
-  const cams = status.cameras;
-  let tiles = (status.dashboard.tiles || []).filter(t => cams.some(c => c.id === t.camera)).map(t => ({...t}));
-  if (!tiles.length) return defaultLayout(cams);
-  let maxY = tiles.reduce((m, t) => Math.max(m, t.y + t.h), 0);
-  for (const c of cams) if (!tiles.some(t => t.camera === c.id)) { tiles.push({camera: c.id, x: 0, y: maxY, w: 4, h: 4}); maxY += 4; }
-  return tiles;
+  const cams = viewCams(), owner = group() || status.dashboard;
+  const saved = (owner[layoutKey()] || []).filter(t => cams.some(c => c.id === t.camera)).map(t => ({...t}));
+  if (!saved.length) return defaultLayout(cams);
+  const missing = cams.filter(c => !saved.some(t => t.camera === c.id));
+  if (missing.length && wall) return defaultLayout(cams);
+  let maxY = saved.reduce((m, t) => Math.max(m, t.y + t.h), 0);
+  for (const c of missing) { saved.push({camera: c.id, x: 0, y: maxY, w: 4, h: 4}); maxY += 4; }
+  return saved;
 }
 const overlaps = (a, b) => a !== b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 // Push tiles out of the way of `moved`, then pull everything up.
@@ -473,61 +521,92 @@ function settle(tiles, moved) {
 }
 
 function dashMetrics() {
+  if (wall) {
+    const W = window.innerWidth, H = window.innerHeight;
+    const rows = Math.max(12, layout.reduce((m, t) => Math.max(m, t.y + t.h), 0));
+    return {W, H, colW: W / 12, rowH: H / rows, narrow: false, gap: 2};
+  }
   const W = $('dash').clientWidth || 800;
-  const narrow = W < 640;
-  const colW = W / 12, rowH = colW * 9 / 16;
-  return {W, colW, rowH, narrow};
+  return {W, colW: W / 12, rowH: W / 12 * 9 / 16, narrow: W < 640, gap: 8};
+}
+
+function renderGroupSelect() {
+  const sel = $('grp-sel');
+  if (groupId && !group()) groupId = '';
+  sel.innerHTML = `<option value="">All cameras (${status.cameras.length})</option>` +
+    groups().map(g => `<option value="${esc(g.id)}">${esc(g.name)} (${g.cameras.length})</option>`).join('');
+  sel.value = groupId;
+  const many = groups().length > 0;
+  $('grp-prev').hidden = $('grp-next').hidden = !many;
+  $('wall-cycle').parentElement.hidden = $('wall-cycle-s').hidden = !many;
 }
 
 function renderDash() {
   const dash = $('dash');
   if (!status) return;
-  const cams = status.cameras;
-  $('no-cameras').hidden = cams.length > 0;
-  $('dash-edit').hidden = !cams.length || editing;
-  dashIds = cams.map(c => c.id + ':' + c.name + ':' + c.enabled).join(',') + JSON.stringify(status.display);
+  renderGroupSelect();
+  const cams = viewCams();
+  $('no-cameras').hidden = status.cameras.length > 0;
+  $('dash-bar').hidden = !status.cameras.length;
+  dashIds = dashKey();
   if (!editing) layout = currentLayout();
   for (const u of unbinders.values()) u();
   unbinders.clear();
   dash.innerHTML = '';
   dash.classList.toggle('editing', editing);
+  $('live-grid').classList.toggle('editing-wall', editing && wall);
   dash.classList.remove('fit-stretch', 'fit-crop', 'fit-fit');
   dash.classList.add('fit-' + (status.display.tile_fit || 'stretch'));
-  for (const t of layout) {
+  const shown = wallSolo && !editing ? [{camera: wallSolo, x: 0, y: 0, w: 12, h: 12}] : layout;
+  for (const t of shown) {
     const c = cam(t.camera);
     if (!c) continue;
+    const q = wallSolo === c.id ? 'main' : 'sub';
     const el = document.createElement('div');
     el.className = 'surface tile';
     el.dataset.id = c.id;
-    el.innerHTML = `<img alt=""><div class="msg">${c.enabled ? 'Connecting…' : 'Camera disabled'}</div>${overlayHtml(c, 'sub')}${editing ? '<div class="rz"></div>' : ''}`;
+    el.dataset.q = q;
+    el.innerHTML = `<img alt=""><div class="msg">${c.enabled ? 'Connecting…' : 'Camera disabled'}</div>${overlayHtml(c, q)}${editing ? '<div class="rz"></div>' : ''}`;
     const img = el.querySelector('img');
     img.onload = () => { el.querySelector('.msg').hidden = true; };
-    unbinders.set(c.id, Live.bind(img, c.id, 'sub'));
+    unbinders.set(c.id, Live.bind(img, c.id, q));
     wireOverlay(el);
-    el.onclick = () => { if (!editing) location.hash = '#live/' + enc(c.id); };
+    el.onclick = () => {
+      if (editing) return;
+      if (wall) { wallSolo = wallSolo ? null : c.id; renderDash(); updateSubscriptions(); }
+      else location.hash = '#live/' + enc(c.id);
+    };
     if (editing) wireTileEdit(el, t);
     dash.appendChild(el);
   }
   placeTiles();
-  $('dash-info').textContent = cams.length ? `${cams.length} camera${cams.length > 1 ? 's' : ''}` + (editing ? ' — drag to move, drag the corner to resize' : '') : '';
+  const g = group();
+  $('dash-info').textContent = editing
+    ? (wall ? 'Full-screen layout: drag to move, drag corners to resize' : 'Editing the layout — drag to move, drag the corner to resize')
+    : cams.length ? `${cams.length} camera${cams.length > 1 ? 's' : ''}` + (g ? '' : '') : (g ? 'No cameras in this group — use Groups… to add some.' : '');
+  toggleEditButtons();
+}
+function dashKey() {
+  return status.cameras.map(c => c.id + ':' + c.name + ':' + c.enabled).join(',') + JSON.stringify(status.display) + JSON.stringify(status.dashboard) + groupId + wall + wallSolo;
 }
 
 function placeTiles() {
-  const m = dashMetrics(), dash = $('dash');
+  const m = dashMetrics(), dash = $('dash'), g = m.gap / 2;
   let maxB = 0, y = 0;
   for (const el of dash.querySelectorAll('.tile')) {
-    const t = layout.find(x => x.camera === el.dataset.id);
+    const t = wallSolo && !editing ? {x: 0, y: 0, w: 12, h: 12} : layout.find(x => x.camera === el.dataset.id);
     if (!t) continue;
     if (m.narrow && !editing) {
       const h = (m.W - 8) * 9 / 16;
       Object.assign(el.style, {left: '4px', top: y + 4 + 'px', width: m.W - 8 + 'px', height: h + 'px'});
       y += h + 8; maxB = y;
     } else {
-      Object.assign(el.style, {left: t.x * m.colW + 4 + 'px', top: t.y * m.rowH + 4 + 'px', width: t.w * m.colW - 8 + 'px', height: t.h * m.rowH - 8 + 'px'});
-      maxB = Math.max(maxB, (t.y + t.h) * m.rowH);
+      const rowH = wallSolo && !editing ? m.H / 12 : m.rowH;
+      Object.assign(el.style, {left: t.x * m.colW + g + 'px', top: t.y * rowH + g + 'px', width: t.w * m.colW - m.gap + 'px', height: t.h * rowH - m.gap + 'px'});
+      maxB = Math.max(maxB, (t.y + t.h) * rowH);
     }
   }
-  dash.style.height = maxB + 'px';
+  dash.style.height = wall ? '' : maxB + 'px';
 }
 window.addEventListener('resize', () => { if (page === 'live' && !focusId) placeTiles(); });
 
@@ -541,14 +620,14 @@ function wireTileEdit(el, t) {
     el.setPointerCapture(e.pointerId);
     const calc = (ev) => {
       const dx = (ev.clientX - start.x) / m.colW, dy = (ev.clientY - start.y) / m.rowH;
-      if (resize) return {x: t.x, y: t.y, w: Math.max(2, Math.min(12 - t.x, Math.round(start.tw + dx))), h: Math.max(2, Math.round(start.th + dy))};
+      if (resize) return {x: t.x, y: t.y, w: Math.max(1, Math.min(12 - t.x, Math.round(start.tw + dx))), h: Math.max(1, Math.round(start.th + dy))};
       return {x: Math.max(0, Math.min(12 - t.w, Math.round(start.tx + dx))), y: Math.max(0, Math.round(start.ty + dy)), w: t.w, h: t.h};
     };
     const move = (ev) => {
-      const g = calc(ev);
-      Object.assign(ghost.style, {left: g.x * m.colW + 'px', top: g.y * m.rowH + 'px', width: g.w * m.colW + 'px', height: g.h * m.rowH + 'px'});
-      if (resize) { el.style.width = (start.tw * m.colW - 8 + ev.clientX - start.x) + 'px'; el.style.height = (start.th * m.rowH - 8 + ev.clientY - start.y) + 'px'; }
-      else { el.style.left = start.tx * m.colW + 4 + ev.clientX - start.x + 'px'; el.style.top = start.ty * m.rowH + 4 + ev.clientY - start.y + 'px'; }
+      const gr = calc(ev);
+      Object.assign(ghost.style, {left: gr.x * m.colW + 'px', top: gr.y * m.rowH + 'px', width: gr.w * m.colW + 'px', height: gr.h * m.rowH + 'px'});
+      if (resize) { el.style.width = (start.tw * m.colW - m.gap + ev.clientX - start.x) + 'px'; el.style.height = (start.th * m.rowH - m.gap + ev.clientY - start.y) + 'px'; }
+      else { el.style.left = start.tx * m.colW + m.gap / 2 + ev.clientX - start.x + 'px'; el.style.top = start.ty * m.rowH + m.gap / 2 + ev.clientY - start.y + 'px'; }
     };
     const up = (ev) => {
       el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up);
@@ -561,29 +640,136 @@ function wireTileEdit(el, t) {
   });
 }
 
-$('dash-edit').onclick = () => { editing = true; layoutBackup = JSON.stringify(layout); toggleEditButtons(); renderDash(); };
-$('dash-cancel').onclick = () => { editing = false; toggleEditButtons(); renderDash(); };
-$('dash-auto').onclick = () => { layout = defaultLayout(status.cameras); renderDash(); };
+async function saveDashboard(d) {
+  await api('api/dashboard', {method: 'PUT', json: d});
+  status.dashboard = d;
+}
+$('dash-edit').onclick = () => { wallSolo = null; editing = true; renderDash(); };
+$('dash-cancel').onclick = () => { editing = false; renderDash(); };
+$('dash-auto').onclick = () => { layout = defaultLayout(viewCams()); renderDash(); };
 $('dash-save').onclick = async () => {
-  try {
-    await api('api/dashboard', {method: 'PUT', json: {tiles: layout}});
-    status.dashboard.tiles = layout.map(t => ({...t}));
-    editing = false; toggleEditButtons(); renderDash(); toast('Layout saved');
-  } catch (e) { toast(e.message, true); }
+  const d = JSON.parse(JSON.stringify(status.dashboard));
+  const owner = groupId ? d.groups.find(g => g.id === groupId) : d;
+  owner[layoutKey()] = layout.map(t => ({...t}));
+  try { await saveDashboard(d); editing = false; renderDash(); toast(wall ? 'Full-screen layout saved' : 'Layout saved'); }
+  catch (e) { toast(e.message, true); }
 };
 function toggleEditButtons() {
-  $('dash-edit').hidden = editing;
+  $('dash-edit').hidden = editing || !!wallSolo;
   for (const id of ['dash-auto', 'dash-cancel', 'dash-save']) $(id).hidden = !editing;
+  for (const id of ['grp-sel', 'grp-prev', 'grp-next', 'grp-manage', 'wall-btn']) $(id).disabled = editing;
+  $('wall-btn').textContent = wall ? '✕ Exit full screen' : '⛶ Full screen';
 }
+
+// ---------- camera groups ----------
+function setGroup(id) {
+  if (editing) return;
+  groupId = id; wallSolo = null;
+  store.set('group', id);
+  renderDash();
+}
+function stepGroup(dir) {
+  const ids = ['', ...groups().map(g => g.id)];
+  setGroup(ids[(ids.indexOf(groupId) + dir + ids.length) % ids.length]);
+}
+$('grp-sel').onchange = (e) => setGroup(e.target.value);
+$('grp-prev').onclick = () => stepGroup(-1);
+$('grp-next').onclick = () => stepGroup(1);
+$('grp-manage').onclick = () => openGroupDialog();
+
+function openGroupDialog() {
+  let list = JSON.parse(JSON.stringify(groups()));
+  const f = $('f-grp');
+  const render = () => {
+    f.innerHTML = `<div class="head"><h2>Camera groups</h2><button type="button" class="small" data-close>✕</button></div>
+      <div class="body"><p class="muted" style="margin-top:0">Groups let you switch between sets of cameras on the Live page and in full screen (e.g. “Outside”, “Driveway”). Each group has its own layout.</p>
+        ${list.map((g, i) => `<div class="grp-row" data-i="${i}">
+          <div class="row"><input type="text" class="g-name" value="${esc(g.name)}" placeholder="Group name" style="flex:1"><button type="button" class="small" data-del="${i}">Delete</button></div>
+          <div class="chips" style="margin-top:8px">${status.cameras.map(c => `<label><input type="checkbox" value="${esc(c.id)}" ${g.cameras.includes(c.id) ? 'checked' : ''}>${esc(c.name)}</label>`).join('')}</div></div>`).join('')
+          || '<div class="empty" style="padding:16px">No groups yet.</div>'}
+        <button type="button" id="g-add">+ New group</button>
+        <div class="err" id="g-err" hidden style="margin-top:8px"></div></div>
+      <div class="foot"><button type="button" data-close>Cancel</button><button class="primary">Save groups</button></div>`;
+    f.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $('grp-dialog').close());
+    f.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { collect(); list.splice(+b.dataset.del, 1); render(); });
+    $('g-add').onclick = () => { collect(); list.push({id: 'g' + Date.now().toString(36), name: '', cameras: [], tiles: [], fullscreen_tiles: []}); render(); const names = f.querySelectorAll('.g-name'); names[names.length - 1].focus(); };
+  };
+  // Read the form back into `list`; a changed camera set resets that group's layouts.
+  const collect = () => f.querySelectorAll('.grp-row').forEach(row => {
+    const g = list[+row.dataset.i];
+    g.name = row.querySelector('.g-name').value.trim();
+    const cams = [...row.querySelectorAll('input[type=checkbox]:checked')].map(i => i.value);
+    if (cams.join() !== g.cameras.join()) { g.cameras = cams; }
+  });
+  f.onsubmit = async (e) => {
+    e.preventDefault(); collect();
+    if (list.some(g => !g.name)) { $('g-err').hidden = false; $('g-err').textContent = 'Give every group a name.'; return; }
+    const d = JSON.parse(JSON.stringify(status.dashboard));
+    d.groups = list;
+    try { await saveDashboard(d); $('grp-dialog').close(); renderDash(); toast('Groups saved'); }
+    catch (err) { $('g-err').hidden = false; $('g-err').textContent = err.message; }
+  };
+  render();
+  $('grp-dialog').showModal();
+}
+
+// ---------- full-screen video wall ----------
+async function enterWall() {
+  const el = $('live-grid');
+  wall = true; wallSolo = null;
+  el.classList.add('wall');
+  try { if (el.requestFullscreen) await el.requestFullscreen({navigationUI: 'hide'}); } catch (e) { /* CSS-only full window */ }
+  showWallBar();
+  renderDash(); updateSubscriptions();
+}
+function exitWall() {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  leaveWall();
+}
+function leaveWall() {
+  if (!wall) return;
+  wall = false; wallSolo = null; editing = false;
+  $('live-grid').classList.remove('wall', 'show-bar', 'hide-cursor', 'editing-wall');
+  stopCycle(); $('wall-cycle').checked = false;
+  renderDash(); updateSubscriptions();
+}
+$('wall-btn').onclick = () => wall ? exitWall() : enterWall();
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && wall) leaveWall();
+  else if (wall) placeTiles();
+});
+// The toolbar appears when the mouse moves and hides again after 3 s.
+let wallBarTimer;
+function showWallBar() {
+  const el = $('live-grid');
+  el.classList.add('show-bar'); el.classList.remove('hide-cursor');
+  clearTimeout(wallBarTimer);
+  wallBarTimer = setTimeout(() => { if (!editing) { el.classList.remove('show-bar'); el.classList.add('hide-cursor'); } }, 3000);
+}
+$('live-grid').addEventListener('pointermove', () => { if (wall) showWallBar(); });
+document.addEventListener('keydown', (e) => {
+  if (!wall || editing || e.target.matches('input, select, textarea')) return;
+  if (e.key === 'ArrowRight') stepGroup(1);
+  else if (e.key === 'ArrowLeft') stepGroup(-1);
+  else if (e.key === 'Escape') { if (wallSolo) { wallSolo = null; renderDash(); updateSubscriptions(); } else exitWall(); }
+});
+let cycleTimer = null;
+function stopCycle() { clearInterval(cycleTimer); cycleTimer = null; }
+function startCycle() {
+  stopCycle();
+  if ($('wall-cycle').checked) cycleTimer = setInterval(() => { if (!editing && !wallSolo) stepGroup(1); }, +$('wall-cycle-s').value * 1000);
+}
+$('wall-cycle-s').value = String(store.get('cycle-s', 20));
+$('wall-cycle').onchange = startCycle;
+$('wall-cycle-s').onchange = () => { store.set('cycle-s', +$('wall-cycle-s').value); startCycle(); };
 
 // Keep the dashboard current (it runs in the background on every page).
 function dashSync() {
   if (!status) return;
-  const ids = status.cameras.map(c => c.id + ':' + c.name + ':' + c.enabled).join(',') + JSON.stringify(status.display);
-  if (ids !== dashIds && !editing) renderDash();
+  if (dashKey() !== dashIds && !editing) renderDash();
   for (const el of document.querySelectorAll('#dash .tile')) {
     const c = cam(el.dataset.id);
-    if (c) updateOverlay(el, c, 'sub');
+    if (c) updateOverlay(el, c, el.dataset.q || 'sub');
   }
 }
 setInterval(() => {
@@ -891,6 +1077,7 @@ async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
   if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
   try { tl.data = await api('api/timeline?' + q); } catch (e) { tl.data = []; toast(e.message, true); }
+  tl.loadedAt = Date.now();
   const now = Date.now();
   if (tl.jump) { tl.T = new Date(tl.jump).getTime() - 3000; tl.jump = null; }
   else if (tl.T == null || tl.T < rec.from.getTime() || tl.T > rec.to.getTime()) {
@@ -922,9 +1109,21 @@ function buildTimelineVideos() {
 }
 
 function segAt(c, T) {
-  return c.segments.find(s => new Date(s.start).getTime() <= T && T < new Date(s.end).getTime() + 1000 && s.kind === 'recording')
-    || c.segments.find(s => new Date(s.start).getTime() <= T && T < new Date(s.end).getTime() + 1000);
+  // The newest recording of a camera that was recording when the timeline
+  // loaded is still growing: treat it as running up to now.
+  const last = c.segments.filter(s => s.kind === 'recording').slice(-1)[0];
+  const end = (s) => s === last && tl.loadedAt - new Date(s.end).getTime() < 90000 ? Date.now() : new Date(s.end).getTime() + 1000;
+  const hit = (s) => new Date(s.start).getTime() <= T && T < end(s);
+  return c.segments.find(s => s.kind === 'recording' && hit(s)) || c.segments.find(hit);
 }
+// Keep the timeline current while looking at recent footage.
+setInterval(() => {
+  if (page === 'recordings' && rec.mode === 'timeline' && !tl.playing && Date.now() - tl.T < 3600000) {
+    const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
+    if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
+    api('api/timeline?' + q).then(d => { tl.data = d; tl.loadedAt = Date.now(); drawTimeline(); }).catch(() => {});
+  }
+}, 30000);
 
 // Keep each camera's video at the shared time `tl.T`.
 function tlSync(force) {
@@ -1039,7 +1238,7 @@ function drawHead() {
     box.setPointerCapture(e.pointerId);
     tl.T = t; drawHead(); previewAll();
   });
-  box.addEventListener('pointermove', (e) => { if (!drag) return; tl.T = tAt(e); drawHead(); previewAll(); });
+  box.addEventListener('pointermove', (e) => { if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewAll(); });
   const end = () => {
     if (!drag) return; drag = false;
     document.querySelectorAll('#tl-videos .sprite').forEach(s => s.hidden = true);
@@ -1051,7 +1250,7 @@ function drawHead() {
 async function spriteFor(cam, seg) {
   const key = seg.url;
   if (!tl.sprites.has(key)) {
-    tl.sprites.set(key, api(`api/sprite/${enc(cam)}/${seg.kind === 'clip' ? 'clip' : 'rec'}/${enc(seg.name)}`).then(s => { new Image().src = s.url; return s; }).catch(() => null));
+    tl.sprites.set(key, api(`api/sprite/${enc(cam)}/${seg.kind === 'clip' ? 'clip' : 'rec'}/${enc(seg.name)}`).then(preloadSprite).catch(() => null));
   }
   return tl.sprites.get(key);
 }
@@ -1061,19 +1260,14 @@ function previewAll() {
     el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
     const s = c && segAt(c, tl.T), sp = el.querySelector('.sprite');
     el.querySelector('.msg').hidden = !!s;
+    el.querySelector('video').style.visibility = s ? '' : 'hidden';
     if (!s) { sp.hidden = true; continue; }
     const T = tl.T;
     spriteFor(c.camera, s).then(info => {
       if (!info || tl.T !== T) return;
-      const i = info.info, off = (T - new Date(s.start).getTime()) / 1000;
-      const n = Math.min(i.count - 1, Math.max(0, Math.floor(off / i.interval)));
-      const W = el.clientWidth, H = el.clientHeight, k = Math.min(W / i.tile_width, H / i.tile_height);
-      const rows = Math.ceil(i.count / i.columns);
+      const off = (T - new Date(s.start).getTime()) / 1000;
       sp.hidden = false;
-      sp.style.backgroundImage = `url("${info.url}")`;
-      sp.style.backgroundSize = `${i.columns * i.tile_width * k}px ${rows * i.tile_height * k}px`;
-      const ox = (W - i.tile_width * k) / 2, oy = (H - i.tile_height * k) / 2;
-      sp.style.backgroundPosition = `${ox - (n % i.columns) * i.tile_width * k}px ${oy - Math.floor(n / i.columns) * i.tile_height * k}px`;
+      const {ox, oy} = spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight);
       sp.style.clipPath = `inset(${oy}px ${ox}px)`;
     });
   }
@@ -1312,6 +1506,16 @@ function brandUrl(brand, which) {
   const auth = user ? `${enc(user)}${pass ? ':' + enc(pass) : ''}@` : '';
   return `rtsp://${auth}${ip}:${port}${path.replaceAll('{ch}', ch)}`;
 }
+// Put the quick-setup IP, port and login into an existing stream URL,
+// keeping its path (e.g. /Streaming/Channels/102).
+function rewriteUrl(u) {
+  const m = u.trim().match(/^(rtsps?:\/\/)(?:[^@\/]*@)?([^:\/?#]+)(?::(\d+))?(.*)$/i);
+  if (!m) return u;
+  const ip = val('q-ip').trim() || m[2], port = val('q-port').trim() || m[3];
+  const user = val('q-user').trim(), pass = $('q-pass').value;
+  const auth = user ? `${enc(user)}${pass ? ':' + enc(pass) : ''}@` : '';
+  return `${m[1]}${auth}${ip}${port ? ':' + port : ''}${m[4]}`;
+}
 // Fill the quick-setup fields from an existing URL.
 function parseUrl(u) {
   try {
@@ -1393,7 +1597,8 @@ async function openCameraDialog(id, clone) {
           <div class="hint">How long each recording file is.</div></div>
         <h3>Storage</h3>
         <label for="c-dir">Storage folder</label>
-        <div><input type="text" id="c-dir" value="${esc(c.storage_dir)}" placeholder="Default: ${esc(settings ? settings.storage.dir : 'recordings')}">
+        <div><div class="row"><input type="text" id="c-dir" value="${esc(c.storage_dir)}" placeholder="Default: ${esc(settings ? settings.storage.dir : 'recordings')}" style="flex:1"><button type="button" id="c-browse">Browse…</button></div>
+          ${id && !clone ? `<label class="check" id="c-move-row" hidden><input type="checkbox" id="c-move" checked> Move existing recordings to the new folder</label>` : ''}
           <div class="hint">Any folder this computer can write to: another drive (<code>D:\\NVR</code>), a NAS (<code>\\\\NAS\\cameras</code> or <code>/mnt/nas</code>), or a synced cloud folder (<code>G:\\My Drive\\NVR</code> with Google Drive for desktop). A sub-folder named after the camera is created.</div></div>
         <label for="c-ret">Keep recordings for</label>
         <div class="row"><input type="number" id="c-ret" min="0" value="${c.retention_days}" style="width:110px"><span class="muted">days (0 = use the default, ${settings ? settings.storage.retention_days : 14})</span></div>
@@ -1406,7 +1611,7 @@ async function openCameraDialog(id, clone) {
         <label for="d-sens">Motion sensitivity</label>
         <div class="row"><input type="range" id="d-sens" min="1" max="100" value="${c.detect.sensitivity}" style="flex:1"><span id="d-sens-v" class="muted" style="width:40px">${c.detect.sensitivity}</span></div>
         <span></span><div><label class="check"><input type="checkbox" id="d-ai" ${c.detect.ai ? 'checked' : ''}> Object recognition (AI)</label>
-          <div class="hint">${aiOn ? `Uses <b>${esc(settings.ai.provider)}</b>. Pictures are checked when motion is seen.` : '<span class="warnc">No AI is set up yet.</span> Choose one in Settings → Object recognition.'}</div></div>
+          <div class="hint">${aiOn ? `Uses <b>${esc(settings.ai.provider)}</b>. Pictures are only sent to the AI while motion is seen (needs motion detection).` : '<span class="warnc">No AI is set up yet.</span> Choose one in Settings → Object recognition.'}</div></div>
         <label>Alert on</label>
         <div class="chips" id="d-objs">${objs.map(o => `<label><input type="checkbox" value="${o}" ${c.detect.objects.includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
         <label for="d-conf">Minimum confidence</label>
@@ -1435,6 +1640,9 @@ async function openCameraDialog(id, clone) {
   });
   const syncSched = () => f.querySelectorAll('.sched').forEach(e => e.hidden = !chk('c-sched-on'));
   $('c-sched-on').onchange = syncSched; syncSched();
+  // Object recognition runs only on motion, so it needs motion detection.
+  $('d-ai').onchange = () => { if (chk('d-ai')) $('d-motion').checked = true; };
+  $('d-motion').onchange = () => { if (!chk('d-motion')) $('d-ai').checked = false; };
   $('d-sens').oninput = () => $('d-sens-v').textContent = val('d-sens');
   $('d-conf').oninput = () => $('d-conf-v').textContent = val('d-conf') + '%';
   $('q-brand').onchange = () => {
@@ -1443,10 +1651,22 @@ async function openCameraDialog(id, clone) {
     if (!val('q-port')) $('q-port').placeholder = 'port (' + brand[2] + ')';
     $('c-url').value = brandUrl(b, 'main'); $('c-live').value = brandUrl(b, 'sub');
   };
-  for (const k of ['q-ip', 'q-port', 'q-ch', 'q-user', 'q-pass']) $(k).oninput = () => { if (val('q-brand')) $('q-brand').onchange(); };
+  // Changing the address or login updates the stream URLs: from the brand
+  // template if one is chosen, otherwise by editing the existing URLs (e.g.
+  // after cloning a camera, just type the new IP).
+  for (const k of ['q-ip', 'q-port', 'q-ch', 'q-user', 'q-pass']) $(k).oninput = () => {
+    if (val('q-brand')) return $('q-brand').onchange();
+    for (const id of ['c-url', 'c-live']) $(id).value = rewriteUrl(val(id));
+  };
   $('c-url-fmt').onchange = (e) => { if (e.target.value) $('c-url').value = brandUrl(e.target.value, 'main'); e.target.value = ''; };
   $('c-live-fmt').onchange = (e) => { if (e.target.value) $('c-live').value = brandUrl(e.target.value, 'sub'); e.target.value = ''; };
   $('c-test').onclick = testCamera;
+  const origDir = c.storage_dir;
+  $('c-dir').oninput = () => { if ($('c-move-row')) $('c-move-row').hidden = val('c-dir').trim() === origDir; };
+  $('c-browse').onclick = async () => {
+    const p = await pickFolder(val('c-dir') || (settings ? settings.storage.dir : ''), 'Storage folder for this camera');
+    if (p) { $('c-dir').value = p; $('c-dir').oninput(); }
+  };
   f.onsubmit = saveCamera;
   $('cam-dialog').showModal();
 }
@@ -1497,7 +1717,9 @@ async function saveCamera(ev) {
   if (body.detect.ai && !objects.length) return err('Choose at least one object to alert on.');
   const btn = $('c-save'); btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    if (editingId) await api(`api/cameras/${enc(editingId)}`, {method: 'PUT', json: body});
+    const move = $('c-move-row') && !$('c-move-row').hidden && chk('c-move');
+    if (move) btn.textContent = 'Moving recordings…';
+    if (editingId) await api(`api/cameras/${enc(editingId)}?move_recordings=${!!move}`, {method: 'PUT', json: body});
     else await api('api/cameras', {method: 'POST', json: body});
     closeCameraDialog();
     toast(editingId ? 'Camera updated' : cloneMode ? 'Camera cloned' : 'Camera added');
@@ -1507,21 +1729,95 @@ async function saveCamera(ev) {
   finally { btn.disabled = false; btn.textContent = 'Save camera'; }
 }
 
+// ---------- folder picker ----------
+// Browse folders on the NVR computer (the browser may be on another device).
+function pickFolder(initial, title) {
+  return new Promise((resolve) => {
+    const f = $('f-fs'), dlg = $('fs-dialog');
+    let cur = null;
+    const done = (v) => { dlg.close(); resolve(v); };
+    const load = async (path) => {
+      let l;
+      try { l = await api('api/fs?path=' + enc(path || '')); }
+      catch (e) { toast(e.message, true); if (path) return load(''); return; }
+      cur = l;
+      const space = (p) => p.free_bytes != null ? `<span class="muted">${fmtBytes(p.free_bytes)} free of ${fmtBytes(p.total_bytes)}</span>` : '';
+      f.innerHTML = `<div class="head"><h2>${esc(title || 'Choose a folder')}</h2><button type="button" class="small" data-close>✕</button></div>
+        <div class="body">
+          <div class="row" style="margin-bottom:8px"><input type="text" id="fs-path" value="${esc(l.path)}" placeholder="Type a path, e.g. D:\\NVR, \\\\NAS\\cameras or /mnt/nas" style="flex:1"><button type="button" id="fs-go">Go</button></div>
+          <div class="row" style="margin-bottom:10px">${l.places.map(p => `<button type="button" class="small" data-path="${esc(p.path)}" title="${esc(p.free_bytes != null ? fmtBytes(p.free_bytes) + ' free' : '')}">💾 ${esc(p.name)}</button>`).join('')}</div>
+          ${l.path ? `<div class="row" style="margin-bottom:6px"><b style="flex:1;word-break:break-all">${esc(l.path)}</b>${space(l)}</div>
+            <div class="fs-list">${l.parent ? `<button type="button" data-path="${esc(l.parent)}">⬑ Up one level</button>` : ''}
+              ${l.folders.map(d => `<button type="button" data-path="${esc(d.path)}">📁 ${esc(d.name)}</button>`).join('') || '<div class="muted" style="padding:8px">No folders here.</div>'}</div>
+            <div class="row" style="margin-top:8px"><input type="text" id="fs-new" placeholder="New folder name" style="flex:1"><button type="button" id="fs-mk">Create folder</button></div>
+            ${l.writable ? '' : '<div class="err" style="margin-top:8px">The NVR cannot write to this folder. Choose another or change its permissions.</div>'}`
+          : '<div class="muted">Choose a drive above, or type a path.</div>'}
+          <div class="hint" style="margin-top:8px">Network drives: type the share path (e.g. <code>\\\\NAS\\cameras</code> on Windows, or a mounted folder like <code>/mnt/nas</code>). Cloud drives: pick the synced folder, e.g. Google Drive for desktop's <code>G:\\My Drive</code>.</div>
+        </div>
+        <div class="foot"><button type="button" data-close>Cancel</button><button type="button" class="primary" id="fs-ok" ${l.path && l.writable ? '' : 'disabled'}>Use this folder</button></div>`;
+      f.querySelectorAll('[data-close]').forEach(b => b.onclick = () => done(null));
+      f.querySelectorAll('[data-path]').forEach(b => b.onclick = () => load(b.dataset.path));
+      $('fs-go').onclick = () => load(val('fs-path'));
+      $('fs-path').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); load(val('fs-path')); } };
+      if ($('fs-mk')) $('fs-mk').onclick = async () => {
+        try { const r = await api('api/fs/mkdir', {method: 'POST', json: {parent: cur.path, name: val('fs-new')}}); load(r.path); }
+        catch (e) { toast(e.message, true); }
+      };
+      $('fs-ok').onclick = () => done(cur.path);
+    };
+    f.onsubmit = (e) => e.preventDefault();
+    load(initial).then(() => dlg.showModal());
+  });
+}
+
 // ---------- storage ----------
 async function renderStorage(body) {
   const s = settings.storage;
   const segs = [[300, '5 minutes'], [600, '10 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [43200, '12 hours'], [86400, 'One long file per day']];
   if (!segs.some(x => x[0] === s.segment_seconds)) segs.unshift([s.segment_seconds, fmtDur(s.segment_seconds)]);
+  const usage = await api('api/usage').catch(() => null);
+  const used = (id) => usage && usage.cameras.find(u => u.camera === id);
   body.innerHTML = `<form class="card" id="f-storage"><h2>Recording &amp; storage</h2><div class="form">
-    <label for="s-dir">Default recordings folder</label><div><input type="text" id="s-dir" required value="${esc(s.dir)}">
-      <div class="hint">Cameras record into sub-folders here, unless a camera has its own storage folder (camera settings → Recording). Existing recordings are not moved.</div></div>
+    <label for="s-dir">Default recordings folder</label><div><div class="row"><input type="text" id="s-dir" required value="${esc(s.dir)}" style="flex:1"><button type="button" id="s-browse">Browse…</button></div>
+      <div class="hint">Cameras save into a sub-folder here, unless they have their own folder (below).</div>
+      <label class="check" id="s-move-row" hidden><input type="checkbox" id="s-move" checked> Move existing recordings to the new folder</label></div>
     <label for="s-seg">Default file length</label><div><select id="s-seg">${segs.map(([v, t]) => `<option value="${v}" ${v === s.segment_seconds ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <div class="hint">Recordings are split into files of this length. Cameras can override it.</div></div>
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
     <label for="s-max">Maximum storage</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
     <label for="s-free">Keep free on disk</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
-  </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>`;
-  $('f-storage').onsubmit = (e) => { e.preventDefault(); saveSettings({storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free')}}); };
+  </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>
+  <div class="card"><h2>Where each camera saves</h2>
+    <table><thead><tr><th>Camera</th><th>Folder</th><th class="hide-sm">Stored</th><th></th></tr></thead><tbody>
+    ${cameraCfgs.map(c => `<tr><td><b>${esc(c.name)}</b></td><td><code>${esc(used(c.id) ? used(c.id).dir : (c.storage_dir || s.dir) + '/' + c.id)}</code>
+      <div class="sub">${c.storage_dir ? 'Own folder' : 'Default folder'}</div></td><td class="hide-sm">${used(c.id) ? fmtBytes(used(c.id).used_bytes) : '–'}</td>
+      <td style="text-align:right"><div class="row" style="justify-content:flex-end"><button type="button" class="small" data-cam="${esc(c.id)}">Change…</button>${c.storage_dir ? `<button type="button" class="small" data-reset="${esc(c.id)}">Use default</button>` : ''}</div></td></tr>`).join('')}
+    </tbody></table>
+    <div class="hint">Changing a folder can move the camera's existing recordings too. Moving to another drive copies the files, which can take a while; the camera pauses recording during the move.</div></div>`;
+  $('s-dir').oninput = () => $('s-move-row').hidden = val('s-dir').trim() === s.dir;
+  $('s-browse').onclick = async () => { const p = await pickFolder(val('s-dir'), 'Default recordings folder'); if (p) { $('s-dir').value = p; $('s-dir').oninput(); } };
+  $('f-storage').onsubmit = async (e) => {
+    e.preventDefault();
+    const moving = !$('s-move-row').hidden && chk('s-move');
+    if (moving) toast('Saving and moving recordings… this can take a while for large folders.');
+    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free')}});
+    renderStorage(body);
+  };
+  const changeCam = async (id, dir) => {
+    const c = cameraCfgs.find(x => x.id === id);
+    const move = confirm(`Move ${c.name}'s existing recordings to the new folder too?\n\nOK = move them\nCancel = leave them where they are (they will no longer show in the NVR)`);
+    toast(move ? 'Moving recordings…' : 'Saving…');
+    try {
+      await api(`api/cameras/${enc(id)}?move_recordings=${move}`, {method: 'PUT', json: {...c, storage_dir: dir}});
+      toast('Saved'); await loadSettings(); renderStorage(body);
+    } catch (err) { toast(err.message, true); }
+  };
+  body.querySelectorAll('[data-cam]').forEach(b => b.onclick = async () => {
+    const c = cameraCfgs.find(x => x.id === b.dataset.cam);
+    const p = await pickFolder(c.storage_dir || s.dir, `Folder for ${c.name}`);
+    if (p) changeCam(c.id, p);
+  });
+  body.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => changeCam(b.dataset.reset, ''));
 }
 
 // ---------- display ----------
@@ -1535,8 +1831,8 @@ function renderDisplay(body) {
     <label for="l-width">Grid picture width</label><div><select id="l-width">${[[480, '480 (low)'], [640, '640'], [960, '960'], [1280, '1280 (HD)'], [1920, '1920'], [0, 'Native']].map(([v, t]) => `<option value="${v}" ${v === l.width ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <label for="l-hd">Full-screen frame rate</label><div class="row"><input type="number" id="l-hd" min="1" max="30" value="${l.hd_fps}" style="width:110px"><span class="muted">fps when a camera is opened (main stream)</span></div>
     <label for="l-q">Picture quality</label><div><select id="l-q">${[[3, 'Very high'], [6, 'High'], [10, 'Medium'], [16, 'Low (saves bandwidth)']].map(([v, t]) => `<option value="${v}" ${v === l.quality ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <span></span><div><label class="check"><input type="checkbox" id="l-pre" ${l.preload_hd ? 'checked' : ''}> Keep HD streams ready in the background</label>
-      <div class="hint">Opening a camera is then instant (its HD picture is already loaded). Uses more CPU/GPU; turn off on slow computers.</div></div>
+    <span></span><div><label class="check"><input type="checkbox" id="l-pre" ${l.preload_hd_streams ? 'checked' : ''}> Keep HD streams ready in the background</label>
+      <div class="hint">Off (recommended): a camera's full-quality stream is only decoded while you have it open; until it arrives you see the sub-stream picture. On: opening a camera shows HD instantly, but every camera's HD stream is decoded all the time — a lot of GPU/CPU.</div></div>
     <h3>Overlays on live video</h3>
     <label>Fullscreen button</label><div class="chips" id="o-fs">${corners.map(([k, t]) => `<label><input type="checkbox" value="${k}" ${d.fullscreen_corners.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
     <span></span><label class="check"><input type="checkbox" id="o-clock" ${d.show_clock ? 'checked' : ''}> Show date and time</label>
@@ -1559,7 +1855,7 @@ function renderDisplay(body) {
   $('f-display').onsubmit = (e) => {
     e.preventDefault();
     saveSettings({
-      live: {fps: num('l-fps'), width: num('l-width'), quality: num('l-q'), hd_fps: num('l-hd'), preload_hd: chk('l-pre')},
+      live: {fps: num('l-fps'), width: num('l-width'), quality: num('l-q'), hd_fps: num('l-hd'), preload_hd_streams: chk('l-pre')},
       display: {fullscreen_corners: [...document.querySelectorAll('#o-fs input:checked')].map(i => i.value), show_clock: chk('o-clock'),
         clock_corner: val('o-corner'), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss', show_name: chk('o-name'), show_fps: chk('o-fps'), tile_fit: val('o-tilefit')},
     }, 'Saved').then(() => renderDash());
@@ -1651,6 +1947,8 @@ async function renderHardware(body) {
         <div class="hint">${caps.hwaccels.length ? 'Your ffmpeg supports: ' + esc(caps.hwaccels.join(', ')) + '. Use Test to check the hardware is really there.' : 'Your ffmpeg reports no GPU support.'}</div></div>
       <label for="h-enc">H.264 encoder</label><div><select id="h-enc">${Object.entries(ENC_LABELS).map(([k, v]) => { const ok = k === 'auto' || caps.encoders.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
         <div class="hint">“Automatic” picks the encoder that matches the decoder.</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="h-sub" ${h.gpu_substreams ? 'checked' : ''}> Also use the GPU for sub-streams</label>
+        <div class="hint">Off (recommended): the GPU only decodes full-quality streams you are watching. Small sub-streams (grid, motion detection) are cheaper on the CPU than on the GPU plus copying the pictures back.</div></div>
       <label for="h-dev" class="vaapi">GPU device</label><div class="vaapi"><input type="text" id="h-dev" value="${esc(h.device)}" placeholder="/dev/dri/renderD128"><div class="hint">VAAPI only. Empty = default.</div></div>
     </div>
     <div class="actions"><button class="primary">Save</button><button type="button" id="h-test">Test selected options</button></div>
@@ -1658,7 +1956,7 @@ async function renderHardware(body) {
   $('h-dec').value = h.hwaccel; $('h-enc').value = h.encoder;
   const sync = () => document.querySelectorAll('.vaapi').forEach(e => e.hidden = !(val('h-dec') === 'vaapi' || val('h-enc') === 'h264_vaapi'));
   $('h-dec').onchange = $('h-enc').onchange = sync; sync();
-  const form = () => ({hwaccel: val('h-dec'), encoder: val('h-enc'), device: val('h-dev').trim()});
+  const form = () => ({hwaccel: val('h-dec'), encoder: val('h-enc'), device: val('h-dev').trim(), gpu_substreams: chk('h-sub')});
   $('f-hw').onsubmit = (e) => { e.preventDefault(); saveSettings({hardware: form()}, 'Saved. Cameras are restarting with the new settings.'); };
   $('h-test').onclick = async () => {
     const btn = $('h-test'), out = $('h-result');
@@ -1682,7 +1980,11 @@ function renderCloud(body) {
     <div class="form">
       <span></span><label class="check"><input type="checkbox" id="cl-on" ${c.enabled ? 'checked' : ''}> Upload recordings to the cloud</label>
       <label for="cl-remote">Destination</label><div><input type="text" id="cl-remote" value="${esc(c.remote)}" placeholder="gdrive:NVR"></div>
-      <label for="cl-what">What to upload</label><div><select id="cl-what"><option value="events" ${c.upload === 'events' ? 'selected' : ''}>Alerts only (clips and pictures)</option><option value="all" ${c.upload === 'all' ? 'selected' : ''}>Everything (needs a fast upload)</option></select></div>
+      <label for="cl-what">What to upload</label><div><select id="cl-what">
+        <option value="ai" ${c.upload === 'ai' ? 'selected' : ''}>Only verified AI alerts (a person, car… recognized by the AI)</option>
+        <option value="events" ${c.upload === 'events' ? 'selected' : ''}>All alerts, including motion-only (clips and pictures)</option>
+        <option value="all" ${c.upload === 'all' ? 'selected' : ''}>Everything, including 24/7 recordings (needs a fast upload)</option></select>
+        <div class="hint">“Verified AI alerts” needs object recognition turned on for the cameras.</div></div>
       <label for="cl-path">rclone program</label><div><input type="text" id="cl-path" value="${esc(c.rclone_path)}"></div>
     </div>
     <div class="actions"><button class="primary">Save</button><button type="button" id="cl-test">Test</button></div><div id="cl-result" style="margin-top:10px"></div></form>`;

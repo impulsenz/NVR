@@ -35,6 +35,12 @@ pub struct DetectStatus {
     pub motion: bool,
     /// Share of the picture that changed, 0..1.
     pub motion_level: f32,
+    /// Moving objects at least the minimum size, right now.
+    pub objects: Vec<MotionObject>,
+    /// Size of the biggest moving area right now (pixels of 640×360).
+    pub biggest_px: u32,
+    /// Biggest object in the last few seconds (easier to read than the live value).
+    pub peak_px: u32,
     /// Objects seen in the event in progress.
     pub active_labels: Vec<Label>,
     pub event_active: bool,
@@ -52,6 +58,8 @@ pub struct Detector {
     buffer: Option<Arc<EventBuffer>>,
     status: Mutex<DetectStatus>,
     latest: Mutex<Option<Frame>>,
+    /// Analysed frames, also used for the live grid (saves a second decode).
+    frames: tokio::sync::watch::Sender<Option<Frame>>,
     /// (width, height) of the sub-stream, if known.
     relay: Arc<crate::relay::Relay>,
 }
@@ -60,7 +68,11 @@ struct Active {
     event: Event,
     last_activity: DateTime<Local>,
     qualified: bool,
+    /// Score of the AI detection in the thumbnail (0 = motion picture, -1 = none).
     thumb_score: f32,
+    thumb_at: Instant,
+    /// Largest motion seen, for picking the motion thumbnail.
+    motion_best: f32,
 }
 
 impl Detector {
@@ -80,12 +92,18 @@ impl Detector {
             buffer,
             status: Mutex::new(DetectStatus::default()),
             latest: Mutex::new(None),
+            frames: tokio::sync::watch::Sender::new(None),
             relay,
         })
     }
 
     pub fn status(&self) -> DetectStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// Frames as they are analysed (RGB, about 640 px wide).
+    pub fn subscribe_frames(&self) -> tokio::sync::watch::Receiver<Option<Frame>> {
+        self.frames.subscribe()
     }
 
     /// The most recent analysed frame.
@@ -107,7 +125,9 @@ impl Detector {
     }
 
     pub async fn run(self: Arc<Self>, cancel: CancellationToken) {
-        let mut use_gpu = self.env.hardware.hwaccel != "none";
+        // Sub-streams are small: the CPU decodes them more cheaply than the
+        // GPU (plus copying frames back), unless the user opts in.
+        let mut use_gpu = self.env.hardware.hwaccel != "none" && self.env.hardware.gpu_substreams;
         let mut failures = 0;
         let mut active: Option<Active> = None;
         loop {
@@ -186,14 +206,22 @@ impl Detector {
             stop_feed.clone(),
         );
         let _stop_on_exit = stop_feed.drop_guard();
+        // When the decoder reports a damaged frame (lost packets), frames
+        // are smeared until the next keyframe: don't use them.
+        let damaged_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         if let Some(stderr) = child.stderr.take() {
             let name = self.cam.name.clone();
+            let damaged = damaged_at.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 let mut filter = ffmpeg::StderrFilter::default();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let before = filter.decode_warnings;
                     if let Some(msg) = filter.filter(&line) {
                         warn!("[{name}] detection ffmpeg: {}", redact(&msg, &url));
+                    }
+                    if filter.decode_warnings > before {
+                        *damaged.lock().unwrap() = Some(Instant::now());
                     }
                 }
             });
@@ -209,7 +237,8 @@ impl Detector {
         );
 
         let frame_len = (w * h * 3) as usize;
-        let mut motion = MotionDetector::new(w, h, d.sensitivity);
+        let mut motion = MotionDetector::new(w, h, MotionSettings::from(d));
+        let mut peak_at = Instant::now();
         let (ai_tx, mut ai_rx) = mpsc::channel::<(Frame, Result<Vec<Detection>, AiError>)>(4);
         let mut ai_busy = false;
         let mut last_ai = Instant::now() - Duration::from_secs(3600);
@@ -242,7 +271,6 @@ impl Detector {
                 height: h,
                 rgb: Arc::new(buf),
             };
-            *self.latest.lock().unwrap() = Some(frame.clone());
             fps_count += 1;
             if fps_since.elapsed() >= Duration::from_secs(5) {
                 self.status.lock().unwrap().fps =
@@ -251,25 +279,43 @@ impl Detector {
                 fps_since = Instant::now();
             }
 
+            let damaged = damaged_at.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_millis(1500));
+            if damaged {
+                // Keep the event alive but don't learn from or save broken frames.
+                self.check_end(active);
+                continue;
+            }
+            *self.latest.lock().unwrap() = Some(frame.clone());
+            self.frames.send_replace(Some(frame.clone()));
             let m = motion.feed(&frame.rgb);
             let moving = d.motion && m.as_ref().is_some_and(|m| m.moving);
             {
                 let mut s = self.status.lock().unwrap();
                 s.motion = moving;
                 s.motion_level = m.as_ref().map(|m| m.fraction).unwrap_or(0.0);
+                s.objects = m.as_ref().map(|m| m.objects.clone()).unwrap_or_default();
+                s.biggest_px = m.as_ref().map(|m| m.biggest).unwrap_or(0);
+                if peak_at.elapsed() > Duration::from_secs(3) {
+                    s.peak_px = 0;
+                }
+                if s.biggest_px >= s.peak_px {
+                    s.peak_px = s.biggest_px;
+                    peak_at = Instant::now();
+                }
             }
             let now = Local::now();
-            if moving {
-                let bbox = m.as_ref().map(|m| m.bbox).unwrap_or((0.0, 0.0, 1.0, 1.0));
-                self.on_motion(active, now, &frame, bbox);
+            if moving && let Some(o) = m.as_ref().and_then(|m| m.objects.first()) {
+                // Thumbnail around the biggest moving object.
+                self.on_motion(active, now, &frame, (o.x, o.y, o.w, o.h), o.size as f32);
             }
 
-            // Object recognition: on motion, or continuously if motion detection is off.
+            // Object recognition only while motion is happening: no motion,
+            // nothing is sent to the AI.
             let ai = self.ai.get();
             if d.ai
                 && ai.enabled()
                 && !ai_busy
-                && (moving || !d.motion || active.is_some())
+                && moving
                 && last_ai.elapsed().as_secs_f64() >= d.ai_interval
             {
                 ai_busy = true;
@@ -309,6 +355,8 @@ impl Detector {
             last_activity: now,
             qualified: false,
             thumb_score: -1.0,
+            thumb_at: Instant::now() - Duration::from_secs(10),
+            motion_best: 0.0,
         }
     }
 
@@ -318,13 +366,16 @@ impl Detector {
         now: DateTime<Local>,
         frame: &Frame,
         bbox: (f32, f32, f32, f32),
+        fraction: f32,
     ) {
         let a = active.get_or_insert_with(|| self.new_event(now));
         a.event.motion = true;
         // With "objects" as the trigger, motion only keeps a pending event open.
         a.last_activity = now;
-        if a.thumb_score < 0.0 {
-            // Motion thumbnail until an object is recognized.
+        // Until the AI recognizes something, the thumbnail is the frame with
+        // the most motion so far.
+        if a.thumb_score <= 0.0 && fraction > a.motion_best * 1.2 && a.thumb_at.elapsed() > Duration::from_millis(800) {
+            a.motion_best = fraction;
             self.save_thumb(a, frame, bbox, 0.0);
         }
         if self.cam.detect.trigger == "motion" && !a.qualified {
@@ -393,7 +444,8 @@ impl Detector {
             .iter()
             .max_by(|x, y| x.score.total_cmp(&y.score))
             .unwrap();
-        if best.score > a.thumb_score + 0.05 {
+        // AI pictures always win over motion pictures; then the most confident one.
+        if best.score > a.thumb_score + 0.05 && (a.thumb_score <= 0.0 || a.thumb_at.elapsed() > Duration::from_secs(1)) {
             self.save_thumb(a, &frame, (best.x, best.y, best.w, best.h), best.score);
             changed = true;
         }
@@ -415,14 +467,22 @@ impl Detector {
         (x, y, w, h): (f32, f32, f32, f32),
         score: f32,
     ) {
-        let crop = frame.crop(x, y, w, h, 0.25, 200).fit(480);
+        // Same 16:9 shape for every thumbnail; at least 40% of the frame for
+        // motion (context), 25% around a recognized object.
+        let min_frac = if score > 0.0 { 0.25 } else { 0.4 };
+        let crop = frame.crop_aspect(x, y, w, h, 0.2, min_frac, 16.0 / 9.0).fit(480);
         let name = format!("{}.jpg", a.event.id);
-        let _ = std::fs::create_dir_all(self.store.dir());
+        let dir = self.store.dir();
+        let _ = std::fs::create_dir_all(dir);
+        // Write then rename, so a browser never reads a half-written picture.
+        let tmp = dir.join(format!("{name}.tmp"));
         if let Ok(j) = crop.jpeg(85)
-            && std::fs::write(self.store.dir().join(&name), j).is_ok()
+            && std::fs::write(&tmp, j).is_ok()
+            && std::fs::rename(&tmp, dir.join(&name)).is_ok()
         {
             a.event.thumb = Some(name);
             a.thumb_score = score;
+            a.thumb_at = Instant::now();
         }
     }
 
@@ -474,39 +534,103 @@ impl Detector {
     }
 }
 
-pub struct MotionResult {
-    pub moving: bool,
-    pub fraction: f32,
-    /// Normalized (x, y, w, h) of the changed area.
-    pub bbox: (f32, f32, f32, f32),
+/// A moving object found in a frame.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MotionObject {
+    /// Box, normalized 0..1.
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Size in pixels of a 640×360 picture (like Blue Iris' object size).
+    pub size: u32,
 }
 
-/// Background-subtraction motion detector on a 4× downscaled grey image.
+pub struct MotionResult {
+    /// Motion that passes size, make time and travel: triggers alerts.
+    pub moving: bool,
+    /// Objects at least the minimum size, biggest first.
+    pub objects: Vec<MotionObject>,
+    /// Size of the biggest changed area (even below the minimum).
+    pub biggest: u32,
+    /// Share of the picture that changed, 0..1.
+    pub fraction: f32,
+}
+
+#[derive(Clone)]
+pub struct MotionSettings {
+    pub min_contrast: f32,
+    pub min_object_px: u32,
+    pub make_time: Duration,
+    pub min_travel_px: f32,
+    /// MASK_W × MASK_H, true = ignore.
+    pub mask: Option<Vec<bool>>,
+}
+
+impl MotionSettings {
+    pub fn from(d: &crate::config::DetectConfig) -> Self {
+        let mask = (d.mask.len() == crate::config::MASK_W * crate::config::MASK_H)
+            .then(|| d.mask.chars().map(|c| c == '1').collect::<Vec<bool>>())
+            .filter(|m| m.iter().any(|x| *x));
+        Self {
+            min_contrast: d.min_contrast as f32,
+            min_object_px: d.min_object_px,
+            make_time: Duration::from_millis(d.make_time_ms as u64),
+            min_travel_px: d.min_travel_px as f32,
+            mask,
+        }
+    }
+}
+
+/// Blue Iris-style motion detection on a 4× downscaled grey image:
+/// pixels that differ from a slowly updated background by more than the
+/// minimum contrast are grouped into connected objects; objects smaller than
+/// the minimum size are ignored; motion must last the make time (and,
+/// optionally, the object must travel) before it triggers.
 pub struct MotionDetector {
     w: usize,
     h: usize,
     src_w: usize,
     bg: Vec<f32>,
     frames: u32,
-    streak: u32,
-    threshold: f32,
-    min_fraction: f32,
+    s: MotionSettings,
+    /// Pixels of a 640-wide picture per grid cell.
+    cell_px: f32,
+    ignore: Vec<bool>,
+    since: Option<Instant>,
+    start: (f32, f32),
+    gap: u32,
+    triggered: bool,
 }
 
 impl MotionDetector {
-    pub fn new(src_w: u32, src_h: u32, sensitivity: u32) -> Self {
+    pub fn new(src_w: u32, src_h: u32, s: MotionSettings) -> Self {
         let (w, h) = ((src_w / 4).max(1) as usize, (src_h / 4).max(1) as usize);
-        let s = sensitivity.clamp(1, 100) as f32;
+        let ignore = match &s.mask {
+            Some(m) => (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let mx = x * crate::config::MASK_W / w;
+                    let my = y * crate::config::MASK_H / h;
+                    m[my * crate::config::MASK_W + mx]
+                })
+                .collect(),
+            None => vec![false; w * h],
+        };
+        let scale = 640.0 / w as f32;
         Self {
             w,
             h,
             src_w: src_w as usize,
             bg: vec![0.0; w * h],
             frames: 0,
-            streak: 0,
-            // Sensitivity 1 → large changes only; 100 → small changes.
-            threshold: 45.0 - s * 0.33,
-            min_fraction: 0.03 - s * 0.000_28,
+            s,
+            cell_px: scale * scale,
+            ignore,
+            since: None,
+            start: (0.0, 0.0),
+            gap: 0,
+            triggered: false,
         }
     }
 
@@ -518,9 +642,7 @@ impl MotionDetector {
                 for dy in 0..4 {
                     for dx in 0..4 {
                         let i = ((y * 4 + dy) * self.src_w + x * 4 + dx) * 3;
-                        sum += 0.299 * rgb[i] as f32
-                            + 0.587 * rgb[i + 1] as f32
-                            + 0.114 * rgb[i + 2] as f32;
+                        sum += 0.299 * rgb[i] as f32 + 0.587 * rgb[i + 1] as f32 + 0.114 * rgb[i + 2] as f32;
                     }
                 }
                 g[y * self.w + x] = sum / 16.0;
@@ -530,37 +652,32 @@ impl MotionDetector {
     }
 
     pub fn feed(&mut self, rgb: &[u8]) -> Option<MotionResult> {
+        self.feed_at(rgb, Instant::now())
+    }
+
+    pub fn feed_at(&mut self, rgb: &[u8], now: Instant) -> Option<MotionResult> {
         let g = self.grey(rgb);
         self.frames += 1;
         if self.frames == 1 {
             self.bg = g;
             return None;
         }
-        let (mut n, mut x0, mut y0, mut x1, mut y1) = (0usize, self.w, self.h, 0, 0);
-        for y in 0..self.h {
-            for x in 0..self.w {
-                let i = y * self.w + x;
-                if (g[i] - self.bg[i]).abs() > self.threshold {
-                    n += 1;
-                    x0 = x0.min(x);
-                    y0 = y0.min(y);
-                    x1 = x1.max(x);
-                    y1 = y1.max(y);
-                }
+        let (w, h) = (self.w, self.h);
+        let mut changed = vec![false; w * h];
+        let mut n = 0usize;
+        for i in 0..w * h {
+            if !self.ignore[i] && (g[i] - self.bg[i]).abs() > self.s.min_contrast {
+                changed[i] = true;
+                n += 1;
             }
         }
-        let fraction = n as f32 / (self.w * self.h) as f32;
-        // Whole-picture changes (lights, IR switching, camera moved): reset.
+        let fraction = n as f32 / (w * h) as f32;
+        // Whole-picture changes (lights, IR switching, camera moved): relearn.
         if fraction > 0.65 {
             self.bg = g;
-            self.streak = 0;
-            return Some(MotionResult {
-                moving: false,
-                fraction,
-                bbox: (0.0, 0.0, 1.0, 1.0),
-            });
+            self.reset();
+            return Some(MotionResult { moving: false, objects: vec![], biggest: 0, fraction });
         }
-        // Slowly absorb changes into the background.
         let alpha = if self.frames < 10 { 0.5 } else { 0.1 };
         for (b, v) in self.bg.iter_mut().zip(g.iter()) {
             *b += (v - *b) * alpha;
@@ -568,27 +685,99 @@ impl MotionDetector {
         if self.frames < 10 {
             return None;
         }
-        self.streak = if fraction > self.min_fraction {
-            self.streak + 1
+
+        let mut objects = self.objects(&changed);
+        objects.sort_by(|a, b| b.size.cmp(&a.size));
+        let biggest = objects.first().map(|o| o.size).unwrap_or(0);
+        objects.retain(|o| o.size >= self.s.min_object_px.max(1));
+
+        // Make time and travel.
+        if let Some(o) = objects.first() {
+            let c = (o.x + o.w / 2.0, o.y + o.h / 2.0);
+            self.gap = 0;
+            if self.since.is_none() {
+                self.since = Some(now);
+                self.start = c;
+            }
+            let lasted = now.duration_since(self.since.unwrap()) >= self.s.make_time;
+            let (dx, dy) = ((c.0 - self.start.0) * 640.0, (c.1 - self.start.1) * 640.0 * h as f32 / w as f32);
+            let travelled = self.s.min_travel_px <= 0.0 || (dx * dx + dy * dy).sqrt() >= self.s.min_travel_px;
+            if lasted && travelled {
+                self.triggered = true;
+            }
         } else {
-            0
-        };
-        let bbox = if n > 0 {
-            (
-                x0 as f32 / self.w as f32,
-                y0 as f32 / self.h as f32,
-                (x1 - x0 + 1) as f32 / self.w as f32,
-                (y1 - y0 + 1) as f32 / self.h as f32,
-            )
-        } else {
-            (0.0, 0.0, 1.0, 1.0)
-        };
-        // Require two frames in a row to ignore single-frame noise.
-        Some(MotionResult {
-            moving: self.streak >= 2,
-            fraction,
-            bbox,
-        })
+            // Allow a couple of frames without objects (e.g. passing behind a post).
+            self.gap += 1;
+            if self.gap > 2 {
+                self.reset();
+            }
+        }
+        Some(MotionResult { moving: self.triggered && !objects.is_empty(), objects, biggest, fraction })
+    }
+
+    fn reset(&mut self) {
+        self.since = None;
+        self.triggered = false;
+        self.gap = 0;
+    }
+
+    /// Connected groups of changed cells. Cells are joined across one-cell
+    /// gaps so a person split by a fence still counts as one object.
+    fn objects(&self, changed: &[bool]) -> Vec<MotionObject> {
+        let (w, h) = (self.w, self.h);
+        let mut grown = vec![false; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                if changed[y * w + x] {
+                    for yy in y.saturating_sub(1)..(y + 2).min(h) {
+                        for xx in x.saturating_sub(1)..(x + 2).min(w) {
+                            grown[yy * w + xx] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut seen = vec![false; w * h];
+        let mut out = Vec::new();
+        let mut stack = Vec::new();
+        for start in 0..w * h {
+            if !grown[start] || seen[start] {
+                continue;
+            }
+            let (mut x0, mut y0, mut x1, mut y1, mut count) = (w, h, 0, 0, 0u32);
+            seen[start] = true;
+            stack.push(start);
+            while let Some(i) = stack.pop() {
+                let (x, y) = (i % w, i / w);
+                if changed[i] {
+                    count += 1;
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+                let mut push = |j: usize| {
+                    if grown[j] && !seen[j] {
+                        seen[j] = true;
+                        stack.push(j);
+                    }
+                };
+                if x > 0 { push(i - 1); }
+                if x + 1 < w { push(i + 1); }
+                if y > 0 { push(i - w); }
+                if y + 1 < h { push(i + w); }
+            }
+            if count > 0 {
+                out.push(MotionObject {
+                    x: x0 as f32 / w as f32,
+                    y: y0 as f32 / h as f32,
+                    w: (x1 - x0 + 1) as f32 / w as f32,
+                    h: (y1 - y0 + 1) as f32 / h as f32,
+                    size: (count as f32 * self.cell_px) as u32,
+                });
+            }
+        }
+        out
     }
 }
 
@@ -596,11 +785,11 @@ impl MotionDetector {
 mod tests {
     use super::*;
 
-    fn frame(w: u32, h: u32, square: Option<(u32, u32)>) -> Vec<u8> {
+    fn frame(w: u32, h: u32, square: Option<(u32, u32, u32)>) -> Vec<u8> {
         let mut v = vec![60u8; (w * h * 3) as usize];
-        if let Some((sx, sy)) = square {
-            for y in sy..sy + 40 {
-                for x in sx..sx + 40 {
+        if let Some((sx, sy, size)) = square {
+            for y in sy..sy + size {
+                for x in sx..sx + size {
                     let i = ((y * w + x) * 3) as usize;
                     v[i..i + 3].copy_from_slice(&[250, 250, 250]);
                 }
@@ -609,33 +798,75 @@ mod tests {
         v
     }
 
-    #[test]
-    fn detects_moving_square_not_static_scene() {
-        let mut m = MotionDetector::new(320, 180, 50);
-        for _ in 0..15 {
-            let r = m.feed(&frame(320, 180, None));
-            assert!(r.is_none_or(|r| !r.moving));
-        }
-        let mut moved = false;
-        for i in 0..5 {
-            let r = m.feed(&frame(320, 180, Some((40 + i * 30, 60)))).unwrap();
-            moved |= r.moving;
-            if r.moving {
-                assert!(r.bbox.0 > 0.1 && r.bbox.0 < 0.9);
-            }
-        }
-        assert!(moved);
+    fn settings(min_object_px: u32, make_ms: u64, travel: f32) -> MotionSettings {
+        MotionSettings { min_contrast: 24.0, min_object_px, make_time: Duration::from_millis(make_ms), min_travel_px: travel, mask: None }
     }
 
     #[test]
-    fn ignores_global_light_change() {
-        let mut m = MotionDetector::new(320, 180, 50);
-        for _ in 0..12 {
-            m.feed(&frame(320, 180, None));
+    fn measures_object_size_and_ignores_small_ones() {
+        // 640×360 picture: a 40×40 square is 1600 px.
+        let mut m = MotionDetector::new(640, 360, settings(1000, 0, 0.0));
+        let t = Instant::now();
+        for i in 0..12 {
+            m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
         }
-        let bright = vec![200u8; 320 * 180 * 3];
-        for _ in 0..3 {
-            assert!(!m.feed(&bright).unwrap().moving);
+        let r = m.feed_at(&frame(640, 360, Some((100, 100, 40))), t + Duration::from_secs(3)).unwrap();
+        assert!(r.moving);
+        assert_eq!(r.objects.len(), 1);
+        assert!((1400..=1800).contains(&r.objects[0].size), "size {}", r.objects[0].size);
+        assert!((r.objects[0].x - 100.0 / 640.0).abs() < 0.02);
+        // An 8×8 speck (64 px) is reported as the biggest change but is not an object.
+        let mut m = MotionDetector::new(640, 360, settings(1000, 0, 0.0));
+        for i in 0..12 {
+            m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
         }
+        let r = m.feed_at(&frame(640, 360, Some((300, 200, 8))), t + Duration::from_secs(3)).unwrap();
+        assert!(!r.moving && r.objects.is_empty() && r.biggest > 0);
+    }
+
+    #[test]
+    fn make_time_and_travel() {
+        let mut m = MotionDetector::new(640, 360, settings(500, 1000, 100.0));
+        let t = Instant::now();
+        for i in 0..12 {
+            m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
+        }
+        let t = t + Duration::from_secs(3);
+        // Object appears and moves 30 px per 200 ms.
+        let mut first_trigger = None;
+        for i in 0..12u32 {
+            let r = m.feed_at(&frame(640, 360, Some((50 + i * 30, 100, 40))), t + Duration::from_millis(i as u64 * 200)).unwrap();
+            if r.moving && first_trigger.is_none() {
+                first_trigger = Some(i);
+            }
+        }
+        // Needs ≥1 s (frame 5) and ≥100 px travel (frame 4): first at frame 5.
+        assert_eq!(first_trigger, Some(5));
+    }
+
+    #[test]
+    fn mask_and_light_changes() {
+        let mut mask = vec![false; crate::config::MASK_W * crate::config::MASK_H];
+        for y in 0..crate::config::MASK_H {
+            for x in 0..crate::config::MASK_W / 2 {
+                mask[y * crate::config::MASK_W + x] = true; // ignore the left half
+            }
+        }
+        let mut s = settings(500, 0, 0.0);
+        s.mask = Some(mask);
+        let mut m = MotionDetector::new(640, 360, s);
+        let t = Instant::now();
+        for i in 0..12 {
+            m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
+        }
+        assert!(!m.feed_at(&frame(640, 360, Some((100, 100, 60))), t + Duration::from_secs(3)).unwrap().moving);
+        assert!(m.feed_at(&frame(640, 360, Some((450, 100, 60))), t + Duration::from_secs(4)).unwrap().moving);
+        // Whole picture brightens (lights on): no motion.
+        let mut m = MotionDetector::new(640, 360, settings(500, 0, 0.0));
+        for i in 0..12 {
+            m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
+        }
+        let bright = vec![200u8; 640 * 360 * 3];
+        assert!(!m.feed_at(&bright, t + Duration::from_secs(3)).unwrap().moving);
     }
 }

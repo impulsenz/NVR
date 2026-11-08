@@ -24,13 +24,20 @@
   <!-- ============ LIVE ============ -->
   <section id="page-live" hidden>
     <div id="live-grid">
-      <div class="row" style="margin-bottom:10px">
+      <div class="row dash-bar" id="dash-bar" style="margin-bottom:10px">
+        <button id="grp-prev" class="icon" title="Previous group">◀</button>
+        <select id="grp-sel" title="Camera group"></select>
+        <button id="grp-next" class="icon" title="Next group">▶</button>
+        <button id="grp-manage" title="Create and edit camera groups">Groups…</button>
         <span class="muted" id="dash-info"></span>
         <span class="spacer"></span>
+        <label class="check wall-only" style="padding:0" title="Switch between groups automatically"><input type="checkbox" id="wall-cycle"> Cycle every</label>
+        <select id="wall-cycle-s" class="wall-only"><option value="10">10 s</option><option value="20">20 s</option><option value="30">30 s</option><option value="60">1 min</option><option value="300">5 min</option></select>
         <button id="dash-edit">Edit layout</button>
         <button id="dash-auto" hidden>Auto arrange</button>
         <button id="dash-cancel" hidden>Cancel</button>
         <button id="dash-save" class="primary" hidden>Save layout</button>
+        <button id="wall-btn" class="primary" title="Fill the whole screen with cameras">⛶ Full screen</button>
       </div>
       <div id="dash"></div>
       <div class="empty" id="no-cameras" hidden>
@@ -194,6 +201,8 @@
 </main>
 
 <dialog id="cam-dialog"><form id="f-cam" method="dialog"></form></dialog>
+<dialog id="grp-dialog"><form id="f-grp" method="dialog"></form></dialog>
+<dialog id="fs-dialog"><form id="f-fs" method="dialog"></form></dialog>
 <div id="toast" hidden></div>
 <script src="app.js"></script>
 </body>

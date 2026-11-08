@@ -35,6 +35,9 @@ pub enum Quality {
 pub struct Live {
     cam: CameraConfig,
     relay: Arc<crate::relay::Relay>,
+    /// For the sub-stream: reuse the motion detector's decoded frames
+    /// instead of decoding the stream a second time.
+    detector: Option<Arc<crate::detect::Detector>>,
     pub quality: Quality,
     fps: Mutex<(u32, Instant, f32)>,
     env: Arc<RuntimeEnv>,
@@ -51,12 +54,15 @@ impl Live {
         env: Arc<RuntimeEnv>,
         quality: Quality,
         relay: Arc<crate::relay::Relay>,
+        detector: Option<Arc<crate::detect::Detector>>,
         cancel: CancellationToken,
     ) -> Arc<Self> {
-        let use_gpu = env.hardware.hwaccel != "none";
+        // The GPU is only worth it for full-quality streams (see HardwareConfig).
+        let use_gpu = env.hardware.hwaccel != "none" && (quality == Quality::Main || env.hardware.gpu_substreams);
         Arc::new(Self {
             cam,
             relay,
+            detector,
             quality,
             fps: Mutex::new((0, Instant::now(), 0.0)),
             env,
@@ -182,9 +188,22 @@ impl Live {
     async fn produce(self: Arc<Self>) {
         info!("[{}] live ({}): starting", self.cam.name, self.q());
         let mut failures = 0;
+        let mut own_decoder_until = Instant::now();
         loop {
             let use_gpu = self.use_gpu.load(Ordering::SeqCst);
-            match self.run_once(use_gpu).await {
+            // Prefer the detector's frames; if it has none (camera starting,
+            // detection restarting), decode ourselves for a minute.
+            let res = match &self.detector {
+                Some(d) if Instant::now() >= own_decoder_until => {
+                    let r = self.run_from_detector(d).await;
+                    if r.is_err() {
+                        own_decoder_until = Instant::now() + Duration::from_secs(60);
+                    }
+                    r
+                }
+                _ => self.run_once(use_gpu).await,
+            };
+            match res {
                 Ok(got_frames) if got_frames => failures = 0,
                 Ok(_) => failures += 1,
                 Err(e) => {
@@ -218,6 +237,41 @@ impl Live {
         }
     }
 
+    /// JPEG-encode the motion detector's frames (no extra decoding).
+    async fn run_from_detector(&self, det: &Arc<crate::detect::Detector>) -> Result<bool> {
+        let mut rx = det.subscribe_frames();
+        // ffmpeg's -q:v scale (2 best .. 31 worst) to JPEG quality.
+        let quality = (100.0 - self.env.live.quality as f32 * 2.5).clamp(40.0, 95.0) as u8;
+        let mut got = false;
+        loop {
+            tokio::select! {
+                r = tokio::time::timeout(Duration::from_secs(10), rx.changed()) => {
+                    r.context("no frames from motion detection")?.context("motion detection stopped")?;
+                }
+                _ = self.cancel.cancelled() => return Ok(got),
+            }
+            let Some(frame) = rx.borrow_and_update().clone() else { continue };
+            let jpg = tokio::task::spawn_blocking(move || frame.jpeg(quality)).await??;
+            got = true;
+            self.publish(Bytes::from(jpg));
+            if !self.wanted() {
+                return Ok(got);
+            }
+        }
+    }
+
+    fn publish(&self, frame: Bytes) {
+        self.tx.send_replace(Some((Instant::now(), frame)));
+        let mut f = self.fps.lock().unwrap();
+        f.0 += 1;
+        let el = f.1.elapsed().as_secs_f32();
+        if el >= 2.0 {
+            f.2 = f.0 as f32 / el;
+            f.0 = 0;
+            f.1 = Instant::now();
+        }
+    }
+
     /// Run ffmpeg until it fails or nobody is watching. Returns whether any frame arrived.
     async fn run_once(&self, use_gpu: bool) -> Result<bool> {
         let live = &self.env.live;
@@ -237,7 +291,7 @@ impl Live {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
         let mut child = cmd
-            .args(["-fflags", "nobuffer", "-flags", "low_delay"])
+            .args(["-fflags", "nobuffer+discardcorrupt", "-flags", "+low_delay-output_corrupt"])
             .args(crate::relay::pipe_input_args())
             .args(["-an", "-vf", &vf, "-q:v", &live.quality.to_string()])
             .args(["-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
@@ -296,15 +350,7 @@ impl Live {
             // Split the byte stream into JPEG images (SOI 0xFFD8 .. EOI 0xFFD9).
             while let Some(frame) = next_jpeg(&mut buf, &mut scan_from) {
                 got = true;
-                self.tx.send_replace(Some((Instant::now(), frame)));
-                let mut f = self.fps.lock().unwrap();
-                f.0 += 1;
-                let el = f.1.elapsed().as_secs_f32();
-                if el >= 2.0 {
-                    f.2 = f.0 as f32 / el;
-                    f.0 = 0;
-                    f.1 = Instant::now();
-                }
+                self.publish(frame);
             }
             if buf.len() > 8 * 1024 * 1024 {
                 buf.clear();

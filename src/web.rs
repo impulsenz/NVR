@@ -83,6 +83,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/export", get(export_clip))
         .route("/api/sprite/{id}/{kind}/{name}", get(sprite_info))
         .route("/api/probe", post(probe))
+        .route("/api/fs", get(fs_list))
+        .route("/api/fs/mkdir", post(fs_mkdir))
         .route("/api/preview", post(start_preview))
         .route("/api/preview/{token}", get(preview_stream))
         .route("/api/hw-test", post(hw_test))
@@ -320,13 +322,48 @@ async fn add_camera(State(m): App, Json(cam): Json<CameraConfig>) -> Response {
     }
 }
 
+#[derive(Deserialize)]
+struct MoveQuery {
+    #[serde(default)]
+    move_recordings: bool,
+}
+
 async fn update_camera(
     State(m): App,
     Path(id): Path<String>,
+    Query(q): Query<MoveQuery>,
     Json(cam): Json<CameraConfig>,
 ) -> Response {
-    match m.update_camera(&id, cam).await {
+    match m.update_camera(&id, cam, q.move_recordings).await {
         Ok(c) => Json(c).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct FsQuery {
+    #[serde(default)]
+    path: String,
+}
+
+/// Folders on the NVR computer, for choosing where recordings go.
+async fn fs_list(Query(q): Query<FsQuery>) -> Response {
+    match tokio::task::spawn_blocking(move || crate::fsbrowse::list(&q.path)).await {
+        Ok(Ok(l)) => Json(l).into_response(),
+        Ok(Err(e)) => bad(e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+#[derive(Deserialize)]
+struct MkdirReq {
+    parent: String,
+    name: String,
+}
+
+async fn fs_mkdir(Json(r): Json<MkdirReq>) -> Response {
+    match crate::fsbrowse::mkdir(&r.parent, &r.name) {
+        Ok(p) => Json(json!({ "path": p })).into_response(),
         Err(e) => bad(e),
     }
 }
@@ -811,51 +848,70 @@ async fn ensure_sprite(
 ) -> anyhow::Result<(PathBuf, ffmpeg::SpriteInfo)> {
     let src = media_path(c, kind, name)?;
     let dir = src.parent().unwrap().join(".thumbs");
-    let img = dir.join(format!("{name}.sprite.jpg"));
+    let prefix = dir.join(format!("{name}.sprite"));
+    let first = dir.join(format!("{name}.sprite-000.jpg"));
     let meta = dir.join(format!("{name}.sprite.json"));
-    let load = || -> Option<ffmpeg::SpriteInfo> {
-        serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()
-    };
-    if fresh(&img, &src)
+    let load = || -> Option<ffmpeg::SpriteInfo> { serde_json::from_slice(&std::fs::read(&meta).ok()?).ok() };
+    if fresh(&first, &src)
         && let Some(i) = load()
     {
-        return Ok((img, i));
+        return Ok((prefix, i));
     }
     let _p = THUMB_JOBS.acquire().await;
-    if fresh(&img, &src)
+    if fresh(&first, &src)
         && let Some(i) = load()
     {
-        return Ok((img, i));
+        return Ok((prefix, i));
     }
     std::fs::create_dir_all(&dir)?;
-    let info = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &img).await?;
+    // Remove pages of an older (shorter or longer) version.
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        let start = format!("{name}.sprite");
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&start) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let info = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &prefix).await?;
     std::fs::write(&meta, serde_json::to_vec(&info)?)?;
-    Ok((img, info))
+    Ok((prefix, info))
 }
 
-async fn sprite_info(
-    State(m): App,
-    Path((id, kind, name)): Path<(String, String, String)>,
-) -> Response {
+async fn sprite_info(State(m): App, Path((id, kind, name)): Path<(String, String, String)>) -> Response {
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
         Ok((_, info)) => Json(json!({
             "info": info,
-            "url": format!("media/{id}/sprite/{kind}/{name}"),
+            "url": format!("media/{id}/sprite/{kind}/{name}?v={}&page=", info.version),
         }))
         .into_response(),
         Err(e) => err(StatusCode::NOT_FOUND, format!("{e:#}")),
     }
 }
 
+#[derive(Deserialize)]
+struct PageQuery {
+    #[serde(default)]
+    page: u32,
+}
+
 async fn sprite_image(
     State(m): App,
     Path((id, kind, name)): Path<(String, String, String)>,
+    Query(q): Query<PageQuery>,
     req: Request,
 ) -> Response {
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
-        Ok((img, _)) => serve_file(img, req, None, false).await,
+        Ok((prefix, info)) if q.page < info.pages => {
+            let file = PathBuf::from(format!("{}-{:03}.jpg", prefix.display(), q.page));
+            let mut res = serve_file(file, req, None, false).await;
+            // Pages are versioned in their URL, so they can be cached for long.
+            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=86400"));
+            res
+        }
+        Ok(_) => err(StatusCode::NOT_FOUND, "no such page"),
         Err(e) => err(StatusCode::NOT_FOUND, format!("{e:#}")),
     }
 }

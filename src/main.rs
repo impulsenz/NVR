@@ -7,6 +7,7 @@ mod config;
 mod detect;
 mod events;
 mod ffmpeg;
+mod fsbrowse;
 mod imgutil;
 mod library;
 mod live;

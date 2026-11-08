@@ -209,7 +209,17 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                 end: e.end,
                 size,
                 name: None,
-                thumb: e.thumb.as_ref().map(|t| event_file_url(id, t)),
+                thumb: e.thumb.as_ref().map(|t| {
+                    // The picture can be replaced by a better one while the
+                    // alert is in progress: version the URL by its time.
+                    let v = std::fs::metadata(rt.events.dir().join(t))
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    format!("{}?v={v}", event_file_url(id, t))
+                }),
                 download: e
                     .clip
                     .as_ref()

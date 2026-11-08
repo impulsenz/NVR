@@ -16,30 +16,32 @@ impl Frame {
         encode_jpeg(&self.rgb, self.width, self.height, quality)
     }
 
-    /// Crop a normalized box (0..1), expanded by `pad` of its size, at least `min_px` wide.
-    pub fn crop(&self, x: f32, y: f32, w: f32, h: f32, pad: f32, min_px: u32) -> Frame {
+    /// Crop around a normalized box with a fixed picture shape (`aspect` = w/h),
+    /// so thumbnails are uniform. The box is padded, made at least
+    /// `min_frac` of the frame width, and kept inside the frame.
+    pub fn crop_aspect(&self, x: f32, y: f32, w: f32, h: f32, pad: f32, min_frac: f32, aspect: f32) -> Frame {
         let (fw, fh) = (self.width as f32, self.height as f32);
-        let mut cw = (w * (1.0 + 2.0 * pad) * fw).max(min_px as f32).min(fw);
-        let mut ch = (h * (1.0 + 2.0 * pad) * fh)
-            .max(min_px as f32 * 0.75)
-            .min(fh);
-        cw = cw.max(16.0);
-        ch = ch.max(16.0);
+        let mut cw = (w * fw * (1.0 + 2.0 * pad)).max(fw * min_frac);
+        let mut ch = h * fh * (1.0 + 2.0 * pad);
+        if cw / ch.max(1.0) < aspect {
+            cw = ch * aspect;
+        } else {
+            ch = cw / aspect;
+        }
+        // Too big for the frame: shrink while keeping the shape.
+        let k = (fw / cw).min(fh / ch).min(1.0);
+        let (cw, ch) = ((cw * k).max(16.0), (ch * k).max(16.0));
         let cx = (x + w / 2.0) * fw;
         let cy = (y + h / 2.0) * fh;
-        let x0 = (cx - cw / 2.0).clamp(0.0, fw - cw) as u32;
-        let y0 = (cy - ch / 2.0).clamp(0.0, fh - ch) as u32;
-        let (cw, ch) = (cw as u32, ch as u32);
+        let x0 = (cx - cw / 2.0).clamp(0.0, (fw - cw).max(0.0)) as u32;
+        let y0 = (cy - ch / 2.0).clamp(0.0, (fh - ch).max(0.0)) as u32;
+        let (cw, ch) = ((cw as u32).min(self.width - x0), (ch as u32).min(self.height - y0));
         let mut out = Vec::with_capacity((cw * ch * 3) as usize);
         for row in y0..y0 + ch {
             let start = ((row * self.width + x0) * 3) as usize;
             out.extend_from_slice(&self.rgb[start..start + (cw * 3) as usize]);
         }
-        Frame {
-            width: cw,
-            height: ch,
-            rgb: Arc::new(out),
-        }
+        Frame { width: cw, height: ch, rgb: Arc::new(out) }
     }
 
     /// Bilinear resize.
@@ -109,7 +111,7 @@ mod tests {
             height: h,
             rgb: Arc::new(rgb),
         };
-        let c = f.crop(0.9, 0.9, 0.2, 0.2, 0.1, 10);
+        let c = f.crop_aspect(0.9, 0.9, 0.2, 0.2, 0.1, 0.2, 16.0 / 9.0);
         assert!(c.width <= w && c.height <= h && c.width >= 10);
         assert_eq!(c.rgb.len() as u32, c.width * c.height * 3);
         let r = f.resize(32, 24);
@@ -117,5 +119,8 @@ mod tests {
         let j = f.jpeg(80).unwrap();
         assert_eq!(&j[..2], &[0xFF, 0xD8]);
         assert_eq!(f.fit(32).width, 32);
+        // A tall box still gives a 16:9 picture.
+        let t = f.crop_aspect(0.4, 0.1, 0.05, 0.8, 0.1, 0.3, 16.0 / 9.0);
+        assert!((t.width as f32 / t.height as f32 - 16.0 / 9.0).abs() < 0.15, "{}x{}", t.width, t.height);
     }
 }

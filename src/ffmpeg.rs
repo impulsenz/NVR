@@ -163,7 +163,7 @@ const DECODERS: &[&str] = &[
 /// picture recovers at the next keyframe, so these are counted and summarized
 /// instead of flooding the log.
 pub struct StderrFilter {
-    decode_warnings: u64,
+    pub decode_warnings: u64,
     lost_packets: u64,
     window: Instant,
 }
@@ -554,67 +554,66 @@ pub struct SpriteInfo {
     /// Seconds between pictures.
     pub interval: f64,
     pub count: u32,
+    /// Pictures per row on each page.
     pub columns: u32,
+    /// Pictures per page (pages are separate images).
+    pub per_page: u32,
+    pub pages: u32,
     pub tile_width: u32,
     pub tile_height: u32,
     pub duration: f64,
+    /// Changes whenever the pictures are regenerated (cache busting).
+    pub version: u64,
 }
 
-/// A grid of small pictures through a recording, for scrubbing previews.
+pub const SPRITE_W: u32 = 480;
+pub const SPRITE_H: u32 = 270;
+const SPRITE_COLS: u32 = 5;
+const SPRITE_PER_PAGE: u32 = 25;
+
+/// Pictures through a recording for scrubbing and time-lapse previews:
+/// pages of 5×5 pictures, 480×270 each, saved as `<prefix>-000.jpg`, ...
 /// Only keyframes are decoded, so this is fast even for long files.
-pub async fn sprite(
-    ffmpeg: &str,
-    file: &std::path::Path,
-    out: &std::path::Path,
-) -> Result<SpriteInfo> {
-    let duration = duration(ffmpeg, file)
-        .await
-        .context("cannot read recording length")?;
-    let count = ((duration / 2.0).ceil() as u32).clamp(1, 240);
+pub async fn sprite(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::Path) -> Result<SpriteInfo> {
+    let duration = duration(ffmpeg, file).await.context("cannot read recording length")?;
+    let count = ((duration / 2.0).ceil() as u32).clamp(1, 300);
     let interval = (duration / count as f64).max(0.5);
-    let columns = count.min(20);
-    let rows = count.div_ceil(columns);
-    let (tw, th) = (160u32, 90u32);
+    let (tw, th) = (SPRITE_W, SPRITE_H);
     let vf = format!(
-        "fps=1/{interval:.3},scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:-1:-1,tile={columns}x{rows}"
+        "fps=1/{interval:.3},scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:-1:-1,tile={SPRITE_COLS}x{}",
+        SPRITE_PER_PAGE / SPRITE_COLS
     );
+    let pattern = format!("{}-%03d.jpg", prefix.display());
     let o = run(
         Command::new(ffmpeg)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-skip_frame",
-                "nokey",
-                "-i",
-            ])
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i"])
             .arg(file)
-            .args([
-                "-an",
-                "-vf",
-                &vf,
-                "-frames:v",
-                "1",
-                "-q:v",
-                "6",
-                "-update",
-                "1",
-            ])
-            .arg(out),
-        120,
+            .args(["-an", "-vf", &vf, "-q:v", "5", "-start_number", "0"])
+            .arg(&pattern),
+        180,
     )
     .await?;
-    if !o.status.success() || !out.exists() {
+    let first = std::path::PathBuf::from(format!("{}-000.jpg", prefix.display()));
+    if !o.status.success() || !first.exists() {
         bail!("{}", first_error(&o.stderr));
     }
+    let pages = (0..)
+        .take_while(|i| std::path::Path::new(&format!("{}-{i:03}.jpg", prefix.display())).exists())
+        .count() as u32;
+    let version = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     Ok(SpriteInfo {
         interval,
-        count,
-        columns,
+        count: count.min(pages * SPRITE_PER_PAGE),
+        columns: SPRITE_COLS,
+        per_page: SPRITE_PER_PAGE,
+        pages,
         tile_width: tw,
         tile_height: th,
         duration,
+        version,
     })
 }
 
@@ -696,6 +695,7 @@ mod tests {
             hwaccel: "cuda".into(),
             encoder: "auto".into(),
             device: String::new(),
+            ..Default::default()
         };
         assert!(full_gpu_pipeline(&hw));
         assert_eq!(
@@ -706,6 +706,7 @@ mod tests {
             hwaccel: "vaapi".into(),
             encoder: "h264_vaapi".into(),
             device: String::new(),
+            ..Default::default()
         };
         let (pre, out) = encoder_args("h264_vaapi", &hw, false);
         assert_eq!(pre, ["-vaapi_device", "/dev/dri/renderD128"]);
