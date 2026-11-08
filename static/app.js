@@ -168,10 +168,10 @@ const Live = {
     st.n++; st.last = performance.now();
     if (st.last - st.t > 2000) { st.fps = st.n * 1000 / (st.last - st.t); st.n = 0; st.t = st.last; }
     this.stats.set(k, st);
-    for (const img of this.imgs.get(k) || []) img.src = url;
+    for (const img of this.imgs.get(k) || []) { img.src = url; if (q === 'main') img.classList.remove('sd-fill'); }
     if (q === 'main' && id === focusId && typeof hideFocusLoading === 'function') hideFocusLoading();
     // The HD image also shows sub frames until its first HD frame arrives.
-    if (q === 'sub') for (const img of this.imgs.get(this.key(id, 'main')) || []) if (!this.urls.has(this.key(id, 'main'))) img.src = url;
+    if (q === 'sub') for (const img of this.imgs.get(this.key(id, 'main')) || []) if (!this.urls.has(this.key(id, 'main'))) { img.src = url; img.classList.add('sd-fill'); }
   },
   fps(id, q) { const s = this.stats.get(this.key(id, q)); return s && performance.now() - s.last < 3000 ? s.fps : 0; },
   // Show a camera in an <img>; returns an unbind function.
@@ -179,7 +179,9 @@ const Live = {
     const k = this.key(id, q);
     if (!this.imgs.has(k)) this.imgs.set(k, new Set());
     this.imgs.get(k).add(img);
-    const cur = this.urls.get(k) || (q === 'main' && this.urls.get(this.key(id, 'sub')));
+    const hd = this.urls.get(k), cur = hd || (q === 'main' && this.urls.get(this.key(id, 'sub')));
+    // The low-resolution stand-in is stretched to the size the HD picture will have.
+    img.classList.toggle('sd-fill', !hd && !!cur);
     if (cur) img.src = cur;
     return () => { const s = this.imgs.get(k); if (s) s.delete(img); };
   },
@@ -232,7 +234,7 @@ function overlayHtml(c, q) {
   if (o.text) parts[o.text_corner].push(`<span class="ovtext">${esc(o.text)}</span>`);
   if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill">${pillHtml(c)}</span>`);
   if (o.show_detections) parts[o.detections_corner].push('<span class="ov-alert"></span>');
-  if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-fmt="${esc(o.clock_format || '')}"></span>`);
+  if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}">${esc(fmtDate(new Date(), o.clock_format || d.clock_format || undefined))}</span>`);
   if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps"></span>');
   for (const corner of d.fullscreen_corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen">⛶</button>');
   return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => `<div class="ov ${k}">${v.join('')}</div>`).join('');
@@ -241,6 +243,14 @@ function wireOverlay(surface) {
   surface.querySelectorAll('.fsbtn').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(surface); });
 }
 function updateOverlay(surface, c, q) {
+  // Rebuild when the camera's or the global on-screen display settings changed.
+  const sig = JSON.stringify([osdFor(c), status.display.fullscreen_corners, c.name, q]);
+  if (surface.dataset.osd !== sig) {
+    surface.querySelectorAll(':scope > .ov').forEach(o => o.remove());
+    surface.insertAdjacentHTML('beforeend', overlayHtml(c, q));
+    wireOverlay(surface);
+    surface.dataset.osd = sig;
+  }
   const clock = surface.querySelector('.ov-clock');
   if (clock) clock.textContent = fmtDate(new Date(), clock.dataset.fmt || undefined);
   const p = surface.querySelector('.ov-pill');
@@ -249,7 +259,7 @@ function updateOverlay(surface, c, q) {
   if (fps) {
     const info = c.info && (q === 'main' ? c.info.main : c.info.sub);
     const shown = Live.fps(c.id, q) || (q === 'main' ? Live.fps(c.id, 'sub') : 0);
-    fps.textContent = `${shown.toFixed(1)} fps` + (info ? ` · ${info.width}×${info.height} ${String(info.codec).toUpperCase()} @ ${info.fps || '?'} fps` : '');
+    fps.textContent = (shown ? `${shown.toFixed(1)} fps` : '– fps') + (info ? ` · ${info.width}×${info.height} ${String(info.codec).toUpperCase()}${info.fps ? ` (camera ${info.fps} fps)` : ''}` : '');
   }
   const a = surface.querySelector('.ov-alert');
   if (a) {
@@ -2187,7 +2197,10 @@ function drawMotionBoxes(svg, objects) {
 function cornerSel(id, cur) {
   return `<select id="${id}">${[['tl', 'Top left'], ['tr', 'Top right'], ['bl', 'Bottom left'], ['br', 'Bottom right']].map(([k, t]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
 }
-function readOsd() {
+// The camera's own on-screen display choices (kept while the controls show the global ones).
+let osdOwn = null;
+function readOsd(raw) {
+  if (!raw && !chk('o-custom') && osdOwn) return {...osdOwn, custom: false};
   const f = val('o-fmt2') === 'custom' ? val('o-fmt2-c').trim() : val('o-fmt2');
   return {custom: chk('o-custom'), show_name: chk('o-name'), name_corner: val('o-name-c'), show_clock: chk('o-clock'), clock_corner: val('o-clock-c'), clock_format: f,
     show_status: chk('o-status'), status_corner: val('o-status-c'), show_detections: chk('o-detections'), detections_corner: val('o-detections-c'),
@@ -2198,6 +2211,23 @@ function setupOsdTab(c, camId) {
   const prev = $('o-prev');
   if (!CLOCK_FORMATS.includes(c.osd.clock_format) && c.osd.clock_format) { $('o-fmt2').value = 'custom'; $('o-fmt2-c').hidden = false; }
   const live = camId ? cam(camId) : null;
+  const ctrls = ['o-name', 'o-name-c', 'o-clock', 'o-clock-c', 'o-status', 'o-status-c', 'o-detections', 'o-detections-c', 'o-fps', 'o-fps-c', 'o-fmt2', 'o-fmt2-c', 'o-text', 'o-text-c'];
+  osdOwn = null;
+  const showFollow = () => {
+    const custom = chk('o-custom');
+    if (!custom) {
+      // Following Settings → Live view & display: show those values, read-only.
+      if (osdOwn === null || $('o-name').disabled === false) osdOwn = readOsd(true);
+      const g = osdFor({osd: {custom: false}});
+      for (const k of ['name', 'clock', 'status', 'detections', 'fps']) { $('o-' + k).checked = !!g['show_' + k]; $('o-' + k + '-c').value = g[k + '_corner']; }
+      $('o-fmt2').value = ''; $('o-fmt2-c').hidden = true;
+    } else if (osdOwn && $('o-name').disabled) {
+      for (const k of ['name', 'clock', 'status', 'detections', 'fps']) { $('o-' + k).checked = !!osdOwn['show_' + k]; $('o-' + k + '-c').value = osdOwn[k + '_corner']; }
+    }
+    ctrls.forEach(id => { if ($(id)) $(id).disabled = !custom; });
+  };
+  $('o-custom').addEventListener('change', showFollow);
+  showFollow();
   const redraw = () => {
     prev.querySelectorAll('.ov').forEach(o => o.remove());
     const fake = {...(live || {id: '', name: val('c-name') || 'Camera', enabled: true, recorder: null, buffer: null, detect: null, record_mode: 'continuous'}), osd: {...readOsd(), custom: true}};
@@ -2390,30 +2420,30 @@ function renderDisplay(body) {
     <span></span><div><label class="check"><input type="checkbox" id="l-pre" ${l.preload_hd_streams ? 'checked' : ''}> Keep HD streams ready in the background</label>
       <div class="hint">Off (recommended): a camera's full-quality stream is only decoded while you have it open; until it arrives you see the sub-stream picture. On: opening a camera shows HD instantly, but every camera's HD stream is decoded all the time — a lot of GPU/CPU.</div></div>
     <h3>Overlays on live video</h3>
-    <label>Fullscreen button</label><div class="chips" id="o-fs">${corners.map(([k, t]) => `<label><input type="checkbox" value="${k}" ${d.fullscreen_corners.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
-    <span></span><label class="check"><input type="checkbox" id="o-clock" ${d.show_clock ? 'checked' : ''}> Show date and time</label>
-    <label for="o-corner">Date &amp; time position</label><div><select id="o-corner">${corners.map(([k, t]) => `<option value="${k}" ${k === d.clock_corner ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <label for="o-fmt">Date &amp; time format</label><div><select id="o-fmt">${CLOCK_FORMATS.map(f => `<option ${f === d.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom" ${custom ? 'selected' : ''}>Custom…</option></select>
-      <input type="text" id="o-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
-      <div class="hint">Preview: <b id="o-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>
-    <label for="o-tilefit">Video in dashboard tiles</label><div><select id="o-tilefit">
+    <label>Fullscreen button</label><div class="chips" id="g-fs">${corners.map(([k, t]) => `<label><input type="checkbox" value="${k}" ${d.fullscreen_corners.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
+    <span></span><label class="check"><input type="checkbox" id="g-clock" ${d.show_clock ? 'checked' : ''}> Show date and time</label>
+    <label for="g-corner">Date &amp; time position</label><div><select id="g-corner">${corners.map(([k, t]) => `<option value="${k}" ${k === d.clock_corner ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <label for="g-fmt">Date &amp; time format</label><div><select id="g-fmt">${CLOCK_FORMATS.map(f => `<option ${f === d.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom" ${custom ? 'selected' : ''}>Custom…</option></select>
+      <input type="text" id="g-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
+      <div class="hint">Preview: <b id="g-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>
+    <label for="g-tilefit">Video in dashboard tiles</label><div><select id="g-tilefit">
       <option value="stretch" ${d.tile_fit === 'stretch' ? 'selected' : ''}>Stretch to fill the box</option>
       <option value="crop" ${d.tile_fit === 'crop' ? 'selected' : ''}>Zoom to fill (trims the edges)</option>
       <option value="fit" ${d.tile_fit === 'fit' ? 'selected' : ''}>Show the whole picture (black bars)</option></select>
       <div class="hint">For cameras whose picture shape differs from the tile (e.g. 4:3 sub-streams).</div></div>
-    <span></span><label class="check"><input type="checkbox" id="o-name" ${d.show_name ? 'checked' : ''}> Show camera name</label>
-    <span></span><label class="check"><input type="checkbox" id="o-fps" ${d.show_fps ? 'checked' : ''}> Show frames per second and stream details</label>
+    <span></span><label class="check"><input type="checkbox" id="g-name" ${d.show_name ? 'checked' : ''}> Show camera name</label>
+    <span></span><label class="check"><input type="checkbox" id="g-fps" ${d.show_fps ? 'checked' : ''}> Show frames per second and stream details</label>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
-  const fmt = () => val('o-fmt') === 'custom' ? val('o-custom') : val('o-fmt');
-  const prev = () => $('o-prev').textContent = fmtDate(new Date(), fmt());
-  $('o-fmt').onchange = () => { $('o-custom').hidden = val('o-fmt') !== 'custom'; prev(); };
-  $('o-custom').oninput = prev; prev();
+  const fmt = () => val('g-fmt') === 'custom' ? val('g-custom') : val('g-fmt');
+  const prev = () => $('g-prev').textContent = fmtDate(new Date(), fmt());
+  $('g-fmt').onchange = () => { $('g-custom').hidden = val('g-fmt') !== 'custom'; prev(); };
+  $('g-custom').oninput = prev; prev();
   $('f-display').onsubmit = (e) => {
     e.preventDefault();
     saveSettings({
       live: {fps: num('l-fps'), width: num('l-width'), quality: num('l-q'), hd_fps: num('l-hd'), preload_hd_streams: chk('l-pre')},
-      display: {fullscreen_corners: [...document.querySelectorAll('#o-fs input:checked')].map(i => i.value), show_clock: chk('o-clock'),
-        clock_corner: val('o-corner'), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss', show_name: chk('o-name'), show_fps: chk('o-fps'), tile_fit: val('o-tilefit')},
+      display: {fullscreen_corners: [...document.querySelectorAll('#g-fs input:checked')].map(i => i.value), show_clock: chk('g-clock'),
+        clock_corner: val('g-corner'), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss', show_name: chk('g-name'), show_fps: chk('g-fps'), tile_fit: val('g-tilefit')},
     }, 'Saved').then(() => renderDash());
   };
 }
