@@ -208,6 +208,20 @@ document.addEventListener('visibilitychange', () => Live.send());
 
 // Which streams the page needs right now. The dashboard keeps running in the
 // background on every page so switching back or opening a camera is instant.
+// Which stream a picture shows: Stream 1 (main, full quality) or Stream 2
+// (sub-stream). `ctx` is 'grid' (tiles) or 'focus' (an opened camera, or
+// one enlarged on the video wall). The viewer can switch each one with the
+// "S1/S2" button on the picture; the choice is remembered in this browser.
+const streamPref = store_get('stream-pref', {});
+function feedQ(c, ctx) {
+  const p = streamPref[c.id + '|' + ctx];
+  if (p === 'main' || p === 'sub') return p;
+  return ctx === 'focus' || (c.view && c.view.grid_quality === 'main') ? 'main' : 'sub';
+}
+function setFeedQ(c, ctx, q) {
+  streamPref[c.id + '|' + ctx] = q;
+  try { localStorage.setItem('nvr-stream-pref', JSON.stringify(streamPref)); } catch (e) {}
+}
 function updateSubscriptions() {
   if (!status) return;
   const l = status.live, subs = [];
@@ -218,19 +232,22 @@ function updateSubscriptions() {
     const gridFps = dataSaver ? Math.min(2, v.grid_fps || l.fps) : (v.grid_fps || l.fps);
     const hdFps = dataSaver ? Math.min(4, v.hd_fps || l.hd_fps) : (v.hd_fps || l.hd_fps);
     const focused = page === 'live' && ((focusId === c.id && !focusPlayback) || (wall && wallSolo === c.id));
-    // Grid picture: sub-stream normally, full quality if chosen for this camera.
     // Data saver: only pictures that are on screen (the grid isn't kept
-    // running in the background), and an opened camera only in HD.
+    // running in the background).
     const shown = page === 'live' && !focusId
       || (page === 'settings' && typeof section !== 'undefined' && section === 'cameras')
       || ($('cam-dialog').open && editingId === c.id);
-    if (dataSaver && !focused && !shown) continue;
-    if (v.grid_quality === 'main') subs.push({camera: c.id, q: 'main', fps: focused ? hdFps : gridFps});
-    else {
-      if (!(dataSaver && focused)) subs.push({camera: c.id, q: 'sub', fps: gridFps});
-      if (focused) subs.push({camera: c.id, q: 'main', fps: hdFps});
-      else if (l.preload_hd_streams && !dataSaver) subs.push({camera: c.id, q: 'main', fps: 1});
-    }
+    const want = new Map();
+    const add = (q, fps) => want.set(q, Math.max(want.get(q) || 0, fps));
+    const gridQ = feedQ(c, 'grid'), focusQ = feedQ(c, 'focus');
+    // The grid keeps running in the background so switching back is instant.
+    if (!dataSaver || shown) add(gridQ, focused && gridQ === focusQ ? hdFps : gridFps);
+    if (focused) {
+      add(focusQ, hdFps);
+      // The sub-stream stands in while the full-quality picture loads.
+      if (focusQ === 'main' && !dataSaver) add('sub', gridFps);
+    } else if (gridQ === 'sub' && l.preload_hd_streams && !dataSaver) add('main', 1);
+    for (const [q, fps] of want) subs.push({camera: c.id, q, fps});
   }
   if (dataSaver) subs.forEach(x => x.lite = true);
   Live.setWanted(subs);
@@ -267,11 +284,30 @@ function overlayHtml(c, q) {
   if (o.show_detections) parts[o.detections_corner].push('<span class="ov-alert"></span>');
   if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}">${esc(fmtDate(new Date(), o.clock_format || d.clock_format || undefined))}</span>`);
   if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps"></span>');
+  // Stream 1 / Stream 2 switch, next to the first fullscreen button (or top right).
+  const sc = d.fullscreen_corners[0] || 'tr';
+  parts[sc].push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
   for (const corner of d.fullscreen_corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen">⛶</button>');
   return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => `<div class="ov ${k}">${v.join('')}</div>`).join('');
 }
 function wireOverlay(surface) {
-  surface.querySelectorAll('.fsbtn').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(surface); });
+  surface.querySelectorAll('.fsbtn:not(.sbtn)').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(surface); });
+  surface.querySelectorAll('.sbtn').forEach(b => {
+    b.onpointerdown = (e) => e.stopPropagation();
+    b.onclick = (e) => { e.stopPropagation(); switchStream(surface); };
+  });
+}
+// Flip a live picture between stream 1 and stream 2.
+function switchStream(surface) {
+  const isFocus = surface.id === 'focus-surface';
+  const c = cam(isFocus ? focusId : surface.dataset.id);
+  if (!c) return;
+  const ctx = isFocus || (wall && wallSolo === c.id) ? 'focus' : 'grid';
+  const q = feedQ(c, ctx) === 'main' ? 'sub' : 'main';
+  setFeedQ(c, ctx, q);
+  if (isFocus) bindFocusImage(c); else renderDash();
+  updateSubscriptions();
+  toast(`${c.name}: ${q === 'main' ? 'stream 1 (main, full quality)' : 'stream 2 (sub-stream)'}`);
 }
 function updateOverlay(surface, c, q) {
   // Rebuild when the camera's or the global on-screen display settings changed.
@@ -749,7 +785,7 @@ function renderDash() {
   for (const t of shown) {
     const c = cam(t.camera);
     if (!c) continue;
-    const q = wallSolo === c.id || (c.view && c.view.grid_quality === 'main') ? 'main' : 'sub';
+    const q = feedQ(c, wallSolo === c.id ? 'focus' : 'grid');
     const el = document.createElement('div');
     el.className = 'surface tile';
     el.dataset.id = c.id;
@@ -981,22 +1017,10 @@ function showLive(id) {
   const c = cam(focusId);
   stopFocusPlayback(false);
   const surf = $('focus-surface');
-  surf.querySelectorAll('.ov').forEach(o => o.remove());
-  surf.insertAdjacentHTML('beforeend', overlayHtml(c, 'main'));
-  wireOverlay(surf);
-  if (focusUnbind) focusUnbind();
-  const img = $('focus-img');
-  img.removeAttribute('src');
-  $('focus-msg').hidden = false; $('focus-msg').textContent = 'Connecting…';
-  img.onload = () => { $('focus-msg').hidden = true; };
-  focusUnbind = Live.bind(img, c.id, 'main');
-  if (img.getAttribute('src')) $('focus-msg').hidden = true;
+  bindFocusImage(c);
   $('focus-snap').href = 'snapshot/' + enc(c.id);
   $('focus-recs').href = '#recordings/' + enc(c.id);
   $('focus-edit').onclick = () => openCameraDialog(c.id);
-  // Spinner until the first full-quality frame arrives (the sub-stream
-  // picture is shown meanwhile).
-  showFocusLoading();
   setupQuickView(c);
   setupPtz(c);
   camTl.open(c.id);
@@ -1005,6 +1029,24 @@ function showLive(id) {
 }
 
 let loadingTimer = null;
+// Show the opened camera's chosen stream in the big picture.
+function bindFocusImage(c) {
+  const surf = $('focus-surface'), q = feedQ(c, 'focus');
+  surf.querySelectorAll(':scope > .ov').forEach(o => o.remove());
+  surf.insertAdjacentHTML('beforeend', overlayHtml(c, q));
+  delete surf.dataset.osd;
+  wireOverlay(surf);
+  if (focusUnbind) focusUnbind();
+  const img = $('focus-img');
+  img.removeAttribute('src');
+  $('focus-msg').hidden = false; $('focus-msg').textContent = 'Connecting…';
+  img.onload = () => { $('focus-msg').hidden = true; };
+  focusUnbind = Live.bind(img, c.id, q);
+  if (img.getAttribute('src')) $('focus-msg').hidden = true;
+  // Spinner until the first full-quality frame arrives (the sub-stream
+  // picture is shown meanwhile).
+  if (q === 'main') showFocusLoading(); else hideFocusLoading();
+}
 function showFocusLoading() {
   const el = $('focus-loading');
   el.hidden = false;
@@ -1149,7 +1191,7 @@ function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } s
 function updateFocus() {
   const c = cam(focusId);
   if (!c) { location.hash = '#live'; return; }
-  updateOverlay($('focus-surface'), c, 'main');
+  updateOverlay($('focus-surface'), c, feedQ(c, 'focus'));
   const r = c.recorder || c.buffer;
   const btn = $('focus-rec');
   btn.hidden = !r || !c.enabled;
@@ -1171,7 +1213,7 @@ function updateFocus() {
     ${r && r.since ? `<dt>Recording for</dt><dd>${fmtDur((Date.now() - new Date(r.since)) / 1000)}</dd>` : ''}
     <dt>Main stream</dt><dd>${esc(s(main))}</dd>
     ${c.has_sub ? `<dt>Sub-stream</dt><dd>${esc(s(sub))}</dd>` : ''}
-    <dt>Live view</dt><dd>${Live.fps(c.id, 'main').toFixed(1)} fps</dd>
+    <dt>Live view</dt><dd>${Live.fps(c.id, feedQ(c, 'focus')).toFixed(1)} fps</dd>
     <dt>Detection</dt><dd>${!c.detection ? 'Off' : d ? (d.running ? `${d.motion ? 'Motion now' : 'Watching'}${c.ai ? ' + AI' : ''}` : 'Starting…') : 'Starting…'}</dd>
     ${d && d.last_event ? `<dt>Last alert</dt><dd>${fmtDate(d.last_event)}</dd>` : ''}
     <dt>Reconnects</dt><dd>${r ? r.restarts : 0}</dd>`;

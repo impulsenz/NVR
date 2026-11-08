@@ -21,6 +21,8 @@ viewing, finding footage, and managing everything, all from the browser.
   **date & time** (format and corner), recording status, what is moving, **frames per second**, your own
   text, and **fullscreen buttons** in any corners.
 - Active alerts are highlighted on the tile ("person", "car", …).
+- **S1 / S2 button on every live picture** switches between stream 1 (main, full quality) and stream 2
+  (sub-stream), separately for the grid and the opened camera; each browser remembers the choice.
 
 **Recording**
 - Per-camera modes, like Blue Iris:
