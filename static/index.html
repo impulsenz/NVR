@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NVR</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --red: #ef4444;
+    --amber: #f59e0b; --green: #22c55e;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  #clock { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
+    border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--panel2);
+    border: 1px solid var(--border); text-transform: uppercase; letter-spacing: .04em; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pill.recording .dot { background: var(--red); animation: pulse 1.2s infinite; }
+  .pill.connecting .dot, .pill.retrying .dot { background: var(--amber); }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .viewer { background: #000; border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden; position: relative; aspect-ratio: 16 / 9; display: flex;
+    align-items: center; justify-content: center; }
+  .viewer img, .viewer video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .viewer .overlay { position: absolute; top: 8px; left: 8px; font-size: 12px;
+    background: rgba(0,0,0,.6); padding: 3px 8px; border-radius: 4px; }
+  .viewer .msg { position: absolute; color: var(--muted); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+  button, .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    padding: 7px 12px; border-radius: 6px; cursor: pointer; font: inherit; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px; }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: var(--red); border-color: var(--red); color: #fff; }
+  button.small, .btn.small { padding: 3px 8px; font-size: 12px; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .05em; font-weight: 600; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break-all; }
+  .err { color: var(--red); font-size: 12px; margin-top: 8px; word-break: break-word; }
+  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; background: var(--accent); }
+
+  .rec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .rec-head h2 { margin: 0; flex: 1; }
+  select { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 6px; font: inherit; }
+  #recs { max-height: 55vh; overflow-y: auto; margin: 0 -6px; }
+  .rec { display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 6px; }
+  .rec:hover { background: var(--panel2); }
+  .rec.active { background: rgba(79,140,255,.15); }
+  .rec .t { flex: 1; font-variant-numeric: tabular-nums; }
+  .rec .s { color: var(--muted); font-size: 12px; }
+  .live-tag { color: var(--red); font-size: 11px; font-weight: 700; }
+  .empty { color: var(--muted); padding: 8px 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="cam-name">NVR</h1>
+  <span id="rec-pill" class="pill"><span class="dot"></span><span id="rec-label">…</span></span>
+  <span class="spacer"></span>
+  <span id="clock"></span>
+</header>
+
+<main>
+  <section>
+    <div class="viewer" id="viewer">
+      <img id="live" alt="Live view">
+      <video id="player" controls playsinline hidden></video>
+      <span class="overlay" id="overlay">LIVE</span>
+      <span class="msg" id="viewer-msg" hidden></span>
+    </div>
+    <div class="toolbar">
+      <button id="btn-record" class="primary">Start recording</button>
+      <button id="btn-live">Pause live view</button>
+      <button id="btn-back" hidden>Back to live</button>
+      <a class="btn" id="btn-snap" href="snapshot.jpg">Snapshot</a>
+      <button id="btn-full">Fullscreen</button>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>Camera</h2>
+      <dl>
+        <dt>State</dt><dd id="st-state">–</dd>
+        <dt>Recording since</dt><dd id="st-since">–</dd>
+        <dt>Reconnects</dt><dd id="st-restarts">0</dd>
+        <dt>Stream</dt><dd id="st-url">–</dd>
+      </dl>
+      <div class="err" id="st-error" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>Storage</h2>
+      <dl>
+        <dt>Recordings</dt><dd id="sg-count">–</dd>
+        <dt>Used</dt><dd id="sg-used">–</dd>
+        <dt>Disk free</dt><dd id="sg-free">–</dd>
+        <dt>Retention</dt><dd id="sg-ret">–</dd>
+      </dl>
+      <div class="bar"><div id="sg-bar" style="width:0"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="rec-head">
+        <h2>Recordings</h2>
+        <select id="day"></select>
+        <button class="small" id="btn-refresh" title="Refresh">↻</button>
+      </div>
+      <div id="recs"><div class="empty">Loading…</div></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let status = null, recordings = [], liveOn = true, playing = null;
+
+const fmtBytes = (b) => {
+  if (b == null) return '–';
+  const u = ['B','KB','MB','GB','TB']; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return b.toFixed(i ? 1 : 0) + ' ' + u[i];
+};
+const fmtTime = (d) => d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+const dayKey = (d) => d.toLocaleDateString([], {weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'});
+const ago = (d) => {
+  let s = Math.floor((Date.now() - d) / 1000);
+  const h = Math.floor(s / 3600); s %= 3600; const m = Math.floor(s / 60); s %= 60;
+  return (h ? h + 'h ' : '') + (h || m ? m + 'm ' : '') + s + 's';
+};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.status === 204 ? null : r.json();
+}
+
+// ---- status ----
+async function refreshStatus() {
+  try { status = await api('api/status'); } catch (e) { return; }
+  const r = status.recorder;
+  $('cam-name').textContent = status.camera.name;
+  document.title = status.camera.name + ' – NVR';
+  $('st-url').textContent = status.camera.url;
+  $('rec-pill').className = 'pill ' + r.state;
+  $('rec-label').textContent = r.state === 'recording' ? 'REC' : r.state;
+  $('st-state').textContent = r.state[0].toUpperCase() + r.state.slice(1);
+  $('st-since').textContent = r.since ? ago(new Date(r.since)) : '–';
+  $('st-restarts').textContent = r.restarts;
+  const err = $('st-error');
+  err.hidden = !r.last_error || r.state === 'recording';
+  err.textContent = r.last_error || '';
+  const btn = $('btn-record');
+  btn.textContent = r.enabled ? 'Stop recording' : 'Start recording';
+  btn.className = r.enabled ? 'danger' : 'primary';
+
+  const s = status.storage;
+  if (s) {
+    $('sg-count').textContent = s.count;
+    $('sg-used').textContent = fmtBytes(s.used_bytes);
+    $('sg-free').textContent = s.disk_free_bytes != null
+      ? fmtBytes(s.disk_free_bytes) + ' of ' + fmtBytes(s.disk_total_bytes) : '–';
+    if (s.disk_total_bytes) {
+      const usedPct = 100 * (1 - s.disk_free_bytes / s.disk_total_bytes);
+      $('sg-bar').style.width = usedPct.toFixed(1) + '%';
+    }
+  }
+  const ret = status.retention, parts = [];
+  parts.push(ret.days ? ret.days + ' days' : 'forever');
+  if (ret.max_storage_gb) parts.push('max ' + ret.max_storage_gb + ' GB');
+  $('sg-ret').textContent = parts.join(', ');
+}
+
+// ---- recordings ----
+async function refreshRecordings() {
+  try { recordings = await api('api/recordings'); } catch (e) { return; }
+  recordings.forEach(r => r.startDate = new Date(r.start));
+  const days = [...new Set(recordings.map(r => dayKey(r.startDate)))];
+  const sel = $('day'), prev = sel.value;
+  sel.innerHTML = days.map(d => `<option>${d}</option>`).join('') || '<option>No recordings</option>';
+  if (days.includes(prev)) sel.value = prev;
+  renderRecordings();
+}
+
+function renderRecordings() {
+  const day = $('day').value;
+  const list = recordings.filter(r => dayKey(r.startDate) === day);
+  const box = $('recs');
+  if (!list.length) { box.innerHTML = '<div class="empty">No recordings yet.</div>'; return; }
+  const newest = recordings[0] && recordings[0].name;
+  const writing = status && status.recorder.state === 'recording';
+  box.innerHTML = '';
+  for (const r of list) {
+    const row = document.createElement('div');
+    row.className = 'rec' + (playing === r.name ? ' active' : '');
+    const inProgress = writing && r.name === newest;
+    row.innerHTML = `
+      <span class="t">${fmtTime(r.startDate)} ${inProgress ? '<span class="live-tag">● REC</span>' : ''}</span>
+      <span class="s">${fmtBytes(r.size)}</span>
+      <button class="small" data-a="play">▶</button>
+      <a class="btn small" href="recordings/${encodeURIComponent(r.name)}?download=1" title="Download">⇩</a>
+      <button class="small" data-a="del" title="Delete" ${inProgress ? 'disabled' : ''}>✕</button>`;
+    row.querySelector('[data-a=play]').onclick = () => play(r);
+    row.querySelector('[data-a=del]').onclick = () => del(r);
+    box.appendChild(row);
+  }
+}
+
+function play(r) {
+  playing = r.name;
+  setLive(false);
+  const v = $('player');
+  v.hidden = false; $('live').hidden = true;
+  v.src = 'recordings/' + encodeURIComponent(r.name);
+  v.play().catch(() => {});
+  $('overlay').textContent = 'PLAYBACK · ' + r.startDate.toLocaleString();
+  $('btn-back').hidden = false; $('btn-live').hidden = true;
+  renderRecordings();
+}
+
+function backToLive() {
+  playing = null;
+  const v = $('player'); v.pause(); v.removeAttribute('src'); v.load(); v.hidden = true;
+  $('btn-back').hidden = true; $('btn-live').hidden = false;
+  setLive(true);
+  renderRecordings();
+}
+
+async function del(r) {
+  if (!confirm('Delete recording from ' + r.startDate.toLocaleString() + '?')) return;
+  try { await api('api/recordings/' + encodeURIComponent(r.name), {method: 'DELETE'}); }
+  catch (e) { alert('Delete failed: ' + e.message); }
+  if (playing === r.name) backToLive();
+  refreshRecordings(); refreshStatus();
+}
+
+// ---- live view ----
+function setLive(on) {
+  liveOn = on;
+  const img = $('live'), msg = $('viewer-msg');
+  if (on) {
+    img.hidden = false; msg.hidden = true;
+    img.src = 'live.mjpeg?t=' + Date.now();
+    $('overlay').textContent = 'LIVE';
+  } else {
+    img.removeAttribute('src');  // closes the stream so the server can stop transcoding
+    if (!playing) { img.hidden = true; msg.hidden = false; msg.textContent = 'Live view paused'; $('overlay').textContent = 'PAUSED'; }
+  }
+  $('btn-live').textContent = on ? 'Pause live view' : 'Resume live view';
+}
+
+$('live').onerror = () => { if (liveOn) setTimeout(() => liveOn && setLive(true), 3000); };
+$('btn-live').onclick = () => setLive(!liveOn);
+$('btn-back').onclick = backToLive;
+$('btn-full').onclick = () => {
+  const el = $('viewer');
+  document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.();
+};
+$('btn-record').onclick = async () => {
+  const on = status && status.recorder.enabled;
+  if (on && !confirm('Stop recording?')) return;
+  await api(on ? 'api/record/stop' : 'api/record/start', {method: 'POST'}).catch(e => alert(e.message));
+  refreshStatus();
+};
+$('btn-refresh').onclick = refreshRecordings;
+$('day').onchange = renderRecordings;
+// Stop streaming while the tab is hidden to save bandwidth.
+document.addEventListener('visibilitychange', () => {
+  if (playing) return;
+  if (document.hidden) $('live').removeAttribute('src');
+  else if (liveOn) setLive(true);
+});
+
+setInterval(() => { $('clock').textContent = new Date().toLocaleString(); }, 1000);
+setInterval(refreshStatus, 2000);
+setInterval(refreshRecordings, 30000);
+refreshStatus().then(refreshRecordings);
+setLive(true);
+</script>
+</body>
+</html>
