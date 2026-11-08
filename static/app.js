@@ -1449,20 +1449,27 @@ async function loadRecordings() {
   if (rec.todTo) q.set('tod_to', rec.todTo);
   if (rec.q) q.set('q', rec.q);
   $('rec-count').textContent = 'Loading…';
-  try { rec.items = await api('api/recordings?' + q); } catch (e) { rec.items = []; toast(e.message, true); }
+  rec.smart = '';
+  try {
+    const r = await fetch('api/recordings?' + q);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    rec.items = await r.json();
+    rec.smart = r.headers.get('x-smart-search') || '';
+  } catch (e) { rec.items = []; toast(e.message, true); }
   renderRecordings();
 }
 
 function renderRecordings() {
   const box = $('rec-cards'), items = rec.items;
   const ev = items.filter(i => i.kind === 'event').length;
-  $('rec-count').textContent = items.length ? `${ev} alert${ev === 1 ? '' : 's'} · recordings are on the Timeline tab` : '';
+  $('rec-count').textContent = (items.length ? `${ev} alert${ev === 1 ? '' : 's'}` : '')
+    + (rec.q && rec.smart === 'on' ? (items.length ? ' · smart search, best matches first' : '') : rec.q && rec.smart.startsWith('unavailable') ? ` · smart search ${rec.smart}` : items.length ? ' · recordings are on the Timeline tab' : '');
   if (!items.length) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">${rec.q ? `No alerts match “${esc(rec.q)}” in this date range. Try a wider date range, fewer words, or another colour (cameras often see white as silver/grey).` : 'No alerts for these filters. Continuous recordings are on the Timeline tab.'}</div>`; return; }
   box.innerHTML = '';
   let day = '';
   for (const it of items) {
     const d = fmtDay(it.start);
-    if (d !== day) { day = d; box.insertAdjacentHTML('beforeend', `<div class="dayhead">${esc(d)}</div>`); }
+    if (d !== day && it.score == null) { day = d; box.insertAdjacentHTML('beforeend', `<div class="dayhead">${esc(d)}</div>`); }
     const card = document.createElement('div');
     card.className = 'rc';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
@@ -1472,7 +1479,7 @@ function renderRecordings() {
         <div class="tags">${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
-        <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
+        <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${it.score != null ? fmtDate(it.start) : fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
     card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && it.event.desc ? '\n' + it.event.desc : ''}`;
     card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
@@ -2809,7 +2816,7 @@ function renderDisplay(body) {
 // ---------- AI ----------
 const PROVIDERS = [
   ['none', 'Off', 'No object recognition (motion detection still works).'],
-  ['builtin', 'Built-in (this computer)', 'Free and private. Runs a YOLOX model on this computer\'s CPU. The model (4–36 MB) downloads automatically the first time.'],
+  ['builtin', 'Built-in (this computer)', 'Free and private. Runs a YOLOX model on this computer\'s CPU. The model (4 MB for the fastest, up to 220 MB for the most accurate) downloads automatically the first time.'],
   ['deepstack', 'AI server on your network', 'CodeProject.AI Server or DeepStack on this or another computer — can use that computer\'s GPU. Free.'],
   ['ollama', 'Ollama (local vision model)', 'A vision model such as qwen2.5vl or llava running in Ollama on your network. Free, slower.'],
   ['gemini', 'Google Gemini (cloud)', 'Free tier with an API key from aistudio.google.com. Pictures are sent to Google.'],
@@ -2824,7 +2831,19 @@ function renderAi(body) {
       <label class="p-builtin" for="ai-model">Model</label><div class="p-builtin"><select id="ai-model">
         <option value="yolox_nano" ${a.builtin_model === 'yolox_nano' ? 'selected' : ''}>Nano — fastest (≈30 ms), good for small PCs</option>
         <option value="yolox_tiny" ${a.builtin_model === 'yolox_tiny' ? 'selected' : ''}>Tiny — balanced (≈90 ms), recommended</option>
-        <option value="yolox_s" ${a.builtin_model === 'yolox_s' ? 'selected' : ''}>Small — most accurate (≈300 ms)</option></select></div>
+        <option value="yolox_s" ${a.builtin_model === 'yolox_s' ? 'selected' : ''}>Small — more accurate (≈350 ms)</option>
+        <option value="yolox_m" ${a.builtin_model === 'yolox_m' ? 'selected' : ''}>Medium — for bigger PCs (≈0.9 s, 100 MB)</option>
+        <option value="yolox_l" ${a.builtin_model === 'yolox_l' ? 'selected' : ''}>Large — most accurate, powerful PCs only (≈2 s, 220 MB)</option></select>
+        <div class="hint">Times are per picture on a 4-core PC; the AI only runs while there is motion.</div></div>
+      <label class="p-builtin" for="ai-verify">Double-check alerts</label><div class="p-builtin"><select id="ai-verify">
+        <option value="">Off</option>
+        ${[['yolox_s', 'Small model (≈350 ms)'], ['yolox_m', 'Medium model (≈0.9 s) — recommended'], ['yolox_l', 'Large model (≈2 s)']].map(([k, t]) => `<option value="${k}" ${a.verify_model === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <div class="hint">When the model above thinks it sees something that would raise an alert, a bigger model looks at the same picture and has the final say: fewer false alerts and fewer mix-ups (a cat called a person). It only runs on those few pictures, so it suits normal PCs too.</div></div>
+      <span class="p-builtin"></span><div class="p-builtin"><label class="check"><input type="checkbox" id="ai-night" ${a.night_boost !== false ? 'checked' : ''}> Night boost</label>
+        <div class="hint">Dark and infrared (black &amp; white) pictures are brightened and their contrast stretched before the AI looks at them, so people and animals are recognized better at night.</div></div>
+      <span class="p-any"></span><div class="p-any"><label class="check"><input type="checkbox" id="ai-smart" ${a.smart_search ? 'checked' : ''}> Smart search</label>
+        <div class="hint">Lets you search alerts by description — “kid wearing a red backpack”, “white van”, “man with a ladder”. Each alert picture (and each person, vehicle or animal in it) is described by a CLIP model on this computer, in the background (≈0.1 s per alert, 600 MB download once, loaded only while in use). Works with any AI choice above.</div>
+        <div class="hint" id="ai-smart-st"></div></div>
       <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
       <label class="p-key" for="ai-key">API key</label><div class="p-key"><input type="password" id="ai-key" autocomplete="new-password" placeholder="${a.has_key ? 'Saved – leave empty to keep' : ''}"><div class="hint" id="ai-key-hint"></div></div>
       <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><div class="row"><input type="text" id="ai-mname" value="${esc(a.model)}" list="ai-models" style="flex:1"><button type="button" id="ai-list">List models</button></div>
@@ -2856,8 +2875,12 @@ function renderAi(body) {
   };
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
-    api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20});
+    api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
+    verify_model: val('ai-verify'), night_boost: chk('ai-night'), smart_search: chk('ai-smart')});
   const showStatus = () => {
+    const ss = status && status.smart_search;
+    if (ss && $('ai-smart-st')) $('ai-smart-st').innerHTML = !a.smart_search ? '' : ss.downloading ? `Downloading the smart-search model… ${Math.round(ss.download_percent || 0)}%`
+      : ss.error ? `<span class="err">${esc(ss.error)}</span>` : `<span class="ok">On</span> — ${ss.indexed} alert${ss.indexed === 1 ? '' : 's'} described so far (newest first, last 60 days).`;
     const s = status && status.ai; if (!s) return;
     $('ai-status').innerHTML = s.provider === 'none' ? '' : `Current: <b>${esc(s.provider)}</b> — ${s.downloading ? `downloading model ${Math.round(s.download_percent || 0)}%` : s.ready ? '<span class="ok">ready</span>' : 'loading'}` +
       ` · ${s.requests} checks${s.failures ? `, ${s.failures} failed` : ''}${s.last_ms != null ? ` · last took ${s.last_ms} ms` : ''}${s.error ? `<br><span class="err">${esc(s.error)}</span>` : ''}`;

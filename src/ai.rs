@@ -195,6 +195,8 @@ pub struct Ai {
     models_dir: PathBuf,
     client: reqwest::Client,
     model: Mutex<Option<Arc<Yolox>>>,
+    /// Bigger model that double-checks possible alerts (optional).
+    verifier: Mutex<Option<Arc<Yolox>>>,
     status: Mutex<AiStatus>,
     recent: Mutex<VecDeque<Instant>>,
     /// Gemini model picked automatically (when none is set).
@@ -229,6 +231,7 @@ impl Ai {
             models_dir: data_dir.join("models"),
             client,
             model: Mutex::new(None),
+            verifier: Mutex::new(None),
             status: Mutex::new(status),
             recent: Mutex::new(VecDeque::new()),
             gemini_auto: Mutex::new(None),
@@ -257,12 +260,19 @@ impl Ai {
             .join(format!("{}.onnx", self.cfg.builtin_model))
     }
 
+    /// The model that double-checks possible alerts, if one is chosen and
+    /// it differs from the main model.
+    fn verify_name(&self) -> Option<String> {
+        let v = self.cfg.verify_model.trim();
+        (!v.is_empty() && v != self.cfg.builtin_model).then(|| v.to_string())
+    }
+
     /// Load (downloading first if needed) the built-in model in the background.
     fn prepare_builtin(self: Arc<Self>) {
         tokio::spawn(async move {
             let path = self.model_path();
             if !path.exists()
-                && let Err(e) = self.download_model(&path).await
+                && let Err(e) = self.download_model(&self.cfg.builtin_model, &path).await
             {
                 warn!("AI: model download failed: {e:#}");
                 let mut s = self.status.lock().unwrap();
@@ -278,9 +288,12 @@ impl Ai {
                         self.cfg.builtin_model, m.size, m.size
                     );
                     *self.model.lock().unwrap() = Some(Arc::new(m));
-                    let mut s = self.status.lock().unwrap();
-                    s.ready = true;
-                    s.error = None;
+                    {
+                        let mut s = self.status.lock().unwrap();
+                        s.ready = true;
+                        s.error = None;
+                    }
+                    self.clone().prepare_verifier().await;
                 }
                 Ok(Err(e)) => {
                     warn!("AI: cannot load model {}: {e:#}", path.display());
@@ -292,10 +305,38 @@ impl Ai {
         });
     }
 
-    async fn download_model(&self, path: &Path) -> Result<()> {
+    /// Load the double-checking model (after the main one is ready).
+    async fn prepare_verifier(self: Arc<Self>) {
+        let Some(name) = self.verify_name() else {
+            return;
+        };
+        let path = self.models_dir.join(format!("{name}.onnx"));
+        if !path.exists()
+            && let Err(e) = self.download_model(&name, &path).await
+        {
+            warn!("AI: download of the double-checking model failed: {e:#}");
+            let mut s = self.status.lock().unwrap();
+            s.downloading = false;
+            s.error = Some(format!("double-checking model download failed: {e:#}"));
+            return;
+        }
+        let p = path.clone();
+        match tokio::task::spawn_blocking(move || Yolox::load(&p)).await {
+            Ok(Ok(m)) => {
+                info!("AI: {name} double-checks possible alerts");
+                *self.verifier.lock().unwrap() = Some(Arc::new(m));
+            }
+            Ok(Err(e)) => {
+                warn!("AI: cannot load {}: {e:#}", path.display());
+                let _ = std::fs::remove_file(&path);
+            }
+            Err(e) => warn!("AI: {e}"),
+        }
+    }
+
+    async fn download_model(&self, name: &str, path: &Path) -> Result<()> {
         let url = format!(
-            "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/{}.onnx",
-            self.cfg.builtin_model
+            "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/{name}.onnx"
         );
         info!("AI: downloading {url}");
         {
@@ -401,11 +442,32 @@ impl Ai {
                 _ => "AI model is loading".into(),
             }));
         };
-        let f = frame.clone();
-        tokio::task::spawn_blocking(move || model.detect(&f, 0.25))
+        // Night boost: dark and infrared pictures are brightened first.
+        let f = if self.cfg.night_boost {
+            crate::imgutil::low_light_boost(frame).unwrap_or_else(|| frame.clone())
+        } else {
+            frame.clone()
+        };
+        let f2 = f.clone();
+        let dets = tokio::task::spawn_blocking(move || model.detect(&f2, 0.25))
             .await
             .map_err(|e| AiError::Failed(e.into()))?
-            .map_err(AiError::Failed)
+            .map_err(AiError::Failed)?;
+        // Something that could become an alert: the bigger model takes a
+        // second look and has the final say (fewer false alerts, and the
+        // right label when the fast model mixes up e.g. a cat and a person).
+        let verifier = self.verifier.lock().unwrap().clone();
+        if let Some(v) = verifier
+            && dets
+                .iter()
+                .any(|d| d.score >= 0.3 && SECURITY_OBJECTS.contains(&d.label.as_str()))
+        {
+            return tokio::task::spawn_blocking(move || v.detect(&f, 0.25))
+                .await
+                .map_err(|e| AiError::Failed(e.into()))?
+                .map_err(AiError::Failed);
+        }
+        Ok(dets)
     }
 
     fn jpeg_b64(frame: &Frame) -> Result<String> {
@@ -1092,5 +1154,74 @@ mod model_tests {
         let people = d.iter().filter(|x| x.label == "person").count();
         eprintln!("{d:#?}");
         assert!(people >= 2, "expected at least 2 people, got {d:?}");
+    }
+}
+
+#[cfg(test)]
+mod night_tests {
+    use super::*;
+
+    /// Needs model files: NVR_TEST_AI_DIR with yolox_tiny.onnx and zidane.jpg.
+    #[test]
+    fn night_boost_helps_in_the_dark() {
+        let Ok(dir) = std::env::var("NVR_TEST_AI_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let m = Yolox::load(&dir.join("yolox_tiny.onnx")).unwrap();
+        let img =
+            crate::imgutil::decode_jpeg(&std::fs::read(dir.join("zidane.jpg")).unwrap()).unwrap();
+        for k in [0.25f32, 0.12, 0.06] {
+            // Night: dark and nearly grey (infrared), with sensor noise.
+            let mut seed = 7u32;
+            let rgb: Vec<u8> = img
+                .rgb
+                .chunks_exact(3)
+                .flat_map(|p| {
+                    let y = 0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32;
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) % 7) as f32 - 3.0;
+                    let v = (y * k + noise).clamp(0.0, 255.0) as u8;
+                    [v, v, v]
+                })
+                .collect();
+            let dark = Frame {
+                width: img.width,
+                height: img.height,
+                rgb: Arc::new(rgb),
+            };
+            let best = |f: &Frame| {
+                m.detect(f, 0.2)
+                    .unwrap()
+                    .iter()
+                    .filter(|d| d.label == "person")
+                    .map(|d| d.score)
+                    .fold(0f32, f32::max)
+            };
+            let boosted = crate::imgutil::low_light_boost(&dark).expect("dark picture is boosted");
+            let n = |f: &Frame| {
+                m.detect(f, 0.3)
+                    .unwrap()
+                    .iter()
+                    .filter(|d| d.label == "person")
+                    .count()
+            };
+            println!(
+                "brightness x{k}: person {:.2} → {:.2} with night boost; people found {} → {}",
+                best(&dark),
+                best(&boosted),
+                n(&dark),
+                n(&boosted)
+            );
+        }
+        let bright = Frame {
+            width: 64,
+            height: 36,
+            rgb: Arc::new((0..64 * 36 * 3).map(|i| (60 + i % 190) as u8).collect()),
+        };
+        assert!(
+            crate::imgutil::low_light_boost(&bright).is_none(),
+            "daylight picture left alone"
+        );
     }
 }

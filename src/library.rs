@@ -50,6 +50,9 @@ pub struct Item {
     pub download: Option<String>,
     /// An alert whose full-quality clip is still being recorded.
     pub pending: bool,
+    /// Smart search: how well the alert matches the words (0..1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f32>,
 }
 
 pub struct Query {
@@ -62,6 +65,8 @@ pub struct Query {
     pub types: HashSet<String>,
     /// Words searched for (see `parse_text`). Empty = no text search.
     pub text: Vec<Term>,
+    /// Smart search: the index and the search words as a CLIP vector.
+    pub smart: Option<(Arc<crate::smart::SmartIndex>, crate::smart::Query)>,
     pub limit: usize,
 }
 
@@ -333,16 +338,32 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                     }),
                     download: Some(format!("{}?download=1", rec_url(id, &r.name))),
                     pending: false,
+                    score: None,
                 });
             }
         }
+        let scores = q
+            .smart
+            .as_ref()
+            .map(|(ix, v)| ix.scores(&rt.events, v))
+            .unwrap_or_default();
         for e in rt.events.between(q.from, q.to) {
-            if !in_tod(e.start, q.tod)
-                || !event_matches(&e, &q.types)
-                || (!q.text.is_empty() && !text_matches(&e, &rt.cfg.name, &q.text))
-            {
+            if !in_tod(e.start, q.tod) || !event_matches(&e, &q.types) {
                 continue;
             }
+            let keyword = !q.text.is_empty() && text_matches(&e, &rt.cfg.name, &q.text);
+            let score = scores.get(&e.id).copied();
+            // Smart search: keyword matches, plus pictures that look like the
+            // description (thresholded below, once all scores are known).
+            if !q.text.is_empty() && !keyword && score.is_none() {
+                continue;
+            }
+            let score = q.smart.as_ref().map(|_| match (score, keyword) {
+                (Some(s), true) => s.max(0.0) + KEYWORD_BONUS,
+                (Some(s), false) => s,
+                (None, true) => KEYWORD_BONUS,
+                (None, false) => f32::MIN,
+            });
             let play = play_at(&rt, &recs, Some(&e), e.start);
             let pending = play.is_none()
                 && e.clip.is_none()
@@ -378,14 +399,35 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                     .map(|c| format!("{}?download=1", event_file_url(id, c))),
                 play,
                 pending,
+                score,
                 event: Some(e),
             });
         }
     }
-    items.sort_by(|a, b| b.start.cmp(&a.start));
+    if q.smart.is_some() {
+        // Keep the alerts close to the best match, best first.
+        let best = items
+            .iter()
+            .filter_map(|i| i.score)
+            .fold(f32::MIN, f32::max);
+        let cut = (best - SMART_SPREAD).max(SMART_MIN);
+        items.retain(|i| i.score.is_some_and(|s| s >= cut));
+        items.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    } else {
+        items.sort_by(|a, b| b.start.cmp(&a.start));
+    }
     items.truncate(q.limit);
     items
 }
+
+/// Smart search: a keyword match (e.g. the AI's own "dog" label) counts
+/// this much extra.
+const KEYWORD_BONUS: f32 = 0.05;
+/// Smart search: results within this of the best match are shown...
+const SMART_SPREAD: f32 = 0.06;
+/// ...and only if the words fit better than "nothing of interest" does
+/// (true matches are typically +0.03 to +0.08).
+const SMART_MIN: f32 = 0.015;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Segment {

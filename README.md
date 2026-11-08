@@ -55,10 +55,19 @@ viewing, finding footage, and managing everything, all from the browser.
 - AI checks run **only while there is motion**: no motion, nothing is sent to the AI.
 - Object recognition, with a choice of AI:
   - **Built-in**: a YOLOX model runs on this computer's CPU. It's free and private, and the model downloads automatically.
+    Five sizes, from Nano (≈30 ms per picture) to Large (≈2 s, for powerful PCs).
   - **AI server on your network**: CodeProject.AI Server or DeepStack, which can use another computer's GPU.
   - **Ollama**: a local vision model such as qwen2.5vl or llava.
   - **Google Gemini**: has a free tier; needs an API key.
   - **Any OpenAI-compatible API**: OpenAI, OpenRouter, Groq, LM Studio, …
+- **Double-check alerts** (built-in AI): when the fast model thinks it sees something worth an alert, a
+  bigger model looks at the same picture and has the final say — fewer false alerts and mix-ups, at little
+  cost because it only runs on those pictures.
+- **Night boost**: dark and infrared pictures are brightened and contrast-stretched before recognition.
+- **Smart search** (optional): a CLIP model on this computer describes each alert picture and each person,
+  vehicle or animal in it, so you can search by description: "kid wearing a red backpack", "white van",
+  "man with a ladder". About 0.1 s per alert in the background, a one-time 600 MB download, and the model
+  is only loaded while in use.
 - Choose which objects alert (person, car, dog, …), the minimum confidence, and whether *any motion*
   or *only recognized objects* make an alert.
 - Each alert gets a **thumbnail of the whole picture** that zooms in on the recognized object.

@@ -38,24 +38,81 @@ impl Frame {
     }
 }
 
-/// Make a picture smaller for slow connections: decode, scale down to at
-/// most `max_w` pixels wide and encode again at `quality`.
-pub fn shrink_jpeg(jpg: &[u8], max_w: u32, quality: u8) -> Result<Vec<u8>> {
+/// Night boost: for a dark picture (night, infrared), stretch the
+/// brightness range to the full scale and lift the shadows, so object
+/// recognition sees more. Returns None when the picture isn't dark.
+pub fn low_light_boost(f: &Frame) -> Option<Frame> {
+    let mut hist = [0u32; 256];
+    let mut n = 0u32;
+    for p in f.rgb.chunks_exact(3).step_by(5) {
+        let y = (0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32) as usize;
+        hist[y.min(255)] += 1;
+        n += 1;
+    }
+    if n == 0 {
+        return None;
+    }
+    let mean = hist
+        .iter()
+        .enumerate()
+        .map(|(v, c)| v as f64 * *c as f64)
+        .sum::<f64>()
+        / n as f64;
+    if mean >= 70.0 {
+        return None;
+    }
+    let pct = |p: f64| {
+        let target = (n as f64 * p) as u32;
+        let mut acc = 0;
+        for (v, c) in hist.iter().enumerate() {
+            acc += c;
+            if acc >= target {
+                return v as f32;
+            }
+        }
+        255.0
+    };
+    let (lo, hi) = (pct(0.01), pct(0.995).max(pct(0.01) + 24.0));
+    // Dark but already using the full range (e.g. dark clothes in daylight): leave it.
+    if mean >= 45.0 && hi >= 235.0 {
+        return None;
+    }
+    // Brightness curve: stretch, then a gamma that lifts shadows more when darker.
+    let gamma = if mean < 35.0 { 0.6 } else { 0.75 };
+    let mut lut = [0u8; 256];
+    for (v, o) in lut.iter_mut().enumerate() {
+        let x = ((v as f32 - lo) / (hi - lo)).clamp(0.0, 1.0);
+        *o = (x.powf(gamma) * 255.0).round() as u8;
+    }
+    let rgb: Vec<u8> = f.rgb.iter().map(|&v| lut[v as usize]).collect();
+    Some(Frame {
+        width: f.width,
+        height: f.height,
+        rgb: Arc::new(rgb),
+    })
+}
+
+/// Decode a JPEG picture into a frame.
+pub fn decode_jpeg(jpg: &[u8]) -> Result<Frame> {
     let mut d = jpeg_decoder::Decoder::new(jpg);
     let pixels = d.decode()?;
     let info = d.info().ok_or_else(|| anyhow::anyhow!("no picture info"))?;
-    let (w, h) = (info.width as u32, info.height as u32);
     let rgb = match info.pixel_format {
         jpeg_decoder::PixelFormat::RGB24 => pixels,
         jpeg_decoder::PixelFormat::L8 => pixels.iter().flat_map(|&v| [v, v, v]).collect(),
         f => anyhow::bail!("unsupported picture format {f:?}"),
     };
-    let f = Frame {
-        width: w,
-        height: h,
+    Ok(Frame {
+        width: info.width as u32,
+        height: info.height as u32,
         rgb: Arc::new(rgb),
-    };
-    f.fit(max_w.max(160)).jpeg(quality)
+    })
+}
+
+/// Make a picture smaller for slow connections: decode, scale down to at
+/// most `max_w` pixels wide and encode again at `quality`.
+pub fn shrink_jpeg(jpg: &[u8], max_w: u32, quality: u8) -> Result<Vec<u8>> {
+    decode_jpeg(jpg)?.fit(max_w.max(160)).jpeg(quality)
 }
 
 pub fn encode_jpeg(rgb: &[u8], w: u32, h: u32, quality: u8) -> Result<Vec<u8>> {

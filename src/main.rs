@@ -2,6 +2,7 @@
 
 mod ai;
 mod buffer;
+mod clip;
 mod cloud;
 mod config;
 mod detect;
@@ -19,6 +20,7 @@ mod onvif;
 mod onvif_device;
 mod recorder;
 mod relay;
+mod smart;
 mod storage;
 mod sysmon;
 mod web;
@@ -93,6 +95,7 @@ async fn main() -> Result<()> {
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
     tokio::spawn(web::prebuild_timelapse(mgr.clone()));
+    tokio::spawn(smart::run(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

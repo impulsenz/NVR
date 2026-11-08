@@ -196,6 +196,7 @@ async fn status(State(m): App) -> Response {
         "dashboard": cfg.dashboard,
         "cameras": cameras,
         "ai": m.ai.get().status(),
+        "smart_search": m.clip.status(),
         "problems": { "warnings": warnings, "errors": errors },
         "monitor": m.monitor.current(),
     }))
@@ -1103,6 +1104,28 @@ async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
         (None, Some(b)) => Some((NaiveTime::MIN, b)),
         _ => None,
     };
+    // Smart search: the words as a CLIP vector (the model loads on first use).
+    let mut smart_note = "off".to_string();
+    let smart = if m.config().ai.smart_search && !q.q.trim().is_empty() {
+        let words = async {
+            anyhow::Ok(crate::smart::Query {
+                text: m.clip.embed_text(q.q.trim()).await?,
+                neutral: m.clip.neutral().await?,
+            })
+        };
+        match words.await {
+            Ok(v) => {
+                smart_note = "on".into();
+                Some((m.smart.clone(), v))
+            }
+            Err(e) => {
+                smart_note = format!("unavailable: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let lq = LibQuery {
         cameras: split_list(&q.cameras),
         from,
@@ -1110,12 +1133,24 @@ async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
         tod,
         types: split_list(&q.types).into_iter().collect(),
         text: library::parse_text(&q.q),
+        smart,
         limit: q.limit.unwrap_or(500).min(5000),
     };
     let items = tokio::task::spawn_blocking(move || library::search(&m, &lq))
         .await
         .unwrap_or_default();
-    Json(items).into_response()
+    let mut res = Json(items).into_response();
+    if let Ok(v) = HeaderValue::from_str(
+        &smart_note
+            .replace(['\r', '\n'], " ")
+            .chars()
+            .filter(|c| c.is_ascii())
+            .take(300)
+            .collect::<String>(),
+    ) {
+        res.headers_mut().insert("x-smart-search", v);
+    }
+    res
 }
 
 async fn timeline(State(m): App, Query(q): Query<SearchQuery>) -> Response {

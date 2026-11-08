@@ -27,7 +27,7 @@ pub const ENCODERS: &[&str] = &[
     "h264_mf",
 ];
 pub const AI_PROVIDERS: &[&str] = &["none", "builtin", "deepstack", "ollama", "gemini", "openai"];
-pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s"];
+pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s", "yolox_m", "yolox_l"];
 /// Motion mask grid size.
 pub const MASK_W: usize = 32;
 pub const MASK_H: usize = 18;
@@ -244,6 +244,14 @@ pub struct AiConfig {
     /// Upper limit on requests per minute across all cameras (cloud free tiers).
     pub max_per_minute: u32,
     pub timeout_seconds: u64,
+    /// Built-in AI only: a bigger model that double-checks what the main
+    /// model found before an alert is raised ("" = off).
+    pub verify_model: String,
+    /// Brighten dark and infrared pictures before recognition.
+    pub night_boost: bool,
+    /// Smart search: describe alert pictures with CLIP so they can be found
+    /// with words ("kid with a red backpack").
+    pub smart_search: bool,
 }
 
 impl Default for AiConfig {
@@ -256,6 +264,9 @@ impl Default for AiConfig {
             model: String::new(),
             max_per_minute: 0,
             timeout_seconds: 20,
+            verify_model: String::new(),
+            night_boost: true,
+            smart_search: false,
         }
     }
 }
@@ -977,6 +988,12 @@ impl Config {
         let ai = &self.ai;
         if !AI_PROVIDERS.contains(&ai.provider.as_str()) {
             bail!("unknown AI provider \"{}\"", ai.provider);
+        }
+        if !ai.verify_model.is_empty() && !BUILTIN_MODELS.contains(&ai.verify_model.as_str()) {
+            bail!(
+                "unknown AI model \"{}\" for double-checking",
+                ai.verify_model
+            );
         }
         if !BUILTIN_MODELS.contains(&ai.builtin_model.as_str()) {
             bail!("unknown built-in AI model \"{}\"", ai.builtin_model);

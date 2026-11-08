@@ -311,6 +311,9 @@ pub struct Manager {
     /// The address actually bound at startup (listen changes need a restart).
     pub bound_listen: String,
     pub ai: Arc<AiHandle>,
+    /// Smart search (CLIP) model and index.
+    pub clip: Arc<crate::clip::Clip>,
+    pub smart: Arc<crate::smart::SmartIndex>,
     pub monitor: Arc<Monitor>,
     usage: Mutex<UsageReport>,
     /// Temporary stream previews for the camera editor: token → (url, transport).
@@ -323,6 +326,7 @@ impl Manager {
     pub fn new(cfg_path: PathBuf, data_dir: PathBuf, config: Config) -> Arc<Self> {
         let _ = std::fs::create_dir_all(data_dir.join("tmp"));
         let ai = Arc::new(AiHandle::new(config.ai.clone(), &data_dir));
+        let data_dir_for_clip = data_dir.clone();
         let m = Arc::new(Self {
             cfg_path,
             bound_listen: config.server.listen.clone(),
@@ -334,6 +338,8 @@ impl Manager {
             edit: tokio::sync::Mutex::new(()),
             started: Instant::now(),
             ai,
+            clip: crate::clip::Clip::new(&data_dir_for_clip),
+            smart: Arc::new(crate::smart::SmartIndex::default()),
             usage: Mutex::new(UsageReport::default()),
             previews: Mutex::new(HashMap::new()),
             onvif: Mutex::new(HashMap::new()),
