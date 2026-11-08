@@ -376,12 +376,16 @@ impl Recorder {
     async fn read_errors(self: Arc<Self>, stderr: tokio::process::ChildStderr) {
         let mut lines = BufReader::new(stderr).lines();
         let mut first = true;
-        while let Ok(Some(line)) = lines.next_line().await {
-            // ffmpeg echoes the input URL in errors; never leak the password.
-            let line = redact(&ffmpeg::clean_line(&line), &self.cam.url);
-            if line.is_empty() {
-                continue;
+        let mut filter = ffmpeg::StderrFilter::default();
+        while let Ok(Some(raw)) = lines.next_line().await {
+            if let Some(s) = filter.summary(false) {
+                info!("[{}] recorder: {s}", self.cam.name);
             }
+            let Some(line) = filter.filter(&raw) else {
+                continue;
+            };
+            // ffmpeg echoes the input URL in errors; never leak the password.
+            let line = redact(&line, &self.cam.url);
             warn!("[{}] ffmpeg: {line}", self.cam.name);
             // The first line of a failing start names the cause; while recording,
             // the latest message is the relevant one.
@@ -390,6 +394,9 @@ impl Recorder {
                 self.update(|s| s.last_error = Some(line));
             }
             first = false;
+        }
+        if let Some(s) = filter.summary(true) {
+            info!("[{}] recorder: {s}", self.cam.name);
         }
     }
 }

@@ -186,8 +186,17 @@ impl Live {
             let name = self.cam.name.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
+                let mut filter = ffmpeg::StderrFilter::default();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    warn!("[{name}] live ffmpeg: {}", redact(line.trim(), &url));
+                    if let Some(msg) = filter.filter(&line) {
+                        warn!("[{name}] live ffmpeg: {}", redact(&msg, &url));
+                    }
+                    if let Some(s) = filter.summary(false) {
+                        info!("[{name}] live view: {s}");
+                    }
+                }
+                if let Some(s) = filter.summary(true) {
+                    info!("[{name}] live view: {s}");
                 }
             });
         }

@@ -14,7 +14,10 @@ use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_target(false).init();
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_ansi(use_color())
+        .init();
 
     let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "nvr.toml".into()));
     let (cfg, needs_save) = config::Config::load_or_create(&path)?;
@@ -59,6 +62,19 @@ async fn main() -> Result<()> {
     }
     mgr.shutdown().await;
     Ok(())
+}
+
+/// Colored log output only on a terminal that can show it. The Windows console
+/// needs ANSI support switched on first, otherwise it prints codes like `←[2m`.
+fn use_color() -> bool {
+    use std::io::IsTerminal;
+    if std::env::var_os("NO_COLOR").is_some() || !std::io::stdout().is_terminal() {
+        return false;
+    }
+    #[cfg(windows)]
+    return nu_ansi_term::enable_ansi_support().is_ok();
+    #[cfg(not(windows))]
+    true
 }
 
 async fn shutdown_signal() {

@@ -451,6 +451,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "libc",
+ "nu-ansi-term",
  "serde",
  "serde_json",
  "tokio",

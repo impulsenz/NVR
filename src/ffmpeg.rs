@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use serde::Serialize;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 
 /// Input options for a camera URL.
@@ -120,16 +120,122 @@ fn first_error(stderr: &[u8]) -> String {
         .unwrap_or_default()
 }
 
+/// Split ffmpeg's `[hevc @ 0x55d1…] message` (Linux/macOS) or
+/// `[hevc @ 000002138f33…] message` (Windows) into (context name, message).
+fn context(line: &str) -> Option<(&str, &str)> {
+    let l = line.trim();
+    let end = l.strip_prefix('[')?.find("] ")? + 1;
+    let (name, addr) = l[1..end].rsplit_once(" @ ")?;
+    let hex = addr.trim_start_matches("0x");
+    (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| (name, l[end + 2..].trim()))
+}
+
 /// Strip ffmpeg's `[h264_nvenc @ 0x55...] ` context prefix.
 pub fn clean_line(line: &str) -> String {
-    let l = line.trim();
-    if l.starts_with('[')
-        && let Some(end) = l.find("] ")
-        && l[..end].contains(" @ 0x")
-    {
-        return l[end + 2..].trim().to_string();
+    match context(line) {
+        Some((_, rest)) => rest.to_string(),
+        None => line.trim().to_string(),
     }
-    l.to_string()
+}
+
+/// Decoders whose complaints are about individual damaged/missing frames.
+const DECODERS: &[&str] = &[
+    "h264",
+    "hevc",
+    "h265",
+    "mpeg4",
+    "mjpeg",
+    "h263",
+    "aac",
+    "pcm_alaw",
+    "pcm_mulaw",
+    "adpcm_g726",
+    "adpcm_g726le",
+    "opus",
+];
+
+/// Separates useful ffmpeg messages from per-frame noise.
+///
+/// When a decoder joins a live stream mid-way, or a network packet is lost,
+/// ffmpeg prints a warning for every affected frame ("Could not find ref with
+/// POC 23", "First slice in a frame missing", "RTP: missed 3 packets"). The
+/// picture recovers at the next keyframe, so these are counted and summarized
+/// instead of flooding the log.
+pub struct StderrFilter {
+    decode_warnings: u64,
+    lost_packets: u64,
+    window: Instant,
+}
+
+impl Default for StderrFilter {
+    fn default() -> Self {
+        Self {
+            decode_warnings: 0,
+            lost_packets: 0,
+            window: Instant::now(),
+        }
+    }
+}
+
+impl StderrFilter {
+    /// Returns the message if it is worth logging, or `None` for noise (counted).
+    pub fn filter(&mut self, raw: &str) -> Option<String> {
+        let line = raw.trim();
+        if line.is_empty() {
+            return None;
+        }
+        // ffmpeg's own de-duplication of the noise below.
+        if line.starts_with("Last message repeated") {
+            return None;
+        }
+        let Some((name, msg)) = context(line) else {
+            return Some(line.to_string());
+        };
+        if let Some(rest) = msg.strip_prefix("RTP: missed ") {
+            let n: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(1);
+            self.lost_packets += n;
+            return None;
+        }
+        if DECODERS.contains(&name) {
+            self.decode_warnings += 1;
+            return None;
+        }
+        Some(msg.to_string())
+    }
+
+    /// A one-line summary of suppressed noise: at most once a minute, or
+    /// whenever `force` is set (e.g. when the process exits).
+    pub fn summary(&mut self, force: bool) -> Option<String> {
+        if self.decode_warnings + self.lost_packets == 0 {
+            self.window = Instant::now();
+            return None;
+        }
+        if !force && self.window.elapsed() < Duration::from_secs(60) {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if self.decode_warnings > 0 {
+            parts.push(format!(
+                "{} damaged/incomplete video frames",
+                self.decode_warnings
+            ));
+        }
+        if self.lost_packets > 0 {
+            parts.push(format!("{} lost network packets", self.lost_packets));
+        }
+        let msg = format!(
+            "{} in the last {}s (normal when a stream starts; if it keeps happening, check the network/Wi-Fi)",
+            parts.join(" and "),
+            self.window.elapsed().as_secs().max(1)
+        );
+        *self = Self::default();
+        Some(msg)
+    }
 }
 
 // ---------- capability detection ----------
@@ -439,5 +545,40 @@ mod tests {
             "Cannot load libcuda.so.1"
         );
         assert_eq!(clean_line("[tcp] x"), "[tcp] x");
+        assert_eq!(
+            clean_line("[hevc @ 000002138f332440] First slice in a frame missing."),
+            "First slice in a frame missing."
+        );
+    }
+
+    #[test]
+    fn filters_decoder_noise() {
+        let mut f = StderrFilter::default();
+        assert_eq!(
+            f.filter("[hevc @ 000001ae7039be00] Could not find ref with POC 23"),
+            None
+        );
+        assert_eq!(
+            f.filter("[h264 @ 0x55d1c2a0] error while decoding MB 3 4"),
+            None
+        );
+        assert_eq!(f.filter("Last message repeated 2 times"), None);
+        assert_eq!(f.filter("[rtsp @ 0x5512] RTP: missed 7 packets"), None);
+        assert_eq!(
+            f.filter("[tcp @ 0x5512] Connection to tcp://10.0.0.5:554 failed: Connection refused")
+                .as_deref(),
+            Some("Connection to tcp://10.0.0.5:554 failed: Connection refused")
+        );
+        assert_eq!(
+            f.filter("Error opening input file x.").as_deref(),
+            Some("Error opening input file x.")
+        );
+        assert!(f.summary(false).is_none()); // not a minute yet
+        let s = f.summary(true).unwrap();
+        assert!(
+            s.starts_with("2 damaged/incomplete video frames and 7 lost network packets"),
+            "{s}"
+        );
+        assert!(f.summary(true).is_none());
     }
 }
