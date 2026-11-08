@@ -18,21 +18,107 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 pub const COCO: [&str; 80] = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
-    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
-    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
-    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
-    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
-    "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
 ];
 
 /// Objects most useful for home security, offered as alert choices.
 pub const SECURITY_OBJECTS: &[&str] = &[
-    "person", "car", "truck", "bus", "motorcycle", "bicycle", "dog", "cat", "bird", "horse", "cow", "sheep",
-    "bear", "backpack", "suitcase", "handbag", "umbrella",
+    "person",
+    "car",
+    "truck",
+    "bus",
+    "motorcycle",
+    "bicycle",
+    "dog",
+    "cat",
+    "bird",
+    "horse",
+    "cow",
+    "sheep",
+    "bear",
+    "backpack",
+    "suitcase",
+    "handbag",
+    "umbrella",
 ];
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -90,7 +176,9 @@ pub struct AiHandle {
 
 impl AiHandle {
     pub fn new(cfg: AiConfig, data_dir: &Path) -> Self {
-        Self { inner: RwLock::new(Ai::new(cfg, data_dir)) }
+        Self {
+            inner: RwLock::new(Ai::new(cfg, data_dir)),
+        }
     }
     pub fn get(&self) -> Arc<Ai> {
         self.inner.read().unwrap().clone()
@@ -116,7 +204,11 @@ impl Ai {
             .timeout(Duration::from_secs(cfg.timeout_seconds.max(1)))
             .build()
             .unwrap_or_default();
-        let status = AiStatus { provider: cfg.provider.clone(), ready: cfg.provider != "builtin", ..Default::default() };
+        let status = AiStatus {
+            provider: cfg.provider.clone(),
+            ready: cfg.provider != "builtin",
+            ..Default::default()
+        };
         let ai = Arc::new(Self {
             busy: tokio::sync::Semaphore::new(if cfg.provider == "builtin" { 2 } else { 4 }),
             cfg,
@@ -141,26 +233,30 @@ impl Ai {
     }
 
     fn model_path(&self) -> PathBuf {
-        self.models_dir.join(format!("{}.onnx", self.cfg.builtin_model))
+        self.models_dir
+            .join(format!("{}.onnx", self.cfg.builtin_model))
     }
 
     /// Load (downloading first if needed) the built-in model in the background.
     fn prepare_builtin(self: Arc<Self>) {
         tokio::spawn(async move {
             let path = self.model_path();
-            if !path.exists() {
-                if let Err(e) = self.download_model(&path).await {
-                    warn!("AI: model download failed: {e:#}");
-                    let mut s = self.status.lock().unwrap();
-                    s.downloading = false;
-                    s.error = Some(format!("model download failed: {e:#}"));
-                    return;
-                }
+            if !path.exists()
+                && let Err(e) = self.download_model(&path).await
+            {
+                warn!("AI: model download failed: {e:#}");
+                let mut s = self.status.lock().unwrap();
+                s.downloading = false;
+                s.error = Some(format!("model download failed: {e:#}"));
+                return;
             }
             let p = path.clone();
             match tokio::task::spawn_blocking(move || Yolox::load(&p)).await {
                 Ok(Ok(m)) => {
-                    info!("AI: built-in model {} loaded ({}×{} input)", self.cfg.builtin_model, m.size, m.size);
+                    info!(
+                        "AI: built-in model {} loaded ({}×{} input)",
+                        self.cfg.builtin_model, m.size, m.size
+                    );
                     *self.model.lock().unwrap() = Some(Arc::new(m));
                     let mut s = self.status.lock().unwrap();
                     s.ready = true;
@@ -188,7 +284,9 @@ impl Ai {
             s.download_percent = Some(0.0);
         }
         std::fs::create_dir_all(&self.models_dir)?;
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(600)).build()?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(600))
+            .build()?;
         let mut resp = client.get(&url).send().await?.error_for_status()?;
         let total = resp.content_length();
         let tmp = path.with_extension("part");
@@ -204,7 +302,11 @@ impl Ai {
         tokio::io::AsyncWriteExt::flush(&mut file).await?;
         drop(file);
         tokio::fs::rename(&tmp, path).await?;
-        info!("AI: model saved to {} ({} MB)", path.display(), got / 1_000_000);
+        info!(
+            "AI: model saved to {} ({} MB)",
+            path.display(),
+            got / 1_000_000
+        );
         let mut s = self.status.lock().unwrap();
         s.downloading = false;
         s.download_percent = None;
@@ -216,7 +318,10 @@ impl Ai {
             return true;
         }
         let mut r = self.recent.lock().unwrap();
-        while r.front().is_some_and(|t| t.elapsed() > Duration::from_secs(60)) {
+        while r
+            .front()
+            .is_some_and(|t| t.elapsed() > Duration::from_secs(60))
+        {
             r.pop_front();
         }
         if r.len() as u32 >= self.cfg.max_per_minute {
@@ -235,7 +340,11 @@ impl Ai {
         if !self.take_rate_slot() {
             return Err(AiError::RateLimited);
         }
-        let _permit = self.busy.acquire().await.map_err(|e| AiError::Failed(e.into()))?;
+        let _permit = self
+            .busy
+            .acquire()
+            .await
+            .map_err(|e| AiError::Failed(e.into()))?;
         let t = Instant::now();
         let res = match self.cfg.provider.as_str() {
             "builtin" => self.detect_builtin(frame).await,
@@ -264,7 +373,10 @@ impl Ai {
         let Some(model) = model else {
             let s = self.status();
             return Err(AiError::NotReady(match (s.downloading, s.error) {
-                (true, _) => format!("downloading AI model ({:.0}%)", s.download_percent.unwrap_or(0.0)),
+                (true, _) => format!(
+                    "downloading AI model ({:.0}%)",
+                    s.download_percent.unwrap_or(0.0)
+                ),
                 (_, Some(e)) => e,
                 _ => "AI model is loading".into(),
             }));
@@ -283,21 +395,38 @@ impl Ai {
 
     fn base_url(&self) -> String {
         let u = self.cfg.url.trim().trim_end_matches('/').to_string();
-        if u.contains("://") { u } else { format!("http://{u}") }
+        if u.contains("://") {
+            u
+        } else {
+            format!("http://{u}")
+        }
     }
 
     async fn detect_deepstack(&self, frame: &Frame) -> Result<Vec<Detection>> {
         let jpg = frame.jpeg(90)?;
-        let part = reqwest::multipart::Part::bytes(jpg).file_name("frame.jpg").mime_str("image/jpeg")?;
-        let form = reqwest::multipart::Form::new().part("image", part).text("min_confidence", "0.3");
+        let part = reqwest::multipart::Part::bytes(jpg)
+            .file_name("frame.jpg")
+            .mime_str("image/jpeg")?;
+        let form = reqwest::multipart::Form::new()
+            .part("image", part)
+            .text("min_confidence", "0.3");
         let url = format!("{}/v1/vision/detection", self.base_url());
         let mut req = self.client.post(&url).multipart(form);
         if !self.cfg.api_key.is_empty() {
             req = req.query(&[("api_key", &self.cfg.api_key)]);
         }
-        let v: Value = req.send().await.with_context(|| format!("cannot reach {url}"))?.error_for_status()?.json().await?;
+        let v: Value = req
+            .send()
+            .await
+            .with_context(|| format!("cannot reach {url}"))?
+            .error_for_status()?
+            .json()
+            .await?;
         if v["success"] == json!(false) {
-            bail!("AI server error: {}", v["error"].as_str().unwrap_or("unknown"));
+            bail!(
+                "AI server error: {}",
+                v["error"].as_str().unwrap_or("unknown")
+            );
         }
         let (fw, fh) = (frame.width as f32, frame.height as f32);
         Ok(v["predictions"]
@@ -322,7 +451,11 @@ impl Ai {
     }
 
     async fn detect_ollama(&self, frame: &Frame) -> Result<Vec<Detection>> {
-        let model = if self.cfg.model.is_empty() { "qwen2.5vl" } else { &self.cfg.model };
+        let model = if self.cfg.model.is_empty() {
+            "qwen2.5vl"
+        } else {
+            &self.cfg.model
+        };
         let body = json!({
             "model": model,
             "stream": false,
@@ -346,7 +479,11 @@ impl Ai {
     }
 
     async fn detect_gemini(&self, frame: &Frame) -> Result<Vec<Detection>> {
-        let model = if self.cfg.model.is_empty() { "gemini-2.5-flash" } else { &self.cfg.model };
+        let model = if self.cfg.model.is_empty() {
+            "gemini-2.5-flash"
+        } else {
+            &self.cfg.model
+        };
         let body = json!({
             "contents": [{"parts": [
                 {"inline_data": {"mime_type": "image/jpeg", "data": Self::jpeg_b64(frame)?}},
@@ -354,7 +491,9 @@ impl Ai {
             ]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         });
-        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        );
         let resp = self
             .client
             .post(&url)
@@ -366,7 +505,10 @@ impl Ai {
         let status = resp.status();
         let v: Value = resp.json().await.unwrap_or(Value::Null);
         if !status.is_success() {
-            bail!("Gemini {status}: {}", v["error"]["message"].as_str().unwrap_or("request failed"));
+            bail!(
+                "Gemini {status}: {}",
+                v["error"]["message"].as_str().unwrap_or("request failed")
+            );
         }
         let text: String = v["candidates"][0]["content"]["parts"]
             .as_array()
@@ -376,7 +518,11 @@ impl Ai {
     }
 
     async fn detect_openai(&self, frame: &Frame) -> Result<Vec<Detection>> {
-        let model = if self.cfg.model.is_empty() { "gpt-4o-mini" } else { &self.cfg.model };
+        let model = if self.cfg.model.is_empty() {
+            "gpt-4o-mini"
+        } else {
+            &self.cfg.model
+        };
         let body = json!({
             "model": model,
             "temperature": 0,
@@ -390,11 +536,17 @@ impl Ai {
         if !self.cfg.api_key.is_empty() {
             req = req.bearer_auth(self.cfg.api_key.trim());
         }
-        let resp = req.send().await.with_context(|| format!("cannot reach {url}"))?;
+        let resp = req
+            .send()
+            .await
+            .with_context(|| format!("cannot reach {url}"))?;
         let status = resp.status();
         let v: Value = resp.json().await.unwrap_or(Value::Null);
         if !status.is_success() {
-            bail!("{status}: {}", v["error"]["message"].as_str().unwrap_or("request failed"));
+            bail!(
+                "{status}: {}",
+                v["error"]["message"].as_str().unwrap_or("request failed")
+            );
         }
         parse_llm(v["choices"][0]["message"]["content"].as_str().unwrap_or(""))
     }
@@ -415,7 +567,9 @@ pub fn normalize_label(l: &str) -> String {
     let l = l.trim().to_lowercase();
     let l = l.trim_end_matches('s');
     match l {
-        "people" | "pedestrian" | "man" | "woman" | "child" | "human" | "persons" => "person".into(),
+        "people" | "pedestrian" | "man" | "woman" | "child" | "human" | "persons" => {
+            "person".into()
+        }
         "vehicle" | "automobile" | "suv" | "van" | "sedan" => "car".into(),
         "motorbike" | "scooter" => "motorcycle".into(),
         "bike" => "bicycle".into(),
@@ -437,9 +591,15 @@ pub fn normalize_label(l: &str) -> String {
 
 /// Parse a vision-LLM reply (JSON, possibly wrapped in text or code fences).
 pub fn parse_llm(text: &str) -> Result<Vec<Detection>> {
-    let start = text.find(['{', '[']).ok_or_else(|| anyhow!("AI reply had no JSON: {}", text.chars().take(120).collect::<String>()))?;
+    let start = text.find(['{', '[']).ok_or_else(|| {
+        anyhow!(
+            "AI reply had no JSON: {}",
+            text.chars().take(120).collect::<String>()
+        )
+    })?;
     let end = text.rfind(['}', ']']).map(|i| i + 1).unwrap_or(text.len());
-    let v: Value = serde_json::from_str(&text[start..end]).context("AI reply was not valid JSON")?;
+    let v: Value =
+        serde_json::from_str(&text[start..end]).context("AI reply was not valid JSON")?;
     let items = match &v {
         Value::Array(a) => a.clone(),
         Value::Object(o) => o
@@ -453,16 +613,29 @@ pub fn parse_llm(text: &str) -> Result<Vec<Detection>> {
     Ok(items
         .iter()
         .filter_map(|it| {
-            let label = it["label"].as_str().or_else(|| it["name"].as_str()).or_else(|| it["object"].as_str())?;
-            let mut score = it["confidence"].as_f64().or_else(|| it["score"].as_f64()).unwrap_or(0.8) as f32;
+            let label = it["label"]
+                .as_str()
+                .or_else(|| it["name"].as_str())
+                .or_else(|| it["object"].as_str())?;
+            let mut score = it["confidence"]
+                .as_f64()
+                .or_else(|| it["score"].as_f64())
+                .unwrap_or(0.8) as f32;
             if score > 1.0 {
                 score /= 100.0;
             }
             let (mut x, mut y, mut w, mut h) = (0.0, 0.0, 1.0, 1.0);
             if let Some(b) = it["box_2d"].as_array().or_else(|| it["box"].as_array()) {
-                let b: Vec<f32> = b.iter().filter_map(|v| v.as_f64().map(|v| v as f32)).collect();
+                let b: Vec<f32> = b
+                    .iter()
+                    .filter_map(|v| v.as_f64().map(|v| v as f32))
+                    .collect();
                 if b.len() == 4 {
-                    let scale = if b.iter().any(|v| *v > 1.0) { 1000.0 } else { 1.0 };
+                    let scale = if b.iter().any(|v| *v > 1.0) {
+                        1000.0
+                    } else {
+                        1.0
+                    };
                     let (y0, x0, y1, x1) = (b[0] / scale, b[1] / scale, b[2] / scale, b[3] / scale);
                     x = x0.clamp(0.0, 1.0);
                     y = y0.clamp(0.0, 1.0);
@@ -470,7 +643,14 @@ pub fn parse_llm(text: &str) -> Result<Vec<Detection>> {
                     h = (y1 - y0).clamp(0.0, 1.0 - y);
                 }
             }
-            Some(Detection { label: normalize_label(label), score: score.clamp(0.0, 1.0), x, y, w, h })
+            Some(Detection {
+                label: normalize_label(label),
+                score: score.clamp(0.0, 1.0),
+                x,
+                y,
+                w,
+                h,
+            })
         })
         .collect())
 }
@@ -505,7 +685,10 @@ impl Yolox {
         use tract_onnx::prelude::*;
         let size = self.size;
         let r = (size as f32 / frame.width as f32).min(size as f32 / frame.height as f32);
-        let (nw, nh) = (((frame.width as f32 * r) as u32).max(1), ((frame.height as f32 * r) as u32).max(1));
+        let (nw, nh) = (
+            ((frame.width as f32 * r) as u32).max(1),
+            ((frame.height as f32 * r) as u32).max(1),
+        );
         let resized = crate::imgutil::resize_rgb(&frame.rgb, frame.width, frame.height, nw, nh);
         // Letterboxed, BGR, planar, 0..255.
         let plane = size * size;
@@ -520,9 +703,16 @@ impl Yolox {
             }
         }
         let tensor = Tensor::from_shape(&[1, 3, size, size], &input).map_err(|e| anyhow!("{e}"))?;
-        let out = self.plan.run(tvec!(tensor.into())).map_err(|e| anyhow!("{e}"))?;
-        let view = out[0].to_plain_array_view::<f32>().map_err(|e| anyhow!("{e}"))?;
-        let data = view.as_slice().ok_or_else(|| anyhow!("unexpected model output"))?;
+        let out = self
+            .plan
+            .run(tvec!(tensor.into()))
+            .map_err(|e| anyhow!("{e}"))?;
+        let view = out[0]
+            .to_plain_array_view::<f32>()
+            .map_err(|e| anyhow!("{e}"))?;
+        let data = view
+            .as_slice()
+            .ok_or_else(|| anyhow!("unexpected model output"))?;
         let stride_len = 85;
         let mut dets = Vec::new();
         let mut idx = 0;
@@ -614,7 +804,14 @@ mod tests {
 
     #[test]
     fn nms_merges_overlaps() {
-        let d = |s: f32, x: f32| Detection { label: "person".into(), score: s, x, y: 0.1, w: 0.2, h: 0.5 };
+        let d = |s: f32, x: f32| Detection {
+            label: "person".into(),
+            score: s,
+            x,
+            y: 0.1,
+            w: 0.2,
+            h: 0.5,
+        };
         let k = nms(vec![d(0.8, 0.1), d(0.9, 0.11), d(0.7, 0.6)], 0.45);
         assert_eq!(k.len(), 2);
         assert_eq!(k[0].score, 0.9);
@@ -629,9 +826,11 @@ mod model_tests {
     /// NVR_TEST_MODEL=path/yolox_nano.onnx NVR_TEST_RGB=path.rgb NVR_TEST_SIZE=1280x720
     #[test]
     fn yolox_finds_people() {
-        let (Ok(model), Ok(rgb), Ok(size)) =
-            (std::env::var("NVR_TEST_MODEL"), std::env::var("NVR_TEST_RGB"), std::env::var("NVR_TEST_SIZE"))
-        else {
+        let (Ok(model), Ok(rgb), Ok(size)) = (
+            std::env::var("NVR_TEST_MODEL"),
+            std::env::var("NVR_TEST_RGB"),
+            std::env::var("NVR_TEST_SIZE"),
+        ) else {
             return;
         };
         let (w, h) = size.split_once('x').unwrap();

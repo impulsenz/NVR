@@ -27,7 +27,14 @@ async fn rclone(cfg: &CloudConfig, args: &[&str], secs: u64) -> Result<String> {
     .map_err(|e| anyhow::anyhow!("cannot run rclone ({e}); install it from rclone.org"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        bail!("{}", err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("rclone failed").trim());
+        bail!(
+            "{}",
+            err.lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("rclone failed")
+                .trim()
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -41,7 +48,10 @@ pub async fn test(cfg: &CloudConfig) -> Result<String> {
     }
     rclone(cfg, &["mkdir", remote], 60).await?;
     rclone(cfg, &["lsd", remote], 60).await?;
-    Ok(format!("{} — {remote} is reachable", version.lines().next().unwrap_or("rclone").trim()))
+    Ok(format!(
+        "{} — {remote} is reachable",
+        version.lines().next().unwrap_or("rclone").trim()
+    ))
 }
 
 fn uploaded_list(dir: &Path) -> HashSet<String> {
@@ -52,7 +62,11 @@ fn uploaded_list(dir: &Path) -> HashSet<String> {
 
 fn mark_uploaded(dir: &Path, rel: &str) {
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(".cloud-uploaded")) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(".cloud-uploaded"))
+    {
         let _ = writeln!(f, "{rel}");
     }
 }
@@ -70,7 +84,10 @@ fn pending(dir: &Path, all: bool, done: &HashSet<String>) -> Vec<(PathBuf, Strin
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
             let rel = format!("events/{name}");
-            if (name.ends_with(".mp4") || name.ends_with(".jpg")) && !done.contains(&rel) && settled(&e.path()) {
+            if (name.ends_with(".mp4") || name.ends_with(".jpg"))
+                && !done.contains(&rel)
+                && settled(&e.path())
+            {
                 out.push((e.path(), rel));
             }
         }

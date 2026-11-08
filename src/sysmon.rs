@@ -83,7 +83,12 @@ impl Monitor {
     pub fn new(data_dir: &std::path::Path) -> Self {
         let file = data_dir.join("system-history.csv");
         let minutes = load_history(&file);
-        Self { fine: Mutex::new(VecDeque::new()), minutes: Mutex::new(minutes), current: Mutex::new(Current::default()), file }
+        Self {
+            fine: Mutex::new(VecDeque::new()),
+            minutes: Mutex::new(minutes),
+            current: Mutex::new(Current::default()),
+            file,
+        }
     }
 
     pub fn current(&self) -> Current {
@@ -112,7 +117,13 @@ impl Monitor {
                 })
                 .collect()
         } else {
-            self.minutes.lock().unwrap().iter().filter(|p| p.t >= from).copied().collect()
+            self.minutes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|p| p.t >= from)
+                .copied()
+                .collect()
         };
         downsample(&raw, points)
     }
@@ -164,7 +175,11 @@ impl Monitor {
             };
             *self.current.lock().unwrap() = Current {
                 sample: s,
-                cpu_name: sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default(),
+                cpu_name: sys
+                    .cpus()
+                    .first()
+                    .map(|c| c.brand().trim().to_string())
+                    .unwrap_or_default(),
                 cores,
                 ram_used: sys.used_memory(),
                 ram_total: total,
@@ -207,7 +222,11 @@ impl Monitor {
             opt(p.gpu_max),
             opt(p.gpu_mem)
         );
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.file) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.file)
+        {
             let _ = f.write_all(line.as_bytes());
         }
         // Keep the file from growing forever: rewrite it once a day.
@@ -218,7 +237,14 @@ impl Monitor {
                 .map(|p| {
                     format!(
                         "{},{:.1},{:.1},{:.1},{:.1},{},{},{}\n",
-                        p.t, p.cpu, p.cpu_max, p.nvr_cpu, p.ram, opt(p.gpu), opt(p.gpu_max), opt(p.gpu_mem)
+                        p.t,
+                        p.cpu,
+                        p.cpu_max,
+                        p.nvr_cpu,
+                        p.ram,
+                        opt(p.gpu),
+                        opt(p.gpu_max),
+                        opt(p.gpu_mem)
                     )
                 })
                 .collect();
@@ -233,7 +259,9 @@ fn opt(v: Option<f32>) -> String {
 
 fn load_history(file: &std::path::Path) -> VecDeque<Point> {
     let cutoff = chrono::Utc::now().timestamp() - (MINUTE_KEEP as i64) * 60;
-    let Ok(text) = std::fs::read_to_string(file) else { return VecDeque::new() };
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return VecDeque::new();
+    };
     text.lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split(',').collect();
@@ -289,7 +317,8 @@ fn downsample(raw: &[Point], points: usize) -> Vec<Point> {
                 cpu_max: c.iter().map(|p| p.cpu_max).fold(0.0, f32::max),
                 nvr_cpu: c.iter().map(|p| p.nvr_cpu).sum::<f32>() / n,
                 ram: c.iter().map(|p| p.ram).sum::<f32>() / n,
-                gpu: (!gpus.is_empty()).then(|| gpus.iter().map(|p| p.gpu.unwrap()).sum::<f32>() / gpus.len() as f32),
+                gpu: (!gpus.is_empty())
+                    .then(|| gpus.iter().map(|p| p.gpu.unwrap()).sum::<f32>() / gpus.len() as f32),
                 gpu_max: c.iter().filter_map(|p| p.gpu_max).reduce(f32::max),
                 gpu_mem: c.iter().filter_map(|p| p.gpu_mem).reduce(f32::max),
             }
@@ -300,16 +329,24 @@ fn downsample(raw: &[Point], points: usize) -> Vec<Point> {
 async fn run_cmd(cmd: &str, args: &[&str], secs: u64) -> Option<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(secs),
-        tokio::process::Command::new(cmd).args(args).stdin(Stdio::null()).kill_on_drop(true).output(),
+        tokio::process::Command::new(cmd)
+            .args(args)
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
     )
     .await
     .ok()?
     .ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-const NVSMI_ARGS: &[&str] =
-    &["--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"];
+const NVSMI_ARGS: &[&str] = &[
+    "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+    "--format=csv,noheader,nounits",
+];
 
 async fn detect_gpu() -> GpuSource {
     if run_cmd("nvidia-smi", NVSMI_ARGS, 10).await.is_some() {
@@ -330,7 +367,12 @@ async fn read_gpu(source: GpuSource) -> Option<GpuReading> {
             let text = run_cmd("nvidia-smi", NVSMI_ARGS, 5).await?;
             parse_nvidia_smi(&text)
         }
-        GpuSource::Sysfs => sysfs_busy().map(|util| GpuReading { util, mem: None, name: Some("GPU".into()), temp: None }),
+        GpuSource::Sysfs => sysfs_busy().map(|util| GpuReading {
+            util,
+            mem: None,
+            name: Some("GPU".into()),
+            temp: None,
+        }),
         GpuSource::WindowsCounters => read_windows_counters().await,
         GpuSource::None => None,
     }
@@ -345,7 +387,12 @@ fn parse_nvidia_smi(text: &str) -> Option<GpuReading> {
         (Some(u), Some(t)) if t > 0.0 => Some(u * 100.0 / t),
         _ => None,
     };
-    Some(GpuReading { util: num(1)?, mem, name: f.first().map(|s| s.to_string()), temp: num(4) })
+    Some(GpuReading {
+        util: num(1)?,
+        mem,
+        name: f.first().map(|s| s.to_string()),
+        temp: num(4),
+    })
 }
 
 /// AMD (and some Intel) GPUs on Linux expose a busy percentage.
@@ -360,25 +407,45 @@ fn sysfs_busy() -> Option<f32> {
 /// Windows "GPU Engine" performance counters (works for any GPU vendor):
 /// utilisation of the busiest engine type, as Task Manager shows it.
 async fn read_windows_counters() -> Option<GpuReading> {
-    let text = run_cmd("typeperf", &["\\GPU Engine(*)\\Utilization Percentage", "-sc", "1"], 15).await?;
+    let text = run_cmd(
+        "typeperf",
+        &["\\GPU Engine(*)\\Utilization Percentage", "-sc", "1"],
+        15,
+    )
+    .await?;
     let util = parse_typeperf(&text)?;
-    Some(GpuReading { util, mem: None, name: Some("GPU".into()), temp: None })
+    Some(GpuReading {
+        util,
+        mem: None,
+        name: Some("GPU".into()),
+        temp: None,
+    })
 }
 
 fn parse_typeperf(text: &str) -> Option<f32> {
     let mut lines = text.lines().map(str::trim).filter(|l| l.starts_with('"'));
     let header = lines.next()?;
     let data = lines.next()?;
-    let split = |l: &str| l.split("\",\"").map(|s| s.trim_matches('"').to_string()).collect::<Vec<_>>();
+    let split = |l: &str| {
+        l.split("\",\"")
+            .map(|s| s.trim_matches('"').to_string())
+            .collect::<Vec<_>>()
+    };
     let (h, d) = (split(header), split(data));
     let mut per_engine: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
     for (name, val) in h.iter().zip(d.iter()).skip(1) {
-        let Some(eng) = name.split("engtype_").nth(1) else { continue };
+        let Some(eng) = name.split("engtype_").nth(1) else {
+            continue;
+        };
         let eng = eng.split(')').next().unwrap_or(eng).to_string();
         let v: f32 = val.trim().parse().unwrap_or(0.0);
         *per_engine.entry(eng).or_default() += v;
     }
-    per_engine.values().copied().reduce(f32::max).map(|v| v.min(100.0))
+    per_engine
+        .values()
+        .copied()
+        .reduce(f32::max)
+        .map(|v| v.min(100.0))
 }
 
 /// Free and total bytes of the disk holding `path` (works for network shares too).
@@ -425,7 +492,16 @@ The command completed successfully."#;
     #[test]
     fn downsamples_with_peaks() {
         let raw: Vec<Point> = (0..10)
-            .map(|i| Point { t: i, cpu: i as f32, cpu_max: i as f32, nvr_cpu: 0.0, ram: 50.0, gpu: None, gpu_max: None, gpu_mem: None })
+            .map(|i| Point {
+                t: i,
+                cpu: i as f32,
+                cpu_max: i as f32,
+                nvr_cpu: 0.0,
+                ram: 50.0,
+                gpu: None,
+                gpu_max: None,
+                gpu_mem: None,
+            })
             .collect();
         let d = downsample(&raw, 2);
         assert_eq!(d.len(), 2);

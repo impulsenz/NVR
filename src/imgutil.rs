@@ -20,7 +20,9 @@ impl Frame {
     pub fn crop(&self, x: f32, y: f32, w: f32, h: f32, pad: f32, min_px: u32) -> Frame {
         let (fw, fh) = (self.width as f32, self.height as f32);
         let mut cw = (w * (1.0 + 2.0 * pad) * fw).max(min_px as f32).min(fw);
-        let mut ch = (h * (1.0 + 2.0 * pad) * fh).max(min_px as f32 * 0.75).min(fh);
+        let mut ch = (h * (1.0 + 2.0 * pad) * fh)
+            .max(min_px as f32 * 0.75)
+            .min(fh);
         cw = cw.max(16.0);
         ch = ch.max(16.0);
         let cx = (x + w / 2.0) * fw;
@@ -33,12 +35,20 @@ impl Frame {
             let start = ((row * self.width + x0) * 3) as usize;
             out.extend_from_slice(&self.rgb[start..start + (cw * 3) as usize]);
         }
-        Frame { width: cw, height: ch, rgb: Arc::new(out) }
+        Frame {
+            width: cw,
+            height: ch,
+            rgb: Arc::new(out),
+        }
     }
 
     /// Bilinear resize.
     pub fn resize(&self, w: u32, h: u32) -> Frame {
-        Frame { width: w, height: h, rgb: Arc::new(resize_rgb(&self.rgb, self.width, self.height, w, h)) }
+        Frame {
+            width: w,
+            height: h,
+            rgb: Arc::new(resize_rgb(&self.rgb, self.width, self.height, w, h)),
+        }
     }
 
     /// Scale down so the longest side is at most `max` pixels.
@@ -94,7 +104,11 @@ mod tests {
     fn crop_resize_encode() {
         let (w, h) = (64u32, 48u32);
         let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i % 251) as u8).collect();
-        let f = Frame { width: w, height: h, rgb: Arc::new(rgb) };
+        let f = Frame {
+            width: w,
+            height: h,
+            rgb: Arc::new(rgb),
+        };
         let c = f.crop(0.9, 0.9, 0.2, 0.2, 0.1, 10);
         assert!(c.width <= w && c.height <= h && c.width >= 10);
         assert_eq!(c.rgb.len() as u32, c.width * c.height * 3);

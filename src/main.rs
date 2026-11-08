@@ -26,7 +26,11 @@ async fn main() -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_target(false).with_ansi(use_color()))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_ansi(use_color()),
+        )
         .with(tracing_subscriber::filter::LevelFilter::INFO)
         .with(logs::LogLayer)
         .init();
@@ -36,8 +40,13 @@ async fn main() -> Result<()> {
     let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "nvr.toml".into()));
     let (cfg, needs_save) = config::Config::load_or_create(&path)?;
     // Logs, statistics and AI models live next to the config file.
-    let data_dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).join("nvr-data");
-    std::fs::create_dir_all(&data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
+    let data_dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."))
+        .join("nvr-data");
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating {}", data_dir.display()))?;
     logs::buffer().set_file(data_dir.join("nvr.log"));
     if needs_save {
         cfg.save(&path)?;

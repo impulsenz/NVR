@@ -5,8 +5,8 @@
 use crate::ai::AiHandle;
 use crate::buffer::{self, EventBuffer};
 use crate::config::{
-    AiConfig, CameraConfig, CloudConfig, Config, DashboardConfig, DisplayConfig, HardwareConfig, LiveConfig,
-    StorageConfig,
+    AiConfig, CameraConfig, CloudConfig, Config, DashboardConfig, DisplayConfig, HardwareConfig,
+    LiveConfig, StorageConfig,
 };
 use crate::detect::Detector;
 use crate::events::EventStore;
@@ -66,15 +66,29 @@ pub struct CameraRuntime {
 }
 
 impl CameraRuntime {
-    fn start(cfg: CameraConfig, dir: PathBuf, env: Arc<RuntimeEnv>, ai: Arc<AiHandle>, events: Arc<EventStore>) -> Arc<Self> {
+    fn start(
+        cfg: CameraConfig,
+        dir: PathBuf,
+        env: Arc<RuntimeEnv>,
+        ai: Arc<AiHandle>,
+        events: Arc<EventStore>,
+    ) -> Arc<Self> {
         let cancel = CancellationToken::new();
         let mut tasks = Vec::new();
         let segment = cfg.segment_seconds(env.segment_seconds);
 
         let recorder = cfg.record_mode.continuous_stream().map(|use_sub| {
             let spec = RecSpec {
-                label: if use_sub && cfg.has_sub() { "recording (sub-stream)" } else { "recording" },
-                url: if use_sub { cfg.live_url().to_string() } else { cfg.url.clone() },
+                label: if use_sub && cfg.has_sub() {
+                    "recording (sub-stream)"
+                } else {
+                    "recording"
+                },
+                url: if use_sub {
+                    cfg.live_url().to_string()
+                } else {
+                    cfg.url.clone()
+                },
                 dir: dir.clone(),
                 prefix: cfg.id.clone(),
                 segment_seconds: segment,
@@ -82,7 +96,13 @@ impl CameraRuntime {
             Recorder::new(cfg.clone(), spec, env.clone(), cancel.clone())
         });
         let (buffer_recorder, event_buffer) = if cfg.record_mode.event_clips() {
-            let buf = EventBuffer::new(&dir, &cfg.name, &env.ffmpeg_path, cfg.detect.pre_seconds, events.clone());
+            let buf = EventBuffer::new(
+                &dir,
+                &cfg.name,
+                &env.ffmpeg_path,
+                cfg.detect.pre_seconds,
+                events.clone(),
+            );
             let spec = RecSpec {
                 label: "event buffer",
                 url: cfg.url.clone(),
@@ -91,7 +111,15 @@ impl CameraRuntime {
                 segment_seconds: buffer::BUFFER_SEGMENT_SECONDS,
             };
             tasks.push(tokio::spawn(buf.clone().run(cancel.clone())));
-            (Some(Recorder::new(cfg.clone(), spec, env.clone(), cancel.clone())), Some(buf))
+            (
+                Some(Recorder::new(
+                    cfg.clone(),
+                    spec,
+                    env.clone(),
+                    cancel.clone(),
+                )),
+                Some(buf),
+            )
         } else {
             (None, None)
         };
@@ -146,7 +174,14 @@ impl CameraRuntime {
                 return;
             }
             let size = sub.and_then(|s| Some((s.width?, s.height?)));
-            let det = Detector::new(c.clone(), env.clone(), ai, me.events.clone(), event_buffer, size);
+            let det = Detector::new(
+                c.clone(),
+                env.clone(),
+                ai,
+                me.events.clone(),
+                event_buffer,
+                size,
+            );
             *me.detector.lock().unwrap() = Some(det.clone());
             det.run(me.cancel.clone()).await;
         });
@@ -158,7 +193,11 @@ impl CameraRuntime {
     async fn stop(&self) {
         self.cancel.cancel();
         let tasks: Vec<_> = self.tasks.lock().unwrap().drain(..).collect();
-        let _ = tokio::time::timeout(Duration::from_secs(15), futures_util::future::join_all(tasks)).await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(15),
+            futures_util::future::join_all(tasks),
+        )
+        .await;
     }
 
     pub fn detector(&self) -> Option<Arc<Detector>> {
@@ -305,7 +344,13 @@ impl Manager {
         let dir = cfg.camera_dir(cam);
         let _ = std::fs::create_dir_all(&dir);
         let store = self.store(cam, &dir);
-        CameraRuntime::start(cam.clone(), dir, Arc::new(RuntimeEnv::from(&cfg)), self.ai.clone(), store)
+        CameraRuntime::start(
+            cam.clone(),
+            dir,
+            Arc::new(RuntimeEnv::from(&cfg)),
+            self.ai.clone(),
+            store,
+        )
     }
 
     pub fn config(&self) -> Config {
@@ -317,7 +362,12 @@ impl Manager {
     }
 
     pub fn camera(&self, id: &str) -> Option<Arc<CameraRuntime>> {
-        self.cameras.read().unwrap().iter().find(|c| c.cfg.id == id).cloned()
+        self.cameras
+            .read()
+            .unwrap()
+            .iter()
+            .find(|c| c.cfg.id == id)
+            .cloned()
     }
 
     pub fn event_stores(&self) -> HashMap<String, Arc<EventStore>> {
@@ -349,7 +399,9 @@ impl Manager {
     pub async fn update_camera(&self, id: &str, mut cam: CameraConfig) -> Result<CameraConfig> {
         let _g = self.edit.lock().await;
         let mut cfg = self.config();
-        let Some(slot) = cfg.cameras.iter_mut().find(|c| c.id == id) else { bail!("camera not found") };
+        let Some(slot) = cfg.cameras.iter_mut().find(|c| c.id == id) else {
+            bail!("camera not found")
+        };
         cam.id = id.to_string();
         cam.name = cam.name.trim().to_string();
         cam.validate()?;
@@ -513,7 +565,11 @@ impl Manager {
             cams.push(CameraUsageView {
                 name: c.name.clone(),
                 bytes_per_day: u.bytes_per_hour * 24.0,
-                retention_days: if c.retention_days > 0 { c.retention_days } else { cfg.storage.retention_days },
+                retention_days: if c.retention_days > 0 {
+                    c.retention_days
+                } else {
+                    cfg.storage.retention_days
+                },
                 usage: u,
             });
         }
@@ -522,19 +578,29 @@ impl Manager {
         let default_root = cfg.storage.dir.clone();
         let mut roots: Vec<(PathBuf, Vec<&CameraUsageView>)> = vec![(default_root, vec![])];
         for c in &cams {
-            let parent = c.usage.dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            let parent = c
+                .usage
+                .dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default();
             match roots.iter_mut().find(|r| r.0 == parent) {
                 Some(r) => r.1.push(c),
                 None => roots.push((parent, vec![c])),
             }
         }
         for (path, list) in roots {
-            let Some((free, total)) = crate::sysmon::disk_space(&path) else { continue };
+            let Some((free, total)) = crate::sysmon::disk_space(&path) else {
+                continue;
+            };
             let per_day: f64 = list.iter().map(|c| c.bytes_per_day).sum();
             let used: u64 = list.iter().map(|c| c.usage.used_bytes).sum();
             let room = free.saturating_sub((cfg.storage.min_free_gb * 1073741824.0) as u64);
             // Same disk as another location: merge.
-            if let Some(l) = locations.iter_mut().find(|l| l.total_bytes == total && l.free_bytes.abs_diff(free) < total / 100) {
+            if let Some(l) = locations
+                .iter_mut()
+                .find(|l| l.total_bytes == total && l.free_bytes.abs_diff(free) < total / 100)
+            {
                 l.cameras.extend(list.iter().map(|c| c.name.clone()));
                 l.used_bytes += used;
                 l.bytes_per_day += per_day;
@@ -555,11 +621,21 @@ impl Manager {
         let used: u64 = cams.iter().map(|c| c.usage.used_bytes).sum();
         let disk_room: u64 = locations
             .iter()
-            .map(|l| l.free_bytes.saturating_sub((cfg.storage.min_free_gb * 1073741824.0) as u64))
+            .map(|l| {
+                l.free_bytes
+                    .saturating_sub((cfg.storage.min_free_gb * 1073741824.0) as u64)
+            })
             .sum();
         let (capacity, limited_by) = if cfg.storage.max_storage_gb > 0.0 {
             let limit = (cfg.storage.max_storage_gb * 1073741824.0) as u64;
-            (limit.min(used + disk_room), if limit <= used + disk_room { "max storage" } else { "disk space" })
+            (
+                limit.min(used + disk_room),
+                if limit <= used + disk_room {
+                    "max storage"
+                } else {
+                    "disk space"
+                },
+            )
         } else {
             (used + disk_room, "disk space")
         };
@@ -571,7 +647,8 @@ impl Manager {
             used_bytes: used,
             capacity_bytes: Some(capacity),
             days_capacity: (per_day > 0.0).then(|| capacity as f64 / per_day),
-            days_until_full: (per_day > 0.0).then(|| capacity.saturating_sub(used) as f64 / per_day),
+            days_until_full: (per_day > 0.0)
+                .then(|| capacity.saturating_sub(used) as f64 / per_day),
             limited_by: limited_by.into(),
             retention_days: cfg.storage.retention_days,
             cameras: cams,
@@ -589,7 +666,7 @@ impl Manager {
             let stores = self.event_stores();
             let me = self.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                if n % 5 == 0 {
+                if n.is_multiple_of(5) {
                     storage::cleanup(&cfg, &stores);
                     // Exports older than an hour.
                     if let Ok(rd) = std::fs::read_dir(me.data_dir.join("tmp")) {
@@ -597,7 +674,9 @@ impl Manager {
                             let old = e
                                 .metadata()
                                 .and_then(|m| m.modified())
-                                .map(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(3600))
+                                .map(|t| {
+                                    t.elapsed().unwrap_or_default() > Duration::from_secs(3600)
+                                })
                                 .unwrap_or(false);
                             if old {
                                 let _ = std::fs::remove_file(e.path());
@@ -608,7 +687,10 @@ impl Manager {
                 *me.usage.lock().unwrap() = Self::compute_usage(&cfg);
             })
             .await;
-            self.previews.lock().unwrap().retain(|_, v| v.2.elapsed() < Duration::from_secs(1800));
+            self.previews
+                .lock()
+                .unwrap()
+                .retain(|_, v| v.2.elapsed() < Duration::from_secs(1800));
             n += 1;
         }
     }

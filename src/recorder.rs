@@ -79,7 +79,12 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn new(cam: CameraConfig, spec: RecSpec, env: Arc<RuntimeEnv>, cancel: CancellationToken) -> Arc<Self> {
+    pub fn new(
+        cam: CameraConfig,
+        spec: RecSpec,
+        env: Arc<RuntimeEnv>,
+        cancel: CancellationToken,
+    ) -> Arc<Self> {
         let use_gpu = cam.reencode() && env.hardware.uses_gpu();
         Arc::new(Self {
             cam,
@@ -155,7 +160,9 @@ impl Recorder {
         let env = &self.env;
         let spec = &self.spec;
         std::fs::create_dir_all(&spec.dir)?;
-        let pattern = spec.dir.join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", spec.prefix));
+        let pattern = spec
+            .dir
+            .join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", spec.prefix));
 
         let mut cmd = Command::new(&env.ffmpeg_path);
         // stdin stays open so we can send "q" for a clean stop.
@@ -314,10 +321,7 @@ impl Recorder {
                     "no video received for 30s (stream stalled)".to_string()
                 }
             };
-            warn!(
-                "{tag}: {reason}; retrying in {}s",
-                backoff.as_secs()
-            );
+            warn!("{tag}: {reason}; retrying in {}s", backoff.as_secs());
 
             // GPU fallback: two failures in a row before any video was
             // recorded while using the GPU → switch this camera to the CPU.

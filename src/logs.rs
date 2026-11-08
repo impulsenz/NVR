@@ -40,7 +40,11 @@ static LOGS: OnceLock<Arc<LogBuffer>> = OnceLock::new();
 
 pub fn buffer() -> Arc<LogBuffer> {
     LOGS.get_or_init(|| {
-        Arc::new(LogBuffer { entries: Mutex::new(VecDeque::new()), next_id: AtomicU64::new(1), file: Mutex::new(None) })
+        Arc::new(LogBuffer {
+            entries: Mutex::new(VecDeque::new()),
+            next_id: AtomicU64::new(1),
+            file: Mutex::new(None),
+        })
     })
     .clone()
 }
@@ -51,7 +55,11 @@ impl LogBuffer {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             *self.file.lock().unwrap() = Some((path, f));
         }
     }
@@ -74,11 +82,21 @@ impl LogBuffer {
             message,
         };
         if let Some((path, file)) = self.file.lock().unwrap().as_mut() {
-            let _ = writeln!(file, "{} {:5} {}", entry.time.format("%Y-%m-%d %H:%M:%S"), level.to_uppercase(), entry.message);
+            let _ = writeln!(
+                file,
+                "{} {:5} {}",
+                entry.time.format("%Y-%m-%d %H:%M:%S"),
+                level.to_uppercase(),
+                entry.message
+            );
             if file.metadata().map(|m| m.len() > MAX_FILE).unwrap_or(false) {
                 let old = path.with_extension("log.1");
                 let _ = std::fs::rename(&*path, old);
-                if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&*path) {
+                if let Ok(f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&*path)
+                {
                     *file = f;
                 }
             }
@@ -92,7 +110,10 @@ impl LogBuffer {
 
     /// Newest-last entries matching the filters.
     pub fn query(&self, q: &LogQuery) -> Vec<LogEntry> {
-        let text = q.q.as_deref().map(str::to_lowercase).filter(|s| !s.is_empty());
+        let text =
+            q.q.as_deref()
+                .map(str::to_lowercase)
+                .filter(|s| !s.is_empty());
         let min = level_rank(q.level.as_deref().unwrap_or("info"));
         let e = self.entries.lock().unwrap();
         let mut out: Vec<LogEntry> = e
@@ -100,11 +121,20 @@ impl LogBuffer {
             .rev()
             .filter(|x| x.id > q.after.unwrap_or(0))
             .filter(|x| level_rank(x.level) >= min)
-            .filter(|x| q.kind.as_deref().is_none_or(|k| k.is_empty() || k == x.kind))
             .filter(|x| {
-                q.camera.as_deref().is_none_or(|c| c.is_empty() || x.camera.as_deref() == Some(c))
+                q.kind
+                    .as_deref()
+                    .is_none_or(|k| k.is_empty() || k == x.kind)
             })
-            .filter(|x| text.as_ref().is_none_or(|t| x.message.to_lowercase().contains(t)))
+            .filter(|x| {
+                q.camera
+                    .as_deref()
+                    .is_none_or(|c| c.is_empty() || x.camera.as_deref() == Some(c))
+            })
+            .filter(|x| {
+                text.as_ref()
+                    .is_none_or(|t| x.message.to_lowercase().contains(t))
+            })
             .take(q.limit.unwrap_or(500).min(5000))
             .cloned()
             .collect();
@@ -182,7 +212,11 @@ impl<S: Subscriber> Layer<S> for LogLayer {
             Level::INFO => "info",
             _ => return,
         };
-        let kind = if meta.target() == "event" { "event" } else { "system" };
+        let kind = if meta.target() == "event" {
+            "event"
+        } else {
+            "system"
+        };
         let mut v = MessageVisitor(String::new());
         event.record(&mut v);
         buffer().push(level, kind, v.0);
@@ -195,17 +229,46 @@ mod tests {
 
     #[test]
     fn filters() {
-        let b = LogBuffer { entries: Mutex::new(VecDeque::new()), next_id: AtomicU64::new(1), file: Mutex::new(None) };
+        let b = LogBuffer {
+            entries: Mutex::new(VecDeque::new()),
+            next_id: AtomicU64::new(1),
+            file: Mutex::new(None),
+        };
         b.push("info", "system", "[Office] recorder: recording".into());
-        b.push("warn", "system", "[Garage] ffmpeg: Connection refused".into());
+        b.push(
+            "warn",
+            "system",
+            "[Garage] ffmpeg: Connection refused".into(),
+        );
         b.push("info", "event", "[Office] alert: person (88%)".into());
         assert_eq!(b.query(&LogQuery::default()).len(), 3);
-        let w = b.query(&LogQuery { level: Some("warn".into()), ..Default::default() });
+        let w = b.query(&LogQuery {
+            level: Some("warn".into()),
+            ..Default::default()
+        });
         assert_eq!(w.len(), 1);
         assert_eq!(w[0].camera.as_deref(), Some("Garage"));
-        let ev = b.query(&LogQuery { kind: Some("event".into()), camera: Some("Office".into()), ..Default::default() });
+        let ev = b.query(&LogQuery {
+            kind: Some("event".into()),
+            camera: Some("Office".into()),
+            ..Default::default()
+        });
         assert_eq!(ev[0].message, "[Office] alert: person (88%)");
-        assert_eq!(b.query(&LogQuery { q: Some("REFUSED".into()), ..Default::default() }).len(), 1);
-        assert_eq!(b.query(&LogQuery { after: Some(2), ..Default::default() }).len(), 1);
+        assert_eq!(
+            b.query(&LogQuery {
+                q: Some("REFUSED".into()),
+                ..Default::default()
+            })
+            .len(),
+            1
+        );
+        assert_eq!(
+            b.query(&LogQuery {
+                after: Some(2),
+                ..Default::default()
+            })
+            .len(),
+            1
+        );
     }
 }

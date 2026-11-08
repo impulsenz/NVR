@@ -417,46 +417,49 @@ pub struct ProbeResult {
 /// Connect to a stream, report its codecs and grab a preview frame.
 /// Codec, size and frame rate of each stream.
 pub async fn probe_streams(ffmpeg: &str, url: &str, transport: &str) -> Result<Vec<StreamInfo>> {
-        let mut cmd = Command::new(ffprobe_path(ffmpeg));
-        cmd.args([
-            "-v",
-            "error",
-            "-show_entries",
-            "stream=codec_type,codec_name,width,height,avg_frame_rate",
-            "-of",
-            "json",
-        ]);
-        let mut input = input_args(url, transport);
-        input.retain(|a| a != "-re" && a != "-stream_loop" && a != "-1");
-        let url_arg = input.pop().unwrap();
-        input.pop(); // "-i"
-        cmd.args(input).arg(url_arg);
-        let o = run(&mut cmd, 20).await?;
-        if !o.status.success() {
-            bail!("{}", first_error(&o.stderr));
-        }
-        let v: serde_json::Value =
-            serde_json::from_slice(&o.stdout).context("bad ffprobe output")?;
-        let streams = v["streams"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .map(|s| StreamInfo {
-                        kind: s["codec_type"].as_str().unwrap_or("").into(),
-                        codec: s["codec_name"].as_str().unwrap_or("").into(),
-                        width: s["width"].as_u64().map(|x| x as u32),
-                        height: s["height"].as_u64().map(|x| x as u32),
-                        fps: s["avg_frame_rate"].as_str().and_then(parse_rate),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(streams)
+    let mut cmd = Command::new(ffprobe_path(ffmpeg));
+    cmd.args([
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=codec_type,codec_name,width,height,avg_frame_rate",
+        "-of",
+        "json",
+    ]);
+    let mut input = input_args(url, transport);
+    input.retain(|a| a != "-re" && a != "-stream_loop" && a != "-1");
+    let url_arg = input.pop().unwrap();
+    input.pop(); // "-i"
+    cmd.args(input).arg(url_arg);
+    let o = run(&mut cmd, 20).await?;
+    if !o.status.success() {
+        bail!("{}", first_error(&o.stderr));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).context("bad ffprobe output")?;
+    let streams = v["streams"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| StreamInfo {
+                    kind: s["codec_type"].as_str().unwrap_or("").into(),
+                    codec: s["codec_name"].as_str().unwrap_or("").into(),
+                    width: s["width"].as_u64().map(|x| x as u32),
+                    height: s["height"].as_u64().map(|x| x as u32),
+                    fps: s["avg_frame_rate"].as_str().and_then(parse_rate),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(streams)
 }
 
 /// The first video stream's details.
 pub async fn video_info(ffmpeg: &str, url: &str, transport: &str) -> Option<StreamInfo> {
-    probe_streams(ffmpeg, url, transport).await.ok()?.into_iter().find(|s| s.kind == "video")
+    probe_streams(ffmpeg, url, transport)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|s| s.kind == "video")
 }
 
 pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
@@ -513,7 +516,14 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
 pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
     let o = run(
         Command::new(ffprobe_path(ffmpeg))
-            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+            ])
             .arg(file),
         30,
     )
@@ -528,7 +538,16 @@ pub async fn thumbnail(ffmpeg: &str, file: &std::path::Path, out: &std::path::Pa
         Command::new(ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "1", "-i"])
             .arg(file)
-            .args(["-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "5", "-update", "1"])
+            .args([
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=320:-2",
+                "-q:v",
+                "5",
+                "-update",
+                "1",
+            ])
             .arg(out),
         30,
     )
@@ -552,8 +571,14 @@ pub struct SpriteInfo {
 
 /// A grid of small pictures through a recording, for scrubbing previews.
 /// Only keyframes are decoded, so this is fast even for long files.
-pub async fn sprite(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path) -> Result<SpriteInfo> {
-    let duration = duration(ffmpeg, file).await.context("cannot read recording length")?;
+pub async fn sprite(
+    ffmpeg: &str,
+    file: &std::path::Path,
+    out: &std::path::Path,
+) -> Result<SpriteInfo> {
+    let duration = duration(ffmpeg, file)
+        .await
+        .context("cannot read recording length")?;
     let count = ((duration / 2.0).ceil() as u32).clamp(1, 240);
     let interval = (duration / count as f64).max(0.5);
     let columns = count.min(20);
@@ -564,9 +589,27 @@ pub async fn sprite(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path)
     );
     let o = run(
         Command::new(ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i"])
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-skip_frame",
+                "nokey",
+                "-i",
+            ])
             .arg(file)
-            .args(["-an", "-vf", &vf, "-frames:v", "1", "-q:v", "6", "-update", "1"])
+            .args([
+                "-an",
+                "-vf",
+                &vf,
+                "-frames:v",
+                "1",
+                "-q:v",
+                "6",
+                "-update",
+                "1",
+            ])
             .arg(out),
         120,
     )
@@ -574,26 +617,57 @@ pub async fn sprite(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path)
     if !o.status.success() || !out.exists() {
         bail!("{}", first_error(&o.stderr));
     }
-    Ok(SpriteInfo { interval, count, columns, tile_width: tw, tile_height: th, duration })
+    Ok(SpriteInfo {
+        interval,
+        count,
+        columns,
+        tile_width: tw,
+        tile_height: th,
+        duration,
+    })
 }
 
 /// Cut `[from, to)` seconds out of a sequence of files into one MP4
 /// (without re-encoding, so cuts snap to the nearest keyframe).
-pub async fn export(ffmpeg: &str, parts: &[(std::path::PathBuf, f64, f64)], out: &std::path::Path) -> Result<()> {
+pub async fn export(
+    ffmpeg: &str,
+    parts: &[(std::path::PathBuf, f64, f64)],
+    out: &std::path::Path,
+) -> Result<()> {
     let list = out.with_extension("txt");
     let mut text = String::new();
     for (path, inpoint, outpoint) in parts {
         text.push_str(&format!(
             "file '{}'\ninpoint {inpoint:.3}\noutpoint {outpoint:.3}\n",
-            path.display().to_string().replace('\\', "/").replace('\'', "'\\''")
+            path.display()
+                .to_string()
+                .replace('\\', "/")
+                .replace('\'', "'\\''")
         ));
     }
     std::fs::write(&list, text)?;
     let o = run(
         Command::new(ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i"])
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+            ])
             .arg(&list)
-            .args(["-c", "copy", "-movflags", "+faststart", "-avoid_negative_ts", "make_zero"])
+            .args([
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                "-avoid_negative_ts",
+                "make_zero",
+            ])
             .arg(out),
         600,
     )

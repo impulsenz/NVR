@@ -45,7 +45,12 @@ pub struct Live {
 }
 
 impl Live {
-    pub fn new(cam: CameraConfig, env: Arc<RuntimeEnv>, quality: Quality, cancel: CancellationToken) -> Arc<Self> {
+    pub fn new(
+        cam: CameraConfig,
+        env: Arc<RuntimeEnv>,
+        quality: Quality,
+        cancel: CancellationToken,
+    ) -> Arc<Self> {
         let use_gpu = env.hardware.hwaccel != "none";
         Arc::new(Self {
             cam,
@@ -67,7 +72,11 @@ impl Live {
     /// Frames per second currently produced (0 when idle).
     pub fn fps(&self) -> f32 {
         let f = self.fps.lock().unwrap();
-        if f.1.elapsed() > Duration::from_secs(5) { 0.0 } else { f.2 }
+        if f.1.elapsed() > Duration::from_secs(5) {
+            0.0
+        } else {
+            f.2
+        }
     }
 
     fn q(&self) -> &'static str {
@@ -179,7 +188,11 @@ impl Live {
                 let mut running = self.running.lock().unwrap();
                 if !self.wanted() {
                     *running = false;
-                    info!("[{}] live ({}): no viewers, stopping", self.cam.name, self.q());
+                    info!(
+                        "[{}] live ({}): no viewers, stopping",
+                        self.cam.name,
+                        self.q()
+                    );
                     return;
                 }
             }

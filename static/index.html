@@ -4,136 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NVR</title>
-<style>
-  :root {
-    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
-    --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --red: #ef4444;
-    --amber: #f59e0b; --green: #22c55e;
-  }
-  * { box-sizing: border-box; }
-  [hidden] { display: none !important; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  a { color: var(--accent); }
-  header { display: flex; align-items: center; gap: 16px; padding: 0 16px; height: 52px;
-    border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
-  nav { display: flex; gap: 2px; height: 100%; }
-  nav a { color: var(--muted); text-decoration: none; padding: 0 14px; display: flex; align-items: center;
-    border-bottom: 2px solid transparent; }
-  nav a:hover { color: var(--text); }
-  nav a.active { color: var(--text); border-bottom-color: var(--accent); }
-  .spacer { flex: 1; }
-  #clock { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  @media (max-width: 640px) { #clock { display: none; } nav a { padding: 0 8px; } }
-  main { padding: 16px; max-width: 1600px; margin: 0 auto; }
-
-  button, .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-    padding: 7px 12px; border-radius: 6px; cursor: pointer; font: inherit; text-decoration: none;
-    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-  button:hover:not(:disabled), .btn:hover { border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.danger { background: var(--red); border-color: var(--red); color: #fff; }
-  button.small, .btn.small { padding: 3px 8px; font-size: 12px; }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-
-  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px;
-    font-size: 11px; font-weight: 700; background: rgba(0,0,0,.55); border: 1px solid var(--border);
-    text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
-  .st-recording .dot { background: var(--red); animation: pulse 1.2s infinite; }
-  .st-connecting .dot, .st-retrying .dot { background: var(--amber); }
-  .st-disabled .dot { background: #555; }
-  @keyframes pulse { 50% { opacity: .3; } }
-
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; }
-  .card h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
-  .card h3 { font-size: 15px; margin: 0 0 4px; }
-  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
-  dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break-word; }
-  .muted { color: var(--muted); }
-  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
-  .err { color: var(--red); font-size: 12px; word-break: break-word; }
-  .ok { color: var(--green); }
-  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 8px; }
-  .bar > div { height: 100%; background: var(--accent); }
-  .empty { color: var(--muted); padding: 40px 16px; text-align: center; }
-
-  /* live grid */
-  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
-  .tile { background: #000; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-    position: relative; aspect-ratio: 16 / 9; cursor: pointer; }
-  .tile:hover { border-color: var(--accent); }
-  .tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .tile .label { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 8px; display: flex;
-    align-items: center; gap: 8px; background: linear-gradient(transparent, rgba(0,0,0,.75)); }
-  .tile .label b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tile .msg, .viewer .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: var(--muted); text-align: center; padding: 16px; pointer-events: none; }
-
-  .viewer { background: #000; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-    position: relative; aspect-ratio: 16 / 9; }
-  .viewer img, .viewer video { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .viewer .overlay { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
-  .two { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; }
-  @media (max-width: 960px) { .two { grid-template-columns: minmax(0, 1fr); } }
-
-  /* recordings */
-  select, input[type=text], input[type=password], input[type=number], input[type=time] {
-    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-    padding: 7px 9px; font: inherit; width: 100%; }
-  select { width: auto; max-width: 100%; }
-  input:focus, select:focus { outline: none; border-color: var(--accent); }
-  #recs { max-height: 62vh; overflow-y: auto; margin: 0 -6px; }
-  .rec { display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 6px; }
-  .rec:hover { background: var(--panel2); }
-  .rec.active { background: rgba(79,140,255,.15); }
-  .rec .t { flex: 1; font-variant-numeric: tabular-nums; }
-  .rec .s { color: var(--muted); font-size: 12px; }
-  .live-tag { color: var(--red); font-size: 11px; font-weight: 700; }
-
-  /* settings */
-  .settings { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 16px; align-items: start; }
-  @media (max-width: 760px) { .settings { grid-template-columns: minmax(0, 1fr); } }
-  .side { display: flex; flex-direction: column; gap: 2px; }
-  @media (max-width: 760px) { .side { flex-direction: row; flex-wrap: wrap; } }
-  .side a { color: var(--muted); text-decoration: none; padding: 8px 12px; border-radius: 6px; }
-  .side a:hover { color: var(--text); background: var(--panel); }
-  .side a.active { color: var(--text); background: var(--panel2); }
-  .form { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px 16px; align-items: start; max-width: 760px; }
-  .form > label { padding-top: 7px; color: var(--muted); }
-  @media (max-width: 640px) { .form { grid-template-columns: minmax(0, 1fr); gap: 4px; } .form > label { padding-top: 10px; } }
-  .form .full { grid-column: 1 / -1; }
-  .check { display: flex; align-items: center; gap: 8px; padding-top: 7px; cursor: pointer; }
-  .check input { width: 16px; height: 16px; }
-  .days { display: flex; flex-wrap: wrap; gap: 4px; }
-  .days label { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px; cursor: pointer; user-select: none; }
-  .days input { display: none; }
-  .days label:has(input:checked) { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .actions { display: flex; gap: 8px; margin-top: 18px; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-  td .sub { color: var(--muted); font-size: 12px; word-break: break-all; }
-  @media (max-width: 640px) { .hide-sm { display: none; } }
-  .probe { margin-top: 10px; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
-  .probe img { max-width: 280px; width: 100%; border-radius: 6px; border: 1px solid var(--border); }
-  .tag { display: inline-block; background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 12px; margin: 2px 4px 2px 0; }
-
-  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
-    padding: 0; width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
-  dialog::backdrop { background: rgba(0,0,0,.6); }
-  dialog .head { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; }
-  dialog .head h2 { margin: 0; font-size: 16px; flex: 1; }
-  dialog .body { padding: 18px; overflow-y: auto; max-height: calc(100vh - 160px); }
-  dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
-
-  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel2);
-    border: 1px solid var(--border); padding: 10px 16px; border-radius: 8px; z-index: 20; max-width: 90vw;
-    box-shadow: 0 6px 24px rgba(0,0,0,.4); }
-  #toast.error { border-color: var(--red); }
-</style>
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header>
@@ -141,6 +12,8 @@
   <nav>
     <a href="#live" data-page="live">Live</a>
     <a href="#recordings" data-page="recordings">Recordings</a>
+    <a href="#system" data-page="system">System</a>
+    <a href="#logs" data-page="logs">Logs <span class="badge" id="log-badge" hidden></span></a>
     <a href="#settings" data-page="settings">Settings</a>
   </nav>
   <span class="spacer"></span>
@@ -148,29 +21,40 @@
 </header>
 
 <main>
-  <!-- LIVE -->
+  <!-- ============ LIVE ============ -->
   <section id="page-live" hidden>
-    <div id="live-grid-wrap">
-      <div class="grid" id="grid"></div>
+    <div id="live-grid">
+      <div class="row" style="margin-bottom:10px">
+        <span class="muted" id="dash-info"></span>
+        <span class="spacer"></span>
+        <button id="dash-edit">Edit layout</button>
+        <button id="dash-auto" hidden>Auto arrange</button>
+        <button id="dash-cancel" hidden>Cancel</button>
+        <button id="dash-save" class="primary" hidden>Save layout</button>
+      </div>
+      <div id="dash"></div>
       <div class="empty" id="no-cameras" hidden>
         <p>No cameras yet.</p>
         <button class="primary" onclick="openCameraDialog()">Add your first camera</button>
       </div>
     </div>
+
     <div id="live-focus" hidden>
       <div class="two">
         <div>
-          <div class="viewer" id="focus-viewer">
+          <div class="surface" id="focus-surface">
             <img id="focus-img" alt="">
-            <div class="overlay"><span class="pill" id="focus-pill"><span class="dot"></span><span></span></span></div>
-            <div class="msg" id="focus-msg" hidden></div>
+            <video id="focus-video" playsinline hidden></video>
+            <div class="msg" id="focus-msg"></div>
           </div>
+          <div id="focus-player-controls"></div>
           <div class="row" style="margin-top:10px">
-            <button id="focus-back" onclick="location.hash='#live'">← All cameras</button>
+            <button id="focus-back">← All cameras</button>
+            <button id="focus-live" class="primary" hidden>● Back to live</button>
             <button id="focus-rec"></button>
             <a class="btn" id="focus-snap">Snapshot</a>
-            <button onclick="fullscreen('focus-viewer')">Fullscreen</button>
-            <a class="btn" id="focus-recs">Recordings</a>
+            <a class="btn" id="focus-recs">All recordings</a>
+            <button id="focus-edit">Camera settings</button>
           </div>
         </div>
         <div>
@@ -179,685 +63,138 @@
             <dl id="focus-info"></dl>
             <div class="err" id="focus-err" style="margin-top:8px" hidden></div>
           </div>
-          <div class="card"><h2>Storage</h2><div id="focus-storage"></div></div>
+          <div class="card">
+            <div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Recent activity</h2>
+              <select id="focus-filter"><option value="">Everything</option><option value="events">Alerts only</option><option value="recording">Recordings only</option></select></div>
+            <div class="side-list" id="focus-activity"></div>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- RECORDINGS -->
+  <!-- ============ RECORDINGS ============ -->
   <section id="page-recordings" hidden>
-    <div class="two">
-      <div>
-        <div class="viewer">
-          <video id="player" controls playsinline></video>
-          <div class="msg" id="player-msg">Choose a recording to play.</div>
-        </div>
-        <div class="hint" id="player-info"></div>
+    <div class="filters">
+      <div class="tabs" style="margin:0;border:0">
+        <button data-mode="list" class="active">Alerts &amp; recordings</button>
+        <button data-mode="timeline">Timeline</button>
       </div>
-      <div class="card">
-        <div class="row" style="margin-bottom:10px">
-          <select id="rec-cam" style="flex:1"></select>
-          <select id="rec-day"></select>
-          <button class="small" id="rec-refresh" title="Refresh">↻</button>
-        </div>
-        <div id="recs"></div>
+      <span class="spacer"></span>
+      <div class="dropdown">
+        <button id="f-cams-btn">All cameras ▾</button>
+        <div class="popover" id="f-cams-pop" hidden style="min-width:220px"></div>
       </div>
+      <div class="dropdown">
+        <button id="f-date-btn">📅 Today</button>
+        <div class="popover" id="f-date-pop" hidden></div>
+      </div>
+      <button id="f-refresh" title="Refresh">↻</button>
+    </div>
+    <div class="chips" id="f-types" style="margin-bottom:12px"></div>
+
+    <div id="rec-player" class="player" hidden>
+      <div class="two">
+        <div>
+          <div class="surface"><video id="rp-video" playsinline></video><div class="msg" id="rp-msg" hidden></div></div>
+          <div id="rp-controls"></div>
+        </div>
+        <div class="card" id="rp-info"></div>
+      </div>
+    </div>
+
+    <div id="rec-list">
+      <div class="muted" id="rec-count" style="margin-bottom:8px"></div>
+      <div class="cards" id="rec-cards"></div>
+    </div>
+
+    <div id="rec-timeline" hidden>
+      <div class="tl-videos" id="tl-videos"></div>
+      <div class="controls">
+        <button id="tl-play" class="primary">▶ Play</button>
+        <button id="tl-back10" title="Back 10 s">−10s</button>
+        <button id="tl-fwd10" title="Forward 10 s">+10s</button>
+        <button id="tl-prev-ev" title="Previous alert">⏮ Alert</button>
+        <button id="tl-next-ev" title="Next alert">Alert ⏭</button>
+        <select id="tl-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>
+        <span class="timecode" id="tl-time"></span>
+        <span class="spacer"></span>
+        <span class="muted">Zoom</span>
+        <select id="tl-zoom"><option value="86400">24 h</option><option value="21600">6 h</option><option value="3600" selected>1 h</option><option value="900">15 min</option><option value="300">5 min</option></select>
+        <button id="tl-left">◀</button><button id="tl-right">▶</button>
+      </div>
+      <div class="controls">
+        <button id="tl-in">Set clip start</button>
+        <button id="tl-out">Set clip end</button>
+        <button id="tl-clear" hidden>Clear</button>
+        <span class="timecode" id="tl-sel-info"></span>
+        <span id="tl-export" class="row"></span>
+      </div>
+      <div class="tl" id="tl"></div>
+      <div class="hint">Drag across the timeline to scrub: every camera shows a quick preview of that moment. Release to play from there.</div>
     </div>
   </section>
 
-  <!-- SETTINGS -->
+  <!-- ============ SYSTEM ============ -->
+  <section id="page-system" hidden>
+    <div class="grid2" id="sys-cards"></div>
+    <div class="card">
+      <div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:1">Server load</h2>
+        <div class="tabs" id="sys-range" style="margin:0;border:0">
+          <button data-r="3600" class="active">1 h</button><button data-r="21600">6 h</button><button data-r="86400">24 h</button><button data-r="604800">7 days</button><button data-r="2592000">30 days</button>
+        </div>
+      </div>
+      <svg class="graph" id="sys-graph" preserveAspectRatio="none"></svg>
+      <div class="legend" id="sys-legend"></div>
+      <div class="hint" id="sys-hover">&nbsp;</div>
+    </div>
+    <div class="card">
+      <h2>Storage</h2>
+      <div id="sys-storage"></div>
+    </div>
+    <div class="card">
+      <h2>Recording per camera</h2>
+      <div id="sys-cams"></div>
+    </div>
+  </section>
+
+  <!-- ============ LOGS ============ -->
+  <section id="page-logs" hidden>
+    <div class="filters">
+      <select id="lg-level"><option value="info">All levels</option><option value="warn">Warnings &amp; errors</option><option value="error">Errors only</option></select>
+      <select id="lg-kind"><option value="">Everything</option><option value="event">Alerts &amp; events</option><option value="system">System</option></select>
+      <select id="lg-cam"><option value="">All cameras</option></select>
+      <input type="search" id="lg-q" placeholder="Search…" style="max-width:240px">
+      <label class="check" style="padding:0"><input type="checkbox" id="lg-live" checked> Live</label>
+      <span class="spacer"></span>
+      <a class="btn" href="api/logs/download">Download log file</a>
+    </div>
+    <div class="card" style="padding:6px">
+      <div class="logs" id="lg-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
   <section id="page-settings" hidden>
     <div class="settings">
       <div class="side" id="side">
         <a href="#settings/cameras" data-s="cameras">Cameras</a>
         <a href="#settings/storage" data-s="storage">Recording &amp; storage</a>
-        <a href="#settings/live" data-s="live">Live view</a>
+        <a href="#settings/display" data-s="display">Live view &amp; display</a>
+        <a href="#settings/ai" data-s="ai">Object recognition (AI)</a>
         <a href="#settings/hardware" data-s="hardware">GPU acceleration</a>
+        <a href="#settings/cloud" data-s="cloud">Cloud backup</a>
+        <a href="#settings/backup" data-s="backup">Export / import setup</a>
         <a href="#settings/system" data-s="system">System &amp; login</a>
-        <a href="#settings/info" data-s="info">System info</a>
+        <a href="#settings/info" data-s="info">About</a>
       </div>
-      <div>
-        <!-- cameras -->
-        <div class="card" data-sec="cameras">
-          <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2>
-            <button class="primary" onclick="openCameraDialog()">+ Add camera</button></div>
-          <table><thead><tr><th>Name</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead>
-            <tbody id="cam-table"></tbody></table>
-          <div class="empty" id="cam-empty" hidden>No cameras configured.</div>
-        </div>
-
-        <!-- storage -->
-        <form class="card" data-sec="storage" id="f-storage">
-          <h2>Recording &amp; storage</h2>
-          <div class="form">
-            <label for="s-dir">Recordings folder</label>
-            <div><input type="text" id="s-dir" name="dir" required>
-              <div class="hint">Each camera records into its own sub-folder. Existing recordings are not moved.</div></div>
-            <label for="s-seg">File length (minutes)</label>
-            <div><input type="number" id="s-seg" min="1" max="60" step="1" required>
-              <div class="hint">Recordings are split into files of this length.</div></div>
-            <label for="s-ret">Keep recordings for (days)</label>
-            <div><input type="number" id="s-ret" min="0" step="1" required>
-              <div class="hint">0 = keep forever.</div></div>
-            <label for="s-max">Maximum storage (GB)</label>
-            <div><input type="number" id="s-max" min="0" step="0.1" required>
-              <div class="hint">Oldest recordings are deleted above this size. 0 = no limit.</div></div>
-            <label for="s-free">Keep free disk space (GB)</label>
-            <div><input type="number" id="s-free" min="0" step="0.1" required>
-              <div class="hint">Oldest recordings are deleted when free space drops below this. 0 = off.</div></div>
-          </div>
-          <div class="actions"><button class="primary">Save</button></div>
-        </form>
-
-        <!-- live -->
-        <form class="card" data-sec="live" id="f-live">
-          <h2>Live view</h2>
-          <div class="form">
-            <label for="l-fps">Frame rate (fps)</label>
-            <div><input type="number" id="l-fps" min="1" max="30" required>
-              <div class="hint">Higher is smoother but uses more CPU/GPU and bandwidth.</div></div>
-            <label for="l-width">Maximum width (pixels)</label>
-            <div><select id="l-width">
-              <option value="640">640 (low)</option><option value="960">960</option>
-              <option value="1280">1280 (HD)</option><option value="1920">1920 (Full HD)</option>
-              <option value="0">Camera's native size</option></select></div>
-            <label for="l-q">Picture quality</label>
-            <div><select id="l-q">
-              <option value="3">Very high</option><option value="6">High</option>
-              <option value="10">Medium</option><option value="16">Low (saves bandwidth)</option></select></div>
-          </div>
-          <div class="actions"><button class="primary">Save</button></div>
-        </form>
-
-        <!-- hardware -->
-        <form class="card" data-sec="hardware" id="f-hw">
-          <h2>GPU acceleration</h2>
-          <p class="muted" style="margin-top:0">A GPU can take over video decoding for the live view, and encoding when a camera
-            has <b>Convert recordings to H.264</b> turned on. Normal recording just copies the camera's video and needs no GPU.
-            If the GPU fails, the NVR falls back to the CPU automatically.</p>
-          <div class="form">
-            <label for="h-dec">Video decoding</label>
-            <div><select id="h-dec"></select><div class="hint" id="h-dec-hint"></div></div>
-            <label for="h-enc">H.264 encoder</label>
-            <div><select id="h-enc"></select><div class="hint">“Automatic” picks the encoder that matches the decoder.</div></div>
-            <label for="h-dev" id="h-dev-label">GPU device</label>
-            <div id="h-dev-wrap"><input type="text" id="h-dev" placeholder="/dev/dri/renderD128">
-              <div class="hint">Only for VAAPI (Linux, Intel/AMD). Leave empty for the default.</div></div>
-          </div>
-          <div class="actions">
-            <button class="primary">Save</button>
-            <button type="button" id="h-test">Test selected options</button>
-          </div>
-          <div id="h-result" style="margin-top:12px"></div>
-        </form>
-
-        <!-- system -->
-        <form class="card" data-sec="system" id="f-sys">
-          <h2>System &amp; login</h2>
-          <div class="form">
-            <label for="y-name">NVR name</label>
-            <div><input type="text" id="y-name" required></div>
-            <label for="y-listen">Web address and port</label>
-            <div><input type="text" id="y-listen" required placeholder="0.0.0.0:8080">
-              <div class="hint">0.0.0.0 = reachable from other devices on your network. Takes effect after a restart.</div></div>
-            <label for="y-user">Login username</label>
-            <div><input type="text" id="y-user" autocomplete="off">
-              <div class="hint">Leave empty to turn off the login.</div></div>
-            <label for="y-pass">Login password</label>
-            <div><input type="password" id="y-pass" autocomplete="new-password">
-              <div class="hint" id="y-pass-hint"></div></div>
-            <label for="y-ffmpeg">ffmpeg program</label>
-            <div><input type="text" id="y-ffmpeg" required>
-              <div class="hint">Name or full path of ffmpeg.</div></div>
-          </div>
-          <div class="actions"><button class="primary">Save</button></div>
-        </form>
-
-        <!-- info -->
-        <div class="card" data-sec="info">
-          <h2>System info</h2>
-          <dl id="info"></dl>
-        </div>
-      </div>
+      <div id="settings-body"></div>
     </div>
   </section>
 </main>
 
-<!-- CAMERA DIALOG -->
-<dialog id="cam-dialog">
-  <form id="f-cam" method="dialog">
-    <div class="head"><h2 id="cam-title">Add camera</h2><button type="button" class="small" onclick="closeCameraDialog()">✕</button></div>
-    <div class="body">
-      <div class="form">
-        <label for="c-name">Name</label>
-        <div><input type="text" id="c-name" required placeholder="Front door"></div>
-        <label></label>
-        <label class="check"><input type="checkbox" id="c-enabled"> Camera enabled</label>
-        <label for="c-url">Main stream URL</label>
-        <div><input type="text" id="c-url" required placeholder="rtsp://user:password@192.168.1.50:554/stream1">
-          <div class="hint">High-quality stream, used for recording. Common formats:<br>
-            Hikvision <code>…/Streaming/Channels/101</code> · Dahua/Amcrest <code>…/cam/realmonitor?channel=1&amp;subtype=0</code> ·
-            Reolink <code>…/h264Preview_01_main</code> · Tapo <code>…/stream1</code></div></div>
-        <label for="c-live">Sub-stream URL</label>
-        <div><input type="text" id="c-live" placeholder="Optional – e.g. …/stream2">
-          <div class="hint">Lower-resolution stream for the live view. Saves CPU and bandwidth.</div></div>
-        <label for="c-transport">RTSP transport</label>
-        <div><select id="c-transport"><option value="tcp">TCP (recommended)</option><option value="udp">UDP</option></select></div>
-        <label></label>
-        <div><button type="button" id="c-test">Test connection</button>
-          <div id="c-probe"></div></div>
-
-        <label for="c-mode">Recording</label>
-        <div><select id="c-mode">
-          <option value="continuous">Always (24/7)</option>
-          <option value="scheduled">On a schedule</option>
-          <option value="off">Off (live view only)</option></select></div>
-        <label class="sched">Schedule</label>
-        <div class="sched">
-          <div class="days" id="c-days"></div>
-          <div class="row" style="margin-top:8px">
-            <input type="time" id="c-start" style="width:auto"> <span class="muted">to</span> <input type="time" id="c-end" style="width:auto">
-          </div>
-          <div class="hint">If the end is earlier than the start, recording runs overnight. Same start and end = all day.</div>
-        </div>
-        <label></label>
-        <label class="check"><input type="checkbox" id="c-audio"> Record audio</label>
-        <label></label>
-        <div><label class="check"><input type="checkbox" id="c-transcode"> Convert recordings to H.264</label>
-          <div class="hint">Use this for H.265 cameras so recordings play in any browser. Re-encodes the video, so it
-            uses the GPU encoder from <i>GPU acceleration</i> (or the CPU).</div></div>
-      </div>
-      <div class="err" id="c-err" style="margin-top:12px" hidden></div>
-    </div>
-    <div class="foot">
-      <button type="button" onclick="closeCameraDialog()">Cancel</button>
-      <button class="primary" id="c-save">Save camera</button>
-    </div>
-  </form>
-</dialog>
-
+<dialog id="cam-dialog"><form id="f-cam" method="dialog"></form></dialog>
 <div id="toast" hidden></div>
-
-<script>
-const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-let status = null, settings = null, cameraCfgs = [], sysinfo = null;
-let page = 'live', focusId = null, liveGen = 0;
-
-// ---------- helpers ----------
-const fmtBytes = (b) => {
-  if (b == null) return '–';
-  const u = ['B','KB','MB','GB','TB']; let i = 0;
-  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
-  return b.toFixed(i ? 1 : 0) + ' ' + u[i];
-};
-const fmtDur = (s) => {
-  s = Math.floor(s); const d = Math.floor(s / 86400); s %= 86400;
-  const h = Math.floor(s / 3600); s %= 3600; const m = Math.floor(s / 60); s %= 60;
-  return (d ? d + 'd ' : '') + (d || h ? h + 'h ' : '') + (d || h || m ? m + 'm ' : '') + (d ? '' : s + 's');
-};
-const fmtTime = (d) => d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-const dayKey = (d) => d.toLocaleDateString([], {weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'});
-
-async function api(path, opts = {}) {
-  if (opts.json !== undefined) {
-    opts.body = JSON.stringify(opts.json); delete opts.json;
-    opts.headers = {'Content-Type': 'application/json'};
-  }
-  const r = await fetch(path, opts);
-  if (!r.ok) {
-    let msg = r.statusText;
-    try { msg = (await r.json()).error || msg; } catch (e) {}
-    throw new Error(msg);
-  }
-  return r.status === 204 ? null : r.json();
-}
-
-let toastTimer;
-function toast(msg, isError) {
-  const t = $('toast'); t.textContent = msg; t.className = isError ? 'error' : ''; t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, isError ? 6000 : 3000);
-}
-
-function fullscreen(id) {
-  document.fullscreenElement ? document.exitFullscreen() : $(id).requestFullscreen?.();
-}
-
-function camState(c) {
-  const r = c.recorder;
-  if (!c.enabled) return {cls: 'disabled', text: 'Disabled'};
-  if (r.state === 'recording') return {cls: 'recording', text: 'REC'};
-  if (r.state === 'connecting') return {cls: 'connecting', text: 'Connecting'};
-  if (r.state === 'retrying') return {cls: 'retrying', text: 'Offline'};
-  if (r.paused) return {cls: 'idle', text: 'Paused'};
-  if (c.record_mode === 'off') return {cls: 'idle', text: 'Live only'};
-  if (c.record_mode === 'scheduled') return {cls: 'idle', text: 'Waiting for schedule'};
-  return {cls: 'idle', text: 'Idle'};
-}
-const pillHtml = (c) => { const s = camState(c); return `<span class="pill st-${s.cls}"><span class="dot"></span>${esc(s.text)}</span>`; };
-
-// ---------- routing ----------
-function route() {
-  const [p, sub] = (location.hash.slice(1) || 'live').split('/');
-  page = ['live', 'recordings', 'settings'].includes(p) ? p : 'live';
-  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
-  for (const s of ['live', 'recordings', 'settings']) $('page-' + s).hidden = s !== page;
-  if (page !== 'recordings') { const v = $('player'); if (!v.paused) v.pause(); }
-  stopLive();
-  if (page === 'live') {
-    focusId = sub ? decodeURIComponent(sub) : null;
-    if (!focusId && status && status.cameras.length === 1) focusId = status.cameras[0].id;
-    renderLive();
-  } else if (page === 'recordings') {
-    if (sub) $('rec-cam').dataset.want = decodeURIComponent(sub);
-    renderRecCameras();
-  } else {
-    showSettings(sub || 'cameras');
-  }
-}
-window.addEventListener('hashchange', route);
-
-// ---------- status polling ----------
-async function refreshStatus() {
-  try { status = await api('api/status'); } catch (e) { return; }
-  $('nvr-name').textContent = status.name;
-  document.title = status.name;
-  if (page === 'live') updateLive();
-  if (page === 'settings') renderCamTable();
-}
-
-// ---------- live ----------
-function stopLive() {
-  liveGen++;
-  $('focus-img').removeAttribute('src');
-  document.querySelectorAll('#grid img').forEach(i => i.removeAttribute('src'));
-}
-
-function renderLive() {
-  if (!status) return;
-  const cams = status.cameras;
-  $('no-cameras').hidden = cams.length > 0;
-  const focus = focusId && cams.find(c => c.id === focusId);
-  $('live-grid-wrap').hidden = !!focus;
-  $('live-focus').hidden = !focus;
-  const gen = ++liveGen;
-  if (focus) {
-    const img = $('focus-img');
-    img.onerror = () => { if (gen === liveGen) { $('focus-msg').hidden = false; $('focus-msg').textContent = 'No picture – retrying…'; setTimeout(() => gen === liveGen && (img.src = `live/${focus.id}/stream.mjpeg?t=${Date.now()}`), 3000); } };
-    img.onload = () => { $('focus-msg').hidden = true; };
-    $('focus-msg').hidden = false; $('focus-msg').textContent = 'Connecting…';
-    img.src = `live/${encodeURIComponent(focus.id)}/stream.mjpeg?t=${Date.now()}`;
-    $('focus-snap').href = `snapshot/${encodeURIComponent(focus.id)}`;
-    $('focus-recs').href = `#recordings/${encodeURIComponent(focus.id)}`;
-    $('focus-back').hidden = cams.length === 1;
-  } else {
-    const grid = $('grid');
-    grid.innerHTML = cams.map(c => `
-      <div class="tile" data-id="${esc(c.id)}">
-        <img alt="">
-        <div class="msg">${c.enabled ? 'Connecting…' : 'Camera disabled'}</div>
-        <div class="label"><b>${esc(c.name)}</b><span class="p">${pillHtml(c)}</span></div>
-      </div>`).join('');
-    grid.querySelectorAll('.tile').forEach(t => {
-      const id = t.dataset.id;
-      t.onclick = () => location.hash = '#live/' + encodeURIComponent(id);
-      const cam = cams.find(c => c.id === id);
-      if (cam.enabled) pollFrame(t.querySelector('img'), t.querySelector('.msg'), id, gen);
-    });
-  }
-  updateLive();
-}
-
-// Grid tiles poll single frames (avoids the browser's limit on open streams).
-function pollFrame(img, msg, id, gen) {
-  const next = (delay) => setTimeout(() => {
-    if (gen !== liveGen || document.hidden) { if (gen === liveGen) next(1000); return; }
-    img.src = `live/${encodeURIComponent(id)}/frame.jpg?t=${Date.now()}`;
-  }, delay);
-  img.onload = () => { msg.hidden = true; next(400); };
-  img.onerror = () => { msg.hidden = false; msg.textContent = 'No picture – retrying…'; next(3000); };
-  next(0);
-}
-
-function updateLive() {
-  if (!status) return;
-  if (!focusId) {
-    // Re-render if the set of cameras changed.
-    const ids = [...document.querySelectorAll('#grid .tile')].map(t => t.dataset.id).join();
-    if (ids !== status.cameras.map(c => c.id).join() && page === 'live') return renderLive();
-    for (const c of status.cameras) {
-      const p = document.querySelector(`#grid .tile[data-id="${CSS.escape(c.id)}"] .p`);
-      if (p) p.innerHTML = pillHtml(c);
-    }
-    return;
-  }
-  const c = status.cameras.find(c => c.id === focusId);
-  if (!c) { location.hash = '#live'; return; }
-  const s = camState(c), r = c.recorder;
-  $('focus-pill').className = 'pill st-' + s.cls;
-  $('focus-pill').lastElementChild.textContent = s.text;
-  const btn = $('focus-rec');
-  const canRecord = c.enabled && c.record_mode !== 'off';
-  btn.hidden = !canRecord;
-  btn.textContent = r.paused ? 'Resume recording' : 'Pause recording';
-  btn.className = r.paused ? 'primary' : '';
-  btn.onclick = async () => {
-    if (!r.paused && !confirm('Pause recording for ' + c.name + '?\nIt resumes automatically when the NVR restarts.')) return;
-    await api(`api/cameras/${encodeURIComponent(c.id)}/${r.paused ? 'resume' : 'pause'}`, {method: 'POST'}).catch(e => toast(e.message, true));
-    refreshStatus();
-  };
-  const modes = {continuous: 'Always', scheduled: 'Scheduled', off: 'Off'};
-  $('focus-info').innerHTML = `
-    <dt>Name</dt><dd>${esc(c.name)}</dd>
-    <dt>Status</dt><dd>${esc(s.text === 'REC' ? 'Recording' : s.text)}</dd>
-    <dt>Recording mode</dt><dd>${modes[c.record_mode]}</dd>
-    <dt>Recording for</dt><dd>${r.since ? fmtDur((Date.now() - new Date(r.since)) / 1000) : '–'}</dd>
-    <dt>Reconnects</dt><dd>${r.restarts}</dd>
-    <dt>Encoding</dt><dd>${c.transcode ? esc(r.gpu || 'H.264 on CPU') + (r.gpu_fallback ? ' (GPU failed)' : '') : 'Copy (no re-encoding)'}</dd>
-    <dt>Stream</dt><dd>${esc(c.url)}</dd>`;
-  const errs = [];
-  if (r.last_error && r.state !== 'recording') errs.push(r.last_error);
-  if (r.gpu_fallback) errs.push('GPU acceleration failed, so this camera is using the CPU: ' + (r.gpu_error || 'unknown error'));
-  $('focus-err').hidden = !errs.length;
-  $('focus-err').textContent = errs.join(' — ');
-  const st = status.storage;
-  $('focus-storage').innerHTML = st ? `<dl>
-    <dt>All recordings</dt><dd>${fmtBytes(st.used_bytes)} (${st.count} files)</dd>
-    <dt>Disk free</dt><dd>${st.disk_free_bytes != null ? fmtBytes(st.disk_free_bytes) + ' of ' + fmtBytes(st.disk_total_bytes) : '–'}</dd></dl>
-    ${st.disk_total_bytes ? `<div class="bar"><div style="width:${(100 * (1 - st.disk_free_bytes / st.disk_total_bytes)).toFixed(1)}%"></div></div>` : ''}` : '';
-}
-
-document.addEventListener('visibilitychange', () => {
-  if (page !== 'live' || !focusId) return;
-  if (document.hidden) $('focus-img').removeAttribute('src'); else renderLive();
-});
-
-// ---------- recordings ----------
-let recordings = [], playing = null;
-
-function renderRecCameras() {
-  if (!status) return;
-  const sel = $('rec-cam'), want = sel.dataset.want || sel.value;
-  sel.innerHTML = status.cameras.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('') || '<option value="">No cameras</option>';
-  if (status.cameras.some(c => c.id === want)) sel.value = want;
-  delete sel.dataset.want;
-  loadRecordings();
-}
-
-async function loadRecordings() {
-  const id = $('rec-cam').value;
-  if (!id) { recordings = []; renderRecordings(); return; }
-  try { recordings = await api(`api/cameras/${encodeURIComponent(id)}/recordings`); } catch (e) { recordings = []; }
-  recordings.forEach(r => r.startDate = new Date(r.start));
-  const days = [...new Set(recordings.map(r => dayKey(r.startDate)))];
-  const sel = $('rec-day'), prev = sel.value;
-  sel.innerHTML = days.map(d => `<option>${d}</option>`).join('') || '<option>No recordings</option>';
-  if (days.includes(prev)) sel.value = prev;
-  renderRecordings();
-}
-
-function renderRecordings() {
-  const id = $('rec-cam').value, day = $('rec-day').value;
-  const list = recordings.filter(r => dayKey(r.startDate) === day);
-  const box = $('recs');
-  if (!list.length) { box.innerHTML = '<div class="empty" style="padding:20px">No recordings.</div>'; return; }
-  const cam = status && status.cameras.find(c => c.id === id);
-  const newest = recordings[0] && recordings[0].name;
-  const writing = cam && cam.recorder.state === 'recording';
-  box.innerHTML = '';
-  for (const r of list) {
-    const row = document.createElement('div');
-    const inProgress = writing && r.name === newest;
-    row.className = 'rec' + (playing === r.name ? ' active' : '');
-    const url = `recordings/${encodeURIComponent(id)}/${encodeURIComponent(r.name)}`;
-    row.innerHTML = `
-      <span class="t">${fmtTime(r.startDate)} ${inProgress ? '<span class="live-tag">● REC</span>' : ''}</span>
-      <span class="s">${fmtBytes(r.size)}</span>
-      <button class="small" data-a="play" title="Play">▶</button>
-      <a class="btn small" href="${url}?download=1" title="Download">⇩</a>
-      <button class="small" data-a="del" title="Delete" ${inProgress ? 'disabled' : ''}>✕</button>`;
-    row.querySelector('[data-a=play]').onclick = () => {
-      playing = r.name;
-      const v = $('player'); v.src = url; v.play().catch(() => {});
-      $('player-msg').hidden = true;
-      $('player-info').textContent = (cam ? cam.name + ' · ' : '') + r.startDate.toLocaleString();
-      renderRecordings();
-    };
-    row.querySelector('[data-a=del]').onclick = async () => {
-      if (!confirm('Delete recording from ' + r.startDate.toLocaleString() + '?')) return;
-      try { await api(`api/cameras/${encodeURIComponent(id)}/recordings/${encodeURIComponent(r.name)}`, {method: 'DELETE'}); }
-      catch (e) { toast('Delete failed: ' + e.message, true); }
-      loadRecordings();
-    };
-    box.appendChild(row);
-  }
-}
-$('player').onerror = () => {
-  if (!$('player').getAttribute('src')) return;
-  $('player-msg').hidden = false;
-  $('player-msg').textContent = 'This browser cannot play this recording (it may be H.265). Download it and use VLC, or turn on “Convert recordings to H.264” for this camera.';
-};
-$('rec-cam').onchange = () => { playing = null; loadRecordings(); };
-$('rec-day').onchange = renderRecordings;
-$('rec-refresh').onclick = loadRecordings;
-
-// ---------- settings ----------
-async function loadSettings() {
-  [settings, cameraCfgs] = await Promise.all([api('api/settings'), api('api/cameras')]);
-}
-
-async function showSettings(sec) {
-  document.querySelectorAll('#side a').forEach(a => a.classList.toggle('active', a.dataset.s === sec));
-  document.querySelectorAll('[data-sec]').forEach(el => el.hidden = el.dataset.sec !== sec);
-  try { await loadSettings(); } catch (e) { toast(e.message, true); return; }
-  if (sec === 'cameras') renderCamTable();
-  if (sec === 'storage') fillStorage();
-  if (sec === 'live') fillLive();
-  if (sec === 'hardware') fillHardware();
-  if (sec === 'system') fillSystem();
-  if (sec === 'info') fillInfo();
-}
-
-function renderCamTable() {
-  if (!status || $('cam-table').closest('[data-sec]').hidden) return;
-  const modes = {continuous: 'Always', scheduled: 'Scheduled', off: 'Off'};
-  $('cam-empty').hidden = cameraCfgs.length > 0;
-  $('cam-table').innerHTML = cameraCfgs.map(cfg => {
-    const st = status.cameras.find(c => c.id === cfg.id);
-    let sched = '';
-    if (cfg.record_mode === 'scheduled') sched = `<div class="sub">${cfg.schedule.days.map(d => DAYS[d]).join(', ')} ${esc(cfg.schedule.start)}–${esc(cfg.schedule.end)}</div>`;
-    return `<tr>
-      <td><b>${esc(cfg.name)}</b><div class="sub">${esc(st ? st.url : '')}</div></td>
-      <td class="hide-sm">${modes[cfg.record_mode]}${cfg.transcode ? ' · H.264' : ''}${cfg.record_audio ? ' · audio' : ''}${sched}</td>
-      <td>${st ? pillHtml(st) : ''}${st && st.recorder.gpu_fallback ? '<div class="sub" style="color:var(--amber)">GPU failed – using CPU</div>' : ''}${st && st.recorder.last_error && st.recorder.state !== 'recording' ? `<div class="sub err">${esc(st.recorder.last_error)}</div>` : ''}</td>
-      <td style="text-align:right"><div class="row" style="justify-content:flex-end">
-        <button class="small" onclick="openCameraDialog('${esc(cfg.id)}')">Edit</button>
-        <button class="small" onclick="deleteCamera('${esc(cfg.id)}')">Delete</button></div></td></tr>`;
-  }).join('');
-}
-
-async function deleteCamera(id) {
-  const cfg = cameraCfgs.find(c => c.id === id);
-  if (!confirm(`Delete camera "${cfg.name}"?`)) return;
-  const delRecs = confirm(`Also delete all recordings from "${cfg.name}"?\n\nOK = delete recordings\nCancel = keep them on disk`);
-  try {
-    await api(`api/cameras/${encodeURIComponent(id)}?delete_recordings=${delRecs}`, {method: 'DELETE'});
-    toast('Camera deleted');
-  } catch (e) { toast(e.message, true); }
-  await loadSettings(); await refreshStatus(); renderCamTable();
-}
-
-// camera dialog
-let editingId = null;
-$('c-days').innerHTML = DAYS.map((d, i) => `<label><input type="checkbox" value="${i}">${d}</label>`).join('');
-const syncSched = () => document.querySelectorAll('.sched').forEach(e => e.hidden = $('c-mode').value !== 'scheduled');
-$('c-mode').onchange = syncSched;
-
-async function openCameraDialog(id) {
-  if (!cameraCfgs.length && !settings) await loadSettings().catch(() => {});
-  editingId = id || null;
-  const c = id ? cameraCfgs.find(c => c.id === id) : {
-    name: '', enabled: true, url: '', live_url: '', rtsp_transport: 'tcp', record_mode: 'continuous',
-    schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: false, transcode: false };
-  $('cam-title').textContent = id ? 'Edit camera' : 'Add camera';
-  $('c-name').value = c.name; $('c-enabled').checked = c.enabled;
-  $('c-url').value = c.url; $('c-live').value = c.live_url; $('c-transport').value = c.rtsp_transport;
-  $('c-mode').value = c.record_mode;
-  document.querySelectorAll('#c-days input').forEach(i => i.checked = c.schedule.days.includes(+i.value));
-  $('c-start').value = c.schedule.start; $('c-end').value = c.schedule.end;
-  $('c-audio').checked = c.record_audio; $('c-transcode').checked = c.transcode;
-  $('c-probe').innerHTML = ''; $('c-err').hidden = true;
-  syncSched();
-  $('cam-dialog').showModal();
-}
-function closeCameraDialog() { $('cam-dialog').close(); }
-
-$('c-test').onclick = async () => {
-  const btn = $('c-test'), out = $('c-probe');
-  const url = $('c-url').value;
-  btn.disabled = true; btn.textContent = 'Connecting…'; out.innerHTML = '';
-  try {
-    const r = await api('api/probe', {method: 'POST', json: {url, rtsp_transport: $('c-transport').value}});
-    if (!r.ok) { out.innerHTML = `<div class="err" style="margin-top:8px">Could not connect: ${esc(r.error || 'unknown error')}</div>`; return; }
-    const tags = r.streams.map(s => s.kind === 'video'
-      ? `<span class="tag">Video: ${esc(s.codec.toUpperCase())} ${s.width || '?'}×${s.height || '?'}${s.fps ? ' @ ' + s.fps + ' fps' : ''}</span>`
-      : `<span class="tag">${esc(s.kind)}: ${esc(s.codec)}</span>`).join('');
-    const hevc = r.streams.some(s => s.kind === 'video' && /hevc|h265/i.test(s.codec));
-    out.innerHTML = `<div class="probe"><img src="${r.snapshot}" alt="Preview"><div>
-      <div class="ok">✓ Connected</div><div style="margin-top:6px">${tags}</div>
-      ${hevc ? '<div class="hint" style="color:var(--amber)">This camera sends H.265. Many browsers cannot play it – consider turning on “Convert recordings to H.264”, or set the camera to H.264.</div>' : ''}
-    </div></div>`;
-  } catch (e) {
-    out.innerHTML = `<div class="err" style="margin-top:8px">${esc(e.message)}</div>`;
-  } finally { btn.disabled = false; btn.textContent = 'Test connection'; }
-};
-
-$('f-cam').onsubmit = async (ev) => {
-  ev.preventDefault();
-  const days = [...document.querySelectorAll('#c-days input:checked')].map(i => +i.value);
-  if ($('c-mode').value === 'scheduled' && !days.length) { $('c-err').hidden = false; $('c-err').textContent = 'Choose at least one day for the schedule.'; return; }
-  const body = {
-    name: $('c-name').value.trim(), enabled: $('c-enabled').checked,
-    url: $('c-url').value.trim(), live_url: $('c-live').value.trim(), rtsp_transport: $('c-transport').value,
-    record_mode: $('c-mode').value, schedule: {days, start: $('c-start').value || '00:00', end: $('c-end').value || '00:00'},
-    record_audio: $('c-audio').checked, transcode: $('c-transcode').checked,
-  };
-  const btn = $('c-save'); btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    if (editingId) await api(`api/cameras/${encodeURIComponent(editingId)}`, {method: 'PUT', json: body});
-    else await api('api/cameras', {method: 'POST', json: body});
-    closeCameraDialog();
-    toast(editingId ? 'Camera updated' : 'Camera added');
-    await loadSettings(); await refreshStatus();
-    if (page === 'settings') renderCamTable(); else route();
-  } catch (e) {
-    $('c-err').hidden = false; $('c-err').textContent = e.message;
-  } finally { btn.disabled = false; btn.textContent = 'Save camera'; }
-};
-
-async function saveSettings(part, msg) {
-  try {
-    const r = await api('api/settings', {method: 'PUT', json: part});
-    toast(r.restart_required ? 'Saved. Restart the NVR to use the new web address.' : (msg || 'Settings saved'));
-    await loadSettings();
-    return true;
-  } catch (e) { toast(e.message, true); return false; }
-}
-
-function fillStorage() {
-  const s = settings.storage;
-  $('s-dir').value = s.dir; $('s-seg').value = Math.round(s.segment_seconds / 60) || 1;
-  $('s-ret').value = s.retention_days; $('s-max').value = s.max_storage_gb; $('s-free').value = s.min_free_gb;
-}
-$('f-storage').onsubmit = (ev) => { ev.preventDefault(); saveSettings({storage: {
-  dir: $('s-dir').value.trim(), segment_seconds: Math.round(+$('s-seg').value * 60),
-  retention_days: Math.round(+$('s-ret').value), max_storage_gb: +$('s-max').value, min_free_gb: +$('s-free').value }}); };
-
-function fillLive() {
-  const l = settings.live;
-  $('l-fps').value = l.fps;
-  const w = $('l-width'); if (![...w.options].some(o => +o.value === l.width)) w.add(new Option(l.width + ' px', l.width)); w.value = l.width;
-  const q = $('l-q'); if (![...q.options].some(o => +o.value === l.quality)) q.add(new Option('Custom (' + l.quality + ')', l.quality)); q.value = l.quality;
-}
-$('f-live').onsubmit = (ev) => { ev.preventDefault(); saveSettings({live: {fps: +$('l-fps').value, width: +$('l-width').value, quality: +$('l-q').value}}); };
-
-const DEC_LABELS = {none: 'Off (CPU)', auto: 'Automatic (use any GPU found)', cuda: 'NVIDIA (CUDA/NVDEC)', qsv: 'Intel Quick Sync (QSV)',
-  vaapi: 'VAAPI – Intel/AMD on Linux', videotoolbox: 'Apple VideoToolbox (macOS)', d3d11va: 'Direct3D 11 (Windows, any GPU)', dxva2: 'DXVA2 (older Windows)'};
-const ENC_LABELS = {auto: 'Automatic', libx264: 'CPU (libx264)', h264_nvenc: 'NVIDIA NVENC', h264_qsv: 'Intel Quick Sync',
-  h264_vaapi: 'VAAPI (Linux Intel/AMD)', h264_videotoolbox: 'Apple VideoToolbox', h264_amf: 'AMD AMF (Windows)', h264_mf: 'Windows Media Foundation'};
-
-async function fillHardware() {
-  if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
-  const caps = sysinfo ? sysinfo.capabilities : {hwaccels: [], encoders: []};
-  const h = settings.hardware;
-  $('h-dec').innerHTML = Object.entries(DEC_LABELS).map(([k, v]) => {
-    const avail = k === 'none' || k === 'auto' || caps.hwaccels.includes(k);
-    return `<option value="${k}" ${avail ? '' : 'disabled'}>${v}${avail ? '' : ' – not in this ffmpeg'}</option>`;
-  }).join('');
-  $('h-enc').innerHTML = Object.entries(ENC_LABELS).map(([k, v]) => {
-    const avail = k === 'auto' || caps.encoders.includes(k);
-    return `<option value="${k}" ${avail ? '' : 'disabled'}>${v}${avail ? '' : ' – not in this ffmpeg'}</option>`;
-  }).join('');
-  $('h-dec').value = h.hwaccel; $('h-enc').value = h.encoder; $('h-dev').value = h.device;
-  $('h-dec-hint').textContent = caps.hwaccels.length ? 'Supported by your ffmpeg: ' + caps.hwaccels.join(', ') + '. Use “Test” to check the hardware is really there.' : 'Your ffmpeg reports no GPU support.';
-  $('h-result').innerHTML = '';
-  syncHw();
-}
-const hwForm = () => ({hwaccel: $('h-dec').value, encoder: $('h-enc').value, device: $('h-dev').value.trim()});
-const syncHw = () => { const v = $('h-dec').value === 'vaapi' || $('h-enc').value === 'h264_vaapi'; $('h-dev-wrap').hidden = $('h-dev-label').hidden = !v; };
-$('h-dec').onchange = $('h-enc').onchange = syncHw;
-$('f-hw').onsubmit = (ev) => { ev.preventDefault(); saveSettings({hardware: hwForm()}, 'Saved. Cameras are restarting with the new settings.'); };
-$('h-test').onclick = async () => {
-  const btn = $('h-test'), out = $('h-result');
-  btn.disabled = true; btn.textContent = 'Testing…'; out.innerHTML = '<span class="muted">Running a short test clip through the GPU…</span>';
-  try {
-    const r = await api('api/hw-test', {method: 'POST', json: hwForm()});
-    const line = (label, t) => `<div><b>${label}:</b> <span class="${t.ok ? 'ok' : 'err'}">${t.ok ? '✓' : '✗'} ${esc(t.message)}</span></div>`;
-    out.innerHTML = line('Decoding', r.decoder) + line('Encoding', r.encoder);
-  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-  finally { btn.disabled = false; btn.textContent = 'Test selected options'; }
-};
-
-function fillSystem() {
-  const s = settings.server;
-  $('y-name').value = s.name; $('y-listen').value = s.listen; $('y-user').value = s.username;
-  $('y-pass').value = ''; $('y-ffmpeg').value = s.ffmpeg_path;
-  $('y-pass-hint').textContent = s.has_password ? 'A password is set. Leave empty to keep it.' : 'Required when a username is set.';
-}
-$('f-sys').onsubmit = async (ev) => {
-  ev.preventDefault();
-  const user = $('y-user').value.trim();
-  if (user && !$('y-pass').value && !settings.server.has_password) { toast('Enter a password for the login.', true); return; }
-  const ok = await saveSettings({server: {name: $('y-name').value, listen: $('y-listen').value, username: user,
-    password: $('y-pass').value, ffmpeg_path: $('y-ffmpeg').value}});
-  if (ok) { fillSystem(); refreshStatus(); sysinfo = null; }
-};
-
-async function fillInfo() {
-  sysinfo = await api('api/system').catch(() => null);
-  if (!sysinfo) return;
-  const c = sysinfo.capabilities, st = status && status.storage;
-  $('info').innerHTML = `
-    <dt>NVR version</dt><dd>${esc(sysinfo.version)}</dd>
-    <dt>Operating system</dt><dd>${esc(sysinfo.os)} (${esc(sysinfo.arch)})</dd>
-    <dt>Uptime</dt><dd>${fmtDur(sysinfo.uptime_seconds)}</dd>
-    <dt>Web address</dt><dd>${esc(sysinfo.listen)}</dd>
-    <dt>ffmpeg</dt><dd>${esc(c.ffmpeg_version || 'NOT FOUND')}</dd>
-    <dt>GPU decoders in ffmpeg</dt><dd>${esc(c.hwaccels.join(', ') || 'none')}</dd>
-    <dt>H.264 encoders in ffmpeg</dt><dd>${esc(c.encoders.join(', ') || 'none')}</dd>
-    <dt>Config file</dt><dd>${esc(sysinfo.config_path)}</dd>
-    <dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd>
-    <dt>Recordings</dt><dd>${st ? fmtBytes(st.used_bytes) + ' in ' + st.count + ' files' : '–'}</dd>
-    <dt>Disk free</dt><dd>${st && st.disk_free_bytes != null ? fmtBytes(st.disk_free_bytes) + ' of ' + fmtBytes(st.disk_total_bytes) : '–'}</dd>`;
-}
-
-// ---------- start ----------
-setInterval(() => { $('clock').textContent = new Date().toLocaleString(); }, 1000);
-setInterval(refreshStatus, 2000);
-setInterval(() => { if (page === 'recordings') loadRecordings(); }, 30000);
-refreshStatus().then(route);
-</script>
+<script src="app.js"></script>
 </body>
 </html>

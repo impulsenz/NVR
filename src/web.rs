@@ -35,6 +35,24 @@ type App = State<Arc<Manager>>;
 pub fn router(mgr: Arc<Manager>) -> Router {
     Router::new()
         .route("/", get(index))
+        .route(
+            "/app.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("../static/app.js"),
+                )
+            }),
+        )
+        .route(
+            "/app.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                    include_str!("../static/app.css"),
+                )
+            }),
+        )
         .route("/api/status", get(status))
         .route("/api/system", get(system))
         .route("/api/monitor", get(monitor))
@@ -46,11 +64,20 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/config/export", get(export_config))
         .route("/api/config/import", post(import_config))
         .route("/api/cameras", get(list_cameras).post(add_camera))
-        .route("/api/cameras/{id}", put(update_camera).delete(delete_camera))
+        .route(
+            "/api/cameras/{id}",
+            put(update_camera).delete(delete_camera),
+        )
         .route("/api/cameras/{id}/pause", post(pause))
         .route("/api/cameras/{id}/resume", post(resume))
-        .route("/api/cameras/{id}/recordings/{name}", axum::routing::delete(delete_recording))
-        .route("/api/cameras/{id}/events/{eid}", axum::routing::delete(delete_event))
+        .route(
+            "/api/cameras/{id}/recordings/{name}",
+            axum::routing::delete(delete_recording),
+        )
+        .route(
+            "/api/cameras/{id}/events/{eid}",
+            axum::routing::delete(delete_event),
+        )
         .route("/api/recordings", get(search))
         .route("/api/timeline", get(timeline))
         .route("/api/export", get(export_clip))
@@ -122,7 +149,8 @@ async fn status(State(m): App) -> Response {
             })
         })
         .collect();
-    let (warnings, errors) = logs::buffer().problems_since(Local::now() - chrono::Duration::hours(1));
+    let (warnings, errors) =
+        logs::buffer().problems_since(Local::now() - chrono::Duration::hours(1));
     Json(json!({
         "name": cfg.server.name,
         "version": env!("CARGO_PKG_VERSION"),
@@ -239,7 +267,10 @@ async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Respon
             (
                 [
                     (header::CONTENT_TYPE, "application/toml".to_string()),
-                    (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{name}\""),
+                    ),
                 ],
                 text,
             )
@@ -265,7 +296,9 @@ async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: String
     };
     let n = cfg.cameras.len();
     match m.import(cfg, q.keep_login).await {
-        Ok(restart) => Json(json!({ "ok": true, "cameras": n, "restart_required": restart })).into_response(),
+        Ok(restart) => {
+            Json(json!({ "ok": true, "cameras": n, "restart_required": restart })).into_response()
+        }
         Err(e) => bad(e),
     }
 }
@@ -283,7 +316,11 @@ async fn add_camera(State(m): App, Json(cam): Json<CameraConfig>) -> Response {
     }
 }
 
-async fn update_camera(State(m): App, Path(id): Path<String>, Json(cam): Json<CameraConfig>) -> Response {
+async fn update_camera(
+    State(m): App,
+    Path(id): Path<String>,
+    Json(cam): Json<CameraConfig>,
+) -> Response {
     match m.update_camera(&id, cam).await {
         Ok(c) => Json(c).into_response(),
         Err(e) => bad(e),
@@ -296,7 +333,11 @@ struct DeleteQuery {
     delete_recordings: bool,
 }
 
-async fn delete_camera(State(m): App, Path(id): Path<String>, Query(q): Query<DeleteQuery>) -> Response {
+async fn delete_camera(
+    State(m): App,
+    Path(id): Path<String>,
+    Query(q): Query<DeleteQuery>,
+) -> Response {
     match m.delete_camera(&id, q.delete_recordings).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
@@ -335,8 +376,19 @@ async fn start_preview(State(m): App, Json(req): Json<StreamReq>) -> Response {
     if req.url.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "enter a stream URL first");
     }
-    let token = format!("{:x}{:x}", Local::now().timestamp_nanos_opt().unwrap_or(0), std::process::id());
-    m.previews.lock().unwrap().insert(token.clone(), (req.url.trim().to_string(), req.rtsp_transport, Instant::now()));
+    let token = format!(
+        "{:x}{:x}",
+        Local::now().timestamp_nanos_opt().unwrap_or(0),
+        std::process::id()
+    );
+    m.previews.lock().unwrap().insert(
+        token.clone(),
+        (
+            req.url.trim().to_string(),
+            req.rtsp_transport,
+            Instant::now(),
+        ),
+    );
     Json(json!({ "url": format!("api/preview/{token}") })).into_response()
 }
 
@@ -347,9 +399,29 @@ async fn preview_stream(State(m): App, Path(token): Path<String>) -> Response {
     };
     let ffmpeg = m.config().server.ffmpeg_path;
     let child = tokio::process::Command::new(&ffmpeg)
-        .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-fflags", "nobuffer"])
+        .args([
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-fflags",
+            "nobuffer",
+        ])
         .args(ffmpeg::input_args(&url, &transport))
-        .args(["-an", "-vf", "fps=5,scale='min(640,iw)':-2", "-q:v", "6", "-t", "600", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
+        .args([
+            "-an",
+            "-vf",
+            "fps=5,scale='min(640,iw)':-2",
+            "-q:v",
+            "6",
+            "-t",
+            "600",
+            "-f",
+            "image2pipe",
+            "-c:v",
+            "mjpeg",
+            "pipe:1",
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -368,7 +440,9 @@ async fn preview_stream(State(m): App, Path(token): Path<String>) -> Response {
         let mut chunk = vec![0u8; 65536];
         let mut scan = 0;
         loop {
-            let n = match tokio::time::timeout(Duration::from_secs(20), stdout.read(&mut chunk)).await {
+            let n = match tokio::time::timeout(Duration::from_secs(20), stdout.read(&mut chunk))
+                .await
+            {
                 Ok(Ok(n)) if n > 0 => n,
                 _ => return,
             };
@@ -418,11 +492,18 @@ async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
     // A freshly created built-in engine needs a moment to load its model.
     let t = Instant::now();
     let mut res = ai.detect(&frame).await;
-    while matches!(res, Err(crate::ai::AiError::NotReady(_))) && t.elapsed() < Duration::from_secs(120) {
+    while matches!(res, Err(crate::ai::AiError::NotReady(_)))
+        && t.elapsed() < Duration::from_secs(120)
+    {
         tokio::time::sleep(Duration::from_millis(500)).await;
         res = ai.detect(&frame).await;
     }
-    let image = frame.jpeg(85).map(|j| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(j)));
+    let image = frame.jpeg(85).map(|j| {
+        format!(
+            "data:image/jpeg;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(j)
+        )
+    });
     match res {
         Ok(d) => Json(json!({ "ok": true, "detections": d, "image": image.ok(), "ms": t.elapsed().as_millis() as u64 }))
             .into_response(),
@@ -431,7 +512,10 @@ async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
 }
 
 /// One decoded RGB frame from the sub-stream, for AI tests when detection is off.
-async fn grab_frame(m: &Manager, c: &crate::manager::CameraRuntime) -> anyhow::Result<crate::imgutil::Frame> {
+async fn grab_frame(
+    m: &Manager,
+    c: &crate::manager::CameraRuntime,
+) -> anyhow::Result<crate::imgutil::Frame> {
     let ffmpeg = m.config().server.ffmpeg_path;
     let (w, h) = (640u32, 360u32);
     let out = tokio::time::timeout(
@@ -439,7 +523,17 @@ async fn grab_frame(m: &Manager, c: &crate::manager::CameraRuntime) -> anyhow::R
         tokio::process::Command::new(ffmpeg)
             .args(["-hide_banner", "-loglevel", "error"])
             .args(ffmpeg::input_args(c.cfg.live_url(), &c.cfg.rtsp_transport))
-            .args(["-frames:v", "1", "-vf", &format!("scale={w}:{h}"), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
+            .args([
+                "-frames:v",
+                "1",
+                "-vf",
+                &format!("scale={w}:{h}"),
+                "-pix_fmt",
+                "rgb24",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .output(),
@@ -448,7 +542,11 @@ async fn grab_frame(m: &Manager, c: &crate::manager::CameraRuntime) -> anyhow::R
     if out.stdout.len() != (w * h * 3) as usize {
         anyhow::bail!("could not get a picture from the camera");
     }
-    Ok(crate::imgutil::Frame { width: w, height: h, rgb: Arc::new(out.stdout) })
+    Ok(crate::imgutil::Frame {
+        width: w,
+        height: h,
+        rgb: Arc::new(out.stdout),
+    })
 }
 
 async fn cloud_test(Json(c): Json<crate::config::CloudConfig>) -> Response {
@@ -474,18 +572,32 @@ struct SearchQuery {
 }
 
 fn split_list(s: &str) -> Vec<String> {
-    s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
+    s.split(',')
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .map(String::from)
+        .collect()
 }
 
-fn range(from: Option<DateTime<chrono::FixedOffset>>, to: Option<DateTime<chrono::FixedOffset>>) -> (DateTime<Local>, DateTime<Local>) {
-    let to = to.map(|t| t.with_timezone(&Local)).unwrap_or_else(Local::now);
-    let from = from.map(|t| t.with_timezone(&Local)).unwrap_or(to - chrono::Duration::days(1));
+fn range(
+    from: Option<DateTime<chrono::FixedOffset>>,
+    to: Option<DateTime<chrono::FixedOffset>>,
+) -> (DateTime<Local>, DateTime<Local>) {
+    let to = to
+        .map(|t| t.with_timezone(&Local))
+        .unwrap_or_else(Local::now);
+    let from = from
+        .map(|t| t.with_timezone(&Local))
+        .unwrap_or(to - chrono::Duration::days(1));
     (from, to)
 }
 
 async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
     let (from, to) = range(q.from, q.to);
-    let t = |s: &Option<String>| s.as_deref().and_then(|x| NaiveTime::parse_from_str(x, "%H:%M").ok());
+    let t = |s: &Option<String>| {
+        s.as_deref()
+            .and_then(|x| NaiveTime::parse_from_str(x, "%H:%M").ok())
+    };
     let tod = match (t(&q.tod_from), t(&q.tod_to)) {
         (Some(a), Some(b)) => Some((a, b)),
         (Some(a), None) => Some((a, NaiveTime::from_hms_opt(23, 59, 59).unwrap())),
@@ -500,14 +612,18 @@ async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
         types: split_list(&q.types).into_iter().collect(),
         limit: q.limit.unwrap_or(500).min(5000),
     };
-    let items = tokio::task::spawn_blocking(move || library::search(&m, &lq)).await.unwrap_or_default();
+    let items = tokio::task::spawn_blocking(move || library::search(&m, &lq))
+        .await
+        .unwrap_or_default();
     Json(items).into_response()
 }
 
 async fn timeline(State(m): App, Query(q): Query<SearchQuery>) -> Response {
     let (from, to) = range(q.from, q.to);
     let cams = split_list(&q.cameras);
-    let t = tokio::task::spawn_blocking(move || library::timeline(&m, &cams, from, to)).await.unwrap_or_default();
+    let t = tokio::task::spawn_blocking(move || library::timeline(&m, &cams, from, to))
+        .await
+        .unwrap_or_default();
     Json(t).into_response()
 }
 
@@ -532,7 +648,12 @@ async fn export_clip(State(m): App, Query(q): Query<ExportQuery>, req: Request) 
     if parts.is_empty() {
         return err(StatusCode::NOT_FOUND, "no recordings in that time range");
     }
-    let name = format!("{}_{}_to_{}.mp4", c.cfg.id, from.format("%Y-%m-%d_%H-%M-%S"), to.format("%H-%M-%S"));
+    let name = format!(
+        "{}_{}_to_{}.mp4",
+        c.cfg.id,
+        from.format("%Y-%m-%d_%H-%M-%S"),
+        to.format("%H-%M-%S")
+    );
     let out = m.data_dir.join("tmp").join(&name);
     let ffmpeg = m.config().server.ffmpeg_path;
     if let Err(e) = ffmpeg::export(&ffmpeg, &parts, &out).await {
@@ -572,10 +693,10 @@ async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bo
     match ServeFile::new(path).oneshot(req).await {
         Ok(res) => {
             let mut res = res.map(Body::new);
-            if let Some(name) = name.filter(|_| download) {
-                if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
-                    res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
-                }
+            if let Some(name) = name.filter(|_| download)
+                && let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
+            {
+                res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
             }
             res
         }
@@ -583,7 +704,11 @@ async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bo
     }
 }
 
-async fn serve_recording(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+async fn serve_recording(
+    State(m): App,
+    Path((id, name)): Path<(String, String)>,
+    req: Request,
+) -> Response {
     let c = camera!(m, id);
     match storage::resolve(&c.dir, &name) {
         Ok(p) => serve_file(p, req, Some(name), false).await,
@@ -591,7 +716,11 @@ async fn serve_recording(State(m): App, Path((id, name)): Path<(String, String)>
     }
 }
 
-async fn serve_event_file(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+async fn serve_event_file(
+    State(m): App,
+    Path((id, name)): Path<(String, String)>,
+    req: Request,
+) -> Response {
     let c = camera!(m, id);
     match storage::resolve(c.events.dir(), &name) {
         Ok(p) => serve_file(p, req, Some(name), false).await,
@@ -600,7 +729,11 @@ async fn serve_event_file(State(m): App, Path((id, name)): Path<(String, String)
 }
 
 /// Resolve "rec"/"clip" + name to a file of the camera.
-fn media_path(c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyhow::Result<PathBuf> {
+fn media_path(
+    c: &crate::manager::CameraRuntime,
+    kind: &str,
+    name: &str,
+) -> anyhow::Result<PathBuf> {
     match kind {
         "clip" => storage::resolve(c.events.dir(), name),
         _ => storage::resolve(&c.dir, name),
@@ -611,7 +744,9 @@ fn media_path(c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyh
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
 fn fresh(cache: &std::path::Path, src: &std::path::Path) -> bool {
-    let (Ok(c), Ok(s)) = (std::fs::metadata(cache), std::fs::metadata(src)) else { return false };
+    let (Ok(c), Ok(s)) = (std::fs::metadata(cache), std::fs::metadata(src)) else {
+        return false;
+    };
     match (c.modified(), s.modified()) {
         // A file still being written changes; refresh its preview every minute.
         (Ok(ct), Ok(st)) => ct + Duration::from_secs(60) >= st,
@@ -619,9 +754,15 @@ fn fresh(cache: &std::path::Path, src: &std::path::Path) -> bool {
     }
 }
 
-async fn recording_thumb(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+async fn recording_thumb(
+    State(m): App,
+    Path((id, name)): Path<(String, String)>,
+    req: Request,
+) -> Response {
     let c = camera!(m, id);
-    let Ok(src) = storage::resolve(&c.dir, &name) else { return err(StatusCode::NOT_FOUND, "not found") };
+    let Ok(src) = storage::resolve(&c.dir, &name) else {
+        return err(StatusCode::NOT_FOUND, "not found");
+    };
     let cache = c.dir.join(".thumbs").join(format!("{name}.jpg"));
     if !fresh(&cache, &src) {
         let _p = THUMB_JOBS.acquire().await;
@@ -635,22 +776,29 @@ async fn recording_thumb(State(m): App, Path((id, name)): Path<(String, String)>
     serve_file(cache, req, None, false).await
 }
 
-async fn ensure_sprite(m: &Manager, c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyhow::Result<(PathBuf, ffmpeg::SpriteInfo)> {
+async fn ensure_sprite(
+    m: &Manager,
+    c: &crate::manager::CameraRuntime,
+    kind: &str,
+    name: &str,
+) -> anyhow::Result<(PathBuf, ffmpeg::SpriteInfo)> {
     let src = media_path(c, kind, name)?;
     let dir = src.parent().unwrap().join(".thumbs");
     let img = dir.join(format!("{name}.sprite.jpg"));
     let meta = dir.join(format!("{name}.sprite.json"));
-    let load = || -> Option<ffmpeg::SpriteInfo> { serde_json::from_slice(&std::fs::read(&meta).ok()?).ok() };
-    if fresh(&img, &src) {
-        if let Some(i) = load() {
-            return Ok((img, i));
-        }
+    let load = || -> Option<ffmpeg::SpriteInfo> {
+        serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()
+    };
+    if fresh(&img, &src)
+        && let Some(i) = load()
+    {
+        return Ok((img, i));
     }
     let _p = THUMB_JOBS.acquire().await;
-    if fresh(&img, &src) {
-        if let Some(i) = load() {
-            return Ok((img, i));
-        }
+    if fresh(&img, &src)
+        && let Some(i) = load()
+    {
+        return Ok((img, i));
     }
     std::fs::create_dir_all(&dir)?;
     let info = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &img).await?;
@@ -658,7 +806,10 @@ async fn ensure_sprite(m: &Manager, c: &crate::manager::CameraRuntime, kind: &st
     Ok((img, info))
 }
 
-async fn sprite_info(State(m): App, Path((id, kind, name)): Path<(String, String, String)>) -> Response {
+async fn sprite_info(
+    State(m): App,
+    Path((id, kind, name)): Path<(String, String, String)>,
+) -> Response {
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
         Ok((_, info)) => Json(json!({
@@ -670,7 +821,11 @@ async fn sprite_info(State(m): App, Path((id, kind, name)): Path<(String, String
     }
 }
 
-async fn sprite_image(State(m): App, Path((id, kind, name)): Path<(String, String, String)>, req: Request) -> Response {
+async fn sprite_image(
+    State(m): App,
+    Path((id, kind, name)): Path<(String, String, String)>,
+    req: Request,
+) -> Response {
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
         Ok((img, _)) => serve_file(img, req, None, false).await,
@@ -681,7 +836,10 @@ async fn sprite_image(State(m): App, Path((id, kind, name)): Path<(String, Strin
 // ---------- live ----------
 
 fn multipart_part(frame: &[u8]) -> Bytes {
-    let head = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", frame.len());
+    let head = format!(
+        "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+        frame.len()
+    );
     let mut part = Vec::with_capacity(head.len() + frame.len() + 2);
     part.extend_from_slice(head.as_bytes());
     part.extend_from_slice(frame);
@@ -689,9 +847,14 @@ fn multipart_part(frame: &[u8]) -> Bytes {
     part.into()
 }
 
-fn mjpeg_response(stream: impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static) -> Response {
+fn mjpeg_response(
+    stream: impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+) -> Response {
     Response::builder()
-        .header(header::CONTENT_TYPE, "multipart/x-mixed-replace; boundary=frame")
+        .header(
+            header::CONTENT_TYPE,
+            "multipart/x-mixed-replace; boundary=frame",
+        )
         .header(header::CACHE_CONTROL, "no-cache, no-store")
         .body(Body::from_stream(stream))
         .unwrap()
@@ -706,14 +869,20 @@ fn sub() -> Quality {
     Quality::Sub
 }
 
-async fn live_mjpeg(State(m): App, Path(id): Path<String>, Query(q): Query<QualityQuery>) -> Response {
+async fn live_mjpeg(
+    State(m): App,
+    Path(id): Path<String>,
+    Query(q): Query<QualityQuery>,
+) -> Response {
     let c = camera!(m, id);
     let mut rx = c.live(q.q).subscribe();
     drop(c);
     let (tx, mut out) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
     tokio::spawn(async move {
         while rx.changed().await.is_ok() {
-            let Some((_, frame)) = rx.borrow_and_update().clone() else { continue };
+            let Some((_, frame)) = rx.borrow_and_update().clone() else {
+                continue;
+            };
             if tx.send(Ok(multipart_part(&frame))).await.is_err() {
                 break;
             }
@@ -722,10 +891,20 @@ async fn live_mjpeg(State(m): App, Path(id): Path<String>, Query(q): Query<Quali
     mjpeg_response(futures_util::stream::poll_fn(move |cx| out.poll_recv(cx)))
 }
 
-async fn live_frame(State(m): App, Path(id): Path<String>, Query(q): Query<QualityQuery>) -> Response {
+async fn live_frame(
+    State(m): App,
+    Path(id): Path<String>,
+    Query(q): Query<QualityQuery>,
+) -> Response {
     let c = camera!(m, id);
     match c.live(q.q).frame().await {
-        Ok(jpg) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-cache, no-store")], jpg)
+        Ok(jpg) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "no-cache, no-store"),
+            ],
+            jpg,
+        )
             .into_response(),
         Err(e) => err(StatusCode::SERVICE_UNAVAILABLE, format!("{e:#}")),
     }
@@ -740,7 +919,13 @@ async fn snapshot(State(m): App, Path(id): Path<String>) -> Response {
                 c.cfg.id,
                 Local::now().format("%Y-%m-%d_%H-%M-%S")
             );
-            let mut res = ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-cache")], jpg)
+            let mut res = (
+                [
+                    (header::CONTENT_TYPE, "image/jpeg"),
+                    (header::CACHE_CONTROL, "no-cache"),
+                ],
+                jpg,
+            )
                 .into_response();
             if let Ok(v) = HeaderValue::from_str(&name) {
                 res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
@@ -818,7 +1003,9 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
     let id = sub.camera.as_bytes();
     loop {
         // The camera may be restarted by a settings change: re-subscribe.
-        let Some(c) = m.camera(&sub.camera) else { return };
+        let Some(c) = m.camera(&sub.camera) else {
+            return;
+        };
         let mut rx = c.live(sub.q).subscribe();
         drop(c);
         let mut last = Instant::now() - min_gap;
@@ -831,7 +1018,10 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
             let frame = rx.borrow_and_update().clone();
             if first {
                 first = false;
-                if frame.as_ref().is_none_or(|f| f.0.elapsed() > Duration::from_secs(5)) {
+                if frame
+                    .as_ref()
+                    .is_none_or(|f| f.0.elapsed() > Duration::from_secs(5))
+                {
                     continue;
                 }
             }
@@ -867,14 +1057,21 @@ async fn basic_auth(State(m): App, req: Request, next: Next) -> Response {
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Basic "))
-        .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok())
+        .and_then(|b64| {
+            base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .ok()
+        })
         .is_some_and(|creds| constant_time_eq(&creds, expected.as_bytes()));
     if ok {
         next.run(req).await
     } else {
         (
             StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Basic realm=\"NVR\", charset=\"UTF-8\"")],
+            [(
+                header::WWW_AUTHENTICATE,
+                "Basic realm=\"NVR\", charset=\"UTF-8\"",
+            )],
             "authentication required",
         )
             .into_response()

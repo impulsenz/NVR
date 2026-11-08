@@ -123,7 +123,10 @@ impl Detector {
             if started.elapsed() < Duration::from_secs(15) {
                 failures += 1;
                 if use_gpu && failures >= 2 {
-                    warn!("[{}] detection: GPU decoding failed, using CPU", self.cam.name);
+                    warn!(
+                        "[{}] detection: GPU decoding failed, using CPU",
+                        self.cam.name
+                    );
                     use_gpu = false;
                 }
             } else {
@@ -153,7 +156,16 @@ impl Detector {
         }
         let mut child = cmd
             .args(ffmpeg::input_args(&url, &self.cam.rtsp_transport))
-            .args(["-an", "-vf", &format!("fps={},scale={w}:{h}", d.fps), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
+            .args([
+                "-an",
+                "-vf",
+                &format!("fps={},scale={w}:{h}", d.fps),
+                "-pix_fmt",
+                "rgb24",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -178,7 +190,10 @@ impl Detector {
             s.running = true;
             s.error = None;
         }
-        info!("[{}] detection: started ({}×{} at {} fps)", self.cam.name, w, h, d.fps);
+        info!(
+            "[{}] detection: started ({}×{} at {} fps)",
+            self.cam.name, w, h, d.fps
+        );
 
         let frame_len = (w * h * 3) as usize;
         let mut motion = MotionDetector::new(w, h, d.sensitivity);
@@ -209,11 +224,16 @@ impl Detector {
                     return Ok(());
                 }
             }
-            let frame = Frame { width: w, height: h, rgb: Arc::new(buf) };
+            let frame = Frame {
+                width: w,
+                height: h,
+                rgb: Arc::new(buf),
+            };
             *self.latest.lock().unwrap() = Some(frame.clone());
             fps_count += 1;
             if fps_since.elapsed() >= Duration::from_secs(5) {
-                self.status.lock().unwrap().fps = fps_count as f32 / fps_since.elapsed().as_secs_f32();
+                self.status.lock().unwrap().fps =
+                    fps_count as f32 / fps_since.elapsed().as_secs_f32();
                 fps_count = 0;
                 fps_since = Instant::now();
             }
@@ -253,7 +273,11 @@ impl Detector {
     }
 
     fn new_event(&self, now: DateTime<Local>) -> Active {
-        let id = format!("ev-{}-{:03}", now.format("%Y%m%d-%H%M%S"), now.timestamp_subsec_millis());
+        let id = format!(
+            "ev-{}-{:03}",
+            now.format("%Y%m%d-%H%M%S"),
+            now.timestamp_subsec_millis()
+        );
         if let Some(b) = &self.buffer {
             b.hold(&id, now);
         }
@@ -275,7 +299,13 @@ impl Detector {
         }
     }
 
-    fn on_motion(&self, active: &mut Option<Active>, now: DateTime<Local>, frame: &Frame, bbox: (f32, f32, f32, f32)) {
+    fn on_motion(
+        &self,
+        active: &mut Option<Active>,
+        now: DateTime<Local>,
+        frame: &Frame,
+        bbox: (f32, f32, f32, f32),
+    ) {
         let a = active.get_or_insert_with(|| self.new_event(now));
         a.event.motion = true;
         // With "objects" as the trigger, motion only keeps a pending event open.
@@ -292,7 +322,12 @@ impl Detector {
         }
     }
 
-    fn handle_ai(&self, frame: Frame, res: Result<Vec<Detection>, AiError>, active: &mut Option<Active>) {
+    fn handle_ai(
+        &self,
+        frame: Frame,
+        res: Result<Vec<Detection>, AiError>,
+        active: &mut Option<Active>,
+    ) {
         let d = &self.cam.detect;
         let dets = match res {
             Ok(d) => {
@@ -312,7 +347,7 @@ impl Detector {
         };
         let hits: Vec<Detection> = dets
             .into_iter()
-            .filter(|x| x.score >= d.min_confidence && d.objects.iter().any(|o| *o == x.label))
+            .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
             .collect();
         if hits.is_empty() {
             return;
@@ -321,37 +356,60 @@ impl Detector {
         let a = active.get_or_insert_with(|| self.new_event(now));
         a.last_activity = now;
         let mut new_labels = Vec::new();
+        let mut changed = !a.qualified;
         for h in &hits {
             match a.event.labels.iter_mut().find(|l| l.label == h.label) {
-                Some(l) => l.score = l.score.max(h.score),
+                Some(l) => {
+                    if h.score > l.score + 0.05 {
+                        changed = true;
+                    }
+                    l.score = l.score.max(h.score);
+                }
                 None => {
-                    a.event.labels.push(Label { label: h.label.clone(), score: h.score });
+                    a.event.labels.push(Label {
+                        label: h.label.clone(),
+                        score: h.score,
+                    });
                     new_labels.push(format!("{} {:.0}%", h.label, h.score * 100.0));
+                    changed = true;
                 }
             }
         }
         a.event.labels.sort_by(|x, y| y.score.total_cmp(&x.score));
-        let best = hits.iter().max_by(|x, y| x.score.total_cmp(&y.score)).unwrap();
-        if best.score > a.thumb_score {
+        let best = hits
+            .iter()
+            .max_by(|x, y| x.score.total_cmp(&y.score))
+            .unwrap();
+        if best.score > a.thumb_score + 0.05 {
             self.save_thumb(a, &frame, (best.x, best.y, best.w, best.h), best.score);
+            changed = true;
         }
         if !new_labels.is_empty() {
             info!(target: "event", "[{}] alert: {}", self.cam.name, new_labels.join(", "));
         }
         a.qualified = true;
-        self.store.save(a.event.clone());
+        // Only write when something changed (the final state is saved when the event ends).
+        if changed {
+            self.store.save(a.event.clone());
+        }
         self.mark_active(a);
     }
 
-    fn save_thumb(&self, a: &mut Active, frame: &Frame, (x, y, w, h): (f32, f32, f32, f32), score: f32) {
+    fn save_thumb(
+        &self,
+        a: &mut Active,
+        frame: &Frame,
+        (x, y, w, h): (f32, f32, f32, f32),
+        score: f32,
+    ) {
         let crop = frame.crop(x, y, w, h, 0.25, 200).fit(480);
         let name = format!("{}.jpg", a.event.id);
         let _ = std::fs::create_dir_all(self.store.dir());
-        if let Ok(j) = crop.jpeg(85) {
-            if std::fs::write(self.store.dir().join(&name), j).is_ok() {
-                a.event.thumb = Some(name);
-                a.thumb_score = score;
-            }
+        if let Ok(j) = crop.jpeg(85)
+            && std::fs::write(self.store.dir().join(&name), j).is_ok()
+        {
+            a.event.thumb = Some(name);
+            a.thumb_score = score;
         }
     }
 
@@ -447,7 +505,9 @@ impl MotionDetector {
                 for dy in 0..4 {
                     for dx in 0..4 {
                         let i = ((y * 4 + dy) * self.src_w + x * 4 + dx) * 3;
-                        sum += 0.299 * rgb[i] as f32 + 0.587 * rgb[i + 1] as f32 + 0.114 * rgb[i + 2] as f32;
+                        sum += 0.299 * rgb[i] as f32
+                            + 0.587 * rgb[i + 1] as f32
+                            + 0.114 * rgb[i + 2] as f32;
                     }
                 }
                 g[y * self.w + x] = sum / 16.0;
@@ -481,17 +541,25 @@ impl MotionDetector {
         if fraction > 0.65 {
             self.bg = g;
             self.streak = 0;
-            return Some(MotionResult { moving: false, fraction, bbox: (0.0, 0.0, 1.0, 1.0) });
+            return Some(MotionResult {
+                moving: false,
+                fraction,
+                bbox: (0.0, 0.0, 1.0, 1.0),
+            });
         }
         // Slowly absorb changes into the background.
-        let alpha = if self.frames < 10 { 0.5 } else { 0.05 };
+        let alpha = if self.frames < 10 { 0.5 } else { 0.1 };
         for (b, v) in self.bg.iter_mut().zip(g.iter()) {
             *b += (v - *b) * alpha;
         }
         if self.frames < 10 {
             return None;
         }
-        self.streak = if fraction > self.min_fraction { self.streak + 1 } else { 0 };
+        self.streak = if fraction > self.min_fraction {
+            self.streak + 1
+        } else {
+            0
+        };
         let bbox = if n > 0 {
             (
                 x0 as f32 / self.w as f32,
@@ -503,7 +571,11 @@ impl MotionDetector {
             (0.0, 0.0, 1.0, 1.0)
         };
         // Require two frames in a row to ignore single-frame noise.
-        Some(MotionResult { moving: self.streak >= 2, fraction, bbox })
+        Some(MotionResult {
+            moving: self.streak >= 2,
+            fraction,
+            bbox,
+        })
     }
 }
 

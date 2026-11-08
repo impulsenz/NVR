@@ -1,54 +1,88 @@
 # NVR
 
-A small, self-hosted network video recorder for home surveillance, written in Rust.
-It records IP cameras around the clock (or on a schedule) and gives you a web interface
-to watch them live, browse and play recordings, and manage everything, including adding
-cameras, from the browser.
+A self-hosted network video recorder for home surveillance, written in Rust. It records your IP
+cameras, spots people, vehicles and animals with AI, and gives you a fast web interface for live
+viewing, finding footage, and managing everything, all from the browser.
 
 ## Features
 
-**Cameras**
-- Add, edit and delete cameras from the web interface. Changes take effect immediately.
-- **Test connection** button: shows a preview image plus the stream's codec, resolution and frame rate.
-- Main stream for recording, optional sub-stream for the live view.
-- RTSP over TCP or UDP.
+**Live view**
+- Dashboard of all cameras that you can **drag, drop and resize** (Live → Edit layout).
+- Always running: grid pictures come from each camera's sub-stream over one WebSocket and keep
+  updating while you use other pages, so switching back is instant.
+- Full-quality streams are **preloaded in the background**: opening a camera shows HD immediately.
+- Click a camera for a big view with its **recent alerts and recordings** beside it. Play them in place.
+- Overlays you can configure: camera name, **date & time** (choose the format and corner),
+  **frames per second** and stream details, and **fullscreen buttons** in any corners.
+- Active alerts are highlighted on the tile ("person", "car", …).
 
 **Recording**
-- Per camera: **Always (24/7)**, **On a schedule** (days of the week + time window, overnight supported), or **Off**.
-- Pause/resume recording from the live view.
-- Video is copied as-is by default (very low CPU), or optionally **converted to H.264** so H.265 cameras play in any browser.
-- Files survive power cuts (fragmented MP4), and recording auto-reconnects with backoff if a camera drops out or stalls.
-- Optional audio.
+- Per-camera modes, like Blue Iris:
+  - **HD 24/7**
+  - **Sub-stream 24/7** (saves space)
+  - **Sub-stream 24/7 + HD clips on alerts**
+  - **HD on alerts only**
+  - **Off**
+- **Pre-event buffer**: in alert modes, full-quality video is buffered continuously (30 s by default),
+  so every alert clip includes what happened *before* it. Video that doesn't contain an alert is discarded.
+- **File length** per camera: 5 min, 15 min, 30 min, 1 h … or one long file per day.
+- Recording frame rate, audio (on by default), H.264 conversion, and schedules.
+- **Storage folder per camera**: another drive, a NAS (`\\NAS\cameras`, `/mnt/nas`) or a synced cloud
+  folder (Google Drive / OneDrive for desktop).
+- Per-camera **retention days** and **GB limit**, plus global limits and a minimum free disk space.
+- **Cloud backup** with rclone (Google Drive, OneDrive, Dropbox, S3, B2, …): alerts only, or everything.
+- Recordings survive power cuts, and cameras reconnect automatically.
 
-**Storage**
-- Configurable file length.
-- Automatic clean-up by age, by total size, and when free disk space runs low. The oldest recordings go first.
+**Motion detection & AI**
+- Built-in motion detection with adjustable sensitivity. It ignores lighting changes.
+- Object recognition, with a choice of AI:
+  - **Built-in**: a YOLOX model runs on this computer's CPU. It's free and private, and the model downloads automatically.
+  - **AI server on your network**: CodeProject.AI Server or DeepStack, which can use another computer's GPU.
+  - **Ollama**: a local vision model such as qwen2.5vl or llava.
+  - **Google Gemini**: has a free tier; needs an API key.
+  - **Any OpenAI-compatible API**: OpenAI, OpenRouter, Groq, LM Studio, …
+- Choose which objects alert (person, car, dog, …), the minimum confidence, and whether *any motion*
+  or *only recognized objects* make an alert.
+- Each alert gets a **thumbnail cropped around the detected object**.
+- "Test on this camera" shows the camera's picture with detection boxes.
 
-**GPU acceleration**
-- Hardware video decoding for the live view, and hardware H.264 encoding for cameras that convert recordings.
-- NVIDIA (CUDA/NVENC), Intel Quick Sync, VAAPI (Intel/AMD on Linux), Apple VideoToolbox, and Direct3D/AMF/Media Foundation on Windows.
-- Shows which GPU options your ffmpeg supports, and a **Test** button checks the hardware really works.
-- If the GPU fails, that camera **falls back to the CPU automatically** and the UI says why.
+**Recordings**
+- **Calendar** to pick a single day or a range, optionally limited to a time of day.
+- Filter by **camera(s)** and **alert type** (tick any of Person, Car, Truck, Dog, Motion, Recordings, …).
+- Cards with **previews**: the alert thumbnail, or a frame from the recording.
+- Player with a **scrub bar that previews frames as you move along it**, and fast seeking.
+- **Clip export**: mark a start and end (buttons or drag the handles) and download just that part.
+- **Multi-camera timeline**: watch several cameras at the same moment, scrub across all of them at once
+  (each shows a quick time-lapse preview), jump between alerts, and export the same time range from each camera.
 
-**Viewing**
-- Live grid of all cameras, and a full-size single-camera view with snapshot and fullscreen.
-- Recordings browser by camera and day, with playback, seeking, download and delete.
-- Works on phones.
+**System & logs**
+- **CPU, GPU and memory** usage with graphs (1 hour to 30 days, kept across restarts), so you can see if
+  the server was overloaded while you were away. NVIDIA GPUs are read via nvidia-smi, AMD on Linux via
+  sysfs, and any GPU on Windows via performance counters.
+- **Disk space** for every storage location, **MB/GB recorded per hour and per day** for each camera, and
+  an estimate of **how many days of recording fit** with your current settings.
+- **Logs page**: errors, warnings, alerts and camera events, filterable by level, type, camera and text.
+  Also saved to `nvr-data/nvr.log`.
 
-**System**
-- NVR name, web port, optional login (HTTP basic auth), ffmpeg location.
-- System info page: version, ffmpeg build, GPU capabilities, disk usage.
-
-## Requirements
-
-- [Rust](https://rustup.rs) (to build)
-- [ffmpeg](https://ffmpeg.org), including `ffprobe` (normally installed together)
-
-See the install steps below for your system.
+**Setup**
+- Add, edit, **clone** and delete cameras in the browser.
+- **Camera brand quick setup**: pick the brand, enter the IP and login, and the main and sub-stream URLs
+  are filled in for you. 15 common formats are included.
+- **Test connection** plays both streams live and shows their codec, resolution and frame rate.
+- **Export / import your whole setup** (cameras, settings, layout) to restore after a reinstall.
+- GPU acceleration (NVIDIA, Intel, AMD, Apple) with automatic CPU fallback.
+- Optional login.
 
 ## Install
 
-**Linux (Ubuntu/Debian/Raspberry Pi OS)**
+You need [Rust](https://rustup.rs) and [ffmpeg](https://ffmpeg.org) (with ffprobe).
+
+**Windows** (PowerShell; accept the Visual Studio Build Tools when the Rust installer asks):
+```bash
+winget install Git.Git Rustlang.Rustup Gyan.FFmpeg
+```
+
+**Linux (Ubuntu/Debian/Raspberry Pi OS)**:
 ```bash
 sudo apt update && sudo apt install -y git ffmpeg build-essential curl
 ```
@@ -56,18 +90,12 @@ sudo apt update && sudo apt install -y git ffmpeg build-essential curl
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-**macOS**
+**macOS**:
 ```bash
 brew install git ffmpeg rustup && rustup-init
 ```
 
-**Windows (PowerShell)**
-```bash
-winget install Git.Git Rustlang.Rustup Gyan.FFmpeg
-```
-
-Then open a new terminal and build:
-
+Then, in a new terminal:
 ```bash
 git clone https://github.com/impulsenz/NVR.git
 ```
@@ -83,106 +111,65 @@ cargo build --release
 ```bash
 ./target/release/nvr
 ```
+(Windows: `.\target\release\nvr.exe`)
 
-Open <http://localhost:8080> (or `http://<this-computer's-IP>:8080` from another device), go to
-**Settings → Cameras → Add camera**, paste your camera's RTSP URL, and click **Test connection**.
+Open <http://localhost:8080> (or `http://<this-computer's-IP>:8080` from a phone) and go to
+**Settings → Cameras → Add camera**.
 
-On first run, `nvr.toml` is created next to where you started it, and recordings go into
-`recordings/<camera>/`. To use a different config file: `nvr /path/to/nvr.toml`.
-Stop with Ctrl+C. The current file is closed cleanly.
+Files are created next to where you start it:
+- `nvr.toml`: all settings (normally changed from the web page)
+- `nvr-data/`: logs, system history, AI models
+- `recordings/<camera>/`: recordings; `events/` inside holds alert clips and thumbnails
 
-### Camera stream URLs
+### Getting started tips
 
-| Brand | Main stream | Sub-stream |
-|---|---|---|
-| Hikvision | `rtsp://user:pass@IP:554/Streaming/Channels/101` | `.../102` |
-| Dahua / Amcrest | `rtsp://user:pass@IP:554/cam/realmonitor?channel=1&subtype=0` | `subtype=1` |
-| Reolink | `rtsp://user:pass@IP:554/h264Preview_01_main` | `..._sub` |
-| TP-Link Tapo | `rtsp://user:pass@IP:554/stream1` | `stream2` |
-
-Many cameras need RTSP turned on in their app first; Tapo also needs a separate "camera account".
+1. Add each camera with both its **main stream and sub-stream**. The sub-stream is used for the grid,
+   motion detection and AI, and saves a lot of CPU.
+2. For storage-friendly recording, use **Sub-stream 24/7 + HD on alerts**.
+3. Turn on AI: **Settings → Object recognition → Built-in**, then tick *Object recognition* on each camera
+   (*Motion & AI* tab). Choose **Only recognized objects** to ignore trees, shadows and rain.
+4. Check **System** after a day to see how much space each camera uses and how many days fit.
 
 ### Testing without a camera
 
-A local video file works as a camera URL (it loops in real time):
-
+A video file works as a camera URL (it plays in a loop):
 ```bash
 ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15 -t 30 -c:v libx264 -pix_fmt yuv420p test.mp4
 ```
 
-Add a camera with the URL `test.mp4` (or its full path).
-
-## GPU acceleration
-
-Normal recording copies the camera's video without decoding it, so it needs no GPU.
-The GPU is used for:
-
-1. **Live view:** the camera stream is decoded to show it in the browser.
-2. **Convert recordings to H.264** (per-camera option): the stream is decoded and re-encoded.
-
-In **Settings → GPU acceleration**, pick the decoder and encoder for your hardware, then click **Test**:
-
-| Hardware | Decoding | Encoder |
-|---|---|---|
-| NVIDIA | NVIDIA (CUDA) | NVIDIA NVENC |
-| Intel (any OS) | Intel Quick Sync | Intel Quick Sync |
-| Intel/AMD on Linux | VAAPI | VAAPI |
-| Mac | Apple VideoToolbox | Apple VideoToolbox |
-| Windows, AMD | Direct3D 11 | AMD AMF |
-
-The GPU must be supported by your ffmpeg build and its drivers must be installed (for NVIDIA, the
-proprietary driver; for VAAPI, e.g. `intel-media-va-driver` or `mesa-va-drivers`). Options your
-ffmpeg doesn't support are greyed out.
-
 ## Notes
 
-- **Security:** Settings show camera URLs including their passwords. Turn on the login
-  (Settings → System & login) if others use your network. The login is HTTP basic auth, so put
-  the NVR behind HTTPS (e.g. a reverse proxy) before exposing it to the internet.
-- **Upgrading from 0.1:** the old single-camera config is converted automatically and existing
-  recordings are moved into the camera's folder.
-- Changing the web port needs a restart. Changing storage, live view or GPU settings briefly
-  restarts the cameras.
-- Disk-space reporting (and the "keep free disk space" rule) currently works on Linux and macOS only.
+- **H.265 cameras:** recording works, but not every browser plays H.265. Turn on *Convert recordings to
+  H.264* for the camera, or download the file and use VLC. Previews and thumbnails work either way.
+- **Cloud AI** (Gemini, OpenAI…) sends camera pictures to that service. Set a requests-per-minute limit for
+  free tiers. The built-in AI and local servers keep everything at home.
+- **Security:** camera passwords are visible in camera settings. Turn on the login if others use your
+  network, and use HTTPS (e.g. a reverse proxy) before exposing it to the internet.
+- **Upgrading:** older `nvr.toml` files are converted automatically.
 
 ## How it works
 
 ```
-camera ─RTSP─► ffmpeg (copy, or GPU decode→H.264 encode) ─► recordings/<camera>/<camera>_<time>.mp4
-       ─RTSP─► ffmpeg (GPU decode → JPEG) ─► browsers (only while someone is watching)
+camera ─ main stream ─► ffmpeg (copy) ─► 24/7 files            ─┐
+       │              └► ffmpeg (copy) ─► .buffer/ (rolling) ─► alert clips
+       └ sub-stream ──► ffmpeg (RGB, 5 fps) ─► motion detector ─► AI ─► events + thumbnails
+                     └► ffmpeg (JPEG) ─► WebSocket ─► browser grid  (HD likewise, on demand)
 ```
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | Startup and shutdown |
-| `src/config.rs` | `nvr.toml` format, defaults, validation, schedules |
-| `src/manager.rs` | Running cameras; applies and saves changes made in the UI |
-| `src/recorder.rs` | Per-camera recording process: schedule, reconnect, stall detection, GPU fallback |
-| `src/live.rs` | Per-camera on-demand live stream |
-| `src/ffmpeg.rs` | ffmpeg command lines, GPU options, capability detection, connection test |
-| `src/storage.rs` | Recording files and retention |
-| `src/web.rs` | HTTP API and login |
-| `static/index.html` | The web interface (built into the program) |
-
-### HTTP API
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/status` | All cameras' state and storage |
-| GET / PUT | `/api/settings` | General settings |
-| GET / POST | `/api/cameras` | List / add cameras |
-| PUT / DELETE | `/api/cameras/{id}` | Edit / delete (`?delete_recordings=true`) |
-| POST | `/api/cameras/{id}/pause`, `/resume` | Pause/resume recording |
-| GET | `/api/cameras/{id}/recordings` | Recordings, newest first |
-| DELETE | `/api/cameras/{id}/recordings/{name}` | Delete a recording |
-| POST | `/api/probe` | Test a stream URL |
-| GET | `/api/system` | Version and GPU capabilities |
-| POST | `/api/hw-test` | Test GPU options |
-| GET | `/recordings/{id}/{name}` | Play a file (`?download=1` to download) |
-| GET | `/live/{id}/stream.mjpeg`, `/live/{id}/frame.jpg` | Live view |
-| GET | `/snapshot/{id}` | Full-resolution JPEG |
-
-## Ideas for next steps
-
-Motion detection with events on a timeline, notifications, PTZ control via ONVIF,
-camera auto-discovery, user accounts, and running as a system service.
+| `src/manager.rs` | Running cameras; applies and saves changes; usage estimates |
+| `src/recorder.rs` | Recording processes: schedule, reconnect, stall detection, GPU fallback |
+| `src/buffer.rs` | Pre-event buffer and alert clips |
+| `src/detect.rs` | Motion detection and event lifecycle |
+| `src/ai.rs` | AI providers (built-in YOLOX, CodeProject.AI/DeepStack, Ollama, Gemini, OpenAI-compatible) |
+| `src/events.rs` | Alert storage |
+| `src/live.rs` | Live JPEG streams |
+| `src/library.rs` | Recording search, timelines, export ranges |
+| `src/storage.rs` | Files, usage, retention |
+| `src/sysmon.rs` | CPU/GPU/RAM monitor and history |
+| `src/logs.rs` | Log page and log file |
+| `src/cloud.rs` | rclone backup |
+| `src/ffmpeg.rs` | ffmpeg commands, GPU options, previews, export |
+| `src/web.rs` | HTTP API and WebSocket |
+| `static/` | Web interface (built into the program) |

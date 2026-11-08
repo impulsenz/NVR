@@ -27,12 +27,17 @@ pub struct Recording {
 }
 
 pub fn valid_component(s: &str) -> bool {
-    !s.is_empty() && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    !s.is_empty()
+        && !s.starts_with('.')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
 }
 
 /// All continuous recordings in one camera folder, newest first.
 pub fn list(dir: &Path) -> Vec<Recording> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut out: Vec<Recording> = entries
         .flatten()
         .filter_map(|e| {
@@ -46,7 +51,12 @@ pub fn list(dir: &Path) -> Vec<Recording> {
             }
             let modified: DateTime<Local> = meta.modified().ok()?.into();
             let start = parse_start(&name).unwrap_or(modified);
-            Some(Recording { name, size: meta.len(), start, end: modified.max(start) })
+            Some(Recording {
+                name,
+                size: meta.len(),
+                start,
+                end: modified.max(start),
+            })
         })
         .collect();
     out.sort_by(|a, b| b.start.cmp(&a.start).then(b.name.cmp(&a.name)));
@@ -93,15 +103,20 @@ pub fn camera_usage(id: &str, dir: &Path) -> CameraUsage {
     let events_dir = dir.join("events");
     let now = Local::now();
     let day_ago = now - CDuration::hours(24);
-    let mut u = CameraUsage { camera: id.into(), dir: dir.to_path_buf(), files: recs.len(), ..Default::default() };
+    let mut u = CameraUsage {
+        camera: id.into(),
+        dir: dir.to_path_buf(),
+        files: recs.len(),
+        ..Default::default()
+    };
     let mut items: Vec<(DateTime<Local>, u64)> = recs.iter().map(|r| (r.start, r.size)).collect();
     if let Ok(rd) = std::fs::read_dir(&events_dir) {
         for e in rd.flatten() {
-            if let Ok(m) = e.metadata() {
-                if m.is_file() {
-                    let t: DateTime<Local> = m.modified().map(Into::into).unwrap_or(now);
-                    items.push((t, m.len()));
-                }
+            if let Ok(m) = e.metadata()
+                && m.is_file()
+            {
+                let t: DateTime<Local> = m.modified().map(Into::into).unwrap_or(now);
+                items.push((t, m.len()));
             }
         }
     }
@@ -125,7 +140,10 @@ pub fn camera_usage(id: &str, dir: &Path) -> CameraUsage {
 /// per-camera folders.
 pub fn migrate_flat_files(root: &Path, camera_ids: &[String]) {
     for r in list(root) {
-        if let Some(id) = camera_ids.iter().find(|id| r.name.starts_with(&format!("{id}_"))) {
+        if let Some(id) = camera_ids
+            .iter()
+            .find(|id| r.name.starts_with(&format!("{id}_")))
+        {
             let dir = root.join(id);
             if std::fs::create_dir_all(&dir).is_ok() {
                 let _ = std::fs::rename(root.join(&r.name), dir.join(&r.name));
@@ -164,7 +182,10 @@ impl Candidate {
                     true
                 }
                 Err(e) => {
-                    warn!("retention: could not delete {}: {e}", dir.join(name).display());
+                    warn!(
+                        "retention: could not delete {}: {e}",
+                        dir.join(name).display()
+                    );
                     false
                 }
             },
@@ -191,8 +212,18 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
         .cameras
         .iter()
         .map(|c| {
-            let days = if c.retention_days > 0 { c.retention_days } else { cfg.storage.retention_days };
-            (c.id.clone(), cfg.camera_dir(c), days, c.max_storage_gb, stores.get(&c.id).cloned())
+            let days = if c.retention_days > 0 {
+                c.retention_days
+            } else {
+                cfg.storage.retention_days
+            };
+            (
+                c.id.clone(),
+                cfg.camera_dir(c),
+                days,
+                c.max_storage_gb,
+                stores.get(&c.id).cloned(),
+            )
         })
         .collect();
     // Folders of removed cameras under the default root still age out.
@@ -217,17 +248,25 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
             .map(|r| Candidate {
                 start: r.start,
                 size: r.size,
-                item: Item::File { dir: dir.clone(), name: r.name },
+                item: Item::File {
+                    dir: dir.clone(),
+                    name: r.name,
+                },
             })
             .collect();
         if let Some(store) = &store {
             for e in store.all() {
                 if let Some(clip) = &e.clip {
-                    let size = std::fs::metadata(store.dir().join(clip)).map(|m| m.len()).unwrap_or(0);
+                    let size = std::fs::metadata(store.dir().join(clip))
+                        .map(|m| m.len())
+                        .unwrap_or(0);
                     cands.push(Candidate {
                         start: e.start,
                         size,
-                        item: Item::Clip { store: store.clone(), id: e.id.clone() },
+                        item: Item::Clip {
+                            store: store.clone(),
+                            id: e.id.clone(),
+                        },
                     });
                 }
             }
@@ -322,7 +361,10 @@ mod tests {
     #[test]
     fn parses_names() {
         let t = parse_start("front-door_2026-11-08_14-05-00.mp4").unwrap();
-        assert_eq!(t.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-11-08 14:05:00");
+        assert_eq!(
+            t.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-11-08 14:05:00"
+        );
         assert!(parse_start("garbage.mp4").is_none());
     }
 
@@ -344,17 +386,32 @@ mod tests {
         cfg.storage.dir = root.clone();
         cfg.storage.min_free_gb = 0.0;
         cfg.storage.retention_days = 0;
-        cfg.cameras.push(CameraConfig { id: "a".into(), url: "x".into(), max_storage_gb: 1.5 / 1024.0, ..Default::default() });
+        cfg.cameras.push(CameraConfig {
+            id: "a".into(),
+            url: "x".into(),
+            max_storage_gb: 1.5 / 1024.0,
+            ..Default::default()
+        });
         cfg.cameras.push(CameraConfig {
             id: "b".into(),
             url: "x".into(),
             storage_dir: other.display().to_string(),
             ..Default::default()
         });
-        for (cam, t) in [("a", "10-00-00"), ("a", "10-05-00"), ("a", "10-10-00"), ("b", "10-00-00"), ("b", "10-05-00")] {
+        for (cam, t) in [
+            ("a", "10-00-00"),
+            ("a", "10-05-00"),
+            ("a", "10-10-00"),
+            ("b", "10-00-00"),
+            ("b", "10-05-00"),
+        ] {
             let d = cfg.camera_dir(cfg.cameras.iter().find(|c| c.id == cam).unwrap());
             std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(d.join(format!("{cam}_2026-01-01_{t}.mp4")), vec![0u8; 1 << 20]).unwrap();
+            std::fs::write(
+                d.join(format!("{cam}_2026-01-01_{t}.mp4")),
+                vec![0u8; 1 << 20],
+            )
+            .unwrap();
         }
         // Camera a: 3 MB with a 1.5 MB limit → the two oldest go. Camera b untouched.
         assert_eq!(cleanup(&cfg, &HashMap::new()), 2);

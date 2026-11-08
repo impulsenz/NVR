@@ -42,7 +42,13 @@ struct Seg {
 }
 
 impl EventBuffer {
-    pub fn new(camera_dir: &Path, name: &str, ffmpeg: &str, pre_seconds: u64, store: Arc<EventStore>) -> Arc<Self> {
+    pub fn new(
+        camera_dir: &Path,
+        name: &str,
+        ffmpeg: &str,
+        pre_seconds: u64,
+        store: Arc<EventStore>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             dir: camera_dir.join(".buffer"),
             name: name.to_string(),
@@ -67,17 +73,25 @@ impl EventBuffer {
     /// An event finished: build a clip from `start - pre` to `end + post`.
     pub fn finish(&self, id: &str, from: DateTime<Local>, to: DateTime<Local>) {
         self.holds.lock().unwrap().remove(id);
-        self.jobs.lock().unwrap().push(Job { event_id: id.to_string(), from, to });
+        self.jobs.lock().unwrap().push(Job {
+            event_id: id.to_string(),
+            from,
+            to,
+        });
     }
 
     fn segments(&self) -> Vec<Seg> {
-        let Ok(rd) = std::fs::read_dir(&self.dir) else { return vec![] };
+        let Ok(rd) = std::fs::read_dir(&self.dir) else {
+            return vec![];
+        };
         let mut v: Vec<(PathBuf, DateTime<Local>)> = rd
             .flatten()
             .filter_map(|e| {
                 let p = e.path();
                 let name = p.file_name()?.to_str()?.to_string();
-                let ts = name.strip_prefix(&format!("{PREFIX}_"))?.strip_suffix(".mp4")?;
+                let ts = name
+                    .strip_prefix(&format!("{PREFIX}_"))?
+                    .strip_suffix(".mp4")?;
                 let n = NaiveDateTime::parse_from_str(ts, "%Y-%m-%d_%H-%M-%S").ok()?;
                 Some((p, Local.from_local_datetime(&n).earliest()?))
             })
@@ -98,38 +112,54 @@ impl EventBuffer {
         let mut tick = tokio::time::interval(Duration::from_secs(3));
         loop {
             tokio::select! {
-                _ = tick.tick() => self.tick().await,
+                _ = tick.tick() => self.tick(false).await,
                 _ = cancel.cancelled() => {
-                    // Finish clips for events that already ended.
-                    self.tick().await;
+                    // Shutting down: wait for the recorder to close its last
+                    // file, then save clips for every finished event.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    if self.jobs.lock().unwrap().is_empty() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_secs(6)).await;
+                    self.tick(true).await;
                     return;
                 }
             }
         }
     }
 
-    async fn tick(&self) {
+    /// `stopping`: the recorder has stopped, so every file is complete.
+    async fn tick(&self, stopping: bool) {
         let segs = self.segments();
         if segs.is_empty() {
             return;
         }
-        let writing_start = segs.last().unwrap().start;
+        let writing_start = if stopping {
+            Local::now() + CDuration::days(1)
+        } else {
+            segs.last().unwrap().start
+        };
+        let complete = if stopping { segs.len() } else { segs.len() - 1 };
 
         // Build clips whose time range is fully written.
         let ready: Vec<Job> = {
             let mut jobs = self.jobs.lock().unwrap();
-            let (ready, wait): (Vec<Job>, Vec<Job>) = jobs.drain(..).partition(|j| j.to <= writing_start);
+            let (ready, wait): (Vec<Job>, Vec<Job>) =
+                jobs.drain(..).partition(|j| j.to <= writing_start);
             *jobs = wait;
             ready
         };
         for job in ready {
-            let parts: Vec<Seg> = segs[..segs.len() - 1]
+            let parts: Vec<Seg> = segs[..complete]
                 .iter()
                 .filter(|s| s.end > job.from && s.start < job.to)
                 .cloned()
                 .collect();
             if parts.is_empty() {
-                warn!("[{}] no buffered video for event {}", self.name, job.event_id);
+                warn!(
+                    "[{}] no buffered video for event {}",
+                    self.name, job.event_id
+                );
                 continue;
             }
             match self.build_clip(&job.event_id, &parts).await {
@@ -158,7 +188,7 @@ impl EventBuffer {
             }
             t
         };
-        for s in &segs[..segs.len() - 1] {
+        for s in &segs[..complete] {
             if s.end < keep_from {
                 let _ = std::fs::remove_file(&s.path);
             }
@@ -172,13 +202,32 @@ impl EventBuffer {
         let list = self.dir.join(format!("{event_id}.txt"));
         let text: String = parts
             .iter()
-            .map(|p| format!("file '{}'\n", p.path.display().to_string().replace('\\', "/").replace('\'', "'\\''")))
+            .map(|p| {
+                format!(
+                    "file '{}'\n",
+                    p.path
+                        .display()
+                        .to_string()
+                        .replace('\\', "/")
+                        .replace('\'', "'\\''")
+                )
+            })
             .collect();
         std::fs::write(&list, text)?;
         let out = tokio::time::timeout(
             Duration::from_secs(300),
             tokio::process::Command::new(&self.ffmpeg)
-                .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i"])
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                ])
                 .arg(&list)
                 .args(["-c", "copy", "-movflags", "+faststart"])
                 .arg(out_dir.join(&name))
@@ -189,7 +238,13 @@ impl EventBuffer {
         .await??;
         let _ = std::fs::remove_file(&list);
         if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("ffmpeg failed"));
+            anyhow::bail!(
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("ffmpeg failed")
+            );
         }
         let secs = (parts.last().unwrap().end - parts[0].start).num_seconds();
         info!(target: "event", "[{}] saved {}s full-quality clip for event {}", self.name, secs, event_id);

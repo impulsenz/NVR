@@ -6,9 +6,25 @@ use chrono::{Datelike, NaiveDateTime, NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const HWACCELS: &[&str] = &["none", "auto", "cuda", "qsv", "vaapi", "videotoolbox", "d3d11va", "dxva2"];
+pub const HWACCELS: &[&str] = &[
+    "none",
+    "auto",
+    "cuda",
+    "qsv",
+    "vaapi",
+    "videotoolbox",
+    "d3d11va",
+    "dxva2",
+];
 pub const ENCODERS: &[&str] = &[
-    "auto", "libx264", "h264_nvenc", "h264_qsv", "h264_vaapi", "h264_videotoolbox", "h264_amf", "h264_mf",
+    "auto",
+    "libx264",
+    "h264_nvenc",
+    "h264_qsv",
+    "h264_vaapi",
+    "h264_videotoolbox",
+    "h264_amf",
+    "h264_mf",
 ];
 pub const AI_PROVIDERS: &[&str] = &["none", "builtin", "deepstack", "ollama", "gemini", "openai"];
 pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s"];
@@ -107,7 +123,13 @@ pub struct LiveConfig {
 
 impl Default for LiveConfig {
     fn default() -> Self {
-        Self { fps: 5, width: 960, quality: 6, hd_fps: 15, preload_hd: true }
+        Self {
+            fps: 5,
+            width: 960,
+            quality: 6,
+            hd_fps: 15,
+            preload_hd: true,
+        }
     }
 }
 
@@ -151,13 +173,21 @@ pub struct HardwareConfig {
 
 impl Default for HardwareConfig {
     fn default() -> Self {
-        Self { hwaccel: "none".into(), encoder: "auto".into(), device: String::new() }
+        Self {
+            hwaccel: "none".into(),
+            encoder: "auto".into(),
+            device: String::new(),
+        }
     }
 }
 
 impl HardwareConfig {
     pub fn vaapi_device(&self) -> &str {
-        if self.device.trim().is_empty() { "/dev/dri/renderD128" } else { self.device.trim() }
+        if self.device.trim().is_empty() {
+            "/dev/dri/renderD128"
+        } else {
+            self.device.trim()
+        }
     }
 
     /// The concrete encoder to use, resolving "auto" from the decoder choice.
@@ -226,7 +256,12 @@ pub struct CloudConfig {
 
 impl Default for CloudConfig {
     fn default() -> Self {
-        Self { enabled: false, rclone_path: "rclone".into(), remote: String::new(), upload: "events".into() }
+        Self {
+            enabled: false,
+            rclone_path: "rclone".into(),
+            remote: String::new(),
+            upload: "events".into(),
+        }
     }
 }
 
@@ -293,7 +328,11 @@ pub struct Schedule {
 
 impl Default for Schedule {
     fn default() -> Self {
-        Self { days: (0..7).collect(), start: "18:00".into(), end: "07:00".into() }
+        Self {
+            days: (0..7).collect(),
+            start: "18:00".into(),
+            end: "07:00".into(),
+        }
     }
 }
 
@@ -361,7 +400,13 @@ impl Default for DetectConfig {
             motion: true,
             sensitivity: 50,
             ai: false,
-            objects: vec!["person".into(), "car".into(), "truck".into(), "dog".into(), "cat".into()],
+            objects: vec![
+                "person".into(),
+                "car".into(),
+                "truck".into(),
+                "dog".into(),
+                "cat".into(),
+            ],
             min_confidence: 0.5,
             trigger: "motion".into(),
             pre_seconds: 30,
@@ -446,7 +491,8 @@ impl CameraConfig {
         if self.record_fps > 60 {
             bail!("recording frame rate must be 0 (camera default) to 60");
         }
-        if self.segment_seconds != 0 && !(10..=MAX_SEGMENT_SECONDS).contains(&self.segment_seconds) {
+        if self.segment_seconds != 0 && !(10..=MAX_SEGMENT_SECONDS).contains(&self.segment_seconds)
+        {
             bail!("file length must be between 10 seconds and 24 hours");
         }
         if self.max_storage_gb < 0.0 {
@@ -483,7 +529,11 @@ impl CameraConfig {
 
     /// Sub-stream URL, falling back to the main stream.
     pub fn live_url(&self) -> &str {
-        if self.has_sub() { &self.live_url } else { &self.url }
+        if self.has_sub() {
+            &self.live_url
+        } else {
+            &self.url
+        }
     }
 
     /// Whether the mode and schedule call for recording right now.
@@ -498,7 +548,11 @@ impl CameraConfig {
     }
 
     pub fn segment_seconds(&self, default: u64) -> u64 {
-        if self.segment_seconds == 0 { default } else { self.segment_seconds }
+        if self.segment_seconds == 0 {
+            default
+        } else {
+            self.segment_seconds
+        }
     }
 
     /// Recordings must be re-encoded (for H.264 conversion or a lower frame rate).
@@ -533,7 +587,8 @@ impl Config {
         if !path.exists() {
             return Ok((Config::default(), true));
         }
-        let text = std::fs::read_to_string(path).with_context(|| format!("reading config file {}", path.display()))?;
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading config file {}", path.display()))?;
         Self::from_toml(&text).with_context(|| format!("in {}", path.display()))
     }
 
@@ -567,11 +622,19 @@ impl Config {
             if !cam.url.is_empty() {
                 let rec = rec.unwrap_or_default();
                 let mut c = CameraConfig {
-                    name: if cam.name.is_empty() { "Camera 1".into() } else { cam.name },
+                    name: if cam.name.is_empty() {
+                        "Camera 1".into()
+                    } else {
+                        cam.name
+                    },
                     url: cam.url,
                     live_url: cam.live_url,
                     record_audio: rec.record_audio.unwrap_or(false),
-                    record_mode: if rec.record_on_start == Some(false) { RecordMode::Off } else { RecordMode::Continuous },
+                    record_mode: if rec.record_on_start == Some(false) {
+                        RecordMode::Off
+                    } else {
+                        RecordMode::Continuous
+                    },
                     ..Default::default()
                 };
                 c.id = self.new_camera_id(&c.name);
@@ -611,7 +674,11 @@ impl Config {
             bail!("live view width is too large");
         }
         let d = &self.display;
-        if d.fullscreen_corners.iter().chain([&d.clock_corner]).any(|c| !CORNERS.contains(&c.as_str())) {
+        if d.fullscreen_corners
+            .iter()
+            .chain([&d.clock_corner])
+            .any(|c| !CORNERS.contains(&c.as_str()))
+        {
             bail!("corners must be tl, tr, bl or br");
         }
         if d.clock_format.trim().is_empty() {
@@ -630,7 +697,9 @@ impl Config {
         if !BUILTIN_MODELS.contains(&ai.builtin_model.as_str()) {
             bail!("unknown built-in AI model \"{}\"", ai.builtin_model);
         }
-        if ["deepstack", "ollama", "openai"].contains(&ai.provider.as_str()) && ai.url.trim().is_empty() {
+        if ["deepstack", "ollama", "openai"].contains(&ai.provider.as_str())
+            && ai.url.trim().is_empty()
+        {
             bail!("enter the address of the AI server");
         }
         if ["gemini"].contains(&ai.provider.as_str()) && ai.api_key.trim().is_empty() {
@@ -653,7 +722,8 @@ impl Config {
         }
         let mut ids = std::collections::HashSet::new();
         for c in &self.cameras {
-            c.validate().with_context(|| format!("camera \"{}\"", c.name))?;
+            c.validate()
+                .with_context(|| format!("camera \"{}\"", c.name))?;
             if !ids.insert(&c.id) || slug(&c.id) != c.id {
                 bail!("camera \"{}\" has an invalid or duplicate id", c.name);
             }
@@ -728,7 +798,11 @@ pub fn mask_url(url: &str) -> String {
 
 /// Replace any occurrence of `url` in `text` with its masked form.
 pub fn redact(text: &str, url: &str) -> String {
-    if url.is_empty() { text.to_string() } else { text.replace(url, &mask_url(url)) }
+    if url.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(url, &mask_url(url))
+    }
 }
 
 #[cfg(test)]
@@ -738,20 +812,36 @@ mod tests {
 
     fn at(day: u32, h: u32, m: u32) -> NaiveDateTime {
         // 2026-11-02 is a Monday.
-        NaiveDate::from_ymd_opt(2026, 11, day).unwrap().and_hms_opt(h, m, 0).unwrap()
+        NaiveDate::from_ymd_opt(2026, 11, day)
+            .unwrap()
+            .and_hms_opt(h, m, 0)
+            .unwrap()
     }
 
     #[test]
     fn masks_password() {
-        assert_eq!(mask_url("rtsp://admin:secret@10.0.0.5:554/s1"), "rtsp://admin:****@10.0.0.5:554/s1");
+        assert_eq!(
+            mask_url("rtsp://admin:secret@10.0.0.5:554/s1"),
+            "rtsp://admin:****@10.0.0.5:554/s1"
+        );
         assert_eq!(mask_url("rtsp://10.0.0.5/s1"), "rtsp://10.0.0.5/s1");
     }
 
     #[test]
     fn default_config_roundtrips() {
         let mut cfg = Config::default();
-        cfg.cameras.push(CameraConfig { id: "a".into(), url: "rtsp://x".into(), ..Default::default() });
-        cfg.dashboard.tiles.push(Tile { camera: "a".into(), x: 0, y: 0, w: 6, h: 4 });
+        cfg.cameras.push(CameraConfig {
+            id: "a".into(),
+            url: "rtsp://x".into(),
+            ..Default::default()
+        });
+        cfg.dashboard.tiles.push(Tile {
+            camera: "a".into(),
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 4,
+        });
         cfg.validate().unwrap();
         let (back, migrated) = Config::from_toml(&cfg.to_toml().unwrap()).unwrap();
         assert!(!migrated);
@@ -796,34 +886,57 @@ mod tests {
         assert_eq!(c.record_mode, RecordMode::Continuous);
         assert!(c.schedule_enabled);
         assert!(!c.record_audio); // explicit value kept
-        assert!(cfg.to_toml().unwrap().contains("record_mode = \"continuous\""));
+        assert!(
+            cfg.to_toml()
+                .unwrap()
+                .contains("record_mode = \"continuous\"")
+        );
     }
 
     #[test]
     fn unique_ids() {
         let mut cfg = Config::default();
-        cfg.cameras.push(CameraConfig { id: "front-door".into(), ..Default::default() });
+        cfg.cameras.push(CameraConfig {
+            id: "front-door".into(),
+            ..Default::default()
+        });
         assert_eq!(cfg.new_camera_id("Front Door!"), "front-door-2");
         assert_eq!(slug("  %% "), "camera");
     }
 
     #[test]
     fn schedule_windows() {
-        let s = Schedule { days: vec![0], start: "18:00".into(), end: "07:00".into() };
+        let s = Schedule {
+            days: vec![0],
+            start: "18:00".into(),
+            end: "07:00".into(),
+        };
         assert!(s.is_active(at(2, 19, 0)));
         assert!(s.is_active(at(3, 6, 59)));
         assert!(!s.is_active(at(3, 7, 0)));
         assert!(!s.is_active(at(3, 19, 0)));
-        let day = Schedule { days: vec![5, 6], start: "09:00".into(), end: "17:00".into() };
+        let day = Schedule {
+            days: vec![5, 6],
+            start: "09:00".into(),
+            end: "17:00".into(),
+        };
         assert!(day.is_active(at(7, 12, 0)));
         assert!(!day.is_active(at(6, 12, 0)));
-        let all = Schedule { days: vec![1], start: "00:00".into(), end: "00:00".into() };
+        let all = Schedule {
+            days: vec![1],
+            start: "00:00".into(),
+            end: "00:00".into(),
+        };
         assert!(all.is_active(at(3, 23, 59)));
     }
 
     #[test]
     fn camera_validation() {
-        let mut c = CameraConfig { id: "a".into(), url: "rtsp://x".into(), ..Default::default() };
+        let mut c = CameraConfig {
+            id: "a".into(),
+            url: "rtsp://x".into(),
+            ..Default::default()
+        };
         c.validate().unwrap();
         c.record_mode = RecordMode::Events;
         c.detect.motion = false;

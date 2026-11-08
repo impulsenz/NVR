@@ -52,7 +52,11 @@ impl EventStore {
     pub fn open(camera_dir: &Path) -> Self {
         let dir = camera_dir.join("events");
         let mut events: Vec<Event> = std::fs::read_to_string(dir.join("events.jsonl"))
-            .map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+            .map(|t| {
+                t.lines()
+                    .filter_map(|l| serde_json::from_str(l).ok())
+                    .collect()
+            })
             .unwrap_or_default();
         // Later lines replace earlier ones with the same id (updates).
         let mut seen = std::collections::HashMap::new();
@@ -63,7 +67,10 @@ impl EventStore {
         idx.sort();
         events = idx.into_iter().map(|i| events[i].clone()).collect();
         events.sort_by_key(|e| e.start);
-        Self { dir, events: RwLock::new(events) }
+        Self {
+            dir,
+            events: RwLock::new(events),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -72,10 +79,13 @@ impl EventStore {
 
     fn append_line(&self, e: &Event) {
         let _ = std::fs::create_dir_all(&self.dir);
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("events.jsonl")) {
-            if let Ok(line) = serde_json::to_string(e) {
-                let _ = writeln!(f, "{line}");
-            }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.dir.join("events.jsonl"))
+            && let Ok(line) = serde_json::to_string(e)
+        {
+            let _ = writeln!(f, "{line}");
         }
     }
 
@@ -92,11 +102,22 @@ impl EventStore {
     }
 
     pub fn get(&self, id: &str) -> Option<Event> {
-        self.events.read().unwrap().iter().find(|e| e.id == id).cloned()
+        self.events
+            .read()
+            .unwrap()
+            .iter()
+            .find(|e| e.id == id)
+            .cloned()
     }
 
     pub fn between(&self, from: DateTime<Local>, to: DateTime<Local>) -> Vec<Event> {
-        self.events.read().unwrap().iter().filter(|e| e.end >= from && e.start <= to).cloned().collect()
+        self.events
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|e| e.end >= from && e.start <= to)
+            .cloned()
+            .collect()
     }
 
     pub fn all(&self) -> Vec<Event> {
@@ -119,8 +140,11 @@ impl EventStore {
         });
         let removed = before - ev.len();
         if removed > 0 {
-            let text: String =
-                ev.iter().filter_map(|e| serde_json::to_string(e).ok()).map(|l| l + "\n").collect();
+            let text: String = ev
+                .iter()
+                .filter_map(|e| serde_json::to_string(e).ok())
+                .map(|l| l + "\n")
+                .collect();
             let tmp = self.dir.join("events.jsonl.tmp");
             if std::fs::write(&tmp, text).is_ok() {
                 let _ = std::fs::rename(&tmp, self.dir.join("events.jsonl"));
@@ -157,7 +181,10 @@ mod tests {
             clip_start: None,
         };
         s.save(e.clone());
-        e.labels.push(Label { label: "person".into(), score: 0.9 });
+        e.labels.push(Label {
+            label: "person".into(),
+            score: 0.9,
+        });
         s.save(e.clone());
         let s2 = EventStore::open(&dir);
         assert_eq!(s2.all().len(), 1);
