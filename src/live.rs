@@ -46,6 +46,9 @@ pub struct Live {
     last_poll: Mutex<Instant>,
     use_gpu: AtomicBool,
     cancel: CancellationToken,
+    /// Per-camera live-view options; changing them restarts only the live stream.
+    view: Mutex<crate::config::ViewConfig>,
+    view_changed: tokio::sync::Notify,
 }
 
 impl Live {
@@ -60,6 +63,7 @@ impl Live {
         // The GPU is only worth it for full-quality streams (see HardwareConfig).
         let use_gpu = env.hardware.hwaccel != "none"
             && (quality == Quality::Main || env.hardware.gpu_substreams);
+        let cam_view = cam.view.clone();
         Arc::new(Self {
             cam,
             relay,
@@ -71,6 +75,8 @@ impl Live {
             running: Mutex::new(false),
             last_poll: Mutex::new(Instant::now() - POLL_KEEPALIVE),
             use_gpu: AtomicBool::new(use_gpu),
+            view: Mutex::new(cam_view),
+            view_changed: tokio::sync::Notify::new(),
             cancel,
         })
     }
@@ -86,6 +92,26 @@ impl Live {
             0.0
         } else {
             f.2
+        }
+    }
+
+    /// Frames per second this stream is produced at.
+    pub fn target_fps(&self) -> u32 {
+        let v = self.view.lock().unwrap();
+        match self.quality {
+            Quality::Sub if v.grid_fps > 0 => v.grid_fps,
+            Quality::Sub => self.env.live.fps,
+            Quality::Main if v.hd_fps > 0 => v.hd_fps,
+            Quality::Main => self.env.live.hd_fps,
+        }
+    }
+
+    /// Apply new live-view options (restarts this stream if the rate changes).
+    pub fn set_view(&self, v: crate::config::ViewConfig) {
+        let before = self.target_fps();
+        *self.view.lock().unwrap() = v;
+        if self.target_fps() != before {
+            self.view_changed.notify_waiters();
         }
     }
 
@@ -195,7 +221,12 @@ impl Live {
             // Prefer the detector's frames; if it has none (camera starting,
             // detection restarting), decode ourselves for a minute.
             let res = match &self.detector {
-                Some(d) if Instant::now() >= own_decoder_until => {
+                // The detector analyses a few frames per second; faster grid
+                // views need their own decoder.
+                Some(d)
+                    if Instant::now() >= own_decoder_until
+                        && self.target_fps() <= self.cam.detect.fps =>
+                {
                     let r = self.run_from_detector(d).await;
                     if r.is_err() {
                         own_decoder_until = Instant::now() + Duration::from_secs(60);
@@ -250,6 +281,7 @@ impl Live {
                     r.context("no frames from motion detection")?.context("motion detection stopped")?;
                 }
                 _ = self.cancel.cancelled() => return Ok(got),
+                _ = self.view_changed.notified() => return Ok(true),
             }
             let Some(frame) = rx.borrow_and_update().clone() else {
                 continue;
@@ -278,10 +310,11 @@ impl Live {
     /// Run ffmpeg until it fails or nobody is watching. Returns whether any frame arrived.
     async fn run_once(&self, use_gpu: bool) -> Result<bool> {
         let live = &self.env.live;
-        let (fps, width) = match self.quality {
-            Quality::Sub => (live.fps, live.width),
+        let fps = self.target_fps();
+        let width = match self.quality {
+            Quality::Sub => live.width,
             // Full quality, but no wider than 1920 px to keep JPEG encoding affordable.
-            Quality::Main => (live.hd_fps, 1920),
+            Quality::Main => 1920,
         };
         let mut vf = format!("fps={fps}");
         if width > 0 {
@@ -346,6 +379,10 @@ impl Live {
                     r.context("live stream stalled")??
                 }
                 _ = self.cancel.cancelled() => 0,
+                _ = self.view_changed.notified() => {
+                    let _ = child.kill().await;
+                    return Ok(true);
+                }
             };
             if n == 0 {
                 if self.cancel.is_cancelled() {

@@ -125,7 +125,9 @@ impl Monitor {
                 .copied()
                 .collect()
         };
-        downsample(&raw, points)
+        // Fine samples every 5 s, minute samples every 60 s.
+        let step = if seconds <= 6 * 3600 { FINE_SECS } else { 60 };
+        bucketize(&raw, from, now, points, step)
     }
 
     /// Sampling loop; runs for the life of the program.
@@ -301,24 +303,48 @@ fn aggregate(s: &[Sample]) -> Point {
     }
 }
 
-/// Reduce to at most `points` buckets, keeping averages and peaks.
-fn downsample(raw: &[Point], points: usize) -> Vec<Point> {
-    if raw.len() <= points || points == 0 {
-        return raw.to_vec();
+/// Group samples into equal time buckets from `from` to `now` (averages and
+/// peaks). Buckets without data (NVR not running, computer off) are zero, so
+/// the graph drops to 0 instead of drawing a line across the gap.
+fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Vec<Point> {
+    let span = (now - from).max(1);
+    let width = (span / points.max(1) as i64).max(step);
+    let n = (span / width).max(1) as usize;
+    let has_gpu = raw.iter().any(|p| p.gpu.is_some());
+    let mut buckets: Vec<Vec<&Point>> = vec![Vec::new(); n];
+    for p in raw {
+        let i = ((p.t - from) / width).clamp(0, n as i64 - 1) as usize;
+        buckets[i].push(p);
     }
-    let per = raw.len().div_ceil(points);
-    raw.chunks(per)
-        .map(|c| {
-            let n = c.len() as f32;
-            let gpus: Vec<&Point> = c.iter().filter(|p| p.gpu.is_some()).collect();
+    buckets
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let t = from + (i as i64 + 1) * width;
+            if c.is_empty() {
+                let zero = has_gpu.then_some(0.0);
+                return Point {
+                    t,
+                    cpu: 0.0,
+                    cpu_max: 0.0,
+                    nvr_cpu: 0.0,
+                    ram: 0.0,
+                    gpu: zero,
+                    gpu_max: zero,
+                    gpu_mem: zero,
+                };
+            }
+            let k = c.len() as f32;
+            let gpus: Vec<f32> = c.iter().filter_map(|p| p.gpu).collect();
             Point {
-                t: c.last().unwrap().t,
-                cpu: c.iter().map(|p| p.cpu).sum::<f32>() / n,
+                t,
+                cpu: c.iter().map(|p| p.cpu).sum::<f32>() / k,
                 cpu_max: c.iter().map(|p| p.cpu_max).fold(0.0, f32::max),
-                nvr_cpu: c.iter().map(|p| p.nvr_cpu).sum::<f32>() / n,
-                ram: c.iter().map(|p| p.ram).sum::<f32>() / n,
+                nvr_cpu: c.iter().map(|p| p.nvr_cpu).sum::<f32>() / k,
+                ram: c.iter().map(|p| p.ram).sum::<f32>() / k,
                 gpu: (!gpus.is_empty())
-                    .then(|| gpus.iter().map(|p| p.gpu.unwrap()).sum::<f32>() / gpus.len() as f32),
+                    .then(|| gpus.iter().sum::<f32>() / gpus.len() as f32)
+                    .or(has_gpu.then_some(0.0)),
                 gpu_max: c.iter().filter_map(|p| p.gpu_max).reduce(f32::max),
                 gpu_mem: c.iter().filter_map(|p| p.gpu_mem).reduce(f32::max),
             }
@@ -490,24 +516,25 @@ The command completed successfully."#;
     }
 
     #[test]
-    fn downsamples_with_peaks() {
-        let raw: Vec<Point> = (0..10)
-            .map(|i| Point {
-                t: i,
-                cpu: i as f32,
-                cpu_max: i as f32,
-                nvr_cpu: 0.0,
-                ram: 50.0,
-                gpu: None,
-                gpu_max: None,
-                gpu_mem: None,
-            })
-            .collect();
-        let d = downsample(&raw, 2);
-        assert_eq!(d.len(), 2);
-        assert_eq!(d[0].cpu, 2.0);
-        assert_eq!(d[0].cpu_max, 4.0);
-        assert_eq!(d[1].cpu_max, 9.0);
+    fn buckets_with_peaks_and_zero_gaps() {
+        let p = |t: i64, cpu: f32| Point {
+            t,
+            cpu,
+            cpu_max: cpu,
+            nvr_cpu: 0.0,
+            ram: 50.0,
+            gpu: None,
+            gpu_max: None,
+            gpu_mem: None,
+        };
+        // Data in the first and last 10 s of a 40 s window; nothing in between.
+        let raw = vec![p(1, 10.0), p(6, 30.0), p(31, 50.0), p(36, 70.0)];
+        let b = bucketize(&raw, 0, 40, 4, 5);
+        assert_eq!(b.len(), 4);
+        assert_eq!((b[0].cpu, b[0].cpu_max), (20.0, 30.0));
+        assert_eq!((b[1].cpu, b[1].ram), (0.0, 0.0)); // gap drops to zero
+        assert_eq!(b[2].cpu, 0.0);
+        assert_eq!(b[3].cpu_max, 70.0);
     }
 
     #[test]

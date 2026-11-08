@@ -315,6 +315,8 @@ pub struct Manager {
     usage: Mutex<UsageReport>,
     /// Temporary stream previews for the camera editor: token → (url, transport).
     pub previews: Mutex<HashMap<String, (String, String, Instant)>>,
+    /// ONVIF (PTZ) clients per camera, keeping discovered service addresses.
+    pub onvif: Mutex<HashMap<String, Arc<crate::onvif::Onvif>>>,
 }
 
 impl Manager {
@@ -334,6 +336,7 @@ impl Manager {
             ai,
             usage: Mutex::new(UsageReport::default()),
             previews: Mutex::new(HashMap::new()),
+            onvif: Mutex::new(HashMap::new()),
         });
         let cams: Vec<_> = config.cameras.iter().map(|c| m.start_camera(c)).collect();
         *m.cameras.write().unwrap() = cams;
@@ -425,8 +428,18 @@ impl Manager {
         cam.name = cam.name.trim().to_string();
         cam.validate()?;
         *slot = cam.clone();
+        let old_cam = old_cfg.cameras.iter().find(|c| c.id == id).cloned();
         self.commit(cfg.clone())?;
         info!("updated camera \"{}\"", cam.name);
+        // Display, live-view and PTZ options apply without interrupting recording.
+        if let (Some(old_cam), Some(rt)) = (&old_cam, self.camera(id))
+            && !cam.needs_restart(old_cam)
+            && !move_recordings
+        {
+            rt.live_sub.set_view(cam.view.clone());
+            rt.live_main.set_view(cam.view.clone());
+            return Ok(cam);
+        }
         let moved = if move_recordings {
             self.move_camera_dirs(&old_cfg, &cfg, Some(id)).await
         } else {
@@ -472,6 +485,32 @@ impl Manager {
                     .context("deleting recordings")?;
             }
             info!("deleted camera \"{}\"", rt.cfg.name);
+        }
+        Ok(())
+    }
+
+    pub fn onvif(&self, id: &str) -> Arc<crate::onvif::Onvif> {
+        self.onvif
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone()
+    }
+
+    /// Change a camera's live-view options without restarting it.
+    pub async fn set_camera_view(&self, id: &str, view: crate::config::ViewConfig) -> Result<()> {
+        let _g = self.edit.lock().await;
+        let mut cfg = self.config();
+        let Some(c) = cfg.cameras.iter_mut().find(|c| c.id == id) else {
+            bail!("camera not found")
+        };
+        c.view = view.clone();
+        c.validate()?;
+        self.commit(cfg)?;
+        if let Some(rt) = self.camera(id) {
+            rt.live_sub.set_view(view.clone());
+            rt.live_main.set_view(view);
         }
         Ok(())
     }

@@ -13,6 +13,7 @@ mod library;
 mod live;
 mod logs;
 mod manager;
+mod onvif;
 mod recorder;
 mod relay;
 mod storage;

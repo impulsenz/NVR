@@ -169,6 +169,7 @@ const Live = {
     if (st.last - st.t > 2000) { st.fps = st.n * 1000 / (st.last - st.t); st.n = 0; st.t = st.last; }
     this.stats.set(k, st);
     for (const img of this.imgs.get(k) || []) img.src = url;
+    if (q === 'main' && id === focusId && typeof hideFocusLoading === 'function') hideFocusLoading();
     // The HD image also shows sub frames until its first HD frame arrives.
     if (q === 'sub') for (const img of this.imgs.get(this.key(id, 'main')) || []) if (!this.urls.has(this.key(id, 'main'))) img.src = url;
   },
@@ -198,23 +199,41 @@ function updateSubscriptions() {
   const l = status.live, subs = [];
   for (const c of status.cameras) {
     if (!c.enabled) continue;
-    subs.push({camera: c.id, q: 'sub', fps: l.fps});
+    const v = c.view || {};
+    const gridFps = v.grid_fps || l.fps, hdFps = v.hd_fps || l.hd_fps;
     const focused = page === 'live' && ((focusId === c.id && !focusPlayback) || (wall && wallSolo === c.id));
-    if (focused) subs.push({camera: c.id, q: 'main', fps: l.hd_fps});
-    else if (l.preload_hd_streams) subs.push({camera: c.id, q: 'main', fps: 1});
+    // Grid picture: sub-stream normally, full quality if chosen for this camera.
+    if (v.grid_quality === 'main') subs.push({camera: c.id, q: 'main', fps: focused ? hdFps : gridFps});
+    else {
+      subs.push({camera: c.id, q: 'sub', fps: gridFps});
+      if (focused) subs.push({camera: c.id, q: 'main', fps: hdFps});
+      else if (l.preload_hd_streams) subs.push({camera: c.id, q: 'main', fps: 1});
+    }
   }
   Live.setWanted(subs);
 }
 
 // Overlays (name, clock, fps, status, fullscreen) for a live surface.
-function overlayHtml(c, q) {
+// Little symbols for what was detected (also used on timelines).
+const LABEL_ICON = {person: '🚶', car: '🚗', truck: '🚚', bus: '🚌', motorcycle: '🏍️', bicycle: '🚲', dog: '🐕', cat: '🐈', bird: '🐦',
+  horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', motion: '〰️'};
+const labelIcon = (l) => LABEL_ICON[l] || '🔷';
+// On-screen display: the camera's own settings, or the global ones.
+function osdFor(c) {
+  if (c.osd && c.osd.custom) return c.osd;
   const d = status.display;
+  return {show_name: d.show_name, name_corner: 'bl', show_clock: d.show_clock, clock_corner: d.clock_corner, clock_format: d.clock_format,
+    show_status: true, status_corner: 'tr', show_detections: true, detections_corner: 'bl', show_fps: d.show_fps, fps_corner: 'tl', text: '', text_corner: 'br'};
+}
+function overlayHtml(c, q) {
+  const d = status.display, o = osdFor(c);
   const parts = {tl: [], tr: [], bl: [], br: []};
-  if (d.show_name) parts.bl.push(`<span class="ovtext name">${esc(c.name)}</span>`);
-  parts.tr.push(`<span class="ov-pill">${pillHtml(c)}</span>`);
-  parts.bl.push('<span class="ov-alert"></span>');
-  if (d.show_clock) parts[d.clock_corner].push('<span class="ovtext ov-clock"></span>');
-  if (d.show_fps) parts.tl.push('<span class="ovtext ov-fps"></span>');
+  if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name">${esc(c.name)}</span>`);
+  if (o.text) parts[o.text_corner].push(`<span class="ovtext">${esc(o.text)}</span>`);
+  if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill">${pillHtml(c)}</span>`);
+  if (o.show_detections) parts[o.detections_corner].push('<span class="ov-alert"></span>');
+  if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-fmt="${esc(o.clock_format || '')}"></span>`);
+  if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps"></span>');
   for (const corner of d.fullscreen_corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen">⛶</button>');
   return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => `<div class="ov ${k}">${v.join('')}</div>`).join('');
 }
@@ -223,7 +242,7 @@ function wireOverlay(surface) {
 }
 function updateOverlay(surface, c, q) {
   const clock = surface.querySelector('.ov-clock');
-  if (clock) clock.textContent = fmtDate(new Date());
+  if (clock) clock.textContent = fmtDate(new Date(), clock.dataset.fmt || undefined);
   const p = surface.querySelector('.ov-pill');
   if (p) p.innerHTML = pillHtml(c);
   const fps = surface.querySelector('.ov-fps');
@@ -235,8 +254,8 @@ function updateOverlay(surface, c, q) {
   const a = surface.querySelector('.ov-alert');
   if (a) {
     const labels = c.detect && c.detect.event_active ? c.detect.active_labels : [];
-    a.innerHTML = labels.length ? `<span class="alertbadge">${labels.map(l => esc(l.label)).join(', ')}</span>`
-      : (c.detect && c.detect.motion ? '<span class="alertbadge" style="background:rgba(245,158,11,.85)">motion</span>' : '');
+    a.innerHTML = labels.length ? `<span class="alertbadge">${labels.map(l => labelIcon(l.label) + ' ' + esc(l.label)).join(', ')}</span>`
+      : (c.detect && c.detect.motion ? `<span class="alertbadge" style="background:rgba(245,158,11,.85)">${labelIcon('motion')} motion</span>` : '');
   }
   surface.classList.toggle('event', !!(c.detect && c.detect.event_active));
 }
@@ -251,7 +270,7 @@ function route() {
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
-  if (page !== 'recordings') pauseAllPlayback();
+  if (page !== 'recordings') { pauseAllPlayback(); if ($('page-recordings').classList.contains('rec-fs')) recFullscreen(false); }
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, extra);
   else if (page === 'system') showSystem();
@@ -320,13 +339,24 @@ class Player {
     this.item = null; this.sprite = null; this.inT = null; this.outT = null; this.marks = [];
     // tc: playing a converted stream that starts at `base` seconds into the file.
     this.tc = false; this.base = 0;
+    // A second, hidden player loads the next file near the end, so moving to
+    // it doesn't blank the picture.
+    this.alt = video.cloneNode(false);
+    this.alt.removeAttribute('id');
+    Object.assign(this.alt.style, {position: 'absolute', inset: '0', visibility: 'hidden'});
+    video.after(this.alt);
+    this.nextSeg = null;
+    for (const v of [video, this.alt]) this.wire(v);
+  }
+  wire(video) {
+    const on = (ev, f) => video.addEventListener(ev, (e) => { if (video === this.video) f(e); });
     video.controls = false;
-    video.addEventListener('timeupdate', () => this.paint());
-    video.addEventListener('play', () => this.paintButtons());
-    video.addEventListener('pause', () => this.paintButtons());
-    video.addEventListener('loadedmetadata', () => { this.paint(); });
-    video.addEventListener('ended', () => this.next());
-    video.addEventListener('error', () => {
+    on('timeupdate', () => { this.paint(); this.prepareNext(); });
+    on('play', () => this.paintButtons());
+    on('pause', () => this.paintButtons());
+    on('loadedmetadata', () => this.paint());
+    on('ended', () => this.next());
+    on('error', () => {
       if (!video.getAttribute('src') || !this.item) return;
       if (!this.tc && convertedUrl(this.item.url)) return this.useConverted();
       if (!this.msg) return;
@@ -334,11 +364,27 @@ class Player {
       this.msg.textContent = 'This recording could not be played. Use Download and play it in VLC.';
     });
     // Some browsers "play" unsupported video as sound only: no picture size.
-    video.addEventListener('loadeddata', () => {
+    on('loadeddata', () => {
       if (!this.tc && this.item && video.videoWidth === 0 && convertedUrl(this.item.url)) this.useConverted();
     });
-    video.addEventListener('playing', () => { if (this.msg) this.msg.hidden = true; });
-    video.addEventListener('click', () => video.paused ? video.play() : video.pause());
+    on('playing', () => { if (this.msg) this.msg.hidden = true; });
+    on('click', () => video.paused ? video.play() : video.pause());
+  }
+  setHidden(h) { for (const v of [this.video, this.alt]) v.hidden = h; }
+  // In the last seconds of a file, find and load the next one in the hidden player.
+  async prepareNext() {
+    if (!this.item || this.item.kind === 'clip' || this.tc || this.preparing) return;
+    const left = this.dur() - this.cur();
+    if (!(left > 0 && left < 8)) return;
+    if (this.nextSeg && this.nextSeg.after === this.item.name) return;
+    this.preparing = true;
+    try {
+      const end = new Date(new Date(this.item.file_start).getTime() + this.dur() * 1000 - 2000);
+      const [t] = await api(`api/timeline?cameras=${enc(this.item.camera)}&from=${enc(end.toISOString())}&to=${enc(new Date(end.getTime() + 86400000).toISOString())}`);
+      const seg = t && t.segments.find(x => x.kind === 'recording' && x.name !== this.item.name && new Date(x.start) >= end - 5000);
+      this.nextSeg = {after: this.item.name, seg};
+      if (seg) { this.alt.preload = 'auto'; this.alt.src = seg.url; this.alt.dataset.url = seg.url; }
+    } catch (e) {} finally { this.preparing = false; }
   }
   build() {
     this.box.innerHTML = `
@@ -420,7 +466,10 @@ class Player {
     const kind = item.kind === 'clip' ? 'clip' : 'rec';
     try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
   }
-  stop() { this.video.pause(); this.video.removeAttribute('src'); this.video.load(); this.item = null; }
+  stop() {
+    for (const v of [this.video, this.alt]) { v.pause(); v.removeAttribute('src'); v.load(); }
+    this.item = null; this.nextSeg = null;
+  }
   paintButtons() { if (this.el) this.el.play.textContent = this.video.paused ? '▶' : '❚❚'; }
   paint() {
     if (!this.el || !this.item) return;
@@ -490,6 +539,24 @@ class Player {
   // Continue with the camera's next recording when a file ends.
   async next() {
     if (!this.item || this.item.kind === 'clip') return;
+    // Ready in the hidden player: swap players without a gap.
+    const pre = this.nextSeg && this.nextSeg.after === this.item.name && this.nextSeg.seg;
+    if (pre && !this.tc && this.alt.dataset.url === pre.url && this.alt.readyState >= 2) {
+      const old = this.video;
+      [this.video, this.alt] = [this.alt, old];
+      this.video.style.visibility = ''; old.style.visibility = 'hidden';
+      this.video.playbackRate = old.playbackRate; this.video.muted = old.muted;
+      this.item = {...this.item, url: pre.url, name: pre.name, file_start: pre.start, offset: 0};
+      this.inT = this.outT = null; this.base = 0;
+      this.video.currentTime = 0;
+      this.video.play().catch(() => {});
+      old.pause();
+      this.dl.href = pre.url + '?download=1';
+      this.paint();
+      const kind = 'rec';
+      api(`api/sprite/${enc(this.item.camera)}/${kind}/${enc(pre.name)}`).then(sp => { this.sprite = preloadSprite(sp); }).catch(() => { this.sprite = null; });
+      return;
+    }
     const end = new Date(new Date(this.item.file_start).getTime() + this.dur() * 1000 - 2000);
     try {
       const [t] = await api(`api/timeline?cameras=${enc(this.item.camera)}&from=${enc(end.toISOString())}&to=${enc(new Date(end.getTime() + 86400000).toISOString())}`);
@@ -613,7 +680,7 @@ function renderDash() {
   for (const t of shown) {
     const c = cam(t.camera);
     if (!c) continue;
-    const q = wallSolo === c.id ? 'main' : 'sub';
+    const q = wallSolo === c.id || (c.view && c.view.grid_quality === 'main') ? 'main' : 'sub';
     const el = document.createElement('div');
     el.className = 'surface tile';
     el.dataset.id = c.id;
@@ -639,7 +706,7 @@ function renderDash() {
   toggleEditButtons();
 }
 function dashKey() {
-  return status.cameras.map(c => c.id + ':' + c.name + ':' + c.enabled).join(',') + JSON.stringify(status.display) + JSON.stringify(status.dashboard) + groupId + wall + wallSolo;
+  return status.cameras.map(c => c.id + ':' + c.name + ':' + c.enabled + JSON.stringify(c.osd) + JSON.stringify(c.view)).join(',') + JSON.stringify(status.display) + JSON.stringify(status.dashboard) + groupId + wall + wallSolo;
 }
 
 function placeTiles() {
@@ -826,7 +893,7 @@ function dashSync() {
 }
 setInterval(() => {
   // Clocks on overlays tick every second.
-  document.querySelectorAll('.ov-clock').forEach(e => e.textContent = fmtDate(new Date()));
+  document.querySelectorAll('.ov-clock').forEach(e => e.textContent = fmtDate(new Date(), e.dataset.fmt || undefined));
   $('clock').textContent = status ? fmtDate(new Date()) : '';
 }, 1000);
 
@@ -858,9 +925,156 @@ function showLive(id) {
   $('focus-snap').href = 'snapshot/' + enc(c.id);
   $('focus-recs').href = '#recordings/' + enc(c.id);
   $('focus-edit').onclick = () => openCameraDialog(c.id);
+  // Spinner until the first full-quality frame arrives (the sub-stream
+  // picture is shown meanwhile).
+  showFocusLoading();
+  setupQuickView(c);
+  setupPtz(c);
+  camTl.open(c.id);
   updateFocus();
   loadActivity();
 }
+
+let loadingTimer = null;
+function showFocusLoading() {
+  const el = $('focus-loading');
+  el.hidden = false;
+  el.querySelector('span').textContent = 'Loading full quality…';
+  clearTimeout(loadingTimer);
+  loadingTimer = setTimeout(() => { el.querySelector('span').textContent = 'Full-quality stream not available — showing sub-stream'; setTimeout(() => el.hidden = true, 5000); }, 20000);
+}
+function hideFocusLoading() { clearTimeout(loadingTimer); $('focus-loading').hidden = true; }
+
+// Quick live-view options for this camera (saved without restarting it).
+function setupQuickView(c) {
+  const v = c.view || {grid_quality: 'auto', grid_fps: 0, hd_fps: 0}, l = status.live;
+  const fpsOpts = (cur, def) => [0, 1, 2, 5, 10, 15, 20, 25, 30].map(f => `<option value="${f}" ${f === cur ? 'selected' : ''}>${f ? f + ' fps' : 'Default (' + def + ')'}</option>`).join('');
+  $('fq-quality').value = v.grid_quality || 'auto';
+  $('fq-gfps').innerHTML = fpsOpts(v.grid_fps || 0, l.fps);
+  $('fq-hfps').innerHTML = fpsOpts(v.hd_fps || 0, l.hd_fps);
+  const save = async () => {
+    const nv = {grid_quality: $('fq-quality').value, grid_fps: +$('fq-gfps').value, hd_fps: +$('fq-hfps').value};
+    try { await api(`api/cameras/${enc(c.id)}/view`, {method: 'PUT', json: nv}); c.view = nv; toast('Saved for ' + c.name); updateSubscriptions(); }
+    catch (e) { toast(e.message, true); }
+  };
+  $('fq-quality').onchange = $('fq-gfps').onchange = $('fq-hfps').onchange = save;
+}
+
+// ---------- PTZ controls ----------
+function setupPtz(c) {
+  const pad = $('ptz-pad');
+  pad.hidden = !c.ptz;
+  if (!c.ptz) return;
+  const id = c.id, msg = (t, bad) => { $('ptz-msg').textContent = t; $('ptz-msg').className = bad ? 'err' : 'hint'; };
+  const move = (v) => api(`api/cameras/${enc(id)}/ptz/move`, {method: 'POST', json: {pan: v[0], tilt: v[1], zoom: v[2]}}).catch(e => msg(e.message, true));
+  const stop = () => api(`api/cameras/${enc(id)}/ptz/stop`, {method: 'POST'}).catch(() => {});
+  pad.querySelectorAll('[data-ptz]').forEach(b => {
+    const v = b.dataset.ptz.split(',').map(Number);
+    let held = false;
+    b.onpointerdown = (e) => { e.preventDefault(); held = true; b.setPointerCapture(e.pointerId); move(v); };
+    b.onpointerup = b.onpointercancel = b.onlostpointercapture = () => { if (held) { held = false; stop(); } };
+  });
+  pad.querySelector('[data-ptz-home]').onclick = stop;
+  const loadPresets = async () => {
+    try {
+      const p = await api(`api/cameras/${enc(id)}/ptz/presets`);
+      $('ptz-presets').innerHTML = `<option value="">Presets (${p.length})…</option>` + p.map(x => `<option value="${esc(x.token)}">${esc(x.name)}</option>`).join('');
+      msg('Press and hold to move.');
+    } catch (e) { msg(e.message, true); }
+  };
+  $('ptz-go').onclick = () => { const t = $('ptz-presets').value; if (t) api(`api/cameras/${enc(id)}/ptz/goto`, {method: 'POST', json: {token: t}}).catch(e => msg(e.message, true)); };
+  $('ptz-presets').onchange = $('ptz-go').onclick;
+  $('ptz-save').onclick = async () => {
+    try { await api(`api/cameras/${enc(id)}/ptz/presets`, {method: 'POST', json: {name: $('ptz-name').value}}); $('ptz-name').value = ''; toast('Preset saved'); loadPresets(); }
+    catch (e) { msg(e.message, true); }
+  };
+  loadPresets();
+}
+
+// ---------- per-camera timeline (camera view) ----------
+const camTl = {
+  id: null, data: null, zoom: 21600, end: null, loadedAt: 0,
+  open(id) {
+    this.id = id; this.zoom = +$('ctl-zoom').value; this.end = null;
+    this.load();
+  },
+  win() { const end = this.end || Date.now(); return [end - this.zoom * 1000, end]; },
+  async load() {
+    const id = this.id; if (!id) return;
+    const [a, b] = this.win();
+    try {
+      const [t] = await api(`api/timeline?cameras=${enc(id)}&from=${enc(new Date(a).toISOString())}&to=${enc(new Date(b).toISOString())}`);
+      if (id !== this.id) return;
+      this.data = t || {segments: [], events: []}; this.loadedAt = Date.now();
+      this.draw();
+    } catch (e) {}
+  },
+  draw() {
+    if (!this.data) return;
+    const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
+    const steps = [600, 1800, 3600, 10800, 21600, 43200, 86400].map(x => x * 1000);
+    const step = steps.find(x => span / x <= 7) || 86400000;
+    let axis = '';
+    for (let t = Math.ceil(a / step) * step; t <= b; t += step) {
+      const d = new Date(t);
+      axis += `<span style="left:${pct(t)}%">${span > 86400000 * 1.5 ? fmtDay(d) : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')}</span>`;
+    }
+    $('ctl-axis').innerHTML = axis;
+    let lane = '';
+    for (const sg of this.data.segments) {
+      const x0 = Math.max(0, pct(new Date(sg.start).getTime())), x1 = Math.min(100, pct(new Date(sg.end).getTime()));
+      if (x1 > 0 && x0 < 100 && x1 > x0) lane += `<div class="seg ${sg.kind === 'clip' ? 'clip' : ''}" style="left:${x0}%;width:${Math.max(0.15, x1 - x0)}%"></div>`;
+    }
+    // Detections: a symbol per alert; nearby alerts with the same symbol are merged.
+    let last = {};
+    for (const e of this.data.events) {
+      const x = pct(new Date(e.start).getTime());
+      if (x < 0 || x > 100) continue;
+      if (!e.labels.length) { lane += `<div class="mo" style="left:${x}%" title="Motion ${fmtTime(e.start)}"></div>`; continue; }
+      const icon = labelIcon(e.labels[0].label);
+      if (last[icon] != null && Math.abs(last[icon] - x) < 1.2) continue;
+      last[icon] = x;
+      lane += `<span class="ic" style="left:${x}%" data-t="${new Date(e.start).getTime()}" title="${esc(e.labels.map(l => l.label).join(', '))} ${fmtTime(e.start)}">${icon}</span>`;
+    }
+    const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
+    lb.innerHTML = lane + '<div class="head" hidden></div>';
+    lb.appendChild(pv);
+  },
+  // Play the camera's footage at time T in the camera view.
+  playAt(T) {
+    const segs = (this.data && this.data.segments) || [];
+    const hit = (sg) => new Date(sg.start).getTime() <= T && T < new Date(sg.end).getTime() + 1000;
+    const sg = segs.find(x => x.kind === 'recording' && hit(x)) || segs.find(hit);
+    if (!sg) { toast('No recording at that time.'); return; }
+    playInFocus({camera: this.id, play: {url: sg.url, name: sg.name, kind: sg.kind, file_start: sg.start, offset: (T - new Date(sg.start).getTime()) / 1000}});
+  },
+};
+$('ctl-zoom').onchange = () => { camTl.zoom = +$('ctl-zoom').value; camTl.load(); };
+$('ctl-left').onclick = () => { camTl.end = camTl.win()[1] - camTl.zoom * 500; camTl.load(); };
+$('ctl-right').onclick = () => { const e = camTl.win()[1] + camTl.zoom * 500; camTl.end = e >= Date.now() ? null : e; camTl.load(); };
+$('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
+(function wireCamTl() {
+  const lane = $('ctl-lane');
+  const tAt = (e) => { const r = lane.getBoundingClientRect(), [a, b] = camTl.win(); return [Math.min(Date.now(), a + (e.clientX - r.left) / r.width * (b - a)), e.clientX - r.left]; };
+  lane.addEventListener('pointermove', async (e) => {
+    if (!camTl.data) return;
+    const [T, x] = tAt(e), pv = lane.querySelector('.preview');
+    pv.hidden = false;
+    pv.style.left = Math.min(Math.max(x, 100), lane.clientWidth - 100) + 'px';
+    pv.querySelector('.t').textContent = fmtDate(new Date(T));
+    const sg = camTl.data.segments.find(s => new Date(s.start).getTime() <= T && T < new Date(s.end).getTime() + 1000);
+    const im = pv.querySelector('.img');
+    if (!sg) { im.style.backgroundImage = ''; return; }
+    const sp = await spriteFor(camTl.id, sg);
+    if (sp) spriteStyle(im, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), 192, 108);
+  });
+  lane.addEventListener('pointerleave', () => { lane.querySelector('.preview').hidden = true; });
+  lane.addEventListener('click', (e) => {
+    const icon = e.target.closest('.ic');
+    camTl.playAt(icon ? +icon.dataset.t - 3000 : tAt(e)[0]);
+  });
+})();
+setInterval(() => { if (page === 'live' && focusId && !camTl.end) camTl.load(); }, 30000);
 function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); }
 
 function updateFocus() {
@@ -935,8 +1149,8 @@ function playInFocus(it) {
   updateSubscriptions();
   $('focus-img').hidden = true;
   $('focus-surface').querySelectorAll('.ov').forEach(o => o.hidden = true);
-  const v = $('focus-video'); v.hidden = false;
-  if (!focusPlayer) focusPlayer = new Player(v, $('focus-player-controls'), $('focus-msg'));
+  if (!focusPlayer) focusPlayer = new Player($('focus-video'), $('focus-player-controls'), $('focus-msg'));
+  focusPlayer.setHidden(false);
   $('focus-player-controls').hidden = false;
   focusPlayer.load({...it.play, camera: it.camera, marks: it.event ? [it.event.start] : []});
   $('focus-live').hidden = false;
@@ -945,7 +1159,8 @@ function stopFocusPlayback(resub = true) {
   if (!focusPlayback) return;
   focusPlayback = null;
   if (focusPlayer) focusPlayer.stop();
-  $('focus-video').hidden = true; $('focus-img').hidden = false;
+  if (focusPlayer) focusPlayer.setHidden(true);
+  $('focus-img').hidden = false;
   $('focus-player-controls').hidden = true;
   $('focus-surface').querySelectorAll('.ov').forEach(o => o.hidden = false);
   $('focus-live').hidden = true;
@@ -1005,6 +1220,19 @@ function setRecMode(mode) {
 }
 document.querySelectorAll('#page-recordings .tabs button').forEach(b => b.onclick = () => setRecMode(b.dataset.mode));
 $('f-refresh').onclick = () => rec.mode === 'list' ? loadRecordings() : loadTimeline();
+// Full screen for browsing recordings (timeline videos get the whole width).
+async function recFullscreen(on) {
+  const el = $('page-recordings');
+  el.classList.toggle('rec-fs', on);
+  $('rec-fs').textContent = on ? '✕ Exit full screen' : '⛶ Full screen';
+  if (on && !document.fullscreenElement && el.requestFullscreen) await el.requestFullscreen().catch(() => {});
+  if (!on && document.fullscreenElement === el) document.exitFullscreen().catch(() => {});
+  if (rec.mode === 'timeline') drawTimeline();
+}
+$('rec-fs').onclick = () => recFullscreen(!$('page-recordings').classList.contains('rec-fs'));
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && $('page-recordings').classList.contains('rec-fs')) recFullscreen(false);
+});
 
 function renderFilters() {
   if (!status) return;
@@ -1105,15 +1333,14 @@ function renderRecordings() {
     card.className = 'rc';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
-    card.innerHTML = `<div class="thumb">${it.thumb ? `<img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.remove()">` : ''}<span class="dur">${fmtDur(dur)}</span>
-        <span class="kind">${it.kind === 'event' && it.event.clip ? '<span class="tag" style="background:#000a">HD clip</span>' : ''}</span></div>
-      <div class="body"><div>${tags}</div><div><b>${esc(it.camera_name)}</b> · ${fmtTime(it.start)}</div>
-      <div class="muted">${it.size ? fmtBytes(it.size) : ''}</div></div>
-      <div class="acts"><button type="button" class="small primary" data-a="play" ${it.play ? '' : 'disabled'} title="${it.pending ? 'Clip still recording' : ''}">${it.pending ? '⏳ Saving' : '▶ Play'}</button>
-        ${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download">⇩</a>` : ''}
-        <span class="spacer"></span><button type="button" class="small" data-a="del" title="Delete">✕</button></div>`;
-    card.querySelector('[data-a=play]').onclick = (e) => { e.stopPropagation(); playItem(it, card); };
-    card.querySelector('.thumb').onclick = () => playItem(it, card);
+    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc(l.label)} ${Math.round(l.score * 100)}%">${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
+    card.innerHTML = `<div class="thumb">${it.thumb ? `<img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.remove()">` : ''}
+        <div class="tags">${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
+        <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small" data-a="del" title="Delete">✕</button></div>
+        <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
+        <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
+    card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}`;
+    card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
       e.stopPropagation();
       const what = it.kind === 'event' ? 'this alert' + (it.event.clip ? ' and its clip' : '') : 'this recording';
@@ -1166,6 +1393,7 @@ async function loadTimeline() {
   buildTimelineVideos();
   drawTimeline();
   tlSync(true);
+  prefetchSprites();
 }
 function centerWindow() { tl.winStart = tl.T - tl.zoom / 2 * 1000; }
 
@@ -1176,20 +1404,35 @@ function buildTimelineVideos() {
     const el = document.createElement('div');
     el.className = 'surface';
     el.dataset.cam = c.camera;
-    el.innerHTML = `<video playsinline muted></video><div class="sprite" hidden></div><div class="msg" hidden>No recording</div>
+    // Two players per camera: one plays while the next file loads in the
+    // other, so moving from file to file doesn't blank the picture.
+    el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video>
+      <div class="sprite" hidden></div><div class="msg" hidden>No recording</div>
       <div class="ov tl"><span class="ovtext name">${esc(c.name)}</span><span class="ovtext tl-t"></span></div>
       <div class="ov tr"><button type="button" class="fsbtn">⛶</button></div>`;
     el.querySelector('.fsbtn').onclick = () => fullscreen(el);
+    el._vids = [...el.querySelectorAll('video')];
+    el._active = 0;
+    el._tc = noNativePlayback.has(c.camera);
     // Fall back to converted playback if this browser can't play the files.
-    const v = el.querySelector('video');
-    v._tc = noNativePlayback.has(c.camera);
-    const fallback = () => { if (!v._tc && convertedUrl(v.dataset.url || '')) { v._tc = true; markNoNative(c.camera); delete v.dataset.url; tlSync(true); } };
-    v.addEventListener('error', fallback);
-    v.addEventListener('loadeddata', () => { if (v.videoWidth === 0) fallback(); });
+    const fallback = (v) => { if (!el._tc && convertedUrl(v.dataset.url || '')) { el._tc = true; markNoNative(c.camera); el._vids.forEach(x => delete x.dataset.url); tlSync(true); } };
+    for (const v of el._vids) {
+      v.addEventListener('error', () => fallback(v));
+      v.addEventListener('loadeddata', () => { if (v.videoWidth === 0) fallback(v); });
+    }
     box.appendChild(el);
   }
 }
-
+const activeVideo = (el) => el._vids[el._active];
+function showVideo(el, i) {
+  el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
+  el._active = i;
+}
+// The camera's recording after segment `s`, if it follows on (no gap).
+function nextSegment(c, s) {
+  const end = new Date(s.end).getTime();
+  return c.segments.find(x => x !== s && x.kind === s.kind && Math.abs(new Date(x.start).getTime() - end) < 5000);
+}
 function segAt(c, T) {
   // The newest recording of a camera that was recording when the timeline
   // loaded is still growing: treat it as running up to now.
@@ -1211,14 +1454,16 @@ setInterval(() => {
 function tlSync(force) {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
-    const v = el.querySelector('video'), msg = el.querySelector('.msg');
+    const msg = el.querySelector('.msg');
+    let v = activeVideo(el);
     el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
     const s = c && segAt(c, tl.T);
-    if (!s) { msg.hidden = false; v.pause(); v.style.visibility = 'hidden'; continue; }
-    msg.hidden = true; v.style.visibility = '';
+    if (!s) { msg.hidden = false; el._vids.forEach(x => { x.pause(); x.style.visibility = 'hidden'; }); continue; }
+    msg.hidden = true;
     const want = (tl.T - new Date(s.start).getTime()) / 1000;
-    if (v._tc) {
+    if (el._tc) {
       // Converted stream: restart it at the wanted time when needed.
+      showVideo(el, el._active);
       const cur = (v._base || 0) + v.currentTime;
       if (v.dataset.url !== s.url || force || Math.abs(cur - want) > Math.max(3, tl.speed * 2)) {
         v.dataset.url = s.url; v._base = want;
@@ -1230,14 +1475,33 @@ function tlSync(force) {
       continue;
     }
     if (v.dataset.url !== s.url) {
-      v.dataset.url = s.url; v.src = s.url;
-      v.addEventListener('loadedmetadata', () => { v.currentTime = want; v.playbackRate = tl.speed; if (tl.playing) v.play().catch(() => {}); }, {once: true});
-      continue;
+      const other = el._vids[1 - el._active];
+      if (other.dataset.url === s.url && other.readyState >= 2) {
+        // The next file is already loaded: switch players without a gap.
+        other.currentTime = want; other.playbackRate = tl.speed;
+        if (tl.playing) other.play().catch(() => {});
+        showVideo(el, 1 - el._active);
+        v = other;
+      } else {
+        v.dataset.url = s.url; v.src = s.url;
+        v.addEventListener('loadedmetadata', () => { v.currentTime = want; v.playbackRate = tl.speed; if (tl.playing) v.play().catch(() => {}); }, {once: true});
+        showVideo(el, el._active);
+        continue;
+      }
     }
+    showVideo(el, el._active);
     if (force || Math.abs(v.currentTime - want) > Math.max(0.8, tl.speed * 0.5)) v.currentTime = want;
     v.playbackRate = tl.speed;
     if (tl.playing && v.paused) v.play().catch(() => {});
     if (!tl.playing && !v.paused) v.pause();
+    // Near the end of this file: load the next one in the other player.
+    const left = (new Date(s.end).getTime() - tl.T) / 1000;
+    const nx = left < 10 * Math.max(1, tl.speed) && nextSegment(c, s);
+    const other = el._vids[1 - el._active];
+    if (nx && other.dataset.url !== nx.url) {
+      other.dataset.url = nx.url; other.preload = 'auto'; other.src = nx.url;
+      other.addEventListener('loadedmetadata', () => { other.currentTime = 0; }, {once: true});
+    }
   }
   drawHead();
 }
@@ -1261,9 +1525,9 @@ function tlPlay(on) {
 function tlStop() { if (tl.playing) tlPlay(false); document.querySelectorAll('#tl-videos video').forEach(v => v.pause()); }
 $('tl-play').onclick = () => tlPlay(!tl.playing);
 $('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); };
-$('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); };
-$('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); };
-$('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); };
+$('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
+$('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); prefetchSprites(); };
+$('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 $('tl-back10').onclick = () => { tl.T -= 10000; tlSync(true); };
 $('tl-fwd10').onclick = () => { tl.T += 10000; tlSync(true); };
 function allEvents() { return tl.data.flatMap(c => c.events).map(e => new Date(e.start).getTime()).sort((a, b) => a - b); }
@@ -1295,7 +1559,7 @@ function drawTimeline() {
       const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime());
       if (b < 0 || a > 100) continue;
       const tip = e.labels.length ? e.labels.map(l => l.label).join(', ') : 'motion';
-      lane += `<div class="ev ${e.labels.length ? '' : 'motion'}" style="left:${Math.max(0, a)}%;width:${Math.max(0.3, b - a)}%" title="${esc(tip)} ${fmtTime(e.start)}" data-t="${new Date(e.start).getTime()}"></div>`;
+      lane += `<div class="ev ${e.labels.length ? '' : 'motion'}" style="left:${Math.max(0, a)}%;width:${Math.max(0.3, b - a)}%" title="${esc(tip)} ${fmtTime(e.start)}" data-t="${new Date(e.start).getTime()}">${e.labels.length ? `<span class="ic">${labelIcon(e.labels[0].label)}</span>` : ''}</div>`;
     }
     rows += `<div class="tl-row"><div class="label" title="${esc(c.name)}">${esc(c.name)}</div><div class="lane">${lane}</div></div>`;
   }
@@ -1348,13 +1612,47 @@ async function spriteFor(cam, seg) {
   }
   return tl.sprites.get(key);
 }
+// Prepare previews for every file in view (nearest to the playhead first),
+// showing progress, so scrubbing is instant.
+function prefetchSprites() {
+  const gen = tl.pfGen = (tl.pfGen || 0) + 1;
+  const a = tl.winStart, b = a + tl.zoom * 1000;
+  const list = [];
+  for (const c of tl.data) for (const sg of c.segments) {
+    const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
+    if (s1 >= a && s0 <= b) list.push({cam: c.camera, sg, d: Math.abs((s0 + s1) / 2 - tl.T)});
+  }
+  list.sort((x, y) => x.d - y.d);
+  const todo = list.slice(0, 300);
+  const st = {total: todo.length, done: 0};
+  const show = () => {
+    if (gen !== tl.pfGen) return;
+    $('tl-sp').hidden = !st.total;
+    $('tl-sp-bar').style.width = (st.total ? st.done / st.total * 100 : 0) + '%';
+    $('tl-sp-t').textContent = st.done >= st.total ? `ready (${st.total} file${st.total === 1 ? '' : 's'})` : `${st.done} of ${st.total} files ready`;
+  };
+  show();
+  tl.pagesDone = tl.pagesDone || new Set();
+  const loadPages = (sp) => Promise.all([...Array(sp.info.pages).keys()].map(p => tl.pagesDone.has(sp.url + p) ? null :
+    new Promise(r => { const im = new Image(); im.onload = im.onerror = () => { tl.pagesDone.add(sp.url + p); r(); }; im.src = sp.url + p; })));
+  let i = 0;
+  const worker = async () => {
+    while (i < todo.length && gen === tl.pfGen) {
+      const job = todo[i++];
+      const sp = await spriteFor(job.cam, job.sg);
+      if (sp) await loadPages(sp);
+      st.done++; show();
+    }
+  };
+  worker(); worker();
+}
 function previewAll() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
     el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
     const s = c && segAt(c, tl.T), sp = el.querySelector('.sprite');
     el.querySelector('.msg').hidden = !!s;
-    el.querySelector('video').style.visibility = s ? '' : 'hidden';
+    if (!s) el._vids.forEach(x => x.style.visibility = 'hidden');
     if (!s) { sp.hidden = true; continue; }
     const T = tl.T;
     spriteFor(c.camera, s).then(info => {
@@ -1632,6 +1930,10 @@ async function openCameraDialog(id, clone) {
     name: '', enabled: true, url: '', live_url: '', rtsp_transport: 'tcp', record_mode: 'continuous', schedule_enabled: false,
     schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, transcode: false, record_fps: 0,
     segment_seconds: 0, storage_dir: '', retention_days: 0, max_storage_gb: 0,
+    osd: {custom: false, show_name: true, name_corner: 'bl', show_clock: true, clock_corner: 'tl', clock_format: '', show_status: true, status_corner: 'tr',
+      show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
+    view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
+    ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
     detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1}};
   if (clone) c.name = c.name + ' (copy)';
   const q = parseUrl(c.url) || {};
@@ -1642,7 +1944,7 @@ async function openCameraDialog(id, clone) {
   $('f-cam').innerHTML = `
     <div class="head"><h2>${clone ? 'Clone camera' : id ? 'Edit camera' : 'Add camera'}</h2><button type="button" class="small" data-close>✕</button></div>
     <div class="body">
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
@@ -1738,6 +2040,31 @@ async function openCameraDialog(id, clone) {
         <label for="d-int">AI check interval</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks during motion (raise this for cloud AI)</span></div>
       </div>
+      <div data-tab="osd" class="form" hidden>
+        <span></span><div><label class="check"><input type="checkbox" id="o-custom" ${c.osd.custom ? 'checked' : ''}> Use settings just for this camera</label>
+          <div class="hint">Off: this camera uses Settings → Live view &amp; display.</div></div>
+        <label>Preview</label>
+        <div class="surface" id="o-prev" style="aspect-ratio:16/9;max-width:560px"><img alt="" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera to see its picture.'}</div></div>
+        ${[['name', 'Camera name'], ['clock', 'Date &amp; time'], ['status', 'Recording status (REC / armed / offline)'], ['detections', 'What is moving (motion, 🚶 person, 🚗 car …)'], ['fps', 'Frame rate and stream details']]
+          .map(([k, t]) => `<span></span><div class="row osd-row"><label class="check" style="padding:0;min-width:300px"><input type="checkbox" id="o-${k}" ${c.osd['show_' + k] ? 'checked' : ''}> ${t}</label>${cornerSel('o-' + k + '-c', c.osd[k + '_corner'])}</div>`).join('')}
+        <label for="o-fmt2">Date &amp; time format</label>
+        <div><select id="o-fmt2"><option value="">Same as everywhere (${esc(status.display.clock_format)})</option>${CLOCK_FORMATS.map(f => `<option ${f === c.osd.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom">Custom…</option></select>
+          <input type="text" id="o-fmt2-c" value="${esc(c.osd.clock_format)}" hidden style="margin-top:6px" placeholder="e.g. DD/MM/YYYY HH:mm:ss"></div>
+        <label for="o-text">Extra text</label>
+        <div class="row"><input type="text" id="o-text" value="${esc(c.osd.text)}" maxlength="200" placeholder="e.g. Driveway – north" style="flex:1">${cornerSel('o-text-c', c.osd.text_corner)}</div>
+      </div>
+
+      <div data-tab="ptz" class="form" hidden>
+        <span></span><div><label class="check"><input type="checkbox" id="p-on" ${c.ptz.enabled ? 'checked' : ''}> This camera can pan, tilt or zoom</label>
+          <div class="hint">Uses ONVIF, which most PTZ cameras support (you may need to turn ONVIF on in the camera's own settings, and some brands need a separate ONVIF user).</div></div>
+        <label for="p-host">Camera address</label><div><input type="text" id="p-host" value="${esc(c.ptz.host)}" placeholder="Same as the stream (${esc((parseUrl(c.url) || {}).ip || 'from the URL')})"></div>
+        <label for="p-port">ONVIF port</label><div class="row"><input type="number" id="p-port" min="1" max="65535" value="${c.ptz.port}" style="width:110px">
+          <select id="p-port-pick"><option value="">Common ports…</option><option value="80">80 – Hikvision, Dahua, Amcrest, most cameras</option><option value="8000">8000 – Reolink</option><option value="2020">2020 – TP-Link Tapo</option><option value="8899">8899 – many budget cameras</option><option value="8080">8080</option><option value="5000">5000</option></select></div>
+        <label for="p-user">ONVIF login</label><div class="row"><input type="text" id="p-user" value="${esc(c.ptz.username)}" placeholder="Same as stream" style="flex:1" autocomplete="off"><input type="password" id="p-pass" value="${esc(c.ptz.password)}" placeholder="Same as stream" style="flex:1" autocomplete="new-password"></div>
+        <label for="p-speed">Speed</label><div class="row"><input type="range" id="p-speed" min="10" max="100" value="${Math.round(c.ptz.speed * 100)}" style="flex:1"><span class="muted" id="p-speed-v" style="width:44px">${Math.round(c.ptz.speed * 100)}%</span></div>
+        <span></span><div class="row"><label class="check"><input type="checkbox" id="p-inv-pan" ${c.ptz.invert_pan ? 'checked' : ''}> Reverse left/right</label><label class="check"><input type="checkbox" id="p-inv-tilt" ${c.ptz.invert_tilt ? 'checked' : ''}> Reverse up/down</label></div>
+        <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
+      </div>
       <div class="err" id="c-err" style="margin-top:12px" hidden></div>
     </div>
     <div class="foot"><button type="button" data-close>Cancel</button><button class="primary" id="c-save">Save camera</button></div>`;
@@ -1756,6 +2083,17 @@ async function openCameraDialog(id, clone) {
   $('d-motion').onchange = () => { if (!chk('d-motion')) $('d-ai').checked = false; };
   $('d-contrast').oninput = () => $('d-contrast-v').textContent = val('d-contrast');
   setupMaskEditor(c.detect.mask, id && !clone ? id : null);
+  $('d-objpx').oninput = () => drawMotionBoxes($('d-mask-boxes'), lastMeterObjects);
+  drawMotionBoxes($('d-mask-boxes'), []);
+  setupOsdTab(c, id && !clone ? id : null);
+  $('p-port-pick').onchange = (e) => { if (e.target.value) $('p-port').value = e.target.value; e.target.value = ''; };
+  $('p-speed').oninput = () => $('p-speed-v').textContent = val('p-speed') + '%';
+  $('p-test').onclick = async () => {
+    $('p-result').textContent = 'Connecting…';
+    const camBody = {...collectCamera(), id: id || ''};
+    const r = await api('api/ptz/test', {method: 'POST', json: {camera: camBody}}).catch(e => ({ok: false, error: e.message}));
+    $('p-result').innerHTML = r.ok ? `<span class="ok">✓ PTZ works.</span> ${r.presets.length} preset(s)${r.presets.length ? ': ' + r.presets.map(p => esc(p.name)).join(', ') : ''}.` : `<span class="err">✗ ${esc(r.error)}</span>`;
+  };
   $('d-conf').oninput = () => $('d-conf-v').textContent = val('d-conf') + '%';
   $('q-brand').onchange = () => {
     const b = val('q-brand'); if (!b) return;
@@ -1783,7 +2121,7 @@ async function openCameraDialog(id, clone) {
   $('cam-dialog').showModal();
 }
 function closeCameraDialog() { stopPreviews(); $('cam-dialog').close(); }
-$('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMeter(); });
+$('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } });
 
 // ---------- motion mask editor & live motion readout ----------
 let maskCells = [], maskUnbind = null, meterTimer = null;
@@ -1830,11 +2168,49 @@ async function updateMotionMeter(camId) {
   $('d-meter').innerHTML = !m.running ? 'Live readout: motion detection is not running for this camera (turn it on and save).' :
     `Live readout (saved settings): biggest moving area now <b>${m.biggest_px.toLocaleString()} px</b>, peak in the last 3 s <b>${m.peak_px.toLocaleString()} px</b>; an alert needs ≥ ${need.toLocaleString()} px — ` +
     (m.moving ? '<span class="ok">triggering</span>' : m.peak_px >= need ? '<span class="warnc">big enough (waiting for make time / travel)</span>' : 'too small');
-  drawMotionBoxes($('d-mask-boxes'), m.objects, 1, 1);
+  drawMotionBoxes($('d-mask-boxes'), m.objects);
 }
 // Boxes around moving objects, in an SVG whose viewBox is 0..1.
-function drawMotionBoxes(svg, objects, sx, sy) {
-  svg.innerHTML = (objects || []).map(o => `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="none" stroke="#f59e0b" stroke-width="2" vector-effect="non-scaling-stroke"/>`).join('');
+let lastMeterObjects = [];
+function drawMotionBoxes(svg, objects) {
+  lastMeterObjects = objects || [];
+  let out = lastMeterObjects.map(o => `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="none" stroke="#f59e0b" stroke-width="2" vector-effect="non-scaling-stroke"/>`).join('');
+  // How big "min. object size" is: a person-shaped box (1 wide : 2 tall) of
+  // that many pixels on a 640×360 picture, in the middle of the picture.
+  const px = $('d-objpx') ? +$('d-objpx').value : 0;
+  if (px > 0) {
+    const wpx = Math.sqrt(px / 2), w = Math.min(1, wpx / 640), h = Math.min(1, wpx * 2 / 360);
+    out += `<rect x="${(1 - w) / 2}" y="${(1 - h) / 2}" width="${w}" height="${h}" fill="rgba(79,140,255,.18)" stroke="#4f8cff" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>`;
+  }
+  svg.innerHTML = out;
+}
+function cornerSel(id, cur) {
+  return `<select id="${id}">${[['tl', 'Top left'], ['tr', 'Top right'], ['bl', 'Bottom left'], ['br', 'Bottom right']].map(([k, t]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+}
+function readOsd() {
+  const f = val('o-fmt2') === 'custom' ? val('o-fmt2-c').trim() : val('o-fmt2');
+  return {custom: chk('o-custom'), show_name: chk('o-name'), name_corner: val('o-name-c'), show_clock: chk('o-clock'), clock_corner: val('o-clock-c'), clock_format: f,
+    show_status: chk('o-status'), status_corner: val('o-status-c'), show_detections: chk('o-detections'), detections_corner: val('o-detections-c'),
+    show_fps: chk('o-fps'), fps_corner: val('o-fps-c'), text: val('o-text').trim(), text_corner: val('o-text-c')};
+}
+let osdPrevUnbind = null;
+function setupOsdTab(c, camId) {
+  const prev = $('o-prev');
+  if (!CLOCK_FORMATS.includes(c.osd.clock_format) && c.osd.clock_format) { $('o-fmt2').value = 'custom'; $('o-fmt2-c').hidden = false; }
+  const live = camId ? cam(camId) : null;
+  const redraw = () => {
+    prev.querySelectorAll('.ov').forEach(o => o.remove());
+    const fake = {...(live || {id: '', name: val('c-name') || 'Camera', enabled: true, recorder: null, buffer: null, detect: null, record_mode: 'continuous'}), osd: {...readOsd(), custom: true}};
+    if (!chk('o-custom')) fake.osd = {custom: false};
+    fake.name = val('c-name') || fake.name;
+    prev.insertAdjacentHTML('beforeend', overlayHtml(fake, 'sub'));
+    if (live) updateOverlay(prev, fake, 'sub'); else prev.querySelectorAll('.ov-clock').forEach(e => e.textContent = fmtDate(new Date(), e.dataset.fmt || undefined));
+  };
+  $('f-cam').querySelector('[data-tab=osd]').addEventListener('input', redraw);
+  $('f-cam').querySelector('[data-tab=osd]').addEventListener('change', () => { $('o-fmt2-c').hidden = val('o-fmt2') !== 'custom'; redraw(); });
+  if (osdPrevUnbind) osdPrevUnbind();
+  osdPrevUnbind = camId ? Live.bind(prev.querySelector('img'), camId, 'sub') : null;
+  redraw();
 }
 
 async function testCamera() {
@@ -1867,19 +2243,34 @@ async function saveCamera(ev) {
   const days = [...document.querySelectorAll('#c-days input:checked')].map(i => +i.value);
   const mode = document.querySelector('input[name=c-mode]:checked').value;
   const objects = [...document.querySelectorAll('#d-objs input:checked')].map(i => i.value);
-  const body = {
+  const body = collectCamera();
+  const err = (m) => { $('c-err').hidden = false; $('c-err').textContent = m; };
+  if (body.schedule_enabled && !days.length) return err('Choose at least one day for the schedule.');
+  if (body.detect.ai && !objects.length) return err('Choose at least one object to alert on.');
+  return finishSave(body);
+}
+// Read the camera form.
+function collectCamera() {
+  const days = [...document.querySelectorAll('#c-days input:checked')].map(i => +i.value);
+  const mode = document.querySelector('input[name=c-mode]:checked').value;
+  const objects = [...document.querySelectorAll('#d-objs input:checked')].map(i => i.value);
+  return {
     name: val('c-name').trim(), enabled: chk('c-enabled'), url: val('c-url').trim(), live_url: val('c-live').trim(),
     rtsp_transport: val('c-transport'), record_mode: mode, schedule_enabled: chk('c-sched-on'),
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
+    osd: readOsd(),
+    view: (cameraCfgs.find(x => x.id === editingId) || {}).view || {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
+    ptz: {enabled: chk('p-on'), host: val('p-host').trim(), port: Math.round(num('p-port')) || 80, username: val('p-user').trim(), password: $('p-pass').value,
+      speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int')},
   };
+}
+async function finishSave(body) {
   const err = (m) => { $('c-err').hidden = false; $('c-err').textContent = m; };
-  if (body.schedule_enabled && !days.length) return err('Choose at least one day for the schedule.');
-  if (body.detect.ai && !objects.length) return err('Choose at least one object to alert on.');
   const btn = $('c-save'); btn.disabled = true; btn.textContent = 'Saving…';
   try {
     const move = $('c-move-row') && !$('c-move-row').hidden && chk('c-move');
@@ -2197,20 +2588,40 @@ function renderBackup(body) {
 }
 
 // ---------- system & login ----------
-function renderSystemSettings(body) {
+async function renderSystemSettings(body) {
   const s = settings.server;
+  if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
+  const addrs = (sysinfo && sysinfo.addresses) || [];
+  const [bind, port] = (() => { const i = s.listen.lastIndexOf(':'); return [s.listen.slice(0, i), s.listen.slice(i + 1)]; })();
   body.innerHTML = `<form class="card" id="f-sys"><h2>System &amp; login</h2><div class="form">
     <label for="y-name">NVR name</label><div><input type="text" id="y-name" required value="${esc(s.name)}"></div>
-    <label for="y-listen">Web address and port</label><div><input type="text" id="y-listen" required value="${esc(s.listen)}"><div class="hint">0.0.0.0 = reachable from other devices on your network. Takes effect after a restart.</div></div>
+    <label>Web address</label><div id="y-addr"></div>
+    <label for="y-port">Port</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px">
+      <select id="y-port-pick"><option value="">Common ports…</option><option value="80">80 – standard web port (no :port needed)</option><option value="8080">8080 – default</option><option value="8000">8000</option><option value="8888">8888</option><option value="5000">5000</option><option value="9000">9000</option></select></div>
+    <label for="y-bind">Reachable from</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
+      ${addrs.map(a => `<option value="${esc(a)}">Only via ${esc(a)}</option>`).join('')}</select><div class="hint">Changing the port or this setting takes effect after the NVR restarts.</div></div>
     <label for="y-user">Login username</label><div><input type="text" id="y-user" value="${esc(s.username)}" autocomplete="off"><div class="hint">Leave empty to turn off the login.</div></div>
     <label for="y-pass">Login password</label><div><input type="password" id="y-pass" autocomplete="new-password"><div class="hint">${s.has_password ? 'A password is set. Leave empty to keep it.' : 'Required when a username is set.'}</div></div>
     <label for="y-ffmpeg">ffmpeg program</label><div><input type="text" id="y-ffmpeg" required value="${esc(s.ffmpeg_path)}"><div class="hint">Name or full path of ffmpeg (ffprobe must be next to it).</div></div>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
+  if (![...$('y-bind').options].some(o => o.value === bind)) $('y-bind').add(new Option('Only via ' + bind, bind));
+  $('y-bind').value = bind;
+  const showAddr = () => {
+    const p = Math.round(num('y-port')) || 8080, b = val('y-bind');
+    const hosts = b === '0.0.0.0' ? (addrs.length ? addrs : ['this-computer']) : [b === '127.0.0.1' ? 'localhost' : b];
+    const urls = hosts.map(h => `http://${h}${p === 80 ? '' : ':' + p}`);
+    $('y-addr').innerHTML = urls.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener"><b>${esc(u)}</b></a>`).join('<br>') +
+      `<div class="hint">${b === '127.0.0.1' ? 'Only this computer can open it.' : 'Open this address on your phone, tablet or another computer on the same network.'} Detected automatically from this computer's network connection.</div>`;
+  };
+  $('y-port').oninput = $('y-bind').onchange = showAddr;
+  $('y-port-pick').onchange = (e) => { if (e.target.value) { $('y-port').value = e.target.value; showAddr(); } e.target.value = ''; };
+  showAddr();
   $('f-sys').onsubmit = async (e) => {
     e.preventDefault();
     const user = val('y-user').trim();
     if (user && !val('y-pass') && !settings.server.has_password) return toast('Enter a password for the login.', true);
-    if (await saveSettings({server: {name: val('y-name'), listen: val('y-listen'), username: user, password: val('y-pass'), ffmpeg_path: val('y-ffmpeg')}})) { sysinfo = null; renderSystemSettings(body); }
+    const listen = `${val('y-bind')}:${Math.round(num('y-port'))}`;
+    if (await saveSettings({server: {name: val('y-name'), listen, username: user, password: val('y-pass'), ffmpeg_path: val('y-ffmpeg')}})) { sysinfo = null; renderSystemSettings(body); }
   };
 }
 
@@ -2220,7 +2631,7 @@ async function renderInfo(body) {
   const c = sysinfo.capabilities;
   body.innerHTML = `<div class="card"><h2>About</h2><dl>
     <dt>NVR version</dt><dd>${esc(sysinfo.version)}</dd><dt>Operating system</dt><dd>${esc(sysinfo.os)} (${esc(sysinfo.arch)})</dd>
-    <dt>Uptime</dt><dd>${fmtDur(sysinfo.uptime_seconds)}</dd><dt>Web address</dt><dd>${esc(sysinfo.listen)}</dd>
+    <dt>Uptime</dt><dd>${fmtDur(sysinfo.uptime_seconds)}</dd><dt>Web address</dt><dd>${(sysinfo.addresses || []).map(a => esc(`http://${a}:${sysinfo.listen.split(':').pop()}`)).join('<br>') || esc(sysinfo.listen)}</dd>
     <dt>ffmpeg</dt><dd>${esc(c.ffmpeg_version || 'NOT FOUND')}</dd>
     <dt>GPU decoders in ffmpeg</dt><dd>${esc(c.hwaccels.join(', ') || 'none')}</dd><dt>H.264 encoders</dt><dd>${esc(c.encoders.join(', ') || 'none')}</dd>
     <dt>Config file</dt><dd>${esc(sysinfo.config_path)}</dd><dt>Data folder</dt><dd>${esc(sysinfo.data_dir)}</dd>

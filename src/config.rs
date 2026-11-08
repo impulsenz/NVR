@@ -495,6 +495,107 @@ impl Default for DetectConfig {
     }
 }
 
+/// On-screen display for one camera (overrides the global display settings).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct OsdConfig {
+    /// false = use Settings → Live view & display.
+    pub custom: bool,
+    pub show_name: bool,
+    pub name_corner: String,
+    pub show_clock: bool,
+    pub clock_corner: String,
+    /// Empty = the global format.
+    pub clock_format: String,
+    /// Recording / armed / offline badge.
+    pub show_status: bool,
+    pub status_corner: String,
+    /// What is moving right now: "motion", "person", "car" ...
+    pub show_detections: bool,
+    pub detections_corner: String,
+    pub show_fps: bool,
+    pub fps_corner: String,
+    /// Extra text, e.g. "Driveway – north".
+    pub text: String,
+    pub text_corner: String,
+}
+
+impl Default for OsdConfig {
+    fn default() -> Self {
+        Self {
+            custom: false,
+            show_name: true,
+            name_corner: "bl".into(),
+            show_clock: true,
+            clock_corner: "tl".into(),
+            clock_format: String::new(),
+            show_status: true,
+            status_corner: "tr".into(),
+            show_detections: true,
+            detections_corner: "bl".into(),
+            show_fps: false,
+            fps_corner: "tl".into(),
+            text: String::new(),
+            text_corner: "br".into(),
+        }
+    }
+}
+
+/// How this camera is shown live (quick options on the Live page).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ViewConfig {
+    /// Grid picture: "auto" (sub-stream) or "main" (full quality, more GPU/CPU).
+    pub grid_quality: String,
+    /// Grid frame rate (0 = default from Live view settings).
+    pub grid_fps: u32,
+    /// Full-screen/opened frame rate (0 = default).
+    pub hd_fps: u32,
+}
+
+impl Default for ViewConfig {
+    fn default() -> Self {
+        Self {
+            grid_quality: "auto".into(),
+            grid_fps: 0,
+            hd_fps: 0,
+        }
+    }
+}
+
+/// Pan / tilt / zoom over ONVIF.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PtzConfig {
+    pub enabled: bool,
+    /// Camera address (empty = from the stream URL).
+    pub host: String,
+    /// ONVIF port (80 for most cameras; Reolink 8000, Tapo 2020).
+    pub port: u16,
+    /// Login (empty = from the stream URL).
+    pub username: String,
+    pub password: String,
+    /// Movement speed 0.1–1.
+    pub speed: f32,
+    pub invert_pan: bool,
+    pub invert_tilt: bool,
+}
+
+impl Default for PtzConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: String::new(),
+            port: 80,
+            username: String::new(),
+            password: String::new(),
+            speed: 0.5,
+            invert_pan: false,
+            invert_tilt: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct CameraConfig {
@@ -526,6 +627,9 @@ pub struct CameraConfig {
     /// Space this camera may use in GB (0 = no per-camera limit).
     pub max_storage_gb: f64,
     pub detect: DetectConfig,
+    pub osd: OsdConfig,
+    pub view: ViewConfig,
+    pub ptz: PtzConfig,
 }
 
 impl Default for CameraConfig {
@@ -548,6 +652,9 @@ impl Default for CameraConfig {
             retention_days: 0,
             max_storage_gb: 0.0,
             detect: DetectConfig::default(),
+            osd: OsdConfig::default(),
+            view: ViewConfig::default(),
+            ptz: PtzConfig::default(),
         }
     }
 }
@@ -609,7 +716,44 @@ impl CameraConfig {
         if d.trigger == "objects" && !d.ai {
             bail!("alerts on objects need object recognition turned on");
         }
+        let o = &self.osd;
+        for c in [
+            &o.name_corner,
+            &o.clock_corner,
+            &o.status_corner,
+            &o.detections_corner,
+            &o.fps_corner,
+            &o.text_corner,
+        ] {
+            if !CORNERS.contains(&c.as_str()) {
+                bail!("on-screen display positions must be tl, tr, bl or br");
+            }
+        }
+        if o.text.len() > 200 {
+            bail!("on-screen text is too long");
+        }
+        if !["auto", "main"].contains(&self.view.grid_quality.as_str())
+            || self.view.grid_fps > 30
+            || self.view.hd_fps > 30
+        {
+            bail!("live view quality must be auto or main, frame rates 0–30");
+        }
+        if !(0.05..=1.0).contains(&self.ptz.speed) {
+            bail!("PTZ speed must be between 0.05 and 1");
+        }
         self.schedule.validate()
+    }
+
+    /// Whether going from `old` to `self` needs the camera restarted.
+    /// Display, live-view and PTZ settings apply without a restart.
+    pub fn needs_restart(&self, old: &CameraConfig) -> bool {
+        let strip = |c: &CameraConfig| CameraConfig {
+            osd: OsdConfig::default(),
+            view: ViewConfig::default(),
+            ptz: PtzConfig::default(),
+            ..c.clone()
+        };
+        strip(self) != strip(old)
     }
 
     pub fn has_sub(&self) -> bool {

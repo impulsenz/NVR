@@ -14,9 +14,12 @@ viewing, finding footage, and managing everything, all from the browser.
 - Always running: grid pictures come from each camera's sub-stream over one WebSocket and keep
   updating while you use other pages, so switching back is instant.
 - Full-quality streams are **preloaded in the background**: opening a camera shows HD immediately.
-- Click a camera for a big view with its **recent alerts and recordings** beside it. Play them in place.
-- Overlays you can configure: camera name, **date & time** (choose the format and corner),
-  **frames per second** and stream details, and **fullscreen buttons** in any corners.
+- Click a camera for a big view with its **recent alerts and recordings** beside it, a **timeline** under it
+  with symbols for what was detected (🚶 person, 🚗 car, 🐈 cat …), **quick quality / frame-rate options**,
+  an **Edit camera** button, and **pan / tilt / zoom** controls with presets (ONVIF).
+- Overlays you can configure globally or per camera (camera settings → On-screen display): camera name,
+  **date & time** (format and corner), recording status, what is moving, **frames per second**, your own
+  text, and **fullscreen buttons** in any corners.
 - Active alerts are highlighted on the tile ("person", "car", …).
 
 **Recording**
@@ -61,7 +64,8 @@ viewing, finding footage, and managing everything, all from the browser.
 - Cards with **previews**: the alert thumbnail, or a frame from the recording.
 - Player with a **scrub bar that previews frames as you move along it**, and fast seeking.
 - **Clip export**: mark a start and end (buttons or drag the handles) and download just that part.
-- **Multi-camera timeline**: watch several cameras at the same moment, scrub across all of them at once
+- **Full-screen mode** for browsing recordings.
+- **Multi-camera timeline**: watch several cameras at the same moment (files play on without gaps), scrub across all of them at once
   (each shows a quick time-lapse preview), jump between alerts, and export the same time range from each camera.
 
 **System & logs**

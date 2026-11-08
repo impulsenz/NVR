@@ -69,6 +69,16 @@ pub fn router(mgr: Arc<Manager>) -> Router {
             put(update_camera).delete(delete_camera),
         )
         .route("/api/cameras/{id}/pause", post(pause))
+        .route("/api/cameras/{id}/view", put(set_view))
+        .route("/api/cameras/{id}/ptz/move", post(ptz_move))
+        .route("/api/cameras/{id}/ptz/stop", post(ptz_stop))
+        .route(
+            "/api/cameras/{id}/ptz/presets",
+            get(ptz_presets).post(ptz_save_preset),
+        )
+        .route("/api/cameras/{id}/ptz/goto", post(ptz_goto))
+        .route("/api/cameras/{id}/ptz/remove", post(ptz_remove))
+        .route("/api/ptz/test", post(ptz_test))
         .route("/api/cameras/{id}/resume", post(resume))
         .route(
             "/api/cameras/{id}/recordings/{name}",
@@ -135,7 +145,16 @@ async fn status(State(m): App) -> Response {
         .cameras()
         .iter()
         .map(|c| {
+            // Options that change without a restart come from the current config.
+            let cur = cfg
+                .cameras
+                .iter()
+                .find(|x| x.id == c.cfg.id)
+                .unwrap_or(&c.cfg);
             json!({
+                "osd": cur.osd,
+                "view": cur.view,
+                "ptz": cur.ptz.enabled,
                 "id": c.cfg.id,
                 "name": c.cfg.name,
                 "enabled": c.cfg.enabled,
@@ -187,11 +206,30 @@ async fn system(State(m): App) -> Response {
         "storage_dir": cfg.storage.dir.canonicalize().unwrap_or(cfg.storage.dir.clone()),
         "log_file": logs::buffer().file_path(),
         "listen": m.bound_listen,
+        "addresses": local_addresses(),
         "uptime_seconds": m.started.elapsed().as_secs(),
         "capabilities": caps,
         "ai_objects": crate::ai::SECURITY_OBJECTS,
     }))
     .into_response()
+}
+
+/// This computer's network (IPv4) addresses, main one first.
+pub fn local_addresses() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // The address used to reach other networks (no packet is sent).
+    for probe in ["8.8.8.8:80", "192.168.1.1:80", "10.0.0.1:80"] {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0")
+            && sock.connect(probe).is_ok()
+            && let Ok(a) = sock.local_addr()
+        {
+            let ip = a.ip().to_string();
+            if !a.ip().is_loopback() && !a.ip().is_unspecified() && !out.contains(&ip) {
+                out.push(ip);
+            }
+        }
+    }
+    out
 }
 
 #[derive(Deserialize)]
@@ -385,6 +423,155 @@ async fn delete_camera(
     match m.delete_camera(&id, q.delete_recordings).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
+    }
+}
+
+async fn set_view(
+    State(m): App,
+    Path(id): Path<String>,
+    Json(v): Json<crate::config::ViewConfig>,
+) -> Response {
+    match m.set_camera_view(&id, v).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+// ---------- PTZ ----------
+
+fn ptz_target(m: &Manager, id: &str) -> anyhow::Result<crate::onvif::Target> {
+    let cfg = m.config();
+    let cam = cfg
+        .cameras
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| anyhow::anyhow!("camera not found"))?;
+    if !cam.ptz.enabled {
+        anyhow::bail!("PTZ is not turned on for this camera (camera settings → PTZ)");
+    }
+    crate::onvif::Target::from(cam, &cam.ptz)
+}
+
+#[derive(Deserialize)]
+struct PtzMove {
+    #[serde(default)]
+    pan: f32,
+    #[serde(default)]
+    tilt: f32,
+    #[serde(default)]
+    zoom: f32,
+}
+
+async fn ptz_move(State(m): App, Path(id): Path<String>, Json(mv): Json<PtzMove>) -> Response {
+    let r = async {
+        let t = ptz_target(&m, &id)?;
+        let cfg = m.config();
+        let p = &cfg.cameras.iter().find(|c| c.id == id).unwrap().ptz;
+        let (sx, sy) = (
+            if p.invert_pan { -1.0 } else { 1.0 },
+            if p.invert_tilt { -1.0 } else { 1.0 },
+        );
+        m.onvif(&id)
+            .move_continuous(
+                &t,
+                mv.pan * p.speed * sx,
+                mv.tilt * p.speed * sy,
+                mv.zoom * p.speed,
+            )
+            .await
+    }
+    .await;
+    match r {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn ptz_stop(State(m): App, Path(id): Path<String>) -> Response {
+    let r = async { m.onvif(&id).stop(&ptz_target(&m, &id)?).await }.await;
+    match r {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn ptz_presets(State(m): App, Path(id): Path<String>) -> Response {
+    let r = async { m.onvif(&id).presets(&ptz_target(&m, &id)?).await }.await;
+    match r {
+        Ok(p) => Json(p).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PresetReq {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    name: String,
+}
+
+async fn ptz_goto(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq>) -> Response {
+    let res = async {
+        m.onvif(&id)
+            .goto_preset(&ptz_target(&m, &id)?, &r.token)
+            .await
+    }
+    .await;
+    match res {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn ptz_save_preset(
+    State(m): App,
+    Path(id): Path<String>,
+    Json(r): Json<PresetReq>,
+) -> Response {
+    if r.name.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "enter a name for the preset");
+    }
+    let res = async {
+        m.onvif(&id)
+            .set_preset(&ptz_target(&m, &id)?, r.name.trim())
+            .await
+    }
+    .await;
+    match res {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn ptz_remove(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq>) -> Response {
+    let res = async {
+        m.onvif(&id)
+            .remove_preset(&ptz_target(&m, &id)?, &r.token)
+            .await
+    }
+    .await;
+    match res {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PtzTestReq {
+    camera: CameraConfig,
+}
+
+/// Check PTZ settings from the camera editor (before saving).
+async fn ptz_test(Json(r): Json<PtzTestReq>) -> Response {
+    let res = async {
+        let t = crate::onvif::Target::from(&r.camera, &r.camera.ptz)?;
+        crate::onvif::Onvif::default().presets(&t).await
+    }
+    .await;
+    match res {
+        Ok(p) => Json(json!({ "ok": true, "presets": p })).into_response(),
+        Err(e) => Json(json!({ "ok": false, "error": format!("{e:#}") })).into_response(),
     }
 }
 
