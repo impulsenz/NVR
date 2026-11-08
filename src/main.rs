@@ -1,11 +1,20 @@
 //! A small home NVR: records IP cameras to disk and serves a web interface.
 
+mod ai;
+mod buffer;
+mod cloud;
 mod config;
+mod detect;
+mod events;
 mod ffmpeg;
+mod imgutil;
+mod library;
 mod live;
+mod logs;
 mod manager;
 mod recorder;
 mod storage;
+mod sysmon;
 mod web;
 
 use anyhow::{Context, Result};
@@ -14,13 +23,22 @@ use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_ansi(use_color())
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_target(false).with_ansi(use_color()))
+        .with(tracing_subscriber::filter::LevelFilter::INFO)
+        .with(logs::LogLayer)
         .init();
+    // HTTPS (cloud AI, model download) uses rustls with the ring crypto backend.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "nvr.toml".into()));
     let (cfg, needs_save) = config::Config::load_or_create(&path)?;
+    // Logs, statistics and AI models live next to the config file.
+    let data_dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).join("nvr-data");
+    std::fs::create_dir_all(&data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
+    logs::buffer().set_file(data_dir.join("nvr.log"));
     if needs_save {
         cfg.save(&path)?;
         info!("wrote {}", path.display());
@@ -46,8 +64,10 @@ async fn main() -> Result<()> {
     );
 
     let listen = cfg.server.listen.clone();
-    let mgr = manager::Manager::new(path, cfg);
-    tokio::spawn(mgr.clone().retention_task());
+    let mgr = manager::Manager::new(path, data_dir, cfg);
+    tokio::spawn(mgr.clone().housekeeping());
+    tokio::spawn(mgr.monitor.clone().run());
+    tokio::spawn(cloud::run(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

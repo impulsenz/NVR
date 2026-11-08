@@ -1,0 +1,169 @@
+//! Motion/AI events for one camera, stored as JSON lines in
+//! `<camera folder>/events/events.jsonl` next to their thumbnails and clips.
+
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Label {
+    pub label: String,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Event {
+    pub id: String,
+    pub camera: String,
+    pub start: DateTime<Local>,
+    pub end: DateTime<Local>,
+    /// Recognized objects (best score per label).
+    #[serde(default)]
+    pub labels: Vec<Label>,
+    /// Motion was detected.
+    #[serde(default)]
+    pub motion: bool,
+    /// Thumbnail file name in the events folder.
+    #[serde(default)]
+    pub thumb: Option<String>,
+    /// Full-quality clip file name in the events folder (event-recording modes).
+    #[serde(default)]
+    pub clip: Option<String>,
+    /// Wall-clock time of the clip's first frame.
+    #[serde(default)]
+    pub clip_start: Option<DateTime<Local>>,
+}
+
+impl Event {
+    #[cfg(test)]
+    pub fn has_label(&self, l: &str) -> bool {
+        self.labels.iter().any(|x| x.label == l)
+    }
+}
+
+pub struct EventStore {
+    dir: PathBuf,
+    events: RwLock<Vec<Event>>,
+}
+
+impl EventStore {
+    pub fn open(camera_dir: &Path) -> Self {
+        let dir = camera_dir.join("events");
+        let mut events: Vec<Event> = std::fs::read_to_string(dir.join("events.jsonl"))
+            .map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+            .unwrap_or_default();
+        // Later lines replace earlier ones with the same id (updates).
+        let mut seen = std::collections::HashMap::new();
+        for (i, e) in events.iter().enumerate() {
+            seen.insert(e.id.clone(), i);
+        }
+        let mut idx: Vec<usize> = seen.into_values().collect();
+        idx.sort();
+        events = idx.into_iter().map(|i| events[i].clone()).collect();
+        events.sort_by_key(|e| e.start);
+        Self { dir, events: RwLock::new(events) }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    fn append_line(&self, e: &Event) {
+        let _ = std::fs::create_dir_all(&self.dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("events.jsonl")) {
+            if let Ok(line) = serde_json::to_string(e) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+    }
+
+    /// Add or update an event.
+    pub fn save(&self, e: Event) {
+        self.append_line(&e);
+        let mut ev = self.events.write().unwrap();
+        if let Some(slot) = ev.iter_mut().find(|x| x.id == e.id) {
+            *slot = e;
+        } else {
+            ev.push(e);
+            ev.sort_by_key(|e| e.start);
+        }
+    }
+
+    pub fn get(&self, id: &str) -> Option<Event> {
+        self.events.read().unwrap().iter().find(|e| e.id == id).cloned()
+    }
+
+    pub fn between(&self, from: DateTime<Local>, to: DateTime<Local>) -> Vec<Event> {
+        self.events.read().unwrap().iter().filter(|e| e.end >= from && e.start <= to).cloned().collect()
+    }
+
+    pub fn all(&self) -> Vec<Event> {
+        self.events.read().unwrap().clone()
+    }
+
+    /// Delete events (and their files) that match `remove`, then compact the file.
+    pub fn remove_where(&self, remove: impl Fn(&Event) -> bool) -> usize {
+        let mut ev = self.events.write().unwrap();
+        let before = ev.len();
+        ev.retain(|e| {
+            if remove(e) {
+                for f in [&e.thumb, &e.clip].into_iter().flatten() {
+                    let _ = std::fs::remove_file(self.dir.join(f));
+                }
+                false
+            } else {
+                true
+            }
+        });
+        let removed = before - ev.len();
+        if removed > 0 {
+            let text: String =
+                ev.iter().filter_map(|e| serde_json::to_string(e).ok()).map(|l| l + "\n").collect();
+            let tmp = self.dir.join("events.jsonl.tmp");
+            if std::fs::write(&tmp, text).is_ok() {
+                let _ = std::fs::rename(&tmp, self.dir.join("events.jsonl"));
+            }
+        }
+        removed
+    }
+
+    /// Delete a single event and its files.
+    pub fn delete(&self, id: &str) -> bool {
+        self.remove_where(|e| e.id == id) > 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_update_reload_remove() {
+        let dir = std::env::temp_dir().join(format!("nvr-ev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = EventStore::open(&dir);
+        let now = Local::now();
+        let mut e = Event {
+            id: "e1".into(),
+            camera: "cam".into(),
+            start: now,
+            end: now,
+            labels: vec![],
+            motion: true,
+            thumb: None,
+            clip: None,
+            clip_start: None,
+        };
+        s.save(e.clone());
+        e.labels.push(Label { label: "person".into(), score: 0.9 });
+        s.save(e.clone());
+        let s2 = EventStore::open(&dir);
+        assert_eq!(s2.all().len(), 1);
+        assert!(s2.get("e1").unwrap().has_label("person"));
+        assert_eq!(s2.remove_where(|e| e.has_label("person")), 1);
+        assert_eq!(EventStore::open(&dir).all().len(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

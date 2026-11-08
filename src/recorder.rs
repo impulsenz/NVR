@@ -55,8 +55,21 @@ struct Inner {
     last_progress: Instant,
 }
 
+/// What one recorder writes.
+#[derive(Debug, Clone)]
+pub struct RecSpec {
+    /// "continuous" or "buffer" (shown in logs).
+    pub label: &'static str,
+    pub url: String,
+    pub dir: std::path::PathBuf,
+    /// File name prefix (files are `<prefix>_YYYY-MM-DD_HH-MM-SS.mp4`).
+    pub prefix: String,
+    pub segment_seconds: u64,
+}
+
 pub struct Recorder {
     cam: CameraConfig,
+    spec: RecSpec,
     env: Arc<RuntimeEnv>,
     want: watch::Sender<bool>,
     paused: AtomicBool,
@@ -66,10 +79,11 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn new(cam: CameraConfig, env: Arc<RuntimeEnv>, cancel: CancellationToken) -> Arc<Self> {
-        let use_gpu = cam.transcode && env.hardware.uses_gpu();
+    pub fn new(cam: CameraConfig, spec: RecSpec, env: Arc<RuntimeEnv>, cancel: CancellationToken) -> Arc<Self> {
+        let use_gpu = cam.reencode() && env.hardware.uses_gpu();
         Arc::new(Self {
             cam,
+            spec,
             env,
             want: watch::Sender::new(false),
             paused: AtomicBool::new(false),
@@ -139,9 +153,9 @@ impl Recorder {
     fn spawn_ffmpeg(&self, use_gpu: bool) -> std::io::Result<(Child, Option<String>)> {
         let cam = &self.cam;
         let env = &self.env;
-        let dir = env.camera_dir(&cam.id);
-        std::fs::create_dir_all(&dir)?;
-        let pattern = dir.join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", cam.id));
+        let spec = &self.spec;
+        std::fs::create_dir_all(&spec.dir)?;
+        let pattern = spec.dir.join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", spec.prefix));
 
         let mut cmd = Command::new(&env.ffmpeg_path);
         // stdin stays open so we can send "q" for a clean stop.
@@ -156,7 +170,7 @@ impl Recorder {
 
         let mut gpu_desc = None;
         let mut out_args = vec!["-c:v".to_string(), "copy".to_string()];
-        if cam.transcode {
+        if cam.reencode() {
             let hw = &env.hardware;
             let (encoder, keep) = if use_gpu {
                 (hw.resolved_encoder(), ffmpeg::full_gpu_pipeline(hw))
@@ -173,9 +187,12 @@ impl Recorder {
             let (pre, out) = ffmpeg::encoder_args(encoder, hw, keep);
             cmd.args(pre);
             out_args = out;
+            if cam.record_fps > 0 {
+                out_args.extend(["-r".to_string(), cam.record_fps.to_string()]);
+            }
         }
         cmd.args(["-fflags", "+genpts"])
-            .args(ffmpeg::input_args(&cam.url, &cam.rtsp_transport))
+            .args(ffmpeg::input_args(&spec.url, &cam.rtsp_transport))
             .args(["-map", "0:v:0"]);
         if cam.record_audio {
             cmd.args(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "64k"]);
@@ -187,7 +204,7 @@ impl Recorder {
                 "-f",
                 "segment",
                 "-segment_time",
-                &env.segment_seconds.to_string(),
+                &spec.segment_seconds.to_string(),
             ])
             .args(["-segment_atclocktime", "1", "-segment_format", "mp4"])
             // Fragmented MP4: files stay playable even if power is lost mid-recording.
@@ -222,7 +239,7 @@ impl Recorder {
         let mut want = self.want.subscribe();
         let mut backoff = Duration::from_secs(2);
         let mut quick_failures = 0u32;
-        let tag = format!("[{}]", self.cam.name);
+        let tag = format!("[{}] {}", self.cam.name, self.spec.label);
 
         loop {
             // Wait until recording is wanted.
@@ -236,12 +253,12 @@ impl Recorder {
 
             self.set_state(RecState::Connecting);
             let use_gpu = self.use_gpu.load(Ordering::SeqCst);
-            info!("{tag} recorder: connecting to {}", mask_url(&self.cam.url));
+            info!("{tag}: connecting to {}", mask_url(&self.spec.url));
             let (mut child, gpu_desc) = match self.spawn_ffmpeg(use_gpu) {
                 Ok(c) => c,
                 Err(e) => {
                     let msg = format!("failed to start ffmpeg: {e}");
-                    warn!("{tag} recorder: {msg}");
+                    warn!("{tag}: {msg}");
                     self.update(|s| s.last_error = Some(msg));
                     self.set_state(RecState::Retrying);
                     if !self.wait_or_disabled(&mut want, backoff).await {
@@ -283,7 +300,7 @@ impl Recorder {
             let stalled = matches!(outcome, Exit::Stalled);
             let reason = match outcome {
                 Exit::Stopped | Exit::Cancelled => {
-                    info!("{tag} recorder: stopping");
+                    info!("{tag}: stopping");
                     graceful_stop(&mut child, stdin).await;
                     self.set_state(RecState::Idle);
                     if matches!(outcome, Exit::Cancelled) {
@@ -298,7 +315,7 @@ impl Recorder {
                 }
             };
             warn!(
-                "{tag} recorder: {reason}; retrying in {}s",
+                "{tag}: {reason}; retrying in {}s",
                 backoff.as_secs()
             );
 
@@ -312,7 +329,7 @@ impl Recorder {
                 if quick_failures >= 2 {
                     self.use_gpu.store(false, Ordering::SeqCst);
                     let err = self.status().last_error.unwrap_or_default();
-                    warn!("{tag} recorder: GPU acceleration failed, switching to CPU");
+                    warn!("{tag}: GPU acceleration failed, switching to CPU");
                     self.update(|s| {
                         s.gpu_fallback = true;
                         s.gpu_error = Some(err);
@@ -367,7 +384,7 @@ impl Recorder {
                     s.state = RecState::Recording;
                     s.since = Some(Local::now());
                     s.last_error = None;
-                    info!("[{}] recorder: recording", self.cam.name);
+                    info!("[{}] {}: recording", self.cam.name, self.spec.label);
                 }
             }
         }
@@ -379,13 +396,13 @@ impl Recorder {
         let mut filter = ffmpeg::StderrFilter::default();
         while let Ok(Some(raw)) = lines.next_line().await {
             if let Some(s) = filter.summary(false) {
-                info!("[{}] recorder: {s}", self.cam.name);
+                info!("[{}] {}: {s}", self.cam.name, self.spec.label);
             }
             let Some(line) = filter.filter(&raw) else {
                 continue;
             };
             // ffmpeg echoes the input URL in errors; never leak the password.
-            let line = redact(&line, &self.cam.url);
+            let line = redact(&redact(&line, &self.cam.url), &self.cam.live_url);
             warn!("[{}] ffmpeg: {line}", self.cam.name);
             // The first line of a failing start names the cause; while recording,
             // the latest message is the relevant one.
@@ -396,7 +413,7 @@ impl Recorder {
             first = false;
         }
         if let Some(s) = filter.summary(true) {
-            info!("[{}] recorder: {s}", self.cam.name);
+            info!("[{}] {}: {s}", self.cam.name, self.spec.label);
         }
     }
 }

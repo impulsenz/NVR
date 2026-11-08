@@ -1,15 +1,26 @@
 //! Owns the configuration and the running cameras. Changes made from the
-//! web UI go through here: they are validated, saved to disk, and applied
-//! by restarting only the cameras that are affected.
+//! web UI go through here: they are validated, saved to disk, and applied by
+//! restarting only what is affected.
 
-use crate::config::{CameraConfig, Config, HardwareConfig, LiveConfig, StorageConfig};
-use crate::live::Live;
-use crate::recorder::Recorder;
-use crate::storage;
+use crate::ai::AiHandle;
+use crate::buffer::{self, EventBuffer};
+use crate::config::{
+    AiConfig, CameraConfig, CloudConfig, Config, DashboardConfig, DisplayConfig, HardwareConfig, LiveConfig,
+    StorageConfig,
+};
+use crate::detect::Detector;
+use crate::events::EventStore;
+use crate::ffmpeg::{self, StreamInfo};
+use crate::live::{Live, Quality};
+use crate::recorder::{RecSpec, Recorder};
+use crate::storage::{self, CameraUsage};
+use crate::sysmon::Monitor;
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -19,74 +30,171 @@ use tracing::info;
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeEnv {
     pub ffmpeg_path: String,
-    pub storage_dir: PathBuf,
     pub segment_seconds: u64,
     pub live: LiveConfig,
     pub hardware: HardwareConfig,
+    pub storage_dir: PathBuf,
 }
 
 impl RuntimeEnv {
     fn from(cfg: &Config) -> Self {
         Self {
             ffmpeg_path: cfg.server.ffmpeg_path.clone(),
-            storage_dir: cfg.storage.dir.clone(),
             segment_seconds: cfg.storage.segment_seconds,
             live: cfg.live.clone(),
             hardware: cfg.hardware.clone(),
+            storage_dir: cfg.storage.dir.clone(),
         }
-    }
-
-    pub fn camera_dir(&self, id: &str) -> PathBuf {
-        self.storage_dir.join(id)
     }
 }
 
 pub struct CameraRuntime {
     pub cfg: CameraConfig,
-    pub env: Arc<RuntimeEnv>,
-    pub recorder: Arc<Recorder>,
-    pub live: Arc<Live>,
+    pub dir: PathBuf,
+    /// 24/7 recording (main or sub-stream), if the mode has one.
+    pub recorder: Option<Arc<Recorder>>,
+    /// Full-quality pre-event buffer recorder, in event-clip modes.
+    pub buffer_recorder: Option<Arc<Recorder>>,
+    pub detector: Mutex<Option<Arc<Detector>>>,
+    pub live_sub: Arc<Live>,
+    pub live_main: Arc<Live>,
+    pub events: Arc<EventStore>,
+    pub info_main: Mutex<Option<StreamInfo>>,
+    pub info_sub: Mutex<Option<StreamInfo>>,
     cancel: CancellationToken,
-    task: std::sync::Mutex<Option<JoinHandle<()>>>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl CameraRuntime {
-    fn start(cfg: CameraConfig, env: Arc<RuntimeEnv>) -> Arc<Self> {
+    fn start(cfg: CameraConfig, dir: PathBuf, env: Arc<RuntimeEnv>, ai: Arc<AiHandle>, events: Arc<EventStore>) -> Arc<Self> {
         let cancel = CancellationToken::new();
-        let recorder = Recorder::new(cfg.clone(), env.clone(), cancel.clone());
-        let live = Live::new(cfg.clone(), env.clone(), cancel.clone());
-        let task = tokio::spawn(recorder.clone().run());
-        Arc::new(Self {
-            cfg,
-            env,
+        let mut tasks = Vec::new();
+        let segment = cfg.segment_seconds(env.segment_seconds);
+
+        let recorder = cfg.record_mode.continuous_stream().map(|use_sub| {
+            let spec = RecSpec {
+                label: if use_sub && cfg.has_sub() { "recording (sub-stream)" } else { "recording" },
+                url: if use_sub { cfg.live_url().to_string() } else { cfg.url.clone() },
+                dir: dir.clone(),
+                prefix: cfg.id.clone(),
+                segment_seconds: segment,
+            };
+            Recorder::new(cfg.clone(), spec, env.clone(), cancel.clone())
+        });
+        let (buffer_recorder, event_buffer) = if cfg.record_mode.event_clips() {
+            let buf = EventBuffer::new(&dir, &cfg.name, &env.ffmpeg_path, cfg.detect.pre_seconds, events.clone());
+            let spec = RecSpec {
+                label: "event buffer",
+                url: cfg.url.clone(),
+                dir: buf.dir.clone(),
+                prefix: buffer::PREFIX.into(),
+                segment_seconds: buffer::BUFFER_SEGMENT_SECONDS,
+            };
+            tasks.push(tokio::spawn(buf.clone().run(cancel.clone())));
+            (Some(Recorder::new(cfg.clone(), spec, env.clone(), cancel.clone())), Some(buf))
+        } else {
+            (None, None)
+        };
+        for r in recorder.iter().chain(buffer_recorder.iter()) {
+            tasks.push(tokio::spawn(r.clone().run()));
+        }
+
+        let live_main = Live::new(cfg.clone(), env.clone(), Quality::Main, cancel.clone());
+        let live_sub = if cfg.has_sub() {
+            Live::new(cfg.clone(), env.clone(), Quality::Sub, cancel.clone())
+        } else {
+            live_main.clone()
+        };
+
+        let rt = Arc::new(Self {
+            dir,
             recorder,
-            live,
-            cancel,
-            task: std::sync::Mutex::new(Some(task)),
-        })
+            buffer_recorder,
+            detector: Mutex::new(None),
+            live_sub,
+            live_main,
+            events,
+            info_main: Mutex::new(None),
+            info_sub: Mutex::new(None),
+            cancel: cancel.clone(),
+            tasks: Mutex::new(tasks),
+            cfg,
+        });
+
+        // Learn the streams' size and frame rate, then start detection
+        // (which needs the sub-stream's picture size).
+        let me = rt.clone();
+        let task = tokio::spawn(async move {
+            if !me.cfg.enabled {
+                return;
+            }
+            let c = &me.cfg;
+            let (main, sub) = tokio::join!(
+                ffmpeg::video_info(&env.ffmpeg_path, &c.url, &c.rtsp_transport),
+                async {
+                    if c.has_sub() {
+                        ffmpeg::video_info(&env.ffmpeg_path, &c.live_url, &c.rtsp_transport).await
+                    } else {
+                        None
+                    }
+                }
+            );
+            let sub = sub.or_else(|| main.clone());
+            *me.info_main.lock().unwrap() = main;
+            *me.info_sub.lock().unwrap() = sub.clone();
+            if me.cancel.is_cancelled() || !c.detection_enabled() {
+                return;
+            }
+            let size = sub.and_then(|s| Some((s.width?, s.height?)));
+            let det = Detector::new(c.clone(), env.clone(), ai, me.events.clone(), event_buffer, size);
+            *me.detector.lock().unwrap() = Some(det.clone());
+            det.run(me.cancel.clone()).await;
+        });
+        rt.tasks.lock().unwrap().push(task);
+        rt
     }
 
-    /// Stop recording (finishing the current file) and the live view.
+    /// Stop recording (finishing the current files), detection and live view.
     async fn stop(&self) {
         self.cancel.cancel();
-        let task = self.task.lock().unwrap().take();
-        if let Some(t) = task {
-            let _ = tokio::time::timeout(Duration::from_secs(10), t).await;
+        let tasks: Vec<_> = self.tasks.lock().unwrap().drain(..).collect();
+        let _ = tokio::time::timeout(Duration::from_secs(15), futures_util::future::join_all(tasks)).await;
+    }
+
+    pub fn detector(&self) -> Option<Arc<Detector>> {
+        self.detector.lock().unwrap().clone()
+    }
+
+    pub fn live(&self, q: Quality) -> Arc<Live> {
+        match q {
+            Quality::Sub => self.live_sub.clone(),
+            Quality::Main => self.live_main.clone(),
         }
     }
 
-    pub fn dir(&self) -> PathBuf {
-        self.env.camera_dir(&self.cfg.id)
+    pub fn pause(&self) {
+        for r in self.recorder.iter().chain(self.buffer_recorder.iter()) {
+            r.pause();
+        }
+    }
+
+    pub fn resume(&self) {
+        for r in self.recorder.iter().chain(self.buffer_recorder.iter()) {
+            r.resume();
+        }
     }
 }
 
-/// Fields of the general settings form; `None` sections are left unchanged.
-#[derive(Debug, Deserialize)]
+/// Fields of the settings forms; `None` sections are left unchanged.
+#[derive(Debug, Deserialize, Default)]
 pub struct SettingsUpdate {
     pub server: Option<ServerUpdate>,
     pub storage: Option<StorageConfig>,
     pub live: Option<LiveConfig>,
+    pub display: Option<DisplayConfig>,
     pub hardware: Option<HardwareConfig>,
+    pub ai: Option<AiConfig>,
+    pub cloud: Option<CloudConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,32 +208,104 @@ pub struct ServerUpdate {
     pub ffmpeg_path: String,
 }
 
+/// Disk space and how long recordings will fit.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UsageReport {
+    pub updated: Option<DateTime<Local>>,
+    pub cameras: Vec<CameraUsageView>,
+    pub locations: Vec<Location>,
+    pub bytes_per_hour: f64,
+    pub bytes_per_day: f64,
+    pub used_bytes: u64,
+    /// Space the recordings may use in total (limit, or disk space).
+    pub capacity_bytes: Option<u64>,
+    /// How many days of recordings fit at the current rate.
+    pub days_capacity: Option<f64>,
+    /// Days until the space is full, from now.
+    pub days_until_full: Option<f64>,
+    /// "max storage" or "disk space".
+    pub limited_by: String,
+    pub retention_days: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CameraUsageView {
+    pub name: String,
+    #[serde(flatten)]
+    pub usage: CameraUsage,
+    pub bytes_per_day: f64,
+    pub retention_days: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Location {
+    pub path: PathBuf,
+    pub cameras: Vec<String>,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub bytes_per_day: f64,
+    pub days_until_full: Option<f64>,
+}
+
 pub struct Manager {
     pub cfg_path: PathBuf,
+    pub data_dir: PathBuf,
     config: RwLock<Config>,
     cameras: RwLock<Vec<Arc<CameraRuntime>>>,
+    stores: Mutex<HashMap<String, Arc<EventStore>>>,
     edit: tokio::sync::Mutex<()>,
     pub started: Instant,
     /// The address actually bound at startup (listen changes need a restart).
     pub bound_listen: String,
+    pub ai: Arc<AiHandle>,
+    pub monitor: Arc<Monitor>,
+    usage: Mutex<UsageReport>,
+    /// Temporary stream previews for the camera editor: token → (url, transport).
+    pub previews: Mutex<HashMap<String, (String, String, Instant)>>,
 }
 
 impl Manager {
-    pub fn new(cfg_path: PathBuf, config: Config) -> Arc<Self> {
-        let env = Arc::new(RuntimeEnv::from(&config));
-        let cameras = config
-            .cameras
-            .iter()
-            .map(|c| CameraRuntime::start(c.clone(), env.clone()))
-            .collect();
-        Arc::new(Self {
+    pub fn new(cfg_path: PathBuf, data_dir: PathBuf, config: Config) -> Arc<Self> {
+        let _ = std::fs::create_dir_all(data_dir.join("tmp"));
+        let ai = Arc::new(AiHandle::new(config.ai.clone(), &data_dir));
+        let m = Arc::new(Self {
             cfg_path,
             bound_listen: config.server.listen.clone(),
-            config: RwLock::new(config),
-            cameras: RwLock::new(cameras),
+            monitor: Arc::new(Monitor::new(&data_dir)),
+            data_dir,
+            config: RwLock::new(config.clone()),
+            cameras: RwLock::new(Vec::new()),
+            stores: Mutex::new(HashMap::new()),
             edit: tokio::sync::Mutex::new(()),
             started: Instant::now(),
-        })
+            ai,
+            usage: Mutex::new(UsageReport::default()),
+            previews: Mutex::new(HashMap::new()),
+        });
+        let cams: Vec<_> = config.cameras.iter().map(|c| m.start_camera(c)).collect();
+        *m.cameras.write().unwrap() = cams;
+        m
+    }
+
+    fn store(&self, cam: &CameraConfig, dir: &std::path::Path) -> Arc<EventStore> {
+        let mut stores = self.stores.lock().unwrap();
+        match stores.get(&cam.id) {
+            Some(s) if s.dir() == dir.join("events") => s.clone(),
+            _ => {
+                let s = Arc::new(EventStore::open(dir));
+                stores.insert(cam.id.clone(), s.clone());
+                s
+            }
+        }
+    }
+
+    fn start_camera(&self, cam: &CameraConfig) -> Arc<CameraRuntime> {
+        let cfg = self.config();
+        let dir = cfg.camera_dir(cam);
+        let _ = std::fs::create_dir_all(&dir);
+        let store = self.store(cam, &dir);
+        CameraRuntime::start(cam.clone(), dir, Arc::new(RuntimeEnv::from(&cfg)), self.ai.clone(), store)
     }
 
     pub fn config(&self) -> Config {
@@ -137,16 +317,11 @@ impl Manager {
     }
 
     pub fn camera(&self, id: &str) -> Option<Arc<CameraRuntime>> {
-        self.cameras
-            .read()
-            .unwrap()
-            .iter()
-            .find(|c| c.cfg.id == id)
-            .cloned()
+        self.cameras.read().unwrap().iter().find(|c| c.cfg.id == id).cloned()
     }
 
-    fn env(&self) -> Arc<RuntimeEnv> {
-        Arc::new(RuntimeEnv::from(&self.config.read().unwrap()))
+    pub fn event_stores(&self) -> HashMap<String, Arc<EventStore>> {
+        self.stores.lock().unwrap().clone()
     }
 
     /// Validate and persist a new config, then make it current.
@@ -166,7 +341,7 @@ impl Manager {
         cfg.cameras.push(cam.clone());
         self.commit(cfg)?;
         info!("added camera \"{}\"", cam.name);
-        let rt = CameraRuntime::start(cam.clone(), self.env());
+        let rt = self.start_camera(&cam);
         self.cameras.write().unwrap().push(rt);
         Ok(cam)
     }
@@ -174,9 +349,7 @@ impl Manager {
     pub async fn update_camera(&self, id: &str, mut cam: CameraConfig) -> Result<CameraConfig> {
         let _g = self.edit.lock().await;
         let mut cfg = self.config();
-        let Some(slot) = cfg.cameras.iter_mut().find(|c| c.id == id) else {
-            bail!("camera not found")
-        };
+        let Some(slot) = cfg.cameras.iter_mut().find(|c| c.id == id) else { bail!("camera not found") };
         cam.id = id.to_string();
         cam.name = cam.name.trim().to_string();
         cam.validate()?;
@@ -191,7 +364,7 @@ impl Manager {
         if let Some(old) = self.camera(&cam.id) {
             old.stop().await;
         }
-        let rt = CameraRuntime::start(cam.clone(), self.env());
+        let rt = self.start_camera(cam);
         let mut cams = self.cameras.write().unwrap();
         if let Some(slot) = cams.iter_mut().find(|c| c.cfg.id == cam.id) {
             *slot = rt;
@@ -208,13 +381,15 @@ impl Manager {
         if cfg.cameras.len() == before {
             bail!("camera not found");
         }
+        cfg.dashboard.tiles.retain(|t| t.camera != id);
         self.commit(cfg)?;
         let rt = self.camera(id);
         self.cameras.write().unwrap().retain(|c| c.cfg.id != id);
+        self.stores.lock().unwrap().remove(id);
         if let Some(rt) = rt {
             rt.stop().await;
             if delete_recordings {
-                let dir = rt.dir();
+                let dir = rt.dir.clone();
                 tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir))
                     .await?
                     .context("deleting recordings")?;
@@ -224,7 +399,14 @@ impl Manager {
         Ok(())
     }
 
-    /// Apply general settings. Returns true if a program restart is needed.
+    pub async fn update_dashboard(&self, d: DashboardConfig) -> Result<()> {
+        let _g = self.edit.lock().await;
+        let mut cfg = self.config();
+        cfg.dashboard = d;
+        self.commit(cfg)
+    }
+
+    /// Apply settings. Returns true if a program restart is needed.
     pub async fn update_settings(&self, up: SettingsUpdate) -> Result<bool> {
         let _g = self.edit.lock().await;
         let old = self.config();
@@ -249,26 +431,70 @@ impl Manager {
         if let Some(l) = up.live {
             cfg.live = l;
         }
+        if let Some(d) = up.display {
+            cfg.display = d;
+        }
         if let Some(h) = up.hardware {
             cfg.hardware = h;
+        }
+        if let Some(mut a) = up.ai {
+            // The form never receives the stored key; empty means "keep".
+            if a.api_key.is_empty() {
+                a.api_key = old.ai.api_key.clone();
+            }
+            cfg.ai = a;
+        }
+        if let Some(c) = up.cloud {
+            cfg.cloud = c;
         }
         if cfg.storage.dir != old.storage.dir {
             std::fs::create_dir_all(&cfg.storage.dir)
                 .with_context(|| format!("cannot create {}", cfg.storage.dir.display()))?;
         }
-        self.commit(cfg.clone())?;
+        self.apply(old, cfg).await
+    }
 
-        if RuntimeEnv::from(&cfg) != RuntimeEnv::from(&old) {
-            info!("settings changed; restarting cameras");
-            for cam in &cfg.cameras {
+    /// Replace the whole configuration (backup import).
+    pub async fn import(&self, mut new: Config, keep_login: bool) -> Result<bool> {
+        let _g = self.edit.lock().await;
+        let old = self.config();
+        if keep_login {
+            new.server.username = old.server.username.clone();
+            new.server.password = old.server.password.clone();
+            new.server.listen = old.server.listen.clone();
+        }
+        // Stop cameras that no longer exist.
+        for c in &old.cameras {
+            if !new.cameras.iter().any(|n| n.id == c.id) {
+                if let Some(rt) = self.camera(&c.id) {
+                    rt.stop().await;
+                }
+                self.cameras.write().unwrap().retain(|r| r.cfg.id != c.id);
+            }
+        }
+        self.apply(old, new).await
+    }
+
+    async fn apply(&self, old: Config, cfg: Config) -> Result<bool> {
+        self.commit(cfg.clone())?;
+        if cfg.ai != old.ai {
+            self.ai.replace(cfg.ai.clone(), &self.data_dir);
+        }
+        let env_changed = RuntimeEnv::from(&cfg) != RuntimeEnv::from(&old);
+        for cam in &cfg.cameras {
+            let prev = old.cameras.iter().find(|c| c.id == cam.id);
+            if env_changed || prev != Some(cam) {
                 self.restart_camera(cam).await;
             }
         }
-        if cfg.storage != old.storage {
-            let s = cfg.storage.clone();
-            tokio::task::spawn_blocking(move || storage::cleanup(&s));
+        if env_changed {
+            info!("settings changed; cameras restarted");
         }
-        Ok(cfg.server.listen != self.bound_listen)
+        if cfg.storage != old.storage {
+            let stores = self.event_stores();
+            tokio::task::spawn_blocking(move || storage::cleanup(&cfg, &stores));
+        }
+        Ok(self.config().server.listen != self.bound_listen)
     }
 
     pub async fn shutdown(&self) {
@@ -276,13 +502,114 @@ impl Manager {
         futures_util::future::join_all(cams.iter().map(|c| c.stop())).await;
     }
 
-    /// Periodically apply retention rules.
-    pub async fn retention_task(self: Arc<Self>) {
-        let mut tick = tokio::time::interval(Duration::from_secs(300));
+    pub fn usage(&self) -> UsageReport {
+        self.usage.lock().unwrap().clone()
+    }
+
+    fn compute_usage(cfg: &Config) -> UsageReport {
+        let mut cams = Vec::new();
+        for c in &cfg.cameras {
+            let u = storage::camera_usage(&c.id, &cfg.camera_dir(c));
+            cams.push(CameraUsageView {
+                name: c.name.clone(),
+                bytes_per_day: u.bytes_per_hour * 24.0,
+                retention_days: if c.retention_days > 0 { c.retention_days } else { cfg.storage.retention_days },
+                usage: u,
+            });
+        }
+        // Group camera folders by the disk they are on.
+        let mut locations: Vec<Location> = Vec::new();
+        let default_root = cfg.storage.dir.clone();
+        let mut roots: Vec<(PathBuf, Vec<&CameraUsageView>)> = vec![(default_root, vec![])];
+        for c in &cams {
+            let parent = c.usage.dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            match roots.iter_mut().find(|r| r.0 == parent) {
+                Some(r) => r.1.push(c),
+                None => roots.push((parent, vec![c])),
+            }
+        }
+        for (path, list) in roots {
+            let Some((free, total)) = crate::sysmon::disk_space(&path) else { continue };
+            let per_day: f64 = list.iter().map(|c| c.bytes_per_day).sum();
+            let used: u64 = list.iter().map(|c| c.usage.used_bytes).sum();
+            let room = free.saturating_sub((cfg.storage.min_free_gb * 1073741824.0) as u64);
+            // Same disk as another location: merge.
+            if let Some(l) = locations.iter_mut().find(|l| l.total_bytes == total && l.free_bytes.abs_diff(free) < total / 100) {
+                l.cameras.extend(list.iter().map(|c| c.name.clone()));
+                l.used_bytes += used;
+                l.bytes_per_day += per_day;
+                l.days_until_full = (l.bytes_per_day > 0.0).then(|| room as f64 / l.bytes_per_day);
+                continue;
+            }
+            locations.push(Location {
+                path,
+                cameras: list.iter().map(|c| c.name.clone()).collect(),
+                free_bytes: free,
+                total_bytes: total,
+                used_bytes: used,
+                bytes_per_day: per_day,
+                days_until_full: (per_day > 0.0).then(|| room as f64 / per_day),
+            });
+        }
+        let per_hour: f64 = cams.iter().map(|c| c.usage.bytes_per_hour).sum();
+        let used: u64 = cams.iter().map(|c| c.usage.used_bytes).sum();
+        let disk_room: u64 = locations
+            .iter()
+            .map(|l| l.free_bytes.saturating_sub((cfg.storage.min_free_gb * 1073741824.0) as u64))
+            .sum();
+        let (capacity, limited_by) = if cfg.storage.max_storage_gb > 0.0 {
+            let limit = (cfg.storage.max_storage_gb * 1073741824.0) as u64;
+            (limit.min(used + disk_room), if limit <= used + disk_room { "max storage" } else { "disk space" })
+        } else {
+            (used + disk_room, "disk space")
+        };
+        let per_day = per_hour * 24.0;
+        UsageReport {
+            updated: Some(Local::now()),
+            bytes_per_hour: per_hour,
+            bytes_per_day: per_day,
+            used_bytes: used,
+            capacity_bytes: Some(capacity),
+            days_capacity: (per_day > 0.0).then(|| capacity as f64 / per_day),
+            days_until_full: (per_day > 0.0).then(|| capacity.saturating_sub(used) as f64 / per_day),
+            limited_by: limited_by.into(),
+            retention_days: cfg.storage.retention_days,
+            cameras: cams,
+            locations,
+        }
+    }
+
+    /// Periodic housekeeping: retention, usage statistics, temp files.
+    pub async fn housekeeping(self: Arc<Self>) {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        let mut n = 0u64;
         loop {
             tick.tick().await;
-            let s = self.config().storage;
-            let _ = tokio::task::spawn_blocking(move || storage::cleanup(&s)).await;
+            let cfg = self.config();
+            let stores = self.event_stores();
+            let me = self.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if n % 5 == 0 {
+                    storage::cleanup(&cfg, &stores);
+                    // Exports older than an hour.
+                    if let Ok(rd) = std::fs::read_dir(me.data_dir.join("tmp")) {
+                        for e in rd.flatten() {
+                            let old = e
+                                .metadata()
+                                .and_then(|m| m.modified())
+                                .map(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(3600))
+                                .unwrap_or(false);
+                            if old {
+                                let _ = std::fs::remove_file(e.path());
+                            }
+                        }
+                    }
+                }
+                *me.usage.lock().unwrap() = Self::compute_usage(&cfg);
+            })
+            .await;
+            self.previews.lock().unwrap().retain(|_, v| v.2.elapsed() < Duration::from_secs(1800));
+            n += 1;
         }
     }
 }

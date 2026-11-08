@@ -396,7 +396,7 @@ pub async fn test_hardware(ffmpeg: &str, hw: &HardwareConfig) -> HwTest {
 
 // ---------- camera probe ----------
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
 pub struct StreamInfo {
     pub kind: String,
     pub codec: String,
@@ -415,8 +415,8 @@ pub struct ProbeResult {
 }
 
 /// Connect to a stream, report its codecs and grab a preview frame.
-pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
-    let info = async {
+/// Codec, size and frame rate of each stream.
+pub async fn probe_streams(ffmpeg: &str, url: &str, transport: &str) -> Result<Vec<StreamInfo>> {
         let mut cmd = Command::new(ffprobe_path(ffmpeg));
         cmd.args([
             "-v",
@@ -451,8 +451,16 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
                     .collect()
             })
             .unwrap_or_default();
-        Ok::<_, anyhow::Error>(streams)
-    };
+        Ok(streams)
+}
+
+/// The first video stream's details.
+pub async fn video_info(ffmpeg: &str, url: &str, transport: &str) -> Option<StreamInfo> {
+    probe_streams(ffmpeg, url, transport).await.ok()?.into_iter().find(|s| s.kind == "video")
+}
+
+pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
+    let info = probe_streams(ffmpeg, url, transport);
     let snap = async {
         let o = run(
             Command::new(ffmpeg)
@@ -497,6 +505,105 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
     }
     res.ok = res.snapshot.is_some();
     res
+}
+
+// ---------- recorded files ----------
+
+/// Duration of a media file in seconds.
+pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
+    let o = run(
+        Command::new(ffprobe_path(ffmpeg))
+            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
+            .arg(file),
+        30,
+    )
+    .await
+    .ok()?;
+    String::from_utf8_lossy(&o.stdout).trim().parse().ok()
+}
+
+/// A small preview image of a recording.
+pub async fn thumbnail(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path) -> Result<()> {
+    let o = run(
+        Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "1", "-i"])
+            .arg(file)
+            .args(["-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "5", "-update", "1"])
+            .arg(out),
+        30,
+    )
+    .await?;
+    if !o.status.success() || !out.exists() {
+        bail!("{}", first_error(&o.stderr));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+pub struct SpriteInfo {
+    /// Seconds between pictures.
+    pub interval: f64,
+    pub count: u32,
+    pub columns: u32,
+    pub tile_width: u32,
+    pub tile_height: u32,
+    pub duration: f64,
+}
+
+/// A grid of small pictures through a recording, for scrubbing previews.
+/// Only keyframes are decoded, so this is fast even for long files.
+pub async fn sprite(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path) -> Result<SpriteInfo> {
+    let duration = duration(ffmpeg, file).await.context("cannot read recording length")?;
+    let count = ((duration / 2.0).ceil() as u32).clamp(1, 240);
+    let interval = (duration / count as f64).max(0.5);
+    let columns = count.min(20);
+    let rows = count.div_ceil(columns);
+    let (tw, th) = (160u32, 90u32);
+    let vf = format!(
+        "fps=1/{interval:.3},scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:-1:-1,tile={columns}x{rows}"
+    );
+    let o = run(
+        Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i"])
+            .arg(file)
+            .args(["-an", "-vf", &vf, "-frames:v", "1", "-q:v", "6", "-update", "1"])
+            .arg(out),
+        120,
+    )
+    .await?;
+    if !o.status.success() || !out.exists() {
+        bail!("{}", first_error(&o.stderr));
+    }
+    Ok(SpriteInfo { interval, count, columns, tile_width: tw, tile_height: th, duration })
+}
+
+/// Cut `[from, to)` seconds out of a sequence of files into one MP4
+/// (without re-encoding, so cuts snap to the nearest keyframe).
+pub async fn export(ffmpeg: &str, parts: &[(std::path::PathBuf, f64, f64)], out: &std::path::Path) -> Result<()> {
+    let list = out.with_extension("txt");
+    let mut text = String::new();
+    for (path, inpoint, outpoint) in parts {
+        text.push_str(&format!(
+            "file '{}'\ninpoint {inpoint:.3}\noutpoint {outpoint:.3}\n",
+            path.display().to_string().replace('\\', "/").replace('\'', "'\\''")
+        ));
+    }
+    std::fs::write(&list, text)?;
+    let o = run(
+        Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i"])
+            .arg(&list)
+            .args(["-c", "copy", "-movflags", "+faststart", "-avoid_negative_ts", "make_zero"])
+            .arg(out),
+        600,
+    )
+    .await;
+    let _ = std::fs::remove_file(&list);
+    let o = o?;
+    if !o.status.success() {
+        bail!("{}", first_error(&o.stderr));
+    }
+    Ok(())
 }
 
 fn parse_rate(r: &str) -> Option<f64> {
