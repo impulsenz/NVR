@@ -87,6 +87,26 @@ function fullscreen(el) {
   if (document.fullscreenElement) document.exitFullscreen();
   else (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el);
 }
+// Double-click any video picture: full screen; double-click again: back to
+// how it was (also inside the full-screen video wall or recordings view,
+// which the browser returns to).
+document.addEventListener('dblclick', (e) => {
+  const s = e.target.closest('.surface');
+  if (!s || e.target.closest('button, a, input, select, .rz') || (typeof editing !== 'undefined' && editing)) return;
+  e.preventDefault();
+  window.getSelection && window.getSelection().removeAllRanges();
+  if (document.fullscreenElement === s) document.exitFullscreen().catch(() => {});
+  else (s.requestFullscreen || s.webkitRequestFullscreen || (() => {})).call(s);
+});
+// A single click that isn't the first half of a double-click.
+function singleClick(fn, delay = 260) {
+  let t = null;
+  return (e) => {
+    clearTimeout(t);
+    if (e.detail > 1) return;
+    t = setTimeout(() => fn(e), delay);
+  };
+}
 
 const COLOR_CSS = {black: '#111', white: '#f5f5f5', grey: '#777', silver: '#c0c4c8', red: '#dc2626', orange: '#f97316', yellow: '#facc15',
   green: '#16a34a', blue: '#2563eb', purple: '#9333ea', pink: '#ec4899', brown: '#8b5a2b', beige: '#d6c7a1'};
@@ -486,7 +506,7 @@ class Player {
       if (!this.tc && this.item && video.videoWidth === 0 && convertedUrl(this.item.url)) this.useConverted();
     });
     on('playing', () => { if (this.msg) this.msg.hidden = true; });
-    on('click', () => video.paused ? video.play() : video.pause());
+    video.addEventListener('click', singleClick(() => { if (video === this.video) video.paused ? video.play() : video.pause(); }));
   }
   setHidden(h) { for (const v of [this.video, this.alt]) v.hidden = h; }
   // In the last seconds of a file, find and load the next one in the hidden player.
@@ -808,11 +828,11 @@ function renderDash() {
     img.onload = () => { el.querySelector('.msg').hidden = true; };
     unbinders.set(c.id, Live.bind(img, c.id, q));
     wireOverlay(el);
-    el.onclick = () => {
-      if (editing) return;
+    el.onclick = singleClick(() => {
+      if (editing || document.fullscreenElement === el) return;
       if (wall) { wallSolo = wallSolo ? null : c.id; renderDash(); updateSubscriptions(); }
       else location.hash = '#live/' + enc(c.id);
-    };
+    });
     if (editing) wireTileEdit(el, t);
     dash.appendChild(el);
   }
