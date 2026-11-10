@@ -244,7 +244,7 @@ impl Relay {
 
     /// One camera connection. Returns (received data, error if it failed).
     async fn session(self: Arc<Self>) -> (bool, Option<String>) {
-        let mut cmd = tokio::process::Command::new(&self.ffmpeg);
+        let mut cmd = crate::load::cmd(&self.ffmpeg);
         cmd.args([
             "-hide_banner",
             "-nostdin",
@@ -613,7 +613,7 @@ pub fn feed(
 
 /// Grab one RGB frame (scaled to `w`×`h`) from a relay.
 pub async fn grab_rgb(relay: &Relay, ffmpeg: &str, w: u32, h: u32) -> anyhow::Result<Vec<u8>> {
-    let mut child: Child = tokio::process::Command::new(ffmpeg)
+    let mut child: Child = crate::load::cmd(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error"])
         .args(relay.input_args())
         .args([

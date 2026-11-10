@@ -68,6 +68,16 @@ pub fn pick_decoder(current: Pick) -> Pick {
 
 /// Lower the priority of a background ffmpeg (previews, thumbnails), so it
 /// never slows down recording or live view.
+/// A command that never opens a console window on Windows (GAZE runs
+/// without one, so every ffmpeg would otherwise flash a black window).
+pub fn cmd(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut c = tokio::process::Command::new(program);
+    #[cfg(windows)]
+    c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    c
+}
+
 pub fn background(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
     #[cfg(windows)]
     {

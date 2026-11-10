@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -163,7 +162,7 @@ impl Live {
     /// A full-resolution JPEG from the main stream.
     pub async fn snapshot(&self) -> Result<Bytes> {
         // Uses the shared camera connection (no extra session on the camera).
-        let mut child = Command::new(&self.env.ffmpeg_path)
+        let mut child = crate::load::cmd(&self.env.ffmpeg_path)
             .args(["-hide_banner", "-loglevel", "error"])
             .args(self.relay.input_args())
             .args([
@@ -321,7 +320,7 @@ impl Live {
             vf.push_str(&format!(",scale='min({width},iw)':-2"));
         }
         let url = self.url().to_string();
-        let mut cmd = Command::new(&self.env.ffmpeg_path);
+        let mut cmd = crate::load::cmd(&self.env.ffmpeg_path);
         cmd.args(["-hide_banner", "-loglevel", "error"]);
         if use_gpu {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));

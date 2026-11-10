@@ -12,6 +12,8 @@
 - **Rotate** a camera's picture in 90° steps.
 - **Zones**: areas and lines drawn on the picture, with line crossing, lingering and items left or taken (packages).
 - **Faces & number plates**: GAZE recognises the people and vehicles you teach it (Settings → People & vehicles, or "Who is this?" on an alert).
+- **Two-way audio**: talk through a camera's speaker from the camera view.
+- **System tray (Windows)**: no more console window; GAZE has an icon by the clock with open, recordings, log, start with Windows, restart and quit.
 - **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
 **Smaller changes**

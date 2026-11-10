@@ -146,6 +146,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/device/imaging", put(device_imaging))
         .route("/api/cameras/{id}/device/reboot", post(device_reboot))
         .route("/api/cameras/{id}/ptz/stop", post(ptz_stop))
+        .route("/api/cameras/{id}/talk", get(talk_ws))
         .route(
             "/api/cameras/{id}/ptz/presets",
             get(ptz_presets).post(ptz_save_preset),
@@ -1156,7 +1157,7 @@ async fn preview_stream(State(m): App, Path(token): Path<String>) -> Response {
         return err(StatusCode::NOT_FOUND, "preview expired");
     };
     let ffmpeg = m.config().server.ffmpeg_path;
-    let child = tokio::process::Command::new(&ffmpeg)
+    let child = crate::load::cmd(&ffmpeg)
         .args([
             "-hide_banner",
             "-nostdin",
@@ -1632,7 +1633,7 @@ async fn play_converted(
             out[i] = "superfast".into();
         }
     }
-    let mut cmd = tokio::process::Command::new(&cfg.server.ffmpeg_path);
+    let mut cmd = crate::load::cmd(&cfg.server.ffmpeg_path);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
     if gpu {
         cmd.args(ffmpeg::decode_args(hw, false));
@@ -2024,6 +2025,61 @@ async fn live_ws(
     ws.on_upgrade(move |socket| live_socket(socket, m, vis))
 }
 
+/// Two-way audio: the browser sends 16-bit mono PCM at 8 kHz (binary
+/// messages); GAZE plays it on the camera's speaker. The first text message
+/// from the server says whether it worked: {"ok":true,"codec":".."} or
+/// {"error":".."}.
+async fn talk_ws(
+    State(m): App,
+    Path(id): Path<String>,
+    user: Option<axum::Extension<CurrentUser>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let vis = visible(&user);
+    let cam = m.config().cameras.iter().find(|c| c.id == id).cloned();
+    let Some(cam) = cam.filter(|_| vis.as_ref().is_none_or(|v| v.contains(&id))) else {
+        return err(StatusCode::NOT_FOUND, "no such camera");
+    };
+    let who = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
+    ws.on_upgrade(move |mut socket| async move {
+        let mut talk = match crate::talk::Talk::open(&cam.id, &cam.url).await {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = socket.send(Message::Text(json!({"error": format!("{e:#}")}).to_string().into())).await;
+                return;
+            }
+        };
+        tracing::info!("[{}] {} is talking through the camera's speaker ({})", cam.name, if who.is_empty() { "someone" } else { &who }, talk.codec());
+        let _ = socket.send(Message::Text(json!({"ok": true, "codec": talk.codec()}).to_string().into())).await;
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        let res: anyhow::Result<()> = async {
+            loop {
+                tokio::select! {
+                    msg = socket.recv() => {
+                        let Some(Ok(msg)) = msg else { break };
+                        match msg {
+                            Message::Binary(b) => {
+                                let s: Vec<i16> = b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+                                talk.send(&s).await?;
+                            }
+                            Message::Close(_) => break,
+                            _ => {}
+                        }
+                    }
+                    _ = tick.tick() => talk.tick().await?,
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = res {
+            let _ = socket.send(Message::Text(json!({"error": format!("{e:#}")}).to_string().into())).await;
+        }
+        talk.stop().await;
+        tracing::info!("[{}] talking stopped", cam.name);
+    })
+}
+
 #[derive(Deserialize, Clone, PartialEq)]
 struct WsSub {
     camera: String,
@@ -2141,8 +2197,6 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
     }
 }
 
-/// Optional HTTP basic auth for every route. Reads the current settings so
-/// login changes apply immediately.
 // ---------- users & sign-in ----------
 
 const COOKIE: &str = "gaze_session";
@@ -2207,6 +2261,10 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         || path.contains("/device/")
     {
         return false;
+    }
+    // Talking through a camera's speaker: not for viewers.
+    if path.ends_with("/talk") {
+        return role != Viewer;
     }
     if read {
         return true;

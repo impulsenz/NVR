@@ -21,6 +21,9 @@ viewing, finding footage, and managing everything, all from the browser.
   **date & time** (format and corner), recording status, what is moving, **frames per second**, your own
   text, and **fullscreen buttons** in any corners.
 - Active alerts are highlighted on the tile ("person", "car", …).
+- **Two-way audio**: the 🎙️ Talk button on an opened camera sends your microphone to the camera's
+  speaker (cameras with an ONVIF audio backchannel and G.711 audio — most Dahua, Hikvision, Amcrest,
+  Axis…). Browsers only allow the microphone on https:// pages or on http://localhost.
 - **S1 / S2 button on every live picture** switches between stream 1 (main, full quality) and stream 2
   (sub-stream), separately for the grid and the opened camera; each browser remembers the choice.
 
@@ -104,6 +107,8 @@ viewing, finding footage, and managing everything, all from the browser.
   open the timeline (older days are prepared when you open them).
 
 **System & logs**
+- On Windows GAZE runs **without a console window**: an icon by the clock opens it (click) and has a
+  menu (right-click) for the recordings folder, the log, **start with Windows**, restart and quit.
 - **CPU, GPU and memory** usage with graphs (1 hour to 30 days, kept across restarts), so you can see if
   the server was overloaded while you were away. NVIDIA GPUs are read via nvidia-smi, AMD on Linux via
   sysfs, and any GPU on Windows via performance counters.

@@ -33,7 +33,7 @@ fn hd_source(
 
 /// One picture at `offset` seconds into a video, full size.
 async fn grab(ffmpeg: &str, file: &std::path::Path, offset: f64) -> anyhow::Result<Frame> {
-    let out = crate::load::background(&mut tokio::process::Command::new(ffmpeg))
+    let out = crate::load::background(&mut crate::load::cmd(ffmpeg))
         .args([
             "-hide_banner",
             "-loglevel",

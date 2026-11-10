@@ -19,7 +19,7 @@ use tracing::{info, warn};
 async fn rclone(cfg: &CloudConfig, args: &[&str], secs: u64) -> Result<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(secs),
-        tokio::process::Command::new(&cfg.rclone_path)
+        crate::load::cmd(&cfg.rclone_path)
             .args(args)
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)

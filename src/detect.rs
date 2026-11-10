@@ -332,7 +332,7 @@ impl Detector {
         let d = &self.cam.detect;
         let (w, h) = self.frame_size().await;
         let url = self.cam.live_url().to_string();
-        let mut cmd = tokio::process::Command::new(&self.env.ffmpeg_path);
+        let mut cmd = crate::load::cmd(&self.env.ffmpeg_path);
         // Warnings too: damaged-frame reports are often only warnings.
         cmd.args(["-hide_banner", "-loglevel", "warning"]);
         if use_gpu {

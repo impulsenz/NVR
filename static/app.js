@@ -1168,6 +1168,8 @@ function showLive(id) {
   const surf = $('focus-surface');
   bindFocusImage(c);
   $('focus-snap').href = 'snapshot/' + enc(c.id);
+  if (talk && talk.cam !== c.id) stopTalk();
+  $('focus-talk').onclick = () => talk ? stopTalk() : startTalk(c.id);
   $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
   setupQuickView(c);
@@ -1388,7 +1390,59 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   });
 })();
 setInterval(() => { if (page === 'live' && focusId && !camTl.end) camTl.load(); }, 30000);
-function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); }
+function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); stopTalk(); }
+
+// ---------- two-way audio ----------
+// The microphone is captured in an AudioWorklet, brought down to 8 kHz
+// 16-bit mono and sent over a WebSocket; GAZE plays it on the camera's speaker.
+let talk = null;
+const TALK_WORKLET = `class Mic extends AudioWorkletProcessor {
+  process(inputs) { const ch = inputs[0][0]; if (ch) this.port.postMessage(ch.slice(0)); return true; }
+}
+registerProcessor('gaze-mic', Mic);`;
+function stopTalk() {
+  if (!talk) return;
+  const t = talk; talk = null;
+  try { t.ws.close(); } catch (_) {}
+  t.stream && t.stream.getTracks().forEach(tr => tr.stop());
+  t.ctx && t.ctx.close().catch(() => {});
+  const b = $('focus-talk'); b.classList.remove('talking'); b.querySelector('span').textContent = 'Talk';
+}
+async function startTalk(camId) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('The browser only allows the microphone on secure pages: open GAZE as https://… (for example through Tailscale) or as http://localhost on this computer.', true);
+    return;
+  }
+  const b = $('focus-talk');
+  b.querySelector('span').textContent = 'Connecting…';
+  const t = talk = {cam: camId};
+  try {
+    t.stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
+  } catch (e) { talk = null; b.querySelector('span').textContent = 'Talk'; toast('No microphone: ' + e.message, true); return; }
+  if (talk !== t) { t.stream.getTracks().forEach(tr => tr.stop()); return; }
+  t.ws = new WebSocket(location.href.replace(/^http/, 'ws').replace(/[#?].*$/, '').replace(/[^/]*$/, '') + `api/cameras/${enc(camId)}/talk`);
+  t.ws.binaryType = 'arraybuffer';
+  t.ws.onmessage = async (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+    if (m.error) { toast(m.error, true); stopTalk(); return; }
+    if (!m.ok || talk !== t) return;
+    t.ctx = new AudioContext();
+    await t.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([TALK_WORKLET], {type: 'text/javascript'})));
+    const src = t.ctx.createMediaStreamSource(t.stream), node = new AudioWorkletNode(t.ctx, 'gaze-mic');
+    const ratio = t.ctx.sampleRate / 8000; let pos = 0, acc = 0, cnt = 0, out = [];
+    node.port.onmessage = (e2) => {
+      // Average the samples that fall into each 1/8000 s (a simple low-pass).
+      for (const v of e2.data) {
+        acc += v; cnt++; pos += 1;
+        if (pos >= ratio) { pos -= ratio; out.push(Math.max(-1, Math.min(1, acc / cnt)) * 32767); acc = 0; cnt = 0; }
+      }
+      if (out.length >= 320 && t.ws.readyState === 1) { t.ws.send(new Int16Array(out).buffer); out = []; }
+    };
+    src.connect(node);
+    b.classList.add('talking'); b.querySelector('span').textContent = 'Stop talking';
+  };
+  t.ws.onclose = () => { if (talk === t) { toast('Talking stopped'); stopTalk(); } };
+}
 
 function updateFocus() {
   const c = cam(focusId);

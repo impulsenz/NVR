@@ -390,7 +390,7 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
 async fn run_cmd(cmd: &str, args: &[&str], secs: u64) -> Option<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(secs),
-        tokio::process::Command::new(cmd)
+        crate::load::cmd(cmd)
             .args(args)
             .stdin(Stdio::null())
             .kill_on_drop(true)

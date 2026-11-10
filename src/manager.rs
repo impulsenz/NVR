@@ -970,7 +970,7 @@ async fn backfill_colors(mgr: Arc<Manager>) {
             let Some(thumb) = &e.thumb else { continue };
             let (w, h) = (160u32, 90u32);
             crate::load::wait_for_cpu(70, Duration::from_secs(600)).await;
-            let Ok(out) = crate::load::background(&mut tokio::process::Command::new(&ffmpeg))
+            let Ok(out) = crate::load::background(&mut crate::load::cmd(&ffmpeg))
                 .args(["-hide_banner", "-loglevel", "error", "-i"])
                 .arg(store.dir().join(thumb))
                 .args([

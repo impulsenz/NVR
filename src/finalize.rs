@@ -56,7 +56,7 @@ async fn finalize(ffmpeg: &str, path: &Path) -> anyhow::Result<()> {
         path.file_stem().unwrap_or_default().to_string_lossy(),
         crate::mp4fix::PART_SUFFIX
     ));
-    let out = crate::load::background(&mut tokio::process::Command::new(ffmpeg))
+    let out = crate::load::background(&mut crate::load::cmd(ffmpeg))
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(path)
         .args(["-map", "0", "-c", "copy", "-movflags", "+faststart"])

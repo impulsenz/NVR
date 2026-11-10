@@ -210,7 +210,7 @@ impl EventBuffer {
         std::fs::write(&list, text)?;
         let out = tokio::time::timeout(
             Duration::from_secs(300),
-            tokio::process::Command::new(&self.ffmpeg)
+            crate::load::cmd(&self.ffmpeg)
                 .args([
                     "-hide_banner",
                     "-loglevel",

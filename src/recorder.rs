@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -165,7 +165,7 @@ impl Recorder {
             .dir
             .join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", spec.prefix));
 
-        let mut cmd = Command::new(&env.ffmpeg_path);
+        let mut cmd = crate::load::cmd(&env.ffmpeg_path);
         // Input comes from the shared camera connection via stdin.
         cmd.args([
             "-hide_banner",

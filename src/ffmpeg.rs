@@ -251,14 +251,19 @@ pub struct Capabilities {
 
 pub async fn capabilities(ffmpeg: &str) -> Capabilities {
     let mut caps = Capabilities::default();
-    if let Ok(o) = run(Command::new(ffmpeg).arg("-version"), 10).await {
+    if let Ok(o) = run(crate::load::cmd(ffmpeg).arg("-version"), 10).await {
         caps.ffmpeg_version = String::from_utf8_lossy(&o.stdout)
             .lines()
             .next()
             .unwrap_or("")
             .to_string();
     }
-    if let Ok(o) = run(Command::new(ffmpeg).args(["-hide_banner", "-hwaccels"]), 10).await {
+    if let Ok(o) = run(
+        crate::load::cmd(ffmpeg).args(["-hide_banner", "-hwaccels"]),
+        10,
+    )
+    .await
+    {
         caps.hwaccels = String::from_utf8_lossy(&o.stdout)
             .lines()
             .skip(1)
@@ -266,7 +271,12 @@ pub async fn capabilities(ffmpeg: &str) -> Capabilities {
             .filter(|l| !l.is_empty())
             .collect();
     }
-    if let Ok(o) = run(Command::new(ffmpeg).args(["-hide_banner", "-encoders"]), 10).await {
+    if let Ok(o) = run(
+        crate::load::cmd(ffmpeg).args(["-hide_banner", "-encoders"]),
+        10,
+    )
+    .await
+    {
         let text = String::from_utf8_lossy(&o.stdout);
         caps.encoders = crate::config::ENCODERS
             .iter()
@@ -309,7 +319,7 @@ pub async fn test_hardware(ffmpeg: &str, hw: &HardwareConfig) -> HwTest {
     let encoder = hw.resolved_encoder().to_string();
     let (pre, out) = encoder_args(&encoder, hw, false);
     let enc = run(
-        Command::new(ffmpeg)
+        crate::load::cmd(ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y"])
             .args(&pre)
             .args(lavfi)
@@ -342,7 +352,7 @@ pub async fn test_hardware(ffmpeg: &str, hw: &HardwareConfig) -> HwTest {
     } else {
         let have_clip = encoder_res.ok
             || run(
-                Command::new(ffmpeg)
+                crate::load::cmd(ffmpeg)
                     .args(["-hide_banner", "-loglevel", "error", "-y"])
                     .args(lavfi)
                     .args(["-c:v", "libx264", "-preset", "ultrafast"])
@@ -358,7 +368,7 @@ pub async fn test_hardware(ffmpeg: &str, hw: &HardwareConfig) -> HwTest {
             }
         } else {
             let dec = run(
-                Command::new(ffmpeg)
+                crate::load::cmd(ffmpeg)
                     .args(["-hide_banner", "-loglevel", "error"])
                     .args(decode_args(hw, false))
                     .arg("-i")
@@ -417,7 +427,7 @@ pub struct ProbeResult {
 /// Connect to a stream, report its codecs and grab a preview frame.
 /// Codec, size and frame rate of each stream.
 pub async fn probe_streams(ffmpeg: &str, url: &str, transport: &str) -> Result<Vec<StreamInfo>> {
-    let mut cmd = Command::new(ffprobe_path(ffmpeg));
+    let mut cmd = crate::load::cmd(ffprobe_path(ffmpeg));
     cmd.args([
         "-v",
         "error",
@@ -457,7 +467,7 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
     let info = probe_streams(ffmpeg, url, transport);
     let snap = async {
         let o = run(
-            Command::new(ffmpeg)
+            crate::load::cmd(ffmpeg)
                 .args(["-hide_banner", "-loglevel", "error"])
                 .args(input_args(url, transport))
                 .args([
@@ -506,7 +516,7 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
 /// Video codec of a media file (e.g. "h264", "hevc").
 pub async fn video_codec(ffmpeg: &str, file: &std::path::Path) -> Option<String> {
     let o = run(
-        Command::new(ffprobe_path(ffmpeg))
+        crate::load::cmd(ffprobe_path(ffmpeg))
             .args([
                 "-v",
                 "error",
@@ -538,7 +548,7 @@ pub async fn hevc_tag(ffmpeg: &str, file: &std::path::Path) -> Vec<String> {
 /// Duration of a media file in seconds.
 pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
     let o = run(
-        Command::new(ffprobe_path(ffmpeg))
+        crate::load::cmd(ffprobe_path(ffmpeg))
             .args([
                 "-v",
                 "error",
@@ -558,7 +568,7 @@ pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
 /// A small preview image of a recording.
 pub async fn thumbnail(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path) -> Result<()> {
     let o = run(
-        crate::load::background(&mut Command::new(ffmpeg))
+        crate::load::background(&mut crate::load::cmd(ffmpeg))
             .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "1", "-i"])
             .arg(file)
             .args([
@@ -621,7 +631,7 @@ pub async fn sprite(
     let vf = format!(
         "fps=1/{interval},scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:-1:-1"
     );
-    let mut command = Command::new(ffmpeg);
+    let mut command = crate::load::cmd(ffmpeg);
     let cmd = crate::load::background(&mut command);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
     if !dense {
@@ -757,7 +767,7 @@ pub async fn export(
         None => vec![],
     };
     let o = run(
-        Command::new(ffmpeg)
+        crate::load::cmd(ffmpeg)
             .args([
                 "-hide_banner",
                 "-loglevel",

@@ -1,4 +1,6 @@
 //! A small home NVR: records IP cameras to disk and serves a web interface.
+// Windows: no console window (GAZE lives in the system tray instead).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod ai;
 mod buffer;
@@ -29,6 +31,8 @@ mod seen;
 mod smart;
 mod storage;
 mod sysmon;
+mod talk;
+mod tray;
 mod users;
 mod web;
 mod zones;
@@ -37,8 +41,29 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
+/// Set by the tray menu: stop (and maybe start again).
+static QUIT: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    tray::attach_console();
+    let res = run().await;
+    if let Err(e) = &res {
+        error!("{e:#}");
+        tray::fatal(&format!("{e:#}"));
+    }
+    tray::remove();
+    if res.is_ok() && RESTART.load(std::sync::atomic::Ordering::SeqCst) {
+        let exe = std::env::current_exe()?;
+        std::process::Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .spawn()?;
+    }
+    res
+}
+
+async fn run() -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     tracing_subscriber::registry()
@@ -110,8 +135,22 @@ async fn main() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await
-        .with_context(|| format!("binding {listen}"))?;
+        .with_context(|| format!("can't use {listen} for the web interface — is GAZE already running? (change [server] listen in the settings file to use another port)"))?;
     info!("web interface on http://{listen}");
+    let port = listen.rsplit(':').next().unwrap_or("8080");
+    let cfg = mgr.config();
+    tray::start(
+        tray::TrayInfo {
+            url: format!("http://localhost:{port}/"),
+            recordings: std::path::absolute(&cfg.storage.dir).unwrap_or(cfg.storage.dir.clone()),
+            log: std::path::absolute(mgr.data_dir.join("nvr.log")).unwrap_or_default(),
+            config: mgr.cfg_path.clone(),
+        },
+        Box::new(|restart| {
+            RESTART.store(restart, std::sync::atomic::Ordering::SeqCst);
+            QUIT.notify_one();
+        }),
+    );
 
     tokio::select! {
         res = axum::serve(listener, web::router(mgr.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()) => {
@@ -137,6 +176,13 @@ fn use_color() -> bool {
 }
 
 async fn shutdown_signal() {
+    tokio::select! {
+        _ = os_signal() => {}
+        _ = QUIT.notified() => {}
+    }
+}
+
+async fn os_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]
     {
