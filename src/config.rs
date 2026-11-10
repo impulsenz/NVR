@@ -73,7 +73,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            name: "Home NVR".into(),
+            name: "GAZE".into(),
             listen: "0.0.0.0:8080".into(),
             username: String::new(),
             password: String::new(),

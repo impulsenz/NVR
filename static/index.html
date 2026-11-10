@@ -3,23 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>NVR</title>
+<title>GAZE</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<meta name="theme-color" content="#14161c">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header>
-  <h1 id="nvr-name">NVR</h1>
+  <h1 id="nvr-name" class="brand"><img src="icon.png" alt=""><span>GAZE</span></h1>
   <nav>
     <a href="#live" data-page="live"><i class="ni">📹</i><span>Live</span></a>
     <a href="#alerts" data-page="alerts"><i class="ni">🔔</i><span>Alerts</span> <span class="badge" id="alert-badge" hidden></span></a>
     <a href="#recordings" data-page="recordings"><i class="ni">🎞️</i><span>Recordings</span></a>
     <a href="#system" data-page="system"><i class="ni">📊</i><span>System</span></a>
     <a href="#logs" data-page="logs"><i class="ni">📜</i><span>Logs</span> <span class="badge" id="log-badge" hidden></span></a>
-    <a href="#settings" data-page="settings"><i class="ni">⚙️</i><span>Settings</span></a>
+    <a href="#settings" data-page="settings" class="admin-only"><i class="ni">⚙️</i><span>Settings</span></a>
   </nav>
   <span class="spacer"></span>
   <span id="bw" class="bw"></span>
   <span id="clock"></span>
+  <div class="dropdown user-menu" id="user-menu" hidden>
+    <button type="button" id="um-btn" class="small" title="Your account">👤 <span id="um-name"></span> ▾</button>
+    <div class="popover" id="um-pop" hidden>
+      <div class="muted small" id="um-role"></div>
+      <label class="small muted" style="display:block;margin:6px 0 2px">Data saver on this device</label>
+      <select id="um-ds"><option value="auto">Automatic (on for phones)</option><option value="on">Always on</option><option value="off">Off</option></select>
+      <button type="button" id="um-pass">Change password</button>
+      <button type="button" id="um-out">Sign out</button>
+    </div>
+  </div>
 </header>
 
 <main>
@@ -59,7 +72,7 @@
             <div class="loading" id="focus-loading" hidden><div class="spinner"></div><span>Loading full quality…</span></div>
             <svg id="focus-boxes" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute;pointer-events:none;z-index:1" hidden></svg>
             <div id="focus-motion-info" class="ovtext" style="position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:2" hidden></div>
-            <div class="ptz-ov" id="ptz-pad" hidden>
+            <div class="ptz-ov op-only" id="ptz-pad" hidden>
               <div class="ptz-ring">
                 <button type="button" class="u" data-ptz="0,1,0" title="Tilt up (↑)">▲</button>
                 <button type="button" class="l" data-ptz="-1,0,0" title="Pan left (←)">◀</button>
@@ -76,11 +89,11 @@
           <div class="row focus-actions" style="margin-top:10px">
             <button id="focus-back"><i class="bi">←</i><span>All cameras</span></button>
             <button id="focus-live" class="primary" hidden>● Back to live</button>
-            <button id="focus-rec"></button>
+            <button id="focus-rec" class="op-only"></button>
             <a class="btn" id="focus-snap"><i class="bi">📷</i><span>Snapshot</span></a>
             <a class="btn" id="focus-recs"><i class="bi">🎞️</i><span>Recordings</span></a>
             <button id="focus-motion" title="Draw boxes around moving objects with their size"><i class="bi">〰️</i><span>Show motion</span></button>
-            <button id="focus-edit"><i class="bi">✎</i><span>Edit camera</span></button>
+            <button id="focus-edit" class="admin-only"><i class="bi">✎</i><span>Edit camera</span></button>
           </div>
           <div class="row" id="focus-quick" style="margin-top:8px">
             <span class="muted">Grid picture</span>
@@ -224,7 +237,8 @@
         <a href="#settings/hardware" data-s="hardware">GPU acceleration</a>
         <a href="#settings/cloud" data-s="cloud">Cloud backup</a>
         <a href="#settings/backup" data-s="backup">Export / import setup</a>
-        <a href="#settings/system" data-s="system">System &amp; login</a>
+        <a href="#settings/users" data-s="users">Users</a>
+        <a href="#settings/system" data-s="system">System</a>
         <a href="#settings/info" data-s="info">About</a>
       </div>
       <div id="settings-body"></div>
@@ -243,6 +257,22 @@
   </div>
 </dialog>
 <div class="global-banner" id="g-banner" hidden></div>
+<!-- Sign-in / first-time setup -->
+<div id="auth" hidden>
+  <div class="auth-bg"><div class="scan"></div><div class="grid"></div></div>
+  <form id="auth-form" class="auth-card" autocomplete="on">
+    <img src="logo.png" alt="GAZE" class="auth-logo">
+    <div class="auth-sub" id="auth-sub">Sign in to watch your cameras</div>
+    <div id="auth-intro" class="hint" hidden></div>
+    <label>User name<input type="text" id="auth-user" autocomplete="username" required></label>
+    <label>Password<input type="password" id="auth-pass" autocomplete="current-password" required></label>
+    <label id="auth-pass2-row" hidden>Password again<input type="password" id="auth-pass2" autocomplete="new-password"></label>
+    <label class="check" id="auth-remember-row"><input type="checkbox" id="auth-remember" checked> Keep me signed in on this device</label>
+    <div class="err" id="auth-err" hidden></div>
+    <button class="primary" id="auth-go">Sign in</button>
+    <div class="auth-foot"><span class="rec-dot"></span> <span id="auth-name">GAZE</span> · recording continues while you're signed out</div>
+  </form>
+</div>
 <dialog id="cam-dialog"><form id="f-cam" method="dialog"></form></dialog>
 <dialog id="grp-dialog"><form id="f-grp" method="dialog"></form></dialog>
 <dialog id="fs-dialog"><form id="f-fs" method="dialog"></form></dialog>

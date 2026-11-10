@@ -53,6 +53,58 @@ pub fn router(mgr: Arc<Manager>) -> Router {
                 )
             }),
         )
+        .route(
+            "/logo.png",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "image/png"),
+                        (header::CACHE_CONTROL, "max-age=86400"),
+                    ],
+                    include_bytes!("../static/logo.png").as_slice(),
+                )
+            }),
+        )
+        .route(
+            "/icon.png",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "image/png"),
+                        (header::CACHE_CONTROL, "max-age=86400"),
+                    ],
+                    include_bytes!("../static/icon.png").as_slice(),
+                )
+            }),
+        )
+        .route(
+            "/favicon.png",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "image/png"),
+                        (header::CACHE_CONTROL, "max-age=86400"),
+                    ],
+                    include_bytes!("../static/favicon.png").as_slice(),
+                )
+            }),
+        )
+        .route("/api/auth/state", get(auth_state))
+        .route("/api/auth/setup", post(auth_setup))
+        .route("/api/auth/login", post(auth_login))
+        .route("/api/auth/logout", post(auth_logout))
+        .route("/api/auth/password", post(auth_password))
+        .route("/api/users", get(users_list).post(users_create))
+        .route("/api/users/{name}", put(users_update).delete(users_delete))
+        .route(
+            "/api/changelog",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+                    include_str!("../CHANGELOG.md"),
+                )
+            }),
+        )
         .route("/api/status", get(status))
         .route("/api/system", get(system))
         .route("/api/monitor", get(monitor))
@@ -124,7 +176,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/live/{id}/frame.jpg", get(live_frame))
         .route("/snapshot/{id}", get(snapshot))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(middleware::from_fn_with_state(mgr.clone(), basic_auth))
+        .layer(middleware::from_fn_with_state(mgr.clone(), auth))
         .with_state(mgr)
 }
 
@@ -151,11 +203,28 @@ async fn index() -> Html<&'static str> {
 
 // ---------- status & system ----------
 
-async fn status(State(m): App) -> Response {
+#[derive(Deserialize, Default)]
+struct DeviceQuery {
+    /// "mobile" or "desktop": each has its own layout.
+    #[serde(default)]
+    device: String,
+}
+
+fn device_kind(d: &str) -> &'static str {
+    if d == "mobile" { "mobile" } else { "desktop" }
+}
+
+async fn status(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Query(dq): Query<DeviceQuery>,
+) -> Response {
     let cfg = m.config();
+    let vis = visible(&user);
     let cameras: Vec<_> = m
         .cameras()
         .iter()
+        .filter(|c| vis.as_ref().is_none_or(|v| v.contains(&c.cfg.id)))
         .map(|c| {
             // Options that change without a restart come from the current config.
             let cur = cfg
@@ -197,7 +266,9 @@ async fn status(State(m): App) -> Response {
         "uptime_seconds": m.started.elapsed().as_secs(),
         "display": cfg.display,
         "live": cfg.live,
-        "dashboard": cfg.dashboard,
+        // The user's own layout for this kind of device (else the shared one).
+        "dashboard": user.as_ref().and_then(|u| m.users.layout(&u.0.0.username, device_kind(&dq.device))).unwrap_or(cfg.dashboard.clone()),
+        "me": user.as_ref().map(|u| crate::users::Me { username: u.0.0.username.clone(), role: u.0.0.role, cameras: u.0.0.cameras.clone() }),
         "cameras": cameras,
         "ai": m.ai.get().status(),
         "smart_search": m.clip.status(),
@@ -395,8 +466,20 @@ async fn put_profiles(State(m): App, Json(p): Json<Vec<crate::config::Profile>>)
     }
 }
 
-async fn put_dashboard(State(m): App, Json(d): Json<DashboardConfig>) -> Response {
-    match m.update_dashboard(d).await {
+async fn put_dashboard(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Query(dq): Query<DeviceQuery>,
+    Json(d): Json<DashboardConfig>,
+) -> Response {
+    // Saved as this user's own layout for this kind of device.
+    let res = match &user {
+        Some(u) => m
+            .users
+            .set_layout(&u.0.0.username, device_kind(&dq.device), d),
+        None => m.update_dashboard(d).await,
+    };
+    match res {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => bad(e),
     }
@@ -1134,7 +1217,27 @@ fn range(
     (from, to)
 }
 
-async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
+/// The cameras asked for, limited to those the user may see.
+fn allowed_cameras(asked: Vec<String>, vis: Option<Vec<String>>) -> Vec<String> {
+    match vis {
+        None => asked,
+        Some(v) if asked.is_empty() => v,
+        Some(v) => {
+            let a: Vec<String> = asked.into_iter().filter(|c| v.contains(c)).collect();
+            if a.is_empty() {
+                vec!["\u{0}none".into()]
+            } else {
+                a
+            }
+        }
+    }
+}
+
+async fn search(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Query(q): Query<SearchQuery>,
+) -> Response {
     let (from, to) = range(q.from, q.to);
     let t = |s: &Option<String>| {
         s.as_deref()
@@ -1169,7 +1272,7 @@ async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
         None
     };
     let lq = LibQuery {
-        cameras: split_list(&q.cameras),
+        cameras: allowed_cameras(split_list(&q.cameras), visible(&user)),
         from,
         to,
         tod,
@@ -1200,9 +1303,13 @@ async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
     res
 }
 
-async fn timeline(State(m): App, Query(q): Query<SearchQuery>) -> Response {
+async fn timeline(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Query(q): Query<SearchQuery>,
+) -> Response {
     let (from, to) = range(q.from, q.to);
-    let cams = split_list(&q.cameras);
+    let cams = allowed_cameras(split_list(&q.cameras), visible(&user));
     let t = tokio::task::spawn_blocking(move || library::timeline(&m, &cams, from, to))
         .await
         .unwrap_or_default();
@@ -1742,8 +1849,13 @@ async fn snapshot(State(m): App, Path(id): Path<String>) -> Response {
 /// All live video goes over one WebSocket: the browser says which cameras it
 /// wants at which quality and frame rate; the server pushes JPEG frames.
 /// Binary message layout: [quality: 0 sub / 1 main][id length][id][JPEG].
-async fn live_ws(State(m): App, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |socket| live_socket(socket, m))
+async fn live_ws(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let vis = visible(&user);
+    ws.on_upgrade(move |socket| live_socket(socket, m, vis))
 }
 
 #[derive(Deserialize, Clone, PartialEq)]
@@ -1761,7 +1873,7 @@ struct WsMsg {
     subs: Vec<WsSub>,
 }
 
-async fn live_socket(mut socket: WebSocket, m: Arc<Manager>) {
+async fn live_socket(mut socket: WebSocket, m: Arc<Manager>, vis: Option<Vec<String>>) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(16);
     let mut tasks: HashMap<(String, u8), (WsSub, tokio::task::JoinHandle<()>)> = HashMap::new();
     loop {
@@ -1773,6 +1885,7 @@ async fn live_socket(mut socket: WebSocket, m: Arc<Manager>) {
                 let wanted: HashMap<(String, u8), WsSub> = req
                     .subs
                     .into_iter()
+                    .filter(|s| vis.as_ref().is_none_or(|v| v.contains(&s.camera)))
                     .map(|s| ((s.camera.clone(), (s.q == Quality::Main) as u8), s))
                     .collect();
                 tasks.retain(|k, (sub, h)| {
@@ -1864,40 +1977,279 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
 
 /// Optional HTTP basic auth for every route. Reads the current settings so
 /// login changes apply immediately.
-async fn basic_auth(State(m): App, req: Request, next: Next) -> Response {
-    let server = m.config().server;
-    if server.username.is_empty() {
-        return next.run(req).await;
-    }
-    let expected = format!("{}:{}", server.username, server.password);
-    let ok = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Basic "))
-        .and_then(|b64| {
-            base64::engine::general_purpose::STANDARD
-                .decode(b64.trim())
-                .ok()
-        })
-        .is_some_and(|creds| constant_time_eq(&creds, expected.as_bytes()));
-    if ok {
-        next.run(req).await
-    } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            [(
-                header::WWW_AUTHENTICATE,
-                "Basic realm=\"NVR\", charset=\"UTF-8\"",
-            )],
-            "authentication required",
-        )
-            .into_response()
+// ---------- users & sign-in ----------
+
+const COOKIE: &str = "gaze_session";
+
+fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|kv| kv.trim().split_once('='))
+        .find(|(k, _)| *k == COOKIE)
+        .map(|(_, v)| v.to_string())
+}
+
+fn session_cookie(token: &str, remember: bool) -> HeaderValue {
+    let age = if remember { "; Max-Age=2592000" } else { "" };
+    HeaderValue::from_str(&format!(
+        "{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax{age}"
+    ))
+    .unwrap()
+}
+
+/// The signed-in user, put on each request by the sign-in check.
+#[derive(Clone)]
+pub struct CurrentUser(pub Arc<crate::users::User>);
+
+/// Camera id in a path like /api/cameras/{id}/…, /media/{id}/…, /live/{id}/….
+fn camera_in_path(path: &str) -> Option<&str> {
+    let mut parts = path.trim_start_matches('/').split('/');
+    match (parts.next()?, parts.next()?) {
+        ("api", "cameras") | ("api", "sprite") => parts.next(),
+        ("media", id) | ("live", id) | ("snapshot", id) => Some(id),
+        _ => None,
     }
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+/// What a role may change (everything else that isn't a read needs admin).
+fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) -> bool {
+    use crate::users::Role::*;
+    if role == Admin {
+        return true;
+    }
+    let read = method == axum::http::Method::GET || method == axum::http::Method::HEAD;
+    // Settings, camera connection details and accounts: admin only.
+    let admin_only = [
+        "/api/settings",
+        "/api/config/",
+        "/api/users",
+        "/api/fs",
+        "/api/probe",
+        "/api/preview",
+        "/api/hw-test",
+        "/api/ai/",
+        "/api/cloud/",
+        "/api/ptz/test",
+        "/api/profiles",
+    ];
+    if admin_only.iter().any(|p| path.starts_with(p))
+        || path == "/api/cameras"
+        || path.ends_with("/device")
+        || path.contains("/device/")
+    {
+        return false;
+    }
+    if read {
+        return true;
+    }
+    // Changes anyone signed in may make.
+    if path.starts_with("/api/alerts/")
+        || path == "/api/dashboard"
+        || path.starts_with("/api/auth/")
+    {
+        return true;
+    }
+    // Operators: move cameras, pause recording, remove alerts/recordings.
+    role == Operator
+        && (path.contains("/ptz/")
+            || path.ends_with("/pause")
+            || path.ends_with("/resume")
+            || (method == axum::http::Method::DELETE
+                && (path.contains("/events/") || path.contains("/recordings/"))))
+}
+
+async fn auth(State(m): App, mut req: Request, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    // The page itself, its pictures and the sign-in API are open: the page
+    // shows the sign-in (or first-time setup) screen.
+    let open = matches!(
+        path.as_str(),
+        "/" | "/app.js"
+            | "/app.css"
+            | "/logo.png"
+            | "/icon.png"
+            | "/favicon.png"
+            | "/api/auth/state"
+            | "/api/auth/login"
+            | "/api/auth/setup"
+            | "/api/changelog"
+    );
+    if open {
+        return next.run(req).await;
+    }
+    let user = session_token(req.headers()).and_then(|t| m.users.session_user(&t));
+    let Some(user) = user else {
+        return err(StatusCode::UNAUTHORIZED, "please sign in");
+    };
+    if !allowed(user.role, req.method(), &path) {
+        return err(
+            StatusCode::FORBIDDEN,
+            "your account isn't allowed to do this — ask the admin",
+        );
+    }
+    if let Some(cam) = camera_in_path(&path)
+        && !user.can_see(cam)
+    {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    req.extensions_mut().insert(CurrentUser(Arc::new(user)));
+    next.run(req).await
+}
+
+/// Cameras the signed-in user may see (None = all).
+fn visible(user: &Option<axum::Extension<CurrentUser>>) -> Option<Vec<String>> {
+    user.as_ref()
+        .map(|u| u.0.0.cameras.clone())
+        .filter(|c| !c.is_empty())
+}
+
+async fn auth_state(State(m): App, headers: axum::http::HeaderMap) -> Response {
+    let me = session_token(&headers)
+        .and_then(|t| m.users.session_user(&t))
+        .map(|u| crate::users::Me {
+            username: u.username,
+            role: u.role,
+            cameras: u.cameras,
+        });
+    Json(json!({ "setup_needed": m.users.setup_needed(), "user": me, "name": m.config().server.name })).into_response()
+}
+
+#[derive(Deserialize)]
+struct LoginReq {
+    username: String,
+    password: String,
+    #[serde(default)]
+    remember: bool,
+}
+
+async fn auth_setup(State(m): App, Json(r): Json<LoginReq>) -> Response {
+    match m.users.setup(&r.username, &r.password) {
+        Ok(t) => {
+            tracing::info!("admin account \"{}\" created", r.username.trim());
+            (
+                [(header::SET_COOKIE, session_cookie(&t, true))],
+                Json(json!({ "ok": true })),
+            )
+                .into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn auth_login(State(m): App, Json(r): Json<LoginReq>) -> Response {
+    // A little delay makes guessing passwords slow.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    match m.users.login(&r.username, &r.password, r.remember) {
+        Ok(t) => (
+            [(header::SET_COOKIE, session_cookie(&t, r.remember))],
+            Json(json!({ "ok": true })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!("failed sign-in for \"{}\"", r.username.trim());
+            err(StatusCode::UNAUTHORIZED, format!("{e:#}"))
+        }
+    }
+}
+
+async fn auth_logout(State(m): App, headers: axum::http::HeaderMap) -> Response {
+    if let Some(t) = session_token(&headers) {
+        m.users.logout(&t);
+    }
+    (
+        [(
+            header::SET_COOKIE,
+            HeaderValue::from_static("gaze_session=; Path=/; Max-Age=0"),
+        )],
+        Json(json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct PasswordReq {
+    current: String,
+    new: String,
+}
+
+async fn auth_password(
+    State(m): App,
+    user: axum::Extension<CurrentUser>,
+    Json(r): Json<PasswordReq>,
+) -> Response {
+    let name = user.0.0.username.clone();
+    if m.users.login(&name, &r.current, false).is_err() {
+        return err(StatusCode::BAD_REQUEST, "the current password is wrong");
+    }
+    match m.users.update(&name, None, None, Some(&r.new)) {
+        Ok(()) => {
+            // Sign in again with the new password on this browser.
+            let t = m.users.login(&name, &r.new, true).unwrap_or_default();
+            (
+                [(header::SET_COOKIE, session_cookie(&t, true))],
+                Json(json!({ "ok": true })),
+            )
+                .into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn users_list(State(m): App) -> Response {
+    Json(m.users.list()).into_response()
+}
+
+#[derive(Deserialize)]
+struct UserReq {
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    password: String,
+    role: Option<crate::users::Role>,
+    cameras: Option<Vec<String>>,
+}
+
+async fn users_create(State(m): App, Json(r): Json<UserReq>) -> Response {
+    match m.users.create(
+        &r.username,
+        &r.password,
+        r.role.unwrap_or(crate::users::Role::Viewer),
+        r.cameras.unwrap_or_default(),
+    ) {
+        Ok(()) => {
+            tracing::info!("user \"{}\" created", r.username.trim());
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn users_update(State(m): App, Path(name): Path<String>, Json(r): Json<UserReq>) -> Response {
+    let pw = (!r.password.is_empty()).then_some(r.password.as_str());
+    match m.users.update(&name, r.role, r.cameras, pw) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn users_delete(
+    State(m): App,
+    Path(name): Path<String>,
+    user: axum::Extension<CurrentUser>,
+) -> Response {
+    if user.0.0.username == name {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "you can't delete your own account while signed in with it",
+        );
+    }
+    match m.users.delete(&name) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
 }
 
 #[cfg(test)]

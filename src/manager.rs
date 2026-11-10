@@ -353,6 +353,8 @@ pub struct Manager {
     pub smart: Arc<crate::smart::SmartIndex>,
     /// Which alerts have been viewed.
     pub seen: crate::seen::Seen,
+    /// User accounts and sign-in sessions.
+    pub users: crate::users::Users,
     pub monitor: Arc<Monitor>,
     usage: Mutex<UsageReport>,
     /// Temporary stream previews for the camera editor: token → (url, transport).
@@ -380,6 +382,11 @@ impl Manager {
             clip: crate::clip::Clip::new(&data_dir_for_clip),
             smart: Arc::new(crate::smart::SmartIndex::default()),
             seen: crate::seen::Seen::open(&data_dir_for_clip),
+            users: {
+                let u = crate::users::Users::open(&data_dir_for_clip);
+                u.migrate_legacy(&config.server.username, &config.server.password);
+                u
+            },
             usage: Mutex::new(UsageReport::default()),
             previews: Mutex::new(HashMap::new()),
             onvif: Mutex::new(HashMap::new()),

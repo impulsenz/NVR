@@ -25,6 +25,7 @@ mod seen;
 mod smart;
 mod storage;
 mod sysmon;
+mod users;
 mod web;
 
 use anyhow::{Context, Result};

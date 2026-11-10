@@ -67,6 +67,7 @@ async function api(path, opts = {}) {
     opts.headers = {'Content-Type': 'application/json'};
   }
   const r = await fetch(path, opts);
+  if (r.status === 401 && !path.startsWith('api/auth')) { showAuth('login'); throw new Error('Please sign in'); }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).error || msg; } catch (e) {}
@@ -428,9 +429,9 @@ function route() {
 window.addEventListener('hashchange', route);
 
 async function refreshStatus() {
-  try { status = await api('api/status'); } catch (e) { return; }
-  $('nvr-name').textContent = status.name;
-  document.title = status.name;
+  try { status = await api('api/status?device=' + deviceKind()); } catch (e) { return; }
+  $('nvr-name').title = status.name;
+  document.title = status.name && status.name !== 'GAZE' ? `GAZE — ${status.name}` : 'GAZE';
   // New alerts.
   const ab = $('alert-badge'), n = status.alerts_unseen || 0;
   ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
@@ -845,6 +846,40 @@ function settle(tiles, moved) {
   }
 }
 
+const phoneGrid = () => ($('dash').clientWidth || window.innerWidth) < 640;
+function renderPhoneEditor() {
+  const dash = $('dash'), all = viewCams();
+  const order = layout.map(t => t.camera).filter(id => cam(id));
+  const hidden = all.filter(c => !order.includes(c.id)).map(c => c.id);
+  let cols = layout.length && layout.every(x => x.w <= 6) ? 2 : 1;
+  const ids = [...order, ...hidden], shown = new Set(order.length ? order : all.map(c => c.id));
+  const draw = () => {
+    dash.style.height = '';
+    dash.innerHTML = `<div class="phone-edit card">
+      <div class="row" style="justify-content:space-between"><b>Phone layout</b>
+        <span class="seg" id="pe-cols"><button type="button" data-c="1" class="${cols === 1 ? 'on' : ''}">1 column</button><button type="button" data-c="2" class="${cols === 2 ? 'on' : ''}">2 columns</button></span></div>
+      <div class="hint">Order the cameras and choose which to show on this phone. Saved for your account on phones only.</div>
+      ${ids.map((id, i) => `<div class="pe-row ${shown.has(id) ? '' : 'off'}" data-id="${esc(id)}">
+        <label class="check"><input type="checkbox" ${shown.has(id) ? 'checked' : ''}> ${esc((cam(id) || {}).name || id)}</label>
+        <span><button type="button" class="small" data-mv="-1" ${i === 0 ? 'disabled' : ''} title="Move up">▲</button><button type="button" class="small" data-mv="1" ${i === ids.length - 1 ? 'disabled' : ''} title="Move down">▼</button></span></div>`).join('')}
+    </div>`;
+    dash.querySelectorAll('#pe-cols button').forEach(b => b.onclick = () => { cols = +b.dataset.c; apply(); draw(); });
+    dash.querySelectorAll('.pe-row').forEach(r => {
+      const id = r.dataset.id;
+      r.querySelector('input').onchange = (e) => { if (e.target.checked) shown.add(id); else shown.delete(id); apply(); draw(); };
+      r.querySelectorAll('[data-mv]').forEach(b => b.onclick = () => {
+        const i = ids.indexOf(id), j = i + +b.dataset.mv;
+        [ids[i], ids[j]] = [ids[j], ids[i]]; apply(); draw();
+      });
+    });
+  };
+  // The layout that "Save layout" stores.
+  const apply = () => {
+    const w = 12 / cols;
+    layout = ids.filter(id => shown.has(id)).map((id, i) => ({camera: id, x: (i % cols) * w, y: Math.floor(i / cols) * w, w, h: w}));
+  };
+  apply(); draw();
+}
 function dashMetrics() {
   if (wall) {
     const W = window.innerWidth, H = window.innerHeight;
@@ -882,6 +917,11 @@ function renderDash() {
   $('live-grid').classList.toggle('editing-wall', editing && wall);
   dash.classList.remove('fit-stretch', 'fit-crop', 'fit-fit');
   dash.classList.add('fit-' + (status.display.tile_fit || 'stretch'));
+  // Phones: a simple list to order and show/hide cameras instead of
+  // dragging tiles around (which doesn't work well with a finger).
+  if (editing && !wall && phoneGrid()) { renderPhoneEditor(); $('dash-info').textContent = ''; toggleEditButtons(); return; }
+  // Phones show the cameras in order (top to bottom, left to right).
+  if (!editing && phoneGrid()) layout = [...layout].sort((a, b) => a.y - b.y || a.x - b.x);
   const shown = wallSolo && !editing ? [{camera: wallSolo, x: 0, y: 0, w: 12, h: 12}] : layout;
   for (const t of shown) {
     const c = cam(t.camera);
@@ -923,9 +963,12 @@ function placeTiles() {
     const t = wallSolo && !editing ? {x: 0, y: 0, w: 12, h: 12} : layout.find(x => x.camera === el.dataset.id);
     if (!t) continue;
     if (m.narrow && !editing) {
-      const h = (m.W - 8) * 9 / 16;
-      Object.assign(el.style, {left: '4px', top: y + 4 + 'px', width: m.W - 8 + 'px', height: h + 'px'});
-      y += h + 8; maxB = y;
+      // One or two columns (chosen in the phone layout editor).
+      const cols = layout.length && layout.every(x => x.w <= 6) ? 2 : 1;
+      const i = [...dash.querySelectorAll('.tile')].indexOf(el), cw = (m.W - 4) / cols, h = (cw - 8) * 9 / 16;
+      const top = Math.floor(i / cols) * (h + 8) + 4;
+      Object.assign(el.style, {left: (i % cols) * cw + 4 + 'px', top: top + 'px', width: cw - 8 + 'px', height: h + 'px'});
+      maxB = Math.max(maxB, top + h + 4);
     } else {
       const rowH = wallSolo && !editing ? m.H / 12 : m.rowH;
       Object.assign(el.style, {left: t.x * m.colW + g + 'px', top: t.y * rowH + g + 'px', width: t.w * m.colW - m.gap + 'px', height: t.h * rowH - m.gap + 'px'});
@@ -967,7 +1010,7 @@ function wireTileEdit(el, t) {
 }
 
 async function saveDashboard(d) {
-  await api('api/dashboard', {method: 'PUT', json: d});
+  await api('api/dashboard?device=' + deviceKind(), {method: 'PUT', json: d});
   status.dashboard = d;
 }
 $('dash-edit').onclick = () => { wallSolo = null; editing = true; renderDash(); };
@@ -1352,7 +1395,7 @@ function updateFocus() {
   btn.hidden = !r || !c.enabled;
   if (r) {
     btn.innerHTML = r.paused ? '<i class="bi">⏺</i><span>Resume recording</span>' : '<i class="bi">⏸</i><span>Pause recording</span>';
-    btn.className = r.paused ? 'primary' : '';
+    btn.classList.toggle('primary', r.paused);
     btn.onclick = async () => {
       if (!r.paused && !confirm(`Pause recording for ${c.name}?\nIt resumes automatically when the NVR restarts.`)) return;
       await api(`api/cameras/${enc(c.id)}/${r.paused ? 'resume' : 'pause'}`, {method: 'POST'}).catch(e => toast(e.message, true));
@@ -1646,7 +1689,7 @@ function renderRecordings() {
     const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc((l.color ? l.color + ' ' : '') + l.label)} ${Math.round(l.score * 100)}%">${l.color ? `<i class="cdot" style="background:${COLOR_CSS[l.color] || l.color}"></i>` : ''}${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
     card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw" style="${zoomStyle(it.event && it.event.focus)}"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
         <div class="tags">${it.kind === 'event' && !it.seen ? '<span class="tag newtag">NEW</span>' : ''}${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
-        <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small" data-a="del" title="Delete">✕</button></div>
+        <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small op-only" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
         <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${it.score != null ? fmtDate(it.start) : fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
     card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && (it.event.summary || it.event.desc) ? '\n' + (it.event.summary || it.event.desc) : ''}`;
@@ -2237,7 +2280,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'hardware', 'cloud', 'backup', 'system', 'info'];
+const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -2250,7 +2293,7 @@ async function showSettings(sec) {
   camPreviewUnbind.splice(0).forEach(u => u());
   const body = $('settings-body');
   ({cameras: renderCameras, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, system: renderSystemSettings, info: renderInfo})[section](body);
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, system: renderSystemSettings, info: renderInfo})[section](body);
 }
 function settingsTick() {
   if (section !== 'cameras') return;
@@ -3364,15 +3407,13 @@ async function renderSystemSettings(body) {
   if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
   const addrs = (sysinfo && sysinfo.addresses) || [];
   const [bind, port] = (() => { const i = s.listen.lastIndexOf(':'); return [s.listen.slice(0, i), s.listen.slice(i + 1)]; })();
-  body.innerHTML = `<form class="card" id="f-sys"><h2>System &amp; login</h2><div class="form">
-    <label for="y-name">NVR name</label><div><input type="text" id="y-name" required value="${esc(s.name)}"></div>
+  body.innerHTML = `<form class="card" id="f-sys"><h2>System</h2><div class="form">
+    <label for="y-name">Name of this system</label><div><input type="text" id="y-name" required value="${esc(s.name)}"></div>
     <label>Web address</label><div id="y-addr"></div>
     <label for="y-port">Port</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px">
       <select id="y-port-pick"><option value="">Common ports…</option><option value="80">80 – standard web port (no :port needed)</option><option value="8080">8080 – default</option><option value="8000">8000</option><option value="8888">8888</option><option value="5000">5000</option><option value="9000">9000</option></select></div>
     <label for="y-bind">Reachable from</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
       ${addrs.map(a => `<option value="${esc(a)}">Only via ${esc(a)}</option>`).join('')}</select><div class="hint">Changing the port or this setting takes effect after the NVR restarts.</div></div>
-    <label for="y-user">Login username</label><div><input type="text" id="y-user" value="${esc(s.username)}" autocomplete="off"><div class="hint">Leave empty to turn off the login.</div></div>
-    <label for="y-pass">Login password</label><div><input type="password" id="y-pass" autocomplete="new-password"><div class="hint">${s.has_password ? 'A password is set. Leave empty to keep it.' : 'Required when a username is set.'}</div></div>
     <label for="y-ffmpeg">ffmpeg program</label><div><input type="text" id="y-ffmpeg" required value="${esc(s.ffmpeg_path)}"><div class="hint">Name or full path of ffmpeg (ffprobe must be next to it).</div></div>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
   if (![...$('y-bind').options].some(o => o.value === bind)) $('y-bind').add(new Option('Only via ' + bind, bind));
@@ -3389,10 +3430,8 @@ async function renderSystemSettings(body) {
   showAddr();
   $('f-sys').onsubmit = async (e) => {
     e.preventDefault();
-    const user = val('y-user').trim();
-    if (user && !val('y-pass') && !settings.server.has_password) return toast('Enter a password for the login.', true);
     const listen = `${val('y-bind')}:${Math.round(num('y-port'))}`;
-    if (await saveSettings({server: {name: val('y-name'), listen, username: user, password: val('y-pass'), ffmpeg_path: val('y-ffmpeg')}})) { sysinfo = null; renderSystemSettings(body); }
+    if (await saveSettings({server: {name: val('y-name'), listen, username: '', password: '', ffmpeg_path: val('y-ffmpeg')}})) { sysinfo = null; renderSystemSettings(body); }
   };
 }
 
@@ -3401,20 +3440,145 @@ async function renderInfo(body) {
   if (!sysinfo) return;
   const c = sysinfo.capabilities;
   body.innerHTML = `<div class="card"><h2>About</h2><dl>
-    <dt>NVR version</dt><dd>${esc(sysinfo.version)}</dd><dt>Operating system</dt><dd>${esc(sysinfo.os)} (${esc(sysinfo.arch)})</dd>
+    <dt>Version</dt><dd><b>GAZE ${esc(sysinfo.version)}</b></dd><dt>Operating system</dt><dd>${esc(sysinfo.os)} (${esc(sysinfo.arch)})</dd>
     <dt>Uptime</dt><dd>${fmtDur(sysinfo.uptime_seconds)}</dd><dt>Web address</dt><dd>${(sysinfo.addresses || []).map(a => esc(`http://${a}:${sysinfo.listen.split(':').pop()}`)).join('<br>') || esc(sysinfo.listen)}</dd>
     <dt>ffmpeg</dt><dd>${esc(c.ffmpeg_version || 'NOT FOUND')}</dd>
     <dt>GPU decoders in ffmpeg</dt><dd>${esc(c.hwaccels.join(', ') || 'none')}</dd><dt>H.264 encoders</dt><dd>${esc(c.encoders.join(', ') || 'none')}</dd>
     <dt>Config file</dt><dd>${esc(sysinfo.config_path)}</dd><dt>Data folder</dt><dd>${esc(sysinfo.data_dir)}</dd>
-    <dt>Log file</dt><dd>${esc(sysinfo.log_file || '–')}</dd><dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd></dl></div>`;
+    <dt>Log file</dt><dd>${esc(sysinfo.log_file || '–')}</dd><dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd></dl></div>
+    <div class="card changelog"><h2>What's new</h2><div id="chlog" class="muted">Loading…</div></div>`;
+  try { $('chlog').innerHTML = mdLite(await (await fetch('api/changelog')).text()); } catch (e) {}
 }
 
 // ======================================================================
 // Start
 // ======================================================================
-Live.connect();
-setInterval(refreshStatus, 2000);
-refreshStatus().then(route);
+// Phones and computers each keep their own layout.
+function deviceKind() { return isPhone() || window.innerWidth < 700 ? 'mobile' : 'desktop'; }
+// A tiny Markdown reader for the changelog (headings, bold, lists).
+function mdLite(md) {
+  const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\*(.+?)\*/g, '<i>$1</i>');
+  let out = '', inList = false;
+  for (const line of md.split('\n')) {
+    const li = line.match(/^\s*-\s+(.*)/);
+    if (li) { if (!inList) { out += '<ul>'; inList = true; } out += `<li>${inline(li[1])}</li>`; continue; }
+    if (inList) { out += '</ul>'; inList = false; }
+    const h = line.match(/^(#{1,3})\s+(.*)/);
+    if (h) out += `<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`;
+    else if (line.trim()) out += `<p>${inline(line)}</p>`;
+  }
+  return out + (inList ? '</ul>' : '');
+}
+
+// ---------- signing in ----------
+let me = null, started = false;
+function showAuth(mode) {
+  $('auth').hidden = false;
+  document.body.classList.add('signed-out');
+  const setup = mode === 'setup';
+  $('auth-sub').textContent = setup ? 'Welcome! Create the admin account' : 'Sign in to watch your cameras';
+  $('auth-intro').hidden = !setup;
+  $('auth-intro').textContent = 'This account can change every setting and add other users (for example family members who may only watch). Keep the password safe.';
+  $('auth-pass2-row').hidden = !setup;
+  $('auth-pass2').required = setup;
+  $('auth-pass').autocomplete = setup ? 'new-password' : 'current-password';
+  $('auth-remember-row').hidden = setup;
+  $('auth-go').textContent = setup ? 'Create admin account' : 'Sign in';
+  $('auth-err').hidden = true;
+  $('auth-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const fail = (m) => { $('auth-err').hidden = false; $('auth-err').textContent = m; };
+    if (setup && $('auth-pass').value !== $('auth-pass2').value) return fail('The two passwords are different.');
+    $('auth-go').disabled = true;
+    try {
+      const r = await fetch(setup ? 'api/auth/setup' : 'api/auth/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: val('auth-user'), password: $('auth-pass').value, remember: chk('auth-remember')})});
+      if (!r.ok) return fail((await r.json().catch(() => ({}))).error || 'Could not sign in');
+      $('auth-pass').value = $('auth-pass2').value = '';
+      boot();
+    } catch (err) { fail(err.message); } finally { $('auth-go').disabled = false; }
+  };
+  setTimeout(() => (val('auth-user') ? $('auth-pass') : $('auth-user')).focus(), 50);
+}
+async function boot() {
+  let st;
+  try { st = await (await fetch('api/auth/state')).json(); } catch (e) { setTimeout(boot, 3000); return; }
+  $('auth-name').textContent = st.name || 'GAZE';
+  if (st.setup_needed) return showAuth('setup');
+  if (!st.user) return showAuth('login');
+  me = st.user;
+  $('auth').hidden = true;
+  document.body.classList.remove('signed-out');
+  document.body.classList.remove('role-admin', 'role-operator', 'role-viewer');
+  document.body.classList.add('role-' + me.role);
+  $('user-menu').hidden = false;
+  $('um-name').textContent = me.username;
+  $('um-role').textContent = {admin: 'Admin — full access', operator: 'Operator — watch, move cameras, manage alerts', viewer: 'Viewer — watch only'}[me.role] + (me.cameras.length ? ` · ${me.cameras.length} camera${me.cameras.length === 1 ? '' : 's'}` : '');
+  if (!started) {
+    started = true;
+    Live.connect();
+    setInterval(refreshStatus, 2000);
+  } else Live.ws && Live.ws.close();
+  settings = null;
+  await refreshStatus();
+  route();
+}
+const isAdmin = () => me && me.role === 'admin';
+const canOperate = () => me && me.role !== 'viewer';
+$('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $('um-pop').hidden = !$('um-pop').hidden; };
+$('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
+$('um-out').onclick = async () => { await fetch('api/auth/logout', {method: 'POST'}); location.hash = '#live'; location.reload(); };
+$('um-pass').onclick = async () => {
+  $('um-pop').hidden = true;
+  const cur = prompt('Current password:'); if (cur == null) return;
+  const nw = prompt('New password (at least 6 characters):'); if (!nw) return;
+  if (prompt('New password again:') !== nw) return toast('The two passwords are different.', true);
+  try { await api('api/auth/password', {method: 'POST', json: {current: cur, new: nw}}); toast('Password changed'); } catch (e) { toast(e.message, true); }
+};
+
+// ---------- Settings → Users (admin) ----------
+async function renderUsers(body) {
+  if (!isAdmin()) { body.innerHTML = '<div class="card"><h2>Users</h2><p class="muted">Only an admin can manage users. Use the 👤 menu at the top to change your own password.</p></div>'; return; }
+  const users = await api('api/users').catch(() => []);
+  const cams = (status && status.cameras) || [];
+  const roleSel = (cur) => `<select class="u-role">${[['admin', 'Admin — everything'], ['operator', 'Operator — watch, PTZ, alerts'], ['viewer', 'Viewer — watch only']].map(([k, t]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+  const camPick = (sel) => `<div class="chips u-cams">${cams.map(c => `<label><input type="checkbox" value="${esc(c.id)}" ${sel.includes(c.id) ? 'checked' : ''}>${esc(c.name)}</label>`).join('')}</div>`;
+  body.innerHTML = `<div class="card"><h2>Users</h2>
+    <p class="muted" style="margin-top:0">Who can open GAZE and what they can do. <b>Admin</b>: everything. <b>Operator</b>: watch, move PTZ cameras, pause recording, manage alerts. <b>Viewer</b>: watch live view, alerts and recordings only. Tick cameras to limit someone to those (none ticked = all cameras).</p>
+    <table class="users"><thead><tr><th>User</th><th>Access</th><th>Cameras</th><th></th></tr></thead><tbody>
+    ${users.map(u => `<tr data-u="${esc(u.username)}"><td><b>${esc(u.username)}</b>${me && u.username === me.username ? ' <span class="muted">(you)</span>' : ''}</td><td>${roleSel(u.role)}</td><td>${camPick(u.cameras)}</td>
+      <td style="text-align:right;white-space:nowrap"><button type="button" class="small u-save">Save</button> <button type="button" class="small u-pw">Set password</button> <button type="button" class="small danger u-del" ${me && u.username === me.username ? 'disabled' : ''}>Delete</button></td></tr>`).join('')}
+    </tbody></table></div>
+    <form class="card" id="u-new"><h2>Add a user</h2><div class="form">
+      <label for="un-name">User name</label><div><input type="text" id="un-name" required autocomplete="off"></div>
+      <label for="un-pass">Password</label><div><input type="password" id="un-pass" required minlength="6" autocomplete="new-password"><div class="hint">At least 6 characters. They can change it later from the 👤 menu.</div></div>
+      <label>Access</label><div id="un-role">${roleSel('viewer')}</div>
+      <label>Cameras</label><div id="un-cams">${camPick([])}</div>
+    </div><div class="actions"><button class="primary">Add user</button></div></form>`;
+  const rowData = (tr) => ({role: tr.querySelector('.u-role').value, cameras: [...tr.querySelectorAll('.u-cams input:checked')].map(i => i.value)});
+  body.querySelectorAll('tr[data-u]').forEach(tr => {
+    const name = tr.dataset.u;
+    tr.querySelector('.u-save').onclick = async () => { try { await api(`api/users/${enc(name)}`, {method: 'PUT', json: rowData(tr)}); toast(`Saved ${name}`); } catch (e) { toast(e.message, true); } };
+    tr.querySelector('.u-pw').onclick = async () => {
+      const p = prompt(`New password for ${name} (at least 6 characters):`); if (!p) return;
+      try { await api(`api/users/${enc(name)}`, {method: 'PUT', json: {password: p}}); toast(`Password set for ${name} (signed out everywhere)`); } catch (e) { toast(e.message, true); }
+    };
+    tr.querySelector('.u-del').onclick = async () => {
+      if (!confirm(`Delete the user ${name}?`)) return;
+      try { await api(`api/users/${enc(name)}`, {method: 'DELETE'}); renderUsers(body); } catch (e) { toast(e.message, true); }
+    };
+  });
+  $('u-new').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('api/users', {method: 'POST', json: {username: val('un-name'), password: $('un-pass').value,
+        role: $('un-role').querySelector('select').value, cameras: [...$('un-cams').querySelectorAll('input:checked')].map(i => i.value)}});
+      toast('User added'); renderUsers(body);
+    } catch (err) { toast(err.message, true); }
+  };
+}
+
+boot();
 
 window.addEventListener('resize', applyDataSaver);
 applyDataSaver();

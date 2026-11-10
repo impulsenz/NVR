@@ -518,3 +518,44 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 .ptz-presets select { background: rgba(0,0,0,.55); color: #fff; border-color: rgba(255,255,255,.2); max-width: 150px; }
 .ptz-msg { position: absolute; right: 0; bottom: -26px; white-space: nowrap; font-size: 11px; color: #ddd; text-shadow: 0 1px 2px #000; }
 .ptz-msg.err { color: #fecaca; }
+
+/* Roles: hide what an account can't use */
+body:not(.role-admin) .admin-only { display: none !important; }
+body.role-viewer .op-only { display: none !important; }
+body.role-viewer #focus-surface.has-ptz { cursor: default; }
+
+/* Brand */
+.brand { display: flex; align-items: center; gap: 8px; letter-spacing: 3px; font-weight: 700; }
+.brand img { width: 30px; height: 30px; object-fit: contain; }
+.user-menu .popover { right: 0; left: auto; min-width: 230px; display: flex; flex-direction: column; gap: 6px; padding: 10px; }
+.user-menu .popover button { justify-content: flex-start; }
+
+/* Sign-in page */
+body.signed-out > header, body.signed-out > main { visibility: hidden; }
+#auth { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 30%, #1d2533 0%, #0b0d12 70%); overflow: hidden; }
+#auth .auth-bg { position: absolute; inset: 0; pointer-events: none; }
+#auth .auth-bg .grid { position: absolute; inset: -50%; background-image: linear-gradient(rgba(79,140,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(79,140,255,.07) 1px, transparent 1px);
+  background-size: 48px 48px; transform: perspective(600px) rotateX(55deg) translateY(10%); animation: gridmove 12s linear infinite; }
+@keyframes gridmove { to { background-position: 0 48px, 48px 0; } }
+#auth .auth-bg .scan { position: absolute; left: 0; right: 0; height: 120px; background: linear-gradient(transparent, rgba(79,140,255,.10), transparent); animation: scan 5s ease-in-out infinite; }
+@keyframes scan { 0% { top: -120px; } 100% { top: 100%; } }
+.auth-card { position: relative; width: min(380px, 92vw); background: rgba(20,22,28,.82); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.08);
+  border-radius: 18px; padding: 28px 26px 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.auth-logo { width: 190px; align-self: center; margin-bottom: 2px; filter: drop-shadow(0 8px 24px rgba(0,0,0,.6)); }
+.auth-sub { text-align: center; color: var(--muted); margin-bottom: 4px; }
+.auth-card label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
+.auth-card label.check { flex-direction: row; align-items: center; }
+.auth-card input[type=text], .auth-card input[type=password] { font-size: 16px; padding: 10px 12px; }
+.auth-card .primary { justify-content: center; padding: 11px; font-size: 15px; margin-top: 4px; }
+.auth-foot { text-align: center; font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); animation: blink 1.6s infinite; display: inline-block; }
+@keyframes blink { 50% { opacity: .25; } }
+.changelog h2 { margin-top: 0; } .changelog h3 { margin: 14px 0 4px; font-size: 15px; } .changelog ul { margin: 4px 0 8px; padding-left: 20px; } .changelog li { margin: 3px 0; }
+table.users .chips { margin: 0; }
+
+/* Phone layout editor */
+.phone-edit { position: relative; display: flex; flex-direction: column; gap: 8px; }
+.pe-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.pe-row.off label { color: var(--muted); }
+.pe-row span { display: flex; gap: 6px; }
+#dash.editing:has(.phone-edit) { height: auto !important; }
