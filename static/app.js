@@ -440,12 +440,17 @@ async function refreshStatus() {
   // New alerts.
   const ab = $('alert-badge'), n = status.alerts_unseen || 0;
   ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
-  // Smart search model download, in plain sight.
+  // Downloads (AI models, updates): a small chip in the header; the
+  // details are in Settings → Tasks.
+  const dls = status.downloads || [], chip = $('dl-chip');
+  chip.hidden = !dls.length;
+  if (dls.length) {
+    const d = dls[0], pct = d.total ? Math.round(100 * d.done / d.total) : null;
+    chip.textContent = `⬇ ${pct != null ? pct + '%' : '…'}${dls.length > 1 ? ` (+${dls.length - 1})` : ''}`;
+    chip.title = dls.map(x => x.title).join('\n') + '\nClick for details (Settings → Tasks)';
+  }
   const ss = status.smart_search, gb = $('g-banner');
-  if (ss && ss.downloading) {
-    gb.hidden = false;
-    gb.innerHTML = `<b>Downloading the smart-search model</b> (one time, about 600 MB) — ${Math.round(ss.download_percent || 0)}%<div class="bar"><div style="width:${(ss.download_percent || 0).toFixed(1)}%"></div></div>`;
-  } else if (ss && ss.error && status.smart_search_on) {
+  if (ss && ss.error && status.smart_search_on && !ss.downloading) {
     gb.hidden = false; gb.innerHTML = `<b>Smart search problem:</b> ${esc(ss.error)} <a href="#settings/ai">Settings</a>`;
   } else if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
     gb.hidden = false;
@@ -3881,8 +3886,7 @@ async function renderSystemSettings(body) {
   body.innerHTML = `<form class="card" id="f-sys"><h2>System</h2><div class="form">
     <label for="y-name">Name of this system</label><div><input type="text" id="y-name" required value="${esc(s.name)}"></div>
     <label>Web address</label><div id="y-addr"></div>
-    <label for="y-port">Port</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px">
-      <select id="y-port-pick"><option value="">Common ports…</option><option value="80">80 – standard web port (no :port needed)</option><option value="8080">8080 – default</option><option value="8000">8000</option><option value="8888">8888</option><option value="5000">5000</option><option value="9000">9000</option></select></div>
+    <label for="y-port">Port</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px"><span class="muted">1–65535 (default 8080)</span></div>
     <label for="y-bind">Reachable from</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
       ${addrs.map(a => `<option value="${esc(a)}">Only via ${esc(a)}</option>`).join('')}</select><div class="hint">Changing the port or this setting takes effect after the NVR restarts.</div></div>
     <label for="y-ffmpeg">ffmpeg program</label><div><input type="text" id="y-ffmpeg" required value="${esc(s.ffmpeg_path)}"><div class="hint">Name or full path of ffmpeg (ffprobe must be next to it).</div></div>
@@ -3897,7 +3901,6 @@ async function renderSystemSettings(body) {
       `<div class="hint">${b === '127.0.0.1' ? 'Only this computer can open it.' : 'Open this address on your phone, tablet or another computer on the same network.'} Detected automatically from this computer's network connection.</div>`;
   };
   $('y-port').oninput = $('y-bind').onchange = showAddr;
-  $('y-port-pick').onchange = (e) => { if (e.target.value) { $('y-port').value = e.target.value; showAddr(); } e.target.value = ''; };
   showAddr();
   $('f-sys').onsubmit = async (e) => {
     e.preventDefault();

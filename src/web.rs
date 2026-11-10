@@ -302,6 +302,11 @@ async fn status(
         "cameras": cameras,
         "ai": m.ai.get().status(),
         "smart_search": m.clip.status(),
+        // Downloads in progress (AI models, updates), for the header.
+        "downloads": crate::jobs::list().into_iter()
+            .filter(|j| j.kind == "download" && j.finished.is_none())
+            .map(|j| json!({"title": j.title, "done": j.done, "total": j.total}))
+            .collect::<Vec<_>>(),
         "alerts_unseen": library::unseen_count(&m),
         "smart_search_on": cfg.ai.smart_search,
         "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.lock().unwrap().len() } else { 0 },

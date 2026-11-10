@@ -25,6 +25,8 @@
 - Number plates the reader isn't sure of are ignored.
 
 **Smaller changes**
+- Model and update downloads no longer cover the top of the page: a small “⬇ 51%” in the header shows progress and opens Settings → Tasks. Other notices (new camera found) sit in the bottom corner.
+- The web port is simply typed in (no list of common ports).
 - Alerts are only described and identified once they're over; notifications, descriptions and faces added while an alert is still going are no longer lost.
 
 ## 0.4.0 — November 2026
