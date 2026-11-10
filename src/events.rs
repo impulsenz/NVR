@@ -66,6 +66,21 @@ pub struct Event {
     /// Faces and plates have been looked for.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub identified: bool,
+    /// Areas where something was left or taken (checked for packages).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ItemChange>,
+}
+
+/// Something left or taken in a watched area during an alert.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ItemChange {
+    pub zone: String,
+    /// Pictures of the area before and after (in the events folder).
+    pub before: String,
+    pub after: String,
+    /// Looked at by the smart search model.
+    #[serde(default)]
+    pub checked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -261,6 +276,7 @@ mod tests {
             faces: Vec::new(),
             plates: Vec::new(),
             identified: false,
+            items: Vec::new(),
         };
         s.save(e.clone());
         e.labels.push(Label {

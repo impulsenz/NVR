@@ -30,6 +30,7 @@ mod recorder;
 mod relay;
 mod seen;
 mod smart;
+mod stationary;
 mod storage;
 mod sysmon;
 mod talk;

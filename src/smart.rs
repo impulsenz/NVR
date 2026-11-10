@@ -322,6 +322,92 @@ fn fmt_secs(s: i64) -> String {
 }
 
 /// Background job: describe new alerts (newest first) while smart search is on.
+/// How much a picture looks like a parcel on the ground (vs. an empty spot).
+async fn parcel_score(clip: &Clip, f: &Frame) -> Option<f32> {
+    const YES: &[&str] = &[
+        "a photo of a parcel on the ground",
+        "a cardboard box on a doorstep",
+        "a delivered package by the front door",
+        "a plastic delivery bag on the ground",
+    ];
+    const NO: &[&str] = &[
+        "a photo of an empty doorstep",
+        "an empty porch floor",
+        "an empty path",
+        "a doormat on the ground",
+    ];
+    let v = clip.embed_image(f).await.ok()?;
+    let best = |opts: &'static [&'static str]| {
+        let v = v.clone();
+        async move {
+            let mut m = f32::MIN;
+            for o in opts {
+                let t = clip.embed_text(o).await.ok()?;
+                m = m.max(t.iter().zip(&v).map(|(a, b)| a * b).sum::<f32>());
+            }
+            Some(m)
+        }
+    };
+    let yes = best(YES).await?;
+    let no = best(NO).await?;
+    Some(yes - no)
+}
+
+/// A parcel appeared between `before` and `after` (parcel scores).
+fn is_parcel_change(before: f32, after: f32) -> bool {
+    after > 0.01 && after - before > 0.015
+}
+
+/// Item left or taken in a watched area: was it a parcel delivered or
+/// picked up? Rewrites the alert's note and its "package" label.
+async fn check_items(clip: &Clip, store: &EventStore, e: &mut Event) {
+    let mut any_package = false;
+    for i in 0..e.items.len() {
+        if e.items[i].checked {
+            any_package |= e
+                .notes
+                .iter()
+                .any(|n| n.starts_with("Package") && n.contains(&e.items[i].zone));
+            continue;
+        }
+        let it = e.items[i].clone();
+        let load = |n: &str| {
+            std::fs::read(store.dir().join(n))
+                .ok()
+                .and_then(|b| crate::imgutil::decode_jpeg(&b).ok())
+        };
+        let (Some(b), Some(a)) = (load(&it.before), load(&it.after)) else {
+            e.items[i].checked = true;
+            continue;
+        };
+        let (Some(sb), Some(sa)) = (parcel_score(clip, &b).await, parcel_score(clip, &a).await)
+        else {
+            return; // model unavailable: try again later
+        };
+        let verdict = if is_parcel_change(sb, sa) {
+            Some(format!("Package delivered at {}", it.zone))
+        } else if is_parcel_change(sa, sb) {
+            Some(format!("Package picked up from {}", it.zone))
+        } else {
+            None
+        };
+        if let Some(v) = &verdict {
+            let prefix = format!("Item left or taken in {}", it.zone);
+            e.notes.retain(|n| !n.starts_with(&prefix));
+            if !e.notes.contains(v) {
+                e.notes.push(v.clone());
+            }
+            tracing::info!(target: "event", "[{}] {v}", e.camera);
+            any_package = true;
+        }
+        e.items[i].checked = true;
+    }
+    if !e.items.is_empty() && !any_package {
+        // Something changed, but it doesn't look like a parcel.
+        e.labels.retain(|l| l.label != "package" || l.score < 1.0);
+    }
+}
+
 pub async fn run(mgr: Arc<Manager>) {
     let count = |mgr: &Manager| {
         mgr.event_stores()
@@ -366,7 +452,7 @@ pub async fn run(mgr: Arc<Manager>) {
                 }
                 let job = crate::jobs::start("ai", "Smart search — describing alerts");
                 job.total(todo.len() as u64);
-                for e in todo {
+                for mut e in todo {
                     if !mgr.config().ai.smart_search {
                         break 'stores;
                     }
@@ -387,6 +473,7 @@ pub async fn run(mgr: Arc<Manager>) {
                     let Ok(f) = crate::imgutil::decode_jpeg(&bytes) else {
                         continue;
                     };
+                    check_items(&mgr.clip, &store, &mut e).await;
                     let mut vecs = Vec::new();
                     let mut objects = Vec::new();
                     for (p, what) in pictures(&f, &e) {
@@ -461,5 +548,90 @@ pub async fn run(mgr: Arc<Manager>) {
         }
         mgr.clip.unload_if_idle();
         tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+}
+
+#[cfg(test)]
+mod parcel_tests {
+    /// Needs the CLIP model: GAZE_TEST_MODELS=<dir with clip-vit-b32-*> GAZE_TEST_PARCEL=<dir with before.jpg, after.jpg>
+    #[tokio::test]
+    #[ignore]
+    async fn parcel_seen() {
+        let (Ok(models), Ok(dir)) = (
+            std::env::var("GAZE_TEST_MODELS"),
+            std::env::var("GAZE_TEST_PARCEL"),
+        ) else {
+            return;
+        };
+        let clip = super::Clip::new(std::path::Path::new(&models));
+        let load = |n: &str| {
+            crate::imgutil::decode_jpeg(&std::fs::read(std::path::Path::new(&dir).join(n)).unwrap())
+                .unwrap()
+        };
+        let b = super::parcel_score(&clip, &load("before.jpg"))
+            .await
+            .unwrap();
+        let a = super::parcel_score(&clip, &load("after.jpg"))
+            .await
+            .unwrap();
+        println!("parcel score before {b:.3}, after {a:.3}");
+        assert!(super::is_parcel_change(b, a) && !super::is_parcel_change(a, b));
+
+        // The whole check on an alert: the note and label are rewritten.
+        let tmp = std::env::temp_dir().join(format!("nvr-parcel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = crate::events::EventStore::open(&tmp);
+        std::fs::create_dir_all(store.dir()).unwrap();
+        for (from, to) in [
+            ("before.jpg", "e-z0-before.jpg"),
+            ("after.jpg", "e-z0-after.jpg"),
+        ] {
+            std::fs::copy(std::path::Path::new(&dir).join(from), store.dir().join(to)).unwrap();
+        }
+        let now = chrono::Local::now();
+        let mut e = crate::events::Event {
+            id: "e".into(),
+            camera: "cam".into(),
+            start: now,
+            end: now,
+            labels: vec![crate::events::Label {
+                label: "package".into(),
+                score: 1.0,
+                color: None,
+            }],
+            motion: true,
+            thumb: None,
+            clip: None,
+            clip_start: None,
+            focus: None,
+            desc: String::new(),
+            boxes: Vec::new(),
+            summary: String::new(),
+            notes: vec!["Item left or taken in Porch (possible delivery)".into()],
+            thumb_at: None,
+            faces: Vec::new(),
+            plates: Vec::new(),
+            identified: false,
+            items: vec![crate::events::ItemChange {
+                zone: "Porch".into(),
+                before: "e-z0-before.jpg".into(),
+                after: "e-z0-after.jpg".into(),
+                checked: false,
+            }],
+        };
+        super::check_items(&clip, &store, &mut e).await;
+        assert_eq!(e.notes, ["Package delivered at Porch"]);
+        assert!(e.items[0].checked && e.labels.iter().any(|l| l.label == "package"));
+        // Swapped pictures: picked up.
+        e.items[0] = crate::events::ItemChange {
+            zone: "Porch".into(),
+            before: "e-z0-after.jpg".into(),
+            after: "e-z0-before.jpg".into(),
+            checked: false,
+        };
+        e.notes = vec!["Item left or taken in Porch".into()];
+        super::check_items(&clip, &store, &mut e).await;
+        assert_eq!(e.notes, ["Package picked up from Porch"]);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

@@ -85,6 +85,11 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Zones** (camera settings → Zones), like Frigate and Blue Iris: draw areas and lines on the picture.
   Alert only for objects inside an area, when something **crosses a line** (in either or one direction),
   when someone **lingers**, or when an **item is left or taken** (packages on the porch).
+- **Parked vehicles**: a car, truck or bike that stays in one place stops alerting (after 60 s by default)
+  and alerts again as soon as it moves; it's remembered across restarts and quiet nights.
+- **Package delivery**: mark a zone around your doorstep to watch for parcels. GAZE compares the area
+  before and after each alert and (with smart search) says "Package delivered at Porch" or
+  "Package picked up from Porch", with before/after pictures in the alert.
 - **Faces & number plates** (Settings → People & vehicles, optional): GAZE finds faces and reads number
   plates in alerts, using the full-quality recording. Teach it people (upload a few photos, or answer
   "Who is this?" on a face in an alert) and vehicles (number plate and photos). Alerts then say

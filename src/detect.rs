@@ -182,6 +182,8 @@ pub struct DetectStatus {
     pub ai_error: Option<String>,
     pub error: Option<String>,
     pub fps: f32,
+    /// Parked vehicles being ignored ("car", …).
+    pub parked: Vec<String>,
 }
 
 pub struct Detector {
@@ -200,6 +202,8 @@ pub struct Detector {
     zones: Mutex<crate::zones::ZoneWatch>,
     /// The latest picture without any activity (for "item left or taken").
     quiet: Mutex<Option<Frame>>,
+    /// Parked vehicles (no alerts until they move).
+    parked: Mutex<crate::stationary::Stationary>,
 }
 
 struct Active {
@@ -214,7 +218,8 @@ struct Active {
     /// Recent recognitions (to settle one label per object).
     seen: Vec<(Detection, Instant)>,
     /// "Item left or taken" areas: (zone index, how the area looked before).
-    zone_before: Vec<(usize, Vec<f32>)>,
+    /// Watched areas before the activity: signature and picture.
+    zone_before: Vec<(usize, Vec<f32>, Frame)>,
 }
 
 impl Detector {
@@ -230,7 +235,7 @@ impl Detector {
             cam,
             env,
             ai,
-            store,
+            store: store.clone(),
             buffer,
             status: Mutex::new(DetectStatus::default()),
             latest: Mutex::new(None),
@@ -238,6 +243,9 @@ impl Detector {
             relay,
             zones: Mutex::new(crate::zones::ZoneWatch::default()),
             quiet: Mutex::new(None),
+            parked: Mutex::new(crate::stationary::Stationary::open(Some(
+                store.dir().join("parked.json"),
+            ))),
         })
     }
 
@@ -558,14 +566,20 @@ impl Detector {
         }
         // How the "item left or taken" areas looked before the activity.
         let quiet = self.quiet.lock().unwrap().clone();
-        let zone_before: Vec<(usize, Vec<f32>)> = quiet
+        let zone_before: Vec<(usize, Vec<f32>, Frame)> = quiet
             .map(|f| {
                 self.cam
                     .zones
                     .iter()
                     .enumerate()
                     .filter(|(_, z)| z.kind == "area" && z.watch_items)
-                    .map(|(i, z)| (i, crate::zones::area_signature(&f, &z.points)))
+                    .map(|(i, z)| {
+                        (
+                            i,
+                            crate::zones::area_signature(&f, &z.points),
+                            zone_picture(&f, &z.points),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -589,6 +603,7 @@ impl Detector {
                 faces: Vec::new(),
                 plates: Vec::new(),
                 identified: false,
+                items: Vec::new(),
             },
             last_activity: now,
             qualified: false,
@@ -668,6 +683,29 @@ impl Detector {
             .into_iter()
             .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
             .collect();
+        // Parked vehicles don't alert until they move.
+        if d.ignore_parked {
+            let kinds: Vec<String> = crate::stationary::PARKING
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let (keep, notes) = self.parked.lock().unwrap().filter(
+                hits,
+                &kinds,
+                Duration::from_secs(d.parked_seconds.max(10) as u64),
+            );
+            hits = keep;
+            let parked = self.parked.lock().unwrap().parked();
+            self.status.lock().unwrap().parked = parked;
+            for n in notes {
+                info!(target: "event", "[{}] {n}", self.cam.name);
+                if let Some(a) = active.as_mut()
+                    && !a.event.notes.contains(&n)
+                {
+                    a.event.notes.push(n);
+                }
+            }
+        }
         // ...and across the pictures of this alert.
         if let Some(a) = active.as_mut() {
             a.seen
@@ -873,7 +911,8 @@ impl Detector {
         if !a.zone_before.is_empty()
             && let Some(now) = self.latest.lock().unwrap().clone()
         {
-            for (zi, before) in &a.zone_before {
+            let person = a.event.labels.iter().any(|l| l.label == "person");
+            for (zi, before, before_pic) in &a.zone_before {
                 let Some(z) = self.cam.zones.get(*zi) else {
                     continue;
                 };
@@ -882,7 +921,30 @@ impl Detector {
                     &crate::zones::area_signature(&now, &z.points),
                 );
                 if change > 0.12 {
-                    let note = format!("Item left or taken in {}", z.name);
+                    // Keep both pictures: smart search tells a delivered
+                    // parcel from one picked up (or a moved bin).
+                    let dir = self.store.dir();
+                    let (bn, an) = (
+                        format!("{}-z{zi}-before.jpg", a.event.id),
+                        format!("{}-z{zi}-after.jpg", a.event.id),
+                    );
+                    if let (Ok(b), Ok(af)) =
+                        (before_pic.jpeg(85), zone_picture(&now, &z.points).jpeg(85))
+                        && std::fs::write(dir.join(&bn), b).is_ok()
+                        && std::fs::write(dir.join(&an), af).is_ok()
+                    {
+                        a.event.items.push(crate::events::ItemChange {
+                            zone: z.name.clone(),
+                            before: bn,
+                            after: an,
+                            checked: false,
+                        });
+                    }
+                    let note = if person {
+                        format!("Item left or taken in {} (possible delivery)", z.name)
+                    } else {
+                        format!("Item left or taken in {}", z.name)
+                    };
                     info!(target: "event", "[{}] {note} ({:.0}% of the area changed)", self.cam.name, change * 100.0);
                     a.event.notes.push(note);
                     if !a.event.labels.iter().any(|l| l.label == "package") {
@@ -904,6 +966,28 @@ impl Detector {
             );
         }
     }
+}
+
+/// The part of the picture around a zone (with a margin), for checking
+/// what's there.
+fn zone_picture(f: &Frame, poly: &[[f32; 2]]) -> Frame {
+    let (mut x0, mut y0, mut x1, mut y1) = (1f32, 1f32, 0f32, 0f32);
+    for p in poly {
+        x0 = x0.min(p[0]);
+        y0 = y0.min(p[1]);
+        x1 = x1.max(p[0]);
+        y1 = y1.max(p[1]);
+    }
+    let (fw, fh) = (f.width as f32, f.height as f32);
+    let (mx, my) = ((x1 - x0) * 0.1, (y1 - y0) * 0.1);
+    crate::recog::crop(
+        f,
+        (x0 - mx) * fw,
+        (y0 - my) * fh,
+        (x1 - x0 + 2.0 * mx) * fw,
+        (y1 - y0 + 2.0 * my) * fh,
+    )
+    .fit(640)
 }
 
 /// A moving object found in a frame.

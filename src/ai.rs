@@ -121,7 +121,7 @@ pub const SECURITY_OBJECTS: &[&str] = &[
     "umbrella",
 ];
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
 pub struct Detection {
     pub label: String,
     pub score: f32,

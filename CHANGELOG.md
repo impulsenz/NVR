@@ -15,6 +15,8 @@
 - **Two-way audio**: talk through a camera's speaker from the camera view.
 - **System tray (Windows)**: no more console window; GAZE has an icon by the clock with open, recordings, log, start with Windows, restart and quit.
 - **Tasks** (System page): see what GAZE is doing in the background — AI descriptions, faces & plates, downloads with progress, previews, cloud backup — plus *Rebuild previews* and *Refresh alert pictures* (sharper pictures from the HD recordings).
+- **Parked vehicles are ignored**: a car that stays in the same place stops making alerts and alerts again when it moves (camera settings → Detection).
+- **Package delivery**: a doorstep area set to watch for parcels says “Package delivered” or “Package picked up”, with before/after pictures.
 - **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
 **Smaller changes**

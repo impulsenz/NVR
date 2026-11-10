@@ -492,6 +492,10 @@ pub struct DetectConfig {
     pub fps: u32,
     /// Minimum seconds between AI checks for this camera.
     pub ai_interval: f64,
+    /// Vehicles that stay in one place stop alerting until they move.
+    pub ignore_parked: bool,
+    /// Seconds without moving before something counts as parked.
+    pub parked_seconds: u32,
 }
 
 impl Default for DetectConfig {
@@ -517,6 +521,8 @@ impl Default for DetectConfig {
             post_seconds: 15,
             fps: 5,
             ai_interval: 1.0,
+            ignore_parked: true,
+            parked_seconds: 60,
         }
     }
 }

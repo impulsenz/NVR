@@ -1471,6 +1471,7 @@ function updateFocus() {
     ${c.has_sub ? `<dt>Sub-stream</dt><dd>${esc(s(sub))}</dd>` : ''}
     <dt>Live view</dt><dd>${Live.fps(c.id, feedQ(c, 'focus')).toFixed(1)} fps</dd>
     <dt>Detection</dt><dd>${!c.detection ? 'Off' : d ? (d.running ? `${d.motion ? 'Motion now' : 'Watching'}${c.ai ? ' + AI' : ''}` : 'Starting…') : 'Starting…'}</dd>
+    ${d && d.parked && d.parked.length ? `<dt>Parked</dt><dd title="Not alerting until they move">${esc(d.parked.join(', '))} (ignored until moved)</dd>` : ''}
     ${d && d.last_event ? `<dt>Last alert</dt><dd>${fmtDate(d.last_event)}</dd>` : ''}
     <dt>Reconnects</dt><dd>${r ? r.restarts : 0}</dd>`;
   const errs = streamErrors(c);
@@ -1793,6 +1794,7 @@ async function playItem(it, card) {
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     ${e && e.faces && e.faces.length ? `<div class="faces"><div class="muted small">Faces</div>${e.faces.map((f, i) => `<div class="face"><img src="media/${enc(it.camera)}/events/${enc(f.file)}" alt="">
       ${f.name ? `<b>${esc(f.name)}</b>` : `<select class="who op-only" data-face="${i}"><option value="">Who is this?</option>${knownPeople.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">New person…</option></select>`}</div>`).join('')}</div>` : ''}
+    ${e && e.items && e.items.length ? `<div class="items">${e.items.map(x => `<div class="item"><div class="muted small">${esc(x.zone)}: before → after</div><div class="row"><img src="media/${enc(it.camera)}/events/${enc(x.before)}" alt=""><span>→</span><img src="media/${enc(it.camera)}/events/${enc(x.after)}" alt=""></div></div>`).join('')}</div>` : ''}
     ${e && e.plates && e.plates.length ? `<div class="plates">${e.plates.map(p => `<span class="plate">${esc(p)}</span>`).join('')}</div>` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
     ${e ? `<dt>Detected</dt><dd>${labelTags(e.labels, e.motion) || '–'}</dd>${e.desc && e.desc !== what ? `<dt>AI description</dt><dd>${esc(e.desc)}</dd>` : ''}<dt>Video</dt><dd>${e.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
@@ -2583,7 +2585,7 @@ async function openCameraDialog(id, clone) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   const q = parseUrl(c.url) || {};
   const objs = (sysinfo && sysinfo.ai_objects) || ['person','car','truck','bus','motorcycle','bicycle','dog','cat','bird'];
@@ -2699,6 +2701,9 @@ async function openCameraDialog(id, clone) {
         <div class="row"><input type="number" id="d-fps" min="1" max="15" value="${c.detect.fps}" style="width:110px"><span class="muted">pictures per second checked for motion</span></div>
         <label for="d-int">AI check interval</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks during motion (raise this for cloud AI)</span></div>
+        <span></span><div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Ignore parked vehicles</label>
+          <div class="row" style="margin-top:4px"><span class="muted">after</span><input type="number" id="d-parked-s" min="10" max="3600" value="${c.detect.parked_seconds || 60}" style="width:90px"><span class="muted">seconds without moving</span></div>
+          <div class="hint">A car, truck, motorbike or bike that stays in the same place stops making alerts (other things moving around it still do). It alerts again as soon as it moves. Needs object recognition (AI).</div></div>
       </div>
       <div data-tab="osd" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="o-custom" ${c.osd.custom ? 'checked' : ''}> Use settings just for this camera</label>
@@ -3011,7 +3016,7 @@ function collectCamera() {
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
-      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int')},
+      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60)},
   };
 }
 // ---------- camera's own settings over ONVIF ----------
@@ -3223,7 +3228,7 @@ function renderZoneList() {
         : `<div class="row" style="flex-wrap:wrap;gap:14px">
             <label class="check"><input type="checkbox" class="z-req" ${z.required ? 'checked' : ''}> Only alert for objects inside this area</label>
             <label class="check">Loitering after <input type="number" class="z-loiter" min="0" max="3600" value="${z.loiter_seconds}" style="width:80px"> s <span class="muted">(0 = off)</span></label>
-            <label class="check"><input type="checkbox" class="z-items" ${z.watch_items ? 'checked' : ''}> Notice items left or taken (parcels, theft)</label></div>`}`;
+            <label class="check"><input type="checkbox" class="z-items" ${z.watch_items ? 'checked' : ''}> Package delivery: notice parcels left or taken</label><div class="hint">Draw the area around your doorstep. With smart search on, GAZE tells “Package delivered” from “Package picked up”.</div></div>`}`;
     const upd = () => {
       z.name = el.querySelector('.z-name').value.trim() || z.name;
       z.objects = [...el.querySelectorAll('.z-objs input:checked')].map(i => i.value);
@@ -3308,7 +3313,7 @@ function applyProfile(p) {
   set('d-travel', d.min_travel_px); set('d-ai', d.ai); set('d-conf', Math.round(d.min_confidence * 100));
   if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
-  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval);
+  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-parked-s', d.parked_seconds || 60);
   // Let the form update anything that depends on these (hidden sections, hints).
   for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
   $('d-objpx') && $('d-objpx').dispatchEvent(new Event('input', {bubbles: true}));

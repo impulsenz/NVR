@@ -630,6 +630,7 @@ mod text_tests {
             faces: Vec::new(),
             plates: Vec::new(),
             identified: false,
+            items: Vec::new(),
         }
     }
 

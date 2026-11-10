@@ -299,6 +299,7 @@ mod tests {
             faces: Vec::new(),
             plates: Vec::new(),
             identified: false,
+            items: Vec::new(),
         };
         store.save(ev(
             "ev-person",

@@ -608,3 +608,6 @@ table.users .chips { margin: 0; }
 .jobs-done summary { cursor: pointer; color: var(--muted); padding: 8px 0 4px; }
 .errc { color: var(--red, #e5484d); } .okc { color: var(--green, #3dd68c); }
 .spin-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent, #4c8dff); animation: talkpulse 1s ease-in-out infinite; display: inline-block; }
+
+.ad-side .items { margin-bottom: 10px; }
+.ad-side .item img { width: 45%; border-radius: 6px; }
