@@ -3523,7 +3523,9 @@ function renderAi(body) {
         <div class="hint" id="ai-smart-st"></div>
         <select id="ai-smodel" style="margin-top:6px">${[['ViT-B-32', 'Standard (CLIP ViT-B/32) — about 0.1 s per alert, 600 MB'], ['ViT-B-16', 'Detailed (CLIP ViT-B/16) — about 0.4 s per alert, 600 MB'], ['ViT-L-14', 'Most accurate (CLIP ViT-L/14) — about 2 s per alert, 1.7 GB, powerful PCs']]
           .map(([k, t]) => `<option value="${k}" ${(a.smart_model || 'ViT-B-32') === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
-        <div class="hint">Changing the model describes the alerts again with it (in the background).</div></div>
+        <div class="hint">Changing the model describes the alerts again with it (in the background).</div>
+        <div class="row" style="margin-top:6px"><span class="muted">Look at</span><select id="ai-sframes">${[[1, 'only the best moment'], [2, '2 moments'], [4, '4 moments'], [6, '6 moments'], [8, '8 moments']].map(([k, t]) => `<option value="${k}" ${(a.summary_frames || 4) === k ? 'selected' : ''}>${t}</option>`).join('')}</select><span class="muted">of each alert's full-quality video</span></div>
+        <div class="hint">More moments give fuller descriptions (someone who turns around, a second person who arrives later) and better search, at a little more work per alert. Needs recordings and the built-in AI or an AI server.</div></div>
       <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
       <label class="p-key" for="ai-key">API key</label><div class="p-key"><input type="password" id="ai-key" autocomplete="new-password" placeholder="${a.has_key ? 'Saved – leave empty to keep' : ''}"><div class="hint" id="ai-key-hint"></div></div>
       <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><div class="row"><input type="text" id="ai-mname" value="${esc(a.model)}" list="ai-models" style="flex:1"><button type="button" id="ai-list">List models</button></div>
@@ -3556,7 +3558,7 @@ function renderAi(body) {
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
     api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
-    verify_model: val('ai-verify'), night_boost: chk('ai-night'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel')});
+    verify_model: val('ai-verify'), night_boost: chk('ai-night'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel'), summary_frames: +val('ai-sframes') || 4});
   const showStatus = () => {
     const ss = status && status.smart_search;
     if (ss && $('ai-smart-st')) $('ai-smart-st').innerHTML = !a.smart_search ? '' : ss.downloading ? `Downloading the smart-search model… ${Math.round(ss.download_percent || 0)}%`

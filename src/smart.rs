@@ -353,6 +353,66 @@ async fn parcel_score(clip: &Clip, f: &Frame) -> Option<f32> {
     Some(yes - no)
 }
 
+/// What was seen across the pictures of one alert, as (description,
+/// count). Of each kind of object there are as many as were seen together
+/// in one picture; the most detailed descriptions are used first ("Adult in
+/// a black top" rather than "Person"), and "Adult" seen in one picture and
+/// "Adult in a black top" in another count as one.
+fn merge_objects(per_picture: &[Vec<(String, String)>]) -> Vec<(String, usize)> {
+    let mut labels: Vec<&str> = Vec::new();
+    for (l, _) in per_picture.iter().flatten() {
+        if !labels.contains(&l.as_str()) {
+            labels.push(l);
+        }
+    }
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for label in labels {
+        let n = per_picture
+            .iter()
+            .map(|p| p.iter().filter(|(l, _)| l == label).count())
+            .max()
+            .unwrap_or(0);
+        let generic = capitalize(label);
+        let mut descs: Vec<&str> = Vec::new();
+        for (l, d) in per_picture.iter().flatten() {
+            if l == label && *d != generic && !descs.contains(&d.as_str()) {
+                descs.push(d);
+            }
+        }
+        let all = descs.clone();
+        descs.retain(|t| {
+            !all.iter()
+                .any(|o| o.len() > t.len() && o.starts_with(&format!("{t} ")))
+        });
+        descs.sort_by_key(|d| std::cmp::Reverse(d.len()));
+        // Several pictures of one person can give different details: no
+        // more descriptions than people.
+        descs.truncate(n);
+        let mut group: Vec<(String, usize)> = Vec::new();
+        for d in &descs {
+            match group.iter_mut().find(|(t, _)| t == d) {
+                Some((_, c)) => *c += 1,
+                None => group.push((d.to_string(), 1)),
+            }
+        }
+        // Within one picture the same description twice is two of them.
+        for (t, c) in group.iter_mut() {
+            let together = per_picture
+                .iter()
+                .map(|p| p.iter().filter(|(l, d)| l == label && d == t).count())
+                .max()
+                .unwrap_or(1);
+            *c = (*c).max(together).min(n);
+        }
+        let used: usize = group.iter().map(|(_, c)| c).sum();
+        if used < n {
+            group.push((generic, n - used));
+        }
+        out.extend(group);
+    }
+    out
+}
+
 /// A parcel appeared between `before` and `after` (parcel scores).
 fn is_parcel_change(before: f32, after: f32) -> bool {
     after > 0.01 && after - before > 0.015
@@ -475,39 +535,66 @@ pub async fn run(mgr: Arc<Manager>) {
                     };
                     check_items(&mgr.clip, &store, &mut e).await;
                     let mut vecs = Vec::new();
-                    let mut objects = Vec::new();
-                    for (p, what) in pictures(&f, &e) {
-                        match mgr.clip.embed_image(&p).await {
-                            Ok(v) => {
-                                if let Some((label, color)) = what {
-                                    objects.push(
-                                        describe_object(&mgr.clip, &v, &label, color.as_deref())
-                                            .await,
-                                    );
+                    // Descriptions per picture: the best moment first, then
+                    // more moments from the full-quality video.
+                    let mut per_picture: Vec<Vec<(String, String)>> = Vec::new();
+                    let extra = match mgr.camera(&e.camera) {
+                        Some(rt) if mgr.config().ai.summary_frames > 1 => {
+                            crate::identify::moments(
+                                &mgr,
+                                &rt,
+                                &e,
+                                mgr.config().ai.summary_frames as usize - 1,
+                            )
+                            .await
+                        }
+                        _ => Vec::new(),
+                    };
+                    let mut frames = vec![(f, e.clone())];
+                    for (xf, boxes) in extra {
+                        // Without boxes there's nothing new to describe.
+                        if boxes.is_empty() {
+                            continue;
+                        }
+                        let mut x = e.clone();
+                        x.boxes = boxes;
+                        x.focus = None;
+                        frames.push((xf, x));
+                    }
+                    for (fr, ev) in &frames {
+                        let mut objects = Vec::new();
+                        for (p, what) in pictures(fr, ev) {
+                            match mgr.clip.embed_image(&p).await {
+                                Ok(v) => {
+                                    if let Some((label, color)) = what {
+                                        let d = describe_object(
+                                            &mgr.clip,
+                                            &v,
+                                            &label,
+                                            color.as_deref(),
+                                        )
+                                        .await;
+                                        objects.push((label, d));
+                                    }
+                                    vecs.push(v);
                                 }
-                                vecs.push(v);
-                            }
-                            Err(err) => {
-                                // Model unavailable; the AI settings show why.
-                                job.fail(format!("{err:#}"));
-                                break 'stores;
+                                Err(err) => {
+                                    // Model unavailable; the AI settings show why.
+                                    job.fail(format!("{err:#}"));
+                                    break 'stores;
+                                }
                             }
                         }
+                        per_picture.push(objects);
                     }
+                    let objects = merge_objects(&per_picture);
                     // What happened, for the alert's side panel and notifications.
                     let secs = (e.end - e.start).num_seconds().max(1);
                     let what = if !e.desc.is_empty() {
                         capitalize(&e.desc)
                     } else if !objects.is_empty() {
-                        // "2 × Adult in a black top" rather than repeating it.
-                        let mut uniq: Vec<(String, usize)> = Vec::new();
-                        for o in &objects {
-                            match uniq.iter_mut().find(|(t, _)| t == o) {
-                                Some((_, n)) => *n += 1,
-                                None => uniq.push((o.clone(), 1)),
-                            }
-                        }
-                        uniq.iter()
+                        objects
+                            .iter()
                             .map(|(t, n)| {
                                 if *n > 1 {
                                     format!("{n} × {t}")
@@ -554,6 +641,35 @@ pub async fn run(mgr: Arc<Manager>) {
 #[cfg(test)]
 mod parcel_tests {
     /// Needs the CLIP model: GAZE_TEST_MODELS=<dir with clip-vit-b32-*> GAZE_TEST_PARCEL=<dir with before.jpg, after.jpg>
+    #[test]
+    fn merging_pictures() {
+        let p = |v: &[(&str, &str)]| {
+            v.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let m = super::merge_objects(&[
+            p(&[("person", "Adult in a black top"), ("person", "Person")]),
+            p(&[("person", "Person"), ("person", "Person")]),
+            p(&[("person", "Adult"), ("car", "White car")]),
+        ]);
+        assert_eq!(
+            m,
+            [
+                ("Adult in a black top".to_string(), 1),
+                ("Person".into(), 1),
+                ("White car".into(), 1)
+            ]
+        );
+        let m = super::merge_objects(&[
+            p(&[("dog", "Dog"), ("dog", "Dog")]),
+            p(&[("dog", "Brown dog")]),
+        ]);
+        assert_eq!(m, [("Brown dog".to_string(), 1), ("Dog".into(), 1)]);
+        let m = super::merge_objects(&[p(&[("person", "Child"), ("person", "Child")])]);
+        assert_eq!(m, [("Child".to_string(), 2)]);
+    }
+
     #[tokio::test]
     #[ignore]
     async fn parcel_seen() {

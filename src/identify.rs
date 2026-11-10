@@ -2,7 +2,7 @@
 //! picture of its best moment, and name the people and vehicles GAZE has
 //! been taught (Settings > People & vehicles).
 
-use crate::events::{Event, EventStore, FaceSeen};
+use crate::events::{Event, EventStore, FaceSeen, SeenBox};
 use crate::imgutil::Frame;
 use crate::manager::{CameraRuntime, Manager};
 use std::path::PathBuf;
@@ -82,6 +82,137 @@ fn cap(s: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Full-quality pictures spread over an alert (other than its best
+/// moment), each with the objects the local AI finds in it. Without a
+/// local AI the boxes are empty.
+pub async fn moments(
+    mgr: &Manager,
+    rt: &CameraRuntime,
+    e: &Event,
+    n: usize,
+) -> Vec<(Frame, Vec<SeenBox>)> {
+    let cfg = mgr.config();
+    let ai = mgr.ai.get();
+    let local = rt.cfg.detect.ai && matches!(ai.cfg.provider.as_str(), "builtin" | "deepstack");
+    let span = (e.end - e.start).num_milliseconds().max(1000);
+    let mut out = Vec::new();
+    for i in 1..=n {
+        let t = e.start + chrono::Duration::milliseconds(span * i as i64 / (n as i64 + 1));
+        if e.thumb_at
+            .is_some_and(|b| (t - b).num_milliseconds().abs() < 700)
+        {
+            continue; // that's the picture already looked at
+        }
+        let Some((file, off)) = hd_source(rt, e, t) else {
+            continue;
+        };
+        let Ok(frame) = grab(&cfg.server.ffmpeg_path, &file, off).await else {
+            continue;
+        };
+        let boxes = if local {
+            ai.detect(&frame)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| {
+                    d.score >= rt.cfg.detect.min_confidence.min(0.45)
+                        && rt.cfg.detect.objects.contains(&d.label)
+                })
+                .map(|d| SeenBox {
+                    label: d.label,
+                    score: d.score,
+                    x: d.x,
+                    y: d.y,
+                    w: d.w,
+                    h: d.h,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        out.push((frame, boxes));
+    }
+    out
+}
+
+/// Faces of the people (boxes) in one picture, added to the alert.
+/// Returns how many new faces were found.
+async fn faces_in(
+    mgr: &Manager,
+    store: &EventStore,
+    e: &mut Event,
+    frame: &Frame,
+    boxes: &[SeenBox],
+    tag: &str,
+) -> anyhow::Result<usize> {
+    let (fw, fh) = (frame.width as f32, frame.height as f32);
+    // Faces already taken in this picture (overlapping person boxes would
+    // otherwise find the same face twice).
+    let mut taken: Vec<[f32; 4]> = Vec::new();
+    let mut found = 0;
+    for (bi, b) in boxes
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.label == "person")
+    {
+        let (x, y, w, h) = (b.x * fw, b.y * fh, b.w * fw, b.h * fh);
+        // Faces are in the top part of a person.
+        let (cx, cy) = (
+            (x - w * 0.15).max(0.0).floor(),
+            (y - h * 0.05).max(0.0).floor(),
+        );
+        let c = crate::recog::crop(frame, x - w * 0.15, y - h * 0.05, w * 1.3, h * 0.6);
+        for face in mgr.recog.faces(&c).await? {
+            if face.score < 0.75 || face.w < 32.0 {
+                continue; // too unsure or too small to recognise
+            }
+            let r = [face.x + cx, face.y + cy, face.w, face.h];
+            if taken.iter().any(|t| iou(t, &r) > 0.3) {
+                continue;
+            }
+            taken.push(r);
+            let print = mgr.recog.faceprint(&c, &face).await?;
+            let name = mgr.known.match_face(&print).map(|(n, _)| n);
+            // The same person in another picture of this alert: keep one,
+            // preferring the one that could be recognised.
+            if let Some(same) = e.faces.iter_mut().find(|f| {
+                crate::known::cosine(&crate::known::unpack(&f.print), &print) >= SAME_PERSON
+            }) {
+                if same.name.is_some() || name.is_none() {
+                    continue;
+                }
+                same.name = name.clone();
+            }
+            let pic = crate::recog::crop(
+                &c,
+                face.x - face.w * 0.3,
+                face.y - face.h * 0.3,
+                face.w * 1.6,
+                face.h * 1.6,
+            )
+            .fit(160);
+            let file = format!("{}-face{tag}{bi}-{}.jpg", e.id, e.faces.len());
+            std::fs::write(store.dir().join(&file), pic.jpeg(85)?)?;
+            e.faces.retain(|f| {
+                !(f.name.is_some()
+                    && f.name == name
+                    && crate::known::cosine(&crate::known::unpack(&f.print), &print) >= SAME_PERSON
+                    && f.file != file)
+            });
+            e.faces.push(FaceSeen {
+                file,
+                print: crate::known::pack(&print),
+                name,
+            });
+            found += 1;
+        }
+    }
+    Ok(found)
+}
+
+/// Two faceprints this similar are the same person (looser than naming).
+const SAME_PERSON: f32 = 0.5;
+
 async fn identify(
     mgr: &Manager,
     rt: &CameraRuntime,
@@ -104,51 +235,33 @@ async fn identify(
     };
     let (fw, fh) = (frame.width as f32, frame.height as f32);
     let mut notes: Vec<String> = Vec::new();
-    // Faces already taken (picture coordinates): overlapping person boxes
-    // would otherwise find the same face twice.
-    let mut taken: Vec<[f32; 4]> = Vec::new();
-    for (bi, b) in e.boxes.clone().iter().enumerate() {
-        let (x, y, w, h) = (b.x * fw, b.y * fh, b.w * fw, b.h * fh);
-        if want_faces && b.label == "person" {
-            // Faces are in the top part of a person.
-            let (cx, cy) = (
-                (x - w * 0.15).max(0.0).floor(),
-                (y - h * 0.05).max(0.0).floor(),
-            );
-            let c = crate::recog::crop(&frame, x - w * 0.15, y - h * 0.05, w * 1.3, h * 0.6);
-            for face in mgr.recog.faces(&c).await? {
-                if face.score < 0.75 || face.w < 32.0 {
-                    continue; // too unsure or too small to recognise
+    if want_faces {
+        let boxes = e.boxes.clone();
+        faces_in(mgr, store, &mut e, &frame, &boxes, "").await?;
+        // No face, or nobody recognised: the best moment may have been a
+        // bad picture (turned away, blurred). Look through more of the
+        // full-quality video.
+        let person = e.boxes.iter().any(|b| b.label == "person")
+            || e.labels.iter().any(|l| l.label == "person");
+        if person && !e.faces.iter().any(|f| f.name.is_some()) {
+            for (k, (f, boxes)) in moments(mgr, rt, &e, 6).await.into_iter().enumerate() {
+                faces_in(mgr, store, &mut e, &f, &boxes, &format!("m{k}-")).await?;
+                if e.faces.iter().any(|f| f.name.is_some()) {
+                    break; // found someone we know
                 }
-                let r = [face.x + cx, face.y + cy, face.w, face.h];
-                if taken.iter().any(|t| iou(t, &r) > 0.3) {
-                    continue;
-                }
-                taken.push(r);
-                let print = mgr.recog.faceprint(&c, &face).await?;
-                let name = mgr.known.match_face(&print).map(|(n, _)| n);
-                // A picture of the face for "who is this?".
-                let pic = crate::recog::crop(
-                    &c,
-                    face.x - face.w * 0.3,
-                    face.y - face.h * 0.3,
-                    face.w * 1.6,
-                    face.h * 1.6,
-                )
-                .fit(160);
-                let file = format!("{}-face{}-{}.jpg", e.id, bi, e.faces.len());
-                std::fs::write(store.dir().join(&file), pic.jpeg(85)?)?;
-                match &name {
-                    Some(n) => notes.push(format!("Recognized {n}")),
-                    None => notes.push("Unknown face".into()),
-                }
-                e.faces.push(FaceSeen {
-                    file,
-                    print: crate::known::pack(&print),
-                    name,
-                });
             }
         }
+        let mut named: Vec<String> = e.faces.iter().filter_map(|f| f.name.clone()).collect();
+        named.dedup();
+        for n in named {
+            notes.push(format!("Recognized {n}"));
+        }
+        if e.faces.iter().any(|f| f.name.is_none()) {
+            notes.push("Unknown face".into());
+        }
+    }
+    for b in e.boxes.clone().iter() {
+        let (x, y, w, h) = (b.x * fw, b.y * fh, b.w * fw, b.h * fh);
         if VEHICLES.contains(&b.label.as_str())
             && cfg.ai.smart_search
             && mgr.known.list().iter().any(|k| k.looks > 0)

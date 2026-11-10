@@ -90,10 +90,14 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Package delivery**: mark a zone around your doorstep to watch for parcels. GAZE compares the area
   before and after each alert and (with smart search) says "Package delivered at Porch" or
   "Package picked up from Porch", with before/after pictures in the alert.
+- **Descriptions from the whole alert**: smart search describes several moments of each alert's
+  full-quality video (4 by default), not only the alert picture, so a person who turns around or a
+  second visitor is included.
 - **Faces & number plates** (Settings → People & vehicles, optional): GAZE finds faces and reads number
   plates in alerts, using the full-quality recording. Teach it people (upload a few photos, or answer
   "Who is this?" on a face in an alert) and vehicles (number plate and photos). Alerts then say
-  "Recognized Mum" or "Plate ABC123 — Dad's car", and you can search for them. Runs on this computer
+  "Recognized Mum" or "Plate ABC123 — Dad's car", and you can search for them. If the alert picture shows
+  no face (or nobody known), up to six more moments of the HD recording are searched. Runs on this computer
   (OpenCV YuNet/SFace and fast-alpr models, about 50 MB, downloaded once).
 
 **Recordings**

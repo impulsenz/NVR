@@ -254,6 +254,9 @@ pub struct AiConfig {
     pub smart_search: bool,
     /// CLIP model for smart search: ViT-B-32, ViT-B-16 or ViT-L-14.
     pub smart_model: String,
+    /// Pictures of each alert's full-quality video described for its
+    /// summary (1 = only the best moment).
+    pub summary_frames: u32,
     /// Look for faces in alerts and name known people.
     pub faces: bool,
     /// Read number plates of vehicles in alerts.
@@ -274,6 +277,7 @@ impl Default for AiConfig {
             night_boost: true,
             smart_search: false,
             smart_model: "ViT-B-32".into(),
+            summary_frames: 4,
             faces: false,
             plates: false,
         }

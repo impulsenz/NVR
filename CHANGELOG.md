@@ -17,6 +17,7 @@
 - **Tasks** (System page): see what GAZE is doing in the background — AI descriptions, faces & plates, downloads with progress, previews, cloud backup — plus *Rebuild previews* and *Refresh alert pictures* (sharper pictures from the HD recordings).
 - **Parked vehicles are ignored**: a car that stays in the same place stops making alerts and alerts again when it moves (camera settings → Detection).
 - **Package delivery**: a doorstep area set to watch for parcels says “Package delivered” or “Package picked up”, with before/after pictures.
+- **Looks at more of the video**: alert descriptions use several moments of the full-quality recording (not just one picture), and when no face (or no known face) is found GAZE searches more of the HD video for one.
 - **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
 **Smaller changes**
