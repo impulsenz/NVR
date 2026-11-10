@@ -15,7 +15,22 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-const BASE: &str = "https://clip-as-service.s3.us-east-2.amazonaws.com/models/onnx/ViT-B-32";
+const BASE: &str = "https://clip-as-service.s3.us-east-2.amazonaws.com/models/onnx";
+/// Smart-search models: (name, description). Bigger = more accurate, slower.
+pub const MODELS: &[(&str, &str)] = &[
+    (
+        "ViT-B-32",
+        "Standard — about 0.1 s per alert on a 4-core PC, 600 MB download",
+    ),
+    (
+        "ViT-B-16",
+        "Detailed — about 0.4 s per alert, 600 MB download",
+    ),
+    (
+        "ViT-L-14",
+        "Most accurate — about 2 s per alert, 1.7 GB download; for powerful PCs",
+    ),
+];
 const VOCAB_URL: &str =
     "https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz";
 const CONTEXT: usize = 77;
@@ -54,6 +69,8 @@ pub struct ClipStatus {
 
 pub struct Clip {
     dir: PathBuf,
+    /// Which CLIP model (see MODELS).
+    model: Mutex<String>,
     loaded: Mutex<Loaded>,
     /// One download / load at a time.
     gate: tokio::sync::Mutex<()>,
@@ -65,6 +82,7 @@ impl Clip {
     pub fn new(data_dir: &Path) -> Arc<Self> {
         Arc::new(Self {
             dir: data_dir.join("models"),
+            model: Mutex::new("ViT-B-32".into()),
             loaded: Mutex::new(Loaded {
                 visual: None,
                 textual: None,
@@ -78,7 +96,43 @@ impl Clip {
     }
 
     fn path(&self, name: &str) -> PathBuf {
-        self.dir.join(format!("clip-vit-b32-{name}"))
+        // "ViT-B-32" → "vit-b32" (the standard model keeps its old file names).
+        let slug = self
+            .model()
+            .to_lowercase()
+            .replace('-', "")
+            .replace("vit", "vit-");
+        self.dir.join(format!("clip-{slug}-{name}"))
+    }
+
+    pub fn model(&self) -> String {
+        self.model.lock().unwrap().clone()
+    }
+
+    /// Switch model (unloads the old one; searches use its own index).
+    pub fn set_model(&self, name: &str) {
+        let name = if MODELS.iter().any(|m| m.0 == name) {
+            name
+        } else {
+            "ViT-B-32"
+        };
+        let mut m = self.model.lock().unwrap();
+        if *m != name {
+            *m = name.to_string();
+            let mut l = self.loaded.lock().unwrap();
+            l.visual = None;
+            l.textual = None;
+            self.text_cache.lock().unwrap().clear();
+            info!("smart search: using the {name} model");
+        }
+    }
+
+    /// The index file for the current model.
+    pub fn index_file(&self) -> String {
+        match self.model().as_str() {
+            "ViT-B-32" => "smart.jsonl".into(),
+            m => format!("smart-{m}.jsonl"),
+        }
     }
 
     pub fn status(&self) -> ClipStatus {
@@ -142,13 +196,14 @@ impl Clip {
         }
         let _g = self.gate.lock().await;
         let res = async {
-            let vocab = self.path("vocab.txt.gz");
+            // The word list is the same for every CLIP model.
+            let vocab = self.dir.join("clip-vit-b32-vocab.txt.gz");
             self.download(VOCAB_URL, &vocab)
                 .await
                 .context("downloading the word list")?;
             let which = if visual { "visual" } else { "textual" };
             let model = self.path(&format!("{which}.onnx"));
-            self.download(&format!("{BASE}/{which}.onnx"), &model)
+            self.download(&format!("{BASE}/{}/{which}.onnx", self.model()), &model)
                 .await
                 .with_context(|| format!("downloading the smart-search model ({which})"))?;
             let need_tok = self.loaded.lock().unwrap().tokenizer.is_none();
@@ -498,7 +553,7 @@ pub fn pack(v: &[f32]) -> String {
 pub fn unpack(s: &str) -> Option<Vec<i8>> {
     use base64::Engine;
     let b = base64::engine::general_purpose::STANDARD.decode(s).ok()?;
-    (b.len() == DIM).then(|| b.into_iter().map(|x| x as i8).collect())
+    (b.len() == DIM || b.len() == 768).then(|| b.into_iter().map(|x| x as i8).collect())
 }
 
 /// Similarity of a text vector and a stored picture vector (−1..1).

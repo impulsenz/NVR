@@ -442,6 +442,10 @@ async function refreshStatus() {
     gb.innerHTML = `<b>Downloading the smart-search model</b> (one time, about 600 MB) — ${Math.round(ss.download_percent || 0)}%<div class="bar"><div style="width:${(ss.download_percent || 0).toFixed(1)}%"></div></div>`;
   } else if (ss && ss.error && status.smart_search_on) {
     gb.hidden = false; gb.innerHTML = `<b>Smart search problem:</b> ${esc(ss.error)} <a href="#settings/ai">Settings</a>`;
+  } else if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
+    gb.hidden = false;
+    gb.innerHTML = `<b>📷 New camera${status.new_cameras > 1 ? 's' : ''} found on your network</b> (${status.new_cameras}) — <a href="#settings/cameras">add ${status.new_cameras > 1 ? 'them' : 'it'}</a> · <a href="javascript:void 0" id="gb-x">dismiss</a>`;
+    $('gb-x').onclick = () => { store.set('newcam-dismissed-' + status.new_cameras, true); gb.hidden = true; };
   } else gb.hidden = true;
   // Only errors count, until dismissed.
   const seen = store.get('errors-seen', 0), fresh = (status.problems.error_ids || []).filter(i => i > seen);
@@ -2325,10 +2329,13 @@ const chk = (id) => $(id).checked;
 // ---------- cameras ----------
 function renderCameras(body) {
   body.innerHTML = `<div class="card">
-    <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><button class="primary" id="add-cam">+ Add camera</button></div>
+    <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><button id="scan-cams" title="Look for cameras on your network (ONVIF and RTSP)">🔍 Scan network</button><button class="primary" id="add-cam">+ Add camera</button></div>
+    <div id="scan-out"></div>
     <table><thead><tr><th>Preview</th><th>Name</th><th class="hide-sm">Profile</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead><tbody id="cam-table"></tbody></table>
     ${cameraCfgs.length ? '' : '<div class="empty">No cameras yet. Click “Add camera”.</div>'}</div>`;
   $('add-cam').onclick = () => openCameraDialog();
+  $('scan-cams').onclick = scanNetwork;
+  if (status && status.new_cameras) scanNetwork();
   const tb = $('cam-table');
   for (const cfg of cameraCfgs) {
     const c = cam(cfg.id);
@@ -2365,6 +2372,41 @@ async function deleteCamera(id) {
   try { await api(`api/cameras/${enc(id)}?delete_recordings=${delRecs}`, {method: 'DELETE'}); toast('Camera deleted'); }
   catch (e) { toast(e.message, true); }
   await refreshStatus(); if (page === 'settings') showSettings('cameras');
+}
+
+// ---------- network scan ----------
+function guessBrand(f) {
+  const t = `${f.manufacturer} ${f.hardware} ${f.name}`.toLowerCase();
+  const map = [['hikvision', 'hikvision'], ['hilook', 'hikvision'], ['annke', 'hikvision'], ['dahua', 'dahua'], ['amcrest', 'dahua'], ['lorex', 'dahua'],
+    ['reolink', 'reolink'], ['tp-link', 'tapo'], ['tapo', 'tapo'], ['vigi', 'tapo'], ['uniview', 'uniview'], ['unv', 'uniview'], ['axis', 'axis'],
+    ['hanwha', 'hanwha'], ['wisenet', 'hanwha'], ['samsung', 'hanwha'], ['foscam', 'foscam'], ['swann', 'swann'], ['ezviz', 'ezviz']];
+  const m = map.find(([k]) => t.includes(k));
+  return m ? m[1] : (f.onvif_port ? 'onvif' : 'generic');
+}
+async function scanNetwork() {
+  const out = $('scan-out'), btn = $('scan-cams');
+  btn.disabled = true; btn.textContent = 'Scanning…';
+  out.innerHTML = '<div class="hint" style="margin:8px 0"><span class="spinner small"></span> Looking for cameras on your network (about 5 seconds)…</div>';
+  let found = [];
+  try { found = await api('api/discover', {method: 'POST'}); } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  btn.disabled = false; btn.textContent = '🔍 Scan network';
+  if (!found.length) { out.innerHTML = '<div class="hint" style="margin:8px 0">No cameras answered. Check that ONVIF is turned on in the camera, and that it is on the same network as this computer.</div>'; return; }
+  out.innerHTML = `<div class="scan-res"><b>Found on the network</b> <span class="muted">(${found.length})</span>
+    <table><tbody>${found.map((f, i) => `<tr><td><b>${esc(f.ip)}</b></td><td>${esc([f.manufacturer, f.hardware, f.name].filter(Boolean).join(' · ') || (f.rtsp ? 'Device with a video stream (RTSP)' : 'Device'))}</td>
+      <td>${f.onvif_port ? '<span class="tag">ONVIF</span>' : ''}${f.rtsp ? '<span class="tag">RTSP</span>' : ''}</td>
+      <td style="text-align:right">${f.added ? '<span class="muted">already added</span>' : `<button type="button" class="small primary" data-add="${i}">+ Add</button>`}</td></tr>`).join('')}</tbody></table></div>`;
+  out.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => {
+    const f = found[+b.dataset.add];
+    await openCameraDialog();
+    // Fill in the quick setup: brand, address and a name; the login is up to you.
+    $('c-name').value = f.name || `${(f.manufacturer || 'Camera')} ${f.ip.split('.').pop()}`;
+    $('q-ip').value = f.ip;
+    $('q-brand').value = guessBrand(f);
+    $('q-brand').onchange();
+    if (f.onvif_port && $('p-port')) $('p-port').value = f.onvif_port;
+    $('q-user').focus();
+    toast('Enter the camera’s login, then Test connection');
+  });
 }
 
 // Common RTSP URL formats. {auth} = user:password@
@@ -3332,7 +3374,17 @@ const PROVIDERS = [
 ];
 function renderAi(body) {
   const a = settings.ai, st = status && status.ai;
-  body.innerHTML = `<form class="card" id="f-ai"><h2>Object recognition (AI)</h2>
+  body.innerHTML = `<div class="card ai-explain"><h2>How GAZE's AI works</h2>
+    <ol>
+      <li><b>Motion detection</b> (always local, very light) notices that something changed in the picture.</li>
+      <li><b>Object recognition</b> then checks that picture for people, vehicles and animals. With the <b>built-in</b> choice this is a <b>YOLOX</b> model (by Megvii, open source,
+        trained on the COCO set of 80 everyday objects) running on this computer's processor — nothing leaves your home. Five sizes from <i>Nano</i> (fast, for small PCs) to <i>Large</i> (most accurate, for powerful PCs).</li>
+      <li><b>Double-check</b> (optional): a bigger YOLOX model looks again at pictures that would raise an alert, to cut false alarms.</li>
+      <li><b>Night boost</b>: dark and infrared pictures are brightened before recognition.</li>
+      <li><b>Smart search</b> (optional): a <b>CLIP</b> model (by OpenAI, open source) describes each alert picture — clothing colour, what someone carries, vehicle type — so you can search in your own words.</li>
+    </ol>
+    <p class="muted" style="margin:0">Instead of the built-in model you can use an AI server on your network (CodeProject.AI / DeepStack, can use another computer's graphics card), a vision model in Ollama, or a cloud service (Google Gemini, OpenAI-compatible) — those also write a short description of what they see.</p></div>
+    <form class="card" id="f-ai"><h2>Object recognition (AI)</h2>
     <p class="muted" style="margin-top:0">When a camera sees motion, a picture is checked for people, vehicles and animals. Turn it on per camera under <i>Motion &amp; AI</i>.</p>
     <div class="radio-cards">${PROVIDERS.map(([k, t, dsc]) => `<label><input type="radio" name="ai-p" value="${k}" ${a.provider === k ? 'checked' : ''}><b>${t}</b><small>${dsc}</small></label>`).join('')}</div>
     <div class="form" style="margin-top:14px">
@@ -3351,7 +3403,10 @@ function renderAi(body) {
         <div class="hint">Dark and infrared (black &amp; white) pictures are brightened and their contrast stretched before the AI looks at them, so people and animals are recognized better at night.</div></div>
       <span class="p-any"></span><div class="p-any"><label class="check"><input type="checkbox" id="ai-smart" ${a.smart_search ? 'checked' : ''}> Smart search</label>
         <div class="hint">Lets you search alerts by description — “kid wearing a red backpack”, “white van”, “man with a ladder”. Each alert picture (and each person, vehicle or animal in it) is described by a CLIP model on this computer, in the background (≈0.1 s per alert, 600 MB download once, loaded only while in use). Works with any AI choice above.</div>
-        <div class="hint" id="ai-smart-st"></div></div>
+        <div class="hint" id="ai-smart-st"></div>
+        <select id="ai-smodel" style="margin-top:6px">${[['ViT-B-32', 'Standard (CLIP ViT-B/32) — about 0.1 s per alert, 600 MB'], ['ViT-B-16', 'Detailed (CLIP ViT-B/16) — about 0.4 s per alert, 600 MB'], ['ViT-L-14', 'Most accurate (CLIP ViT-L/14) — about 2 s per alert, 1.7 GB, powerful PCs']]
+          .map(([k, t]) => `<option value="${k}" ${(a.smart_model || 'ViT-B-32') === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <div class="hint">Changing the model describes the alerts again with it (in the background).</div></div>
       <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
       <label class="p-key" for="ai-key">API key</label><div class="p-key"><input type="password" id="ai-key" autocomplete="new-password" placeholder="${a.has_key ? 'Saved – leave empty to keep' : ''}"><div class="hint" id="ai-key-hint"></div></div>
       <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><div class="row"><input type="text" id="ai-mname" value="${esc(a.model)}" list="ai-models" style="flex:1"><button type="button" id="ai-list">List models</button></div>
@@ -3384,7 +3439,7 @@ function renderAi(body) {
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
     api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
-    verify_model: val('ai-verify'), night_boost: chk('ai-night'), smart_search: chk('ai-smart')});
+    verify_model: val('ai-verify'), night_boost: chk('ai-night'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel')});
   const showStatus = () => {
     const ss = status && status.smart_search;
     if (ss && $('ai-smart-st')) $('ai-smart-st').innerHTML = !a.smart_search ? '' : ss.downloading ? `Downloading the smart-search model… ${Math.round(ss.download_percent || 0)}%`
@@ -3422,10 +3477,30 @@ const DEC_LABELS = {none: 'Off (CPU)', auto: 'Automatic (use any GPU found)', cu
   vaapi: 'VAAPI – Intel/AMD on Linux', videotoolbox: 'Apple VideoToolbox (macOS)', d3d11va: 'Direct3D 11 (Windows, any GPU)', dxva2: 'DXVA2 (older Windows)'};
 const ENC_LABELS = {auto: 'Automatic', libx264: 'CPU (libx264)', h264_nvenc: 'NVIDIA NVENC', h264_qsv: 'Intel Quick Sync',
   h264_vaapi: 'VAAPI (Linux Intel/AMD)', h264_videotoolbox: 'Apple VideoToolbox', h264_amf: 'AMD AMF (Windows)', h264_mf: 'Windows Media Foundation'};
+// Live card: which GPU, what it's used for, how busy it is.
+let gpuTimer = null;
+async function paintGpuNow() {
+  const el = $('gpu-now');
+  if (!el || page !== 'settings' || section !== 'hardware') { clearInterval(gpuTimer); gpuTimer = null; return; }
+  const m = await api('api/monitor?range=300').catch(() => null);
+  if (!m) return;
+  const c = m.current, s = c.sample, h = settings.hardware;
+  const using = h.hwaccel === 'none' ? 'not used — video is decoded on the CPU'
+    : `decoding ${h.gpu_substreams ? 'all streams' : 'full-quality streams you watch'} with ${esc(DEC_LABELS[h.hwaccel] || h.hwaccel)}` + (h.encoder && h.encoder !== 'auto' ? `, encoding with ${esc(h.encoder)}` : '');
+  const fallback = (status ? status.cameras : []).filter(x => (x.recorder || x.buffer || {}).gpu_fallback).map(x => x.name);
+  el.innerHTML = s.gpu == null
+    ? `<b>${esc(c.gpu_name || 'No GPU readings')}</b><div class="hint">GAZE can't read GPU usage on this computer (NVIDIA needs nvidia-smi; AMD on Linux and any GPU on Windows are read automatically).</div><div>GPU acceleration: ${using}.</div>`
+    : `<div class="gpu-row"><div><b>${esc(c.gpu_name || 'GPU')}</b>${c.gpu_temp != null ? ` · ${c.gpu_temp.toFixed(0)} °C` : ''}<div class="muted small">read via ${esc(c.gpu_source || '')}</div></div>
+       <div class="gpu-pct"><span>${s.gpu.toFixed(0)}%</span><div class="bar"><div style="width:${Math.min(100, s.gpu).toFixed(0)}%"></div></div><small>in use now${s.gpu_mem != null ? ` · memory ${s.gpu_mem.toFixed(0)}%` : ''}</small></div></div>
+       <div style="margin-top:8px">GPU acceleration: ${using}.</div>
+       ${fallback.length ? `<div class="warnc">Using the CPU instead (the GPU failed) for: ${esc(fallback.join(', '))}</div>` : ''}`;
+}
 async function renderHardware(body) {
+  clearInterval(gpuTimer); gpuTimer = setInterval(paintGpuNow, 3000); setTimeout(paintGpuNow, 50);
   if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
   const caps = sysinfo ? sysinfo.capabilities : {hwaccels: [], encoders: []}, h = settings.hardware;
-  body.innerHTML = `<form class="card" id="f-hw"><h2>GPU acceleration</h2>
+  body.innerHTML = `<div class="card gpu-now"><h2>Your graphics card</h2><div id="gpu-now" class="muted">Reading…</div></div>
+    <form class="card" id="f-hw"><h2>GPU acceleration</h2>
     <p class="muted" style="margin-top:0">The GPU decodes video for the live view and motion detection, and encodes when a camera converts or lowers the frame rate of recordings. Normal recording copies the camera's video and needs no GPU. If the GPU fails, the NVR switches to the CPU automatically.</p>
     <div class="form">
       <label for="h-dec">Video decoding</label><div><select id="h-dec">${Object.entries(DEC_LABELS).map(([k, v]) => { const ok = k === 'none' || k === 'auto' || caps.hwaccels.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
@@ -3458,28 +3533,65 @@ async function renderHardware(body) {
 // ---------- cloud ----------
 function renderCloud(body) {
   const c = settings.cloud;
+  let method = c.remote ? (/^([a-zA-Z]:[\\/]|\\\\|\/)/.test(c.remote.trim()) ? 'folder' : 'rclone') : 'folder';
   body.innerHTML = `<form class="card" id="f-cloud"><h2>Cloud backup</h2>
-    <p class="muted" style="margin-top:0">Copies recordings to Google Drive, OneDrive, Dropbox, Amazon S3, Backblaze B2 and 70+ other services using <a href="https://rclone.org" target="_blank" rel="noopener">rclone</a>. Files stay on this computer too.</p>
-    <ol class="muted" style="margin-top:0;padding-left:20px"><li>Install rclone from rclone.org.</li><li>Run <code>rclone config</code> once and add your cloud account (e.g. name it <code>gdrive</code>).</li><li>Enter the destination below, e.g. <code>gdrive:NVR</code>, and click Test.</li></ol>
-    <p class="hint">Simpler alternative: set a camera's storage folder to a synced folder such as Google Drive for desktop or OneDrive.</p>
-    <div class="form">
-      <span></span><label class="check"><input type="checkbox" id="cl-on" ${c.enabled ? 'checked' : ''}> Upload recordings to the cloud</label>
-      <label for="cl-remote">Destination</label><div><input type="text" id="cl-remote" value="${esc(c.remote)}" placeholder="gdrive:NVR"></div>
-      <label for="cl-what">What to upload</label><div><select id="cl-what">
-        <option value="ai" ${c.upload === 'ai' ? 'selected' : ''}>Only verified AI alerts (a person, car… recognized by the AI)</option>
-        <option value="events" ${c.upload === 'events' ? 'selected' : ''}>All alerts, including motion-only (clips and pictures)</option>
-        <option value="all" ${c.upload === 'all' ? 'selected' : ''}>Everything, including 24/7 recordings (needs a fast upload)</option></select>
-        <div class="hint">“Verified AI alerts” needs object recognition turned on for the cameras.</div></div>
-      <label for="cl-path">rclone program</label><div><input type="text" id="cl-path" value="${esc(c.rclone_path)}"></div>
+    <p class="muted" style="margin-top:0">Keeps a copy of your alerts (or all recordings) in the cloud, so they're safe even if this computer is stolen or breaks. Everything also stays on this computer.</p>
+    <div class="cl-status" id="cl-status"></div>
+    <h3>1. Where to back up</h3>
+    <div class="radio-cards cl-methods">
+      <label><input type="radio" name="cl-m" value="folder" ${method === 'folder' ? 'checked' : ''}><b>A synced folder — easiest</b>
+        <small>If Google Drive for desktop, OneDrive or Dropbox is installed on this PC, pick its folder. GAZE copies the files there and that app uploads them. Nothing else to install.</small></label>
+      <label><input type="radio" name="cl-m" value="rclone" ${method === 'rclone' ? 'checked' : ''}><b>A cloud account through rclone</b>
+        <small>No sync app needed; works with Google Drive, OneDrive, Dropbox, Amazon S3, Backblaze B2 and 70+ more. Needs the free rclone program set up once.</small></label>
     </div>
-    <div class="actions"><button class="primary">Save</button><button type="button" id="cl-test">Test</button></div><div id="cl-result" style="margin-top:10px"></div></form>`;
-  const form = () => ({enabled: chk('cl-on'), remote: val('cl-remote').trim(), upload: val('cl-what'), rclone_path: val('cl-path').trim() || 'rclone'});
-  $('f-cloud').onsubmit = (e) => { e.preventDefault(); saveSettings({cloud: form()}); };
+    <div class="form" id="cl-folder">
+      <label for="cl-dir">Synced folder</label><div class="row"><input type="text" id="cl-dir" value="${method === 'folder' ? esc(c.remote) : ''}" placeholder="e.g. C:\\Users\\you\\Google Drive\\GAZE" style="flex:1"><button type="button" id="cl-pick">Browse…</button></div>
+    </div>
+    <div class="form" id="cl-rclone">
+      <label>Step 1</label><div>Install rclone from <a href="https://rclone.org/downloads/" target="_blank" rel="noopener">rclone.org</a>.
+        <div class="row" style="margin-top:6px"><input type="text" id="cl-path" value="${esc(c.rclone_path)}" style="flex:1" title="rclone program (name or full path)"><button type="button" id="cl-check">Check</button></div></div>
+      <label>Step 2</label><div>Add your cloud account once: open a command prompt and run <code>rclone config</code> (choose “n” for new, give it a name like <i>gdrive</i>, pick the service and sign in).</div>
+      <label for="cl-acc">Step 3</label><div class="row"><select id="cl-acc"><option value="">Choose the account…</option></select><input type="text" id="cl-sub" placeholder="folder, e.g. GAZE" style="flex:1"></div>
+    </div>
+    <h3>2. What to back up</h3>
+    <div class="form"><span></span><div><select id="cl-what">
+        <option value="ai" ${c.upload === 'ai' ? 'selected' : ''}>Only alerts the AI recognized (a person, car…) — recommended</option>
+        <option value="events" ${c.upload === 'events' ? 'selected' : ''}>All alerts, including motion-only</option>
+        <option value="all" ${c.upload === 'all' ? 'selected' : ''}>Everything, including 24/7 recordings (needs a fast upload and lots of cloud space)</option></select></div></div>
+    <h3>3. Turn it on</h3>
+    <div class="form"><span></span><label class="check"><input type="checkbox" id="cl-on" ${c.enabled ? 'checked' : ''}> Back up to the cloud</label></div>
+    <div class="actions"><button type="button" id="cl-test">Test</button><button class="primary">Save</button></div><div id="cl-result" style="margin-top:10px"></div></form>`;
+  const sync = () => { method = document.querySelector('input[name=cl-m]:checked').value; $('cl-folder').hidden = method !== 'folder'; $('cl-rclone').hidden = method !== 'rclone'; };
+  document.querySelectorAll('input[name=cl-m]').forEach(r => r.onchange = sync); sync();
+  if (method === 'rclone' && c.remote) { const [acc, ...rest] = c.remote.split(':'); $('cl-acc').innerHTML += `<option value="${esc(acc)}" selected>${esc(acc)}</option>`; $('cl-sub').value = rest.join(':'); }
+  const remote = () => method === 'folder' ? val('cl-dir').trim() : (val('cl-acc') ? `${val('cl-acc')}:${val('cl-sub').trim()}` : '');
+  const form = () => ({enabled: chk('cl-on'), remote: remote(), upload: val('cl-what'), rclone_path: val('cl-path').trim() || 'rclone'});
+  const result = (ok, msg) => $('cl-result').innerHTML = `<span class="${ok ? 'ok' : 'err'}">${ok ? '✓' : '✗'} ${esc(msg)}</span>`;
+  $('cl-pick').onclick = async () => { const p = await pickFolder(val('cl-dir'), 'Choose the synced folder'); if (p) $('cl-dir').value = p; };
+  $('cl-check').onclick = async () => {
+    const r = await api('api/cloud/remotes', {method: 'POST', json: form()}).catch(e => ({ok: false, message: e.message}));
+    if (!r.ok) return result(false, r.message);
+    const cur = val('cl-acc');
+    $('cl-acc').innerHTML = '<option value="">Choose the account…</option>' + r.remotes.map(x => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('');
+    result(true, r.remotes.length ? `rclone works — ${r.remotes.length} account${r.remotes.length === 1 ? '' : 's'} found. Choose one in step 3.` : 'rclone works, but no account is set up yet — do step 2, then Check again.');
+  };
+  $('f-cloud').onsubmit = async (e) => { e.preventDefault(); if (chk('cl-on') && !remote()) return result(false, method === 'folder' ? 'Choose the synced folder first.' : 'Choose the rclone account first.'); await saveSettings({cloud: form()}); paintCloudStatus(); };
   $('cl-test').onclick = async () => {
     $('cl-result').innerHTML = '<span class="muted">Testing…</span>';
     const r = await api('api/cloud/test', {method: 'POST', json: form()}).catch(e => ({ok: false, message: e.message}));
-    $('cl-result').innerHTML = `<span class="${r.ok ? 'ok' : 'err'}">${r.ok ? '✓' : '✗'} ${esc(r.message)}</span>`;
+    result(r.ok, r.message);
   };
+  if (method === 'rclone') $('cl-check').click();
+  paintCloudStatus();
+}
+async function paintCloudStatus() {
+  const el = $('cl-status'); if (!el) return;
+  const st = await api('api/cloud/status').catch(() => null);
+  const c = settings.cloud;
+  if (!c.enabled) { el.innerHTML = '<span class="muted">● Backup is off.</span>'; return; }
+  el.innerHTML = !st ? '' : `<span class="${st.last_error ? 'err' : 'ok'}">●</span> Backing up to <b>${esc(c.remote)}</b> · ${st.uploaded} file${st.uploaded === 1 ? '' : 's'} uploaded since GAZE started`
+    + (st.last_upload ? ` · last ${fmtDate(st.last_upload)}` : '') + (st.waiting ? ` · ${st.waiting} waiting` : ' · up to date')
+    + (st.last_error ? `<div class="err">Problem: ${esc(st.last_error)}</div>` : '');
 }
 
 // ---------- backup ----------

@@ -252,6 +252,8 @@ pub struct AiConfig {
     /// Smart search: describe alert pictures with CLIP so they can be found
     /// with words ("kid with a red backpack").
     pub smart_search: bool,
+    /// CLIP model for smart search: ViT-B-32, ViT-B-16 or ViT-L-14.
+    pub smart_model: String,
 }
 
 impl Default for AiConfig {
@@ -267,6 +269,7 @@ impl Default for AiConfig {
             verify_model: String::new(),
             night_boost: true,
             smart_search: false,
+            smart_model: "ViT-B-32".into(),
         }
     }
 }

@@ -150,6 +150,11 @@ impl Monitor {
         let source = detect_gpu().await;
         info!("system monitor: GPU readings via {source:?}");
         let mut tick = tokio::time::interval(Duration::from_secs(FINE_SECS as u64));
+        // The card's real name (Windows counters only say "GPU").
+        #[cfg(windows)]
+        let card_name = windows_gpu_name().await;
+        #[cfg(not(windows))]
+        let card_name: Option<String> = None;
         let mut minute: Vec<Sample> = Vec::new();
         let mut last_gpu: Option<GpuReading> = None;
         let mut n = 0u64;
@@ -175,10 +180,21 @@ impl Monitor {
                 last_gpu = read_gpu(source).await;
             }
             let total = sys.total_memory().max(1);
+            // Windows' Task Manager shows "% Processor Utility" (it counts
+            // turbo clock speeds), which can differ a lot from plain busy
+            // time: use the same figure, and scale the NVR's share to match.
+            let mut cpu = sys.global_cpu_usage();
+            let mut nvr_cpu = nvr / cores as f32;
+            if let Some(u) = cpu_utility().await {
+                if cpu > 0.5 {
+                    nvr_cpu *= u / cpu;
+                }
+                cpu = u;
+            }
             let s = Sample {
                 t: chrono::Utc::now().timestamp(),
-                cpu: sys.global_cpu_usage(),
-                nvr_cpu: (nvr / cores as f32).min(100.0),
+                cpu: cpu.min(100.0),
+                nvr_cpu: nvr_cpu.min(100.0),
                 ram: sys.used_memory() as f32 * 100.0 / total as f32,
                 nvr_ram: (nvr_mem as f32 * 100.0 / total as f32).min(100.0),
                 gpu: last_gpu.as_ref().map(|g| g.util),
@@ -196,7 +212,9 @@ impl Monitor {
                 ram_used: sys.used_memory(),
                 ram_total: total,
                 nvr_ram_used: nvr_mem,
-                gpu_name: last_gpu.as_ref().and_then(|g| g.name.clone()),
+                gpu_name: card_name
+                    .clone()
+                    .or_else(|| last_gpu.as_ref().and_then(|g| g.name.clone())),
                 gpu_temp: last_gpu.as_ref().and_then(|g| g.temp),
                 gpu_source: (source != GpuSource::None).then(|| format!("{source:?}")),
             };
@@ -447,6 +465,56 @@ fn sysfs_busy() -> Option<f32> {
         .reduce(f32::max)
 }
 
+/// Windows: total CPU as Task Manager shows it ("% Processor Utility").
+#[cfg(windows)]
+async fn cpu_utility() -> Option<f32> {
+    let text = run_cmd(
+        "typeperf",
+        &[
+            "\\Processor Information(_Total)\\% Processor Utility",
+            "-sc",
+            "1",
+        ],
+        10,
+    )
+    .await?;
+    parse_single_counter(&text).map(|v| v.min(100.0))
+}
+
+#[cfg(not(windows))]
+async fn cpu_utility() -> Option<f32> {
+    None
+}
+
+/// The value of a one-counter `typeperf -sc 1` output.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_single_counter(text: &str) -> Option<f32> {
+    let data = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with('"'))
+        .nth(1)?;
+    data.rsplit("\",\"")
+        .next()?
+        .trim_matches('"')
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The graphics card's name on Windows (any vendor).
+#[cfg(windows)]
+pub async fn windows_gpu_name() -> Option<String> {
+    let text = run_cmd(
+        "powershell",
+        &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join ' + '"],
+        20,
+    )
+    .await?;
+    let n = text.trim().to_string();
+    (!n.is_empty()).then_some(n)
+}
+
 /// Windows "GPU Engine" performance counters (works for any GPU vendor):
 /// utilisation of the busiest engine type, as Task Manager shows it.
 async fn read_windows_counters() -> Option<GpuReading> {
@@ -521,6 +589,12 @@ mod tests {
         assert_eq!(g.name.as_deref(), Some("NVIDIA GeForce RTX 3060"));
         assert!((g.mem.unwrap() - 8.33).abs() < 0.1);
         assert_eq!(g.temp, Some(54.0));
+    }
+
+    #[test]
+    fn parses_single_counter() {
+        let text = "\r\n\"(PDH-CSV 4.0)\",\"\\\\PC\\Processor Information(_Total)\\% Processor Utility\"\r\n\"11/10/2026 09:00:00.000\",\"37.5\"\r\nExiting, please wait...";
+        assert_eq!(super::parse_single_counter(text), Some(37.5));
     }
 
     #[test]

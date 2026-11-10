@@ -19,10 +19,20 @@ pub struct Query {
     pub neutral: Vec<Vec<f32>>,
 }
 
-#[derive(Default)]
 pub struct SmartIndex {
     /// events folder → (event id → vectors)
     dirs: Mutex<HashMap<PathBuf, HashMap<String, Vec<Vec<i8>>>>>,
+    /// Index file name for the current model.
+    file: Mutex<String>,
+}
+
+impl Default for SmartIndex {
+    fn default() -> Self {
+        Self {
+            dirs: Mutex::default(),
+            file: Mutex::new("smart.jsonl".into()),
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -32,10 +42,19 @@ struct Line {
 }
 
 impl SmartIndex {
+    /// Use another model's index (different models' vectors don't mix).
+    pub fn set_file(&self, f: &str) {
+        let mut cur = self.file.lock().unwrap();
+        if *cur != f {
+            *cur = f.to_string();
+            self.dirs.lock().unwrap().clear();
+        }
+    }
+
     fn with<R>(&self, dir: &Path, f: impl FnOnce(&mut HashMap<String, Vec<Vec<i8>>>) -> R) -> R {
         let mut dirs = self.dirs.lock().unwrap();
         let m = dirs.entry(dir.to_path_buf()).or_insert_with(|| {
-            std::fs::read_to_string(dir.join("smart.jsonl"))
+            std::fs::read_to_string(dir.join(&*self.file.lock().unwrap()))
                 .map(|t| {
                     t.lines()
                         .filter_map(|l| serde_json::from_str::<Line>(l).ok())
@@ -63,7 +82,7 @@ impl SmartIndex {
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(store.dir().join("smart.jsonl"))
+            .open(store.dir().join(&*self.file.lock().unwrap()))
             && let Ok(s) = serde_json::to_string(&line)
         {
             let _ = writeln!(f, "{s}");
@@ -314,6 +333,9 @@ pub async fn run(mgr: Arc<Manager>) {
     tokio::time::sleep(Duration::from_secs(30)).await;
     let mut announced = false;
     loop {
+        // The chosen model, and its own index.
+        mgr.clip.set_model(&mgr.config().ai.smart_model);
+        mgr.smart.set_file(&mgr.clip.index_file());
         if mgr.config().ai.smart_search {
             let mut done = 0;
             let cutoff = chrono::Local::now() - chrono::Duration::days(60);

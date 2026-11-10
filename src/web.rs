@@ -115,6 +115,9 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/dashboard", put(put_dashboard))
         .route("/api/profiles", get(get_profiles).put(put_profiles))
         .route("/api/client", get(client_info))
+        .route("/api/discover", post(discover_now))
+        .route("/api/cloud/status", get(cloud_status))
+        .route("/api/cloud/remotes", post(cloud_remotes))
         .route("/api/alerts/seen", post(alerts_seen))
         .route("/api/alerts/seen-all", post(alerts_seen_all))
         .route("/api/alerts/unseen", post(alerts_unseen))
@@ -274,6 +277,7 @@ async fn status(
         "smart_search": m.clip.status(),
         "alerts_unseen": library::unseen_count(&m),
         "smart_search_on": cfg.ai.smart_search,
+        "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.lock().unwrap().len() } else { 0 },
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
     }))
@@ -453,6 +457,12 @@ async fn alerts_unseen(State(m): App, Json(r): Json<SeenReq>) -> Response {
         }
         None => err(StatusCode::NOT_FOUND, "alert not found"),
     }
+}
+
+async fn discover_now(State(m): App) -> Response {
+    let found = crate::discover::scan(&m).await;
+    *m.new_cameras.lock().unwrap() = found.iter().filter(|f| !f.added).cloned().collect();
+    Json(found).into_response()
 }
 
 async fn get_profiles(State(m): App) -> Response {
@@ -1168,6 +1178,17 @@ async fn grab_frame(
     })
 }
 
+async fn cloud_status() -> Response {
+    Json(crate::cloud::STATUS.lock().unwrap().clone()).into_response()
+}
+
+async fn cloud_remotes(Json(c): Json<crate::config::CloudConfig>) -> Response {
+    match crate::cloud::remotes(&c).await {
+        Ok(r) => Json(json!({ "ok": true, "remotes": r })).into_response(),
+        Err(e) => Json(json!({ "ok": false, "message": format!("{e:#}") })).into_response(),
+    }
+}
+
 async fn cloud_test(Json(c): Json<crate::config::CloudConfig>) -> Response {
     match crate::cloud::test(&c).await {
         Ok(msg) => Json(json!({ "ok": true, "message": msg })).into_response(),
@@ -1252,6 +1273,8 @@ async fn search(
     // Smart search: the words as a CLIP vector (the model loads on first use).
     let mut smart_note = "off".to_string();
     let smart = if m.config().ai.smart_search && !q.q.trim().is_empty() {
+        m.clip.set_model(&m.config().ai.smart_model);
+        m.smart.set_file(&m.clip.index_file());
         let words = async {
             anyhow::Ok(crate::smart::Query {
                 text: m.clip.embed_text(q.q.trim()).await?,

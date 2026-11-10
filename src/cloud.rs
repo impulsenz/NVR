@@ -1,5 +1,8 @@
-//! Optional backup of recordings to cloud storage with rclone
-//! (Google Drive, OneDrive, Dropbox, S3, Backblaze B2, ... — anything rclone supports).
+//! Optional backup of recordings to the cloud, two ways:
+//! - **a synced folder** on this computer (Google Drive, OneDrive or Dropbox
+//!   for desktop): files are copied there and that app uploads them;
+//! - **rclone** (Google Drive, OneDrive, Dropbox, S3, Backblaze B2, … — anything
+//!   rclone supports), no sync app needed.
 //!
 //! Finished files are copied to `<remote>/<camera id>/...`. Uploaded files are
 //! remembered in `<camera folder>/.cloud-uploaded`.
@@ -39,8 +42,68 @@ async fn rclone(cfg: &CloudConfig, args: &[&str], secs: u64) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// A folder on this computer (synced by a cloud app) rather than an rclone remote.
+pub fn is_local(remote: &str) -> bool {
+    let r = remote.trim();
+    r.starts_with('/')
+        || r.starts_with("\\\\")
+        || (r.len() > 2
+            && r.as_bytes()[1] == b':'
+            && (r.as_bytes()[2] == b'\\' || r.as_bytes()[2] == b'/'))
+}
+
+/// How backups are going (shown in Settings).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CloudStatus {
+    pub last_upload: Option<chrono::DateTime<chrono::Local>>,
+    pub uploaded: u64,
+    pub waiting: usize,
+    pub last_error: Option<String>,
+}
+
+pub static STATUS: std::sync::Mutex<CloudStatus> = std::sync::Mutex::new(CloudStatus {
+    last_upload: None,
+    uploaded: 0,
+    waiting: 0,
+    last_error: None,
+});
+
+/// rclone accounts set up with `rclone config`.
+pub async fn remotes(cfg: &CloudConfig) -> Result<Vec<String>> {
+    let out = rclone(cfg, &["listremotes"], 20).await?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim().trim_end_matches(':').to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// Copy one file into a synced folder (whole file first, then renamed).
+fn copy_local(src: &Path, dest: &Path) -> Result<()> {
+    if let Some(p) = dest.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let tmp = dest.with_extension("part");
+    std::fs::copy(src, &tmp)?;
+    std::fs::rename(&tmp, dest)?;
+    Ok(())
+}
+
 /// Check that the destination is reachable.
 pub async fn test(cfg: &CloudConfig) -> Result<String> {
+    if is_local(&cfg.remote) {
+        let dir = PathBuf::from(cfg.remote.trim());
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("can't use {}: {e}", dir.display()))?;
+        let probe = dir.join(".gaze-test");
+        std::fs::write(&probe, b"ok")
+            .map_err(|e| anyhow::anyhow!("can't write in {}: {e}", dir.display()))?;
+        let _ = std::fs::remove_file(probe);
+        return Ok(format!(
+            "{} is ready — your sync app uploads what GAZE copies there",
+            dir.display()
+        ));
+    }
     let version = rclone(cfg, &["version"], 20).await?;
     let remote = cfg.remote.trim();
     if remote.is_empty() {
@@ -136,21 +199,44 @@ pub async fn run(mgr: Arc<Manager>) {
             let dir = cfg.camera_dir(cam);
             let done = uploaded_list(&dir);
             let store = stores.get(&cam.id).map(|s| s.as_ref());
-            for (path, rel) in pending(&dir, &cfg.cloud.upload, store, &done) {
-                let dest = format!("{remote}/{}/{rel}", cam.id);
-                let src = path.display().to_string();
-                match rclone(&cfg.cloud, &["copyto", &src, &dest], 3600).await {
-                    Ok(_) => {
+            let todo = pending(&dir, &cfg.cloud.upload, store, &done);
+            STATUS.lock().unwrap().waiting = todo.len();
+            for (path, rel) in todo {
+                let res = if is_local(&remote) {
+                    let dest = PathBuf::from(&remote).join(&cam.id).join(&rel);
+                    let p = path.clone();
+                    tokio::task::spawn_blocking(move || copy_local(&p, &dest))
+                        .await
+                        .map_err(anyhow::Error::from)
+                        .and_then(|r| r)
+                } else {
+                    let dest = format!("{remote}/{}/{rel}", cam.id);
+                    rclone(
+                        &cfg.cloud,
+                        &["copyto", &path.display().to_string(), &dest],
+                        3600,
+                    )
+                    .await
+                    .map(|_| ())
+                };
+                match res {
+                    Ok(()) => {
                         mark_uploaded(&dir, &rel);
                         info!("[{}] cloud: uploaded {rel}", cam.name);
                         last_error.clear();
+                        let mut st = STATUS.lock().unwrap();
+                        st.last_upload = Some(chrono::Local::now());
+                        st.uploaded += 1;
+                        st.waiting = st.waiting.saturating_sub(1);
+                        st.last_error = None;
                     }
                     Err(e) => {
                         let msg = format!("{e:#}");
                         if msg != last_error {
                             warn!("[{}] cloud upload failed: {msg}", cam.name);
-                            last_error = msg;
+                            last_error = msg.clone();
                         }
+                        STATUS.lock().unwrap().last_error = Some(msg);
                         break;
                     }
                 }
@@ -162,6 +248,16 @@ pub async fn run(mgr: Arc<Manager>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_or_rclone() {
+        assert!(is_local(r"C:\Users\me\Google Drive\GAZE"));
+        assert!(is_local("D:/Backups"));
+        assert!(is_local(r"\\NAS\cameras"));
+        assert!(is_local("/home/me/Dropbox"));
+        assert!(!is_local("gdrive:NVR"));
+        assert!(!is_local("b2:bucket/cams"));
+    }
     use crate::events::{Event, EventStore, Label};
 
     #[test]

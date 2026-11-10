@@ -570,3 +570,14 @@ table.users .chips { margin: 0; }
 .zl { position: absolute; transform: translate(-50%, -50%); z-index: 2; pointer-events: none; background: rgba(0,0,0,.6); border: 1px solid; border-radius: 4px; padding: 0 6px; font-size: 12px; }
 .zone-item { border-left: 4px solid; background: var(--panel2); border-radius: 6px; padding: 8px 10px; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .zone-item .chips { margin: 0; }
+.scan-res { background: var(--panel2); border-radius: 8px; padding: 10px; margin: 8px 0 12px; }
+.scan-res table td { padding: 4px 8px; }
+.gpu-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.gpu-pct { min-width: 200px; text-align: right; }
+.gpu-pct span { font-size: 26px; font-weight: 700; }
+.gpu-pct .bar { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; margin: 4px 0; }
+.gpu-pct .bar div { height: 100%; background: var(--purple); }
+.cl-status { background: var(--panel2); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+.cl-methods { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)) !important; margin-bottom: 10px; }
+#f-cloud h3 { margin: 16px 0 8px; }
+.ai-explain ol { margin: 0 0 8px; padding-left: 20px; line-height: 1.5; } .ai-explain li { margin: 4px 0; }
