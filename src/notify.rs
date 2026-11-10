@@ -186,9 +186,28 @@ fn tags(e: &Event, sus: bool) -> &'static str {
     }
 }
 
-fn link(cfg: &NotifyConfig, e: &Event) -> Option<String> {
-    let base = cfg.link.trim().trim_end_matches('/');
-    (!base.is_empty()).then(|| format!("{base}/#alerts?open={}~{}", e.camera, e.id))
+/// Where tapping the notification goes: that alert in GAZE. Without an
+/// address in the settings, this computer's address on the home network.
+fn link(cfg: &NotifyConfig, listen: &str, e: &Event) -> Option<String> {
+    let base = match cfg.link.trim().trim_end_matches('/') {
+        "" => {
+            let port = listen.rsplit(':').next().unwrap_or("8080");
+            format!("http://{}:{port}", lan_ip()?)
+        }
+        b => b.to_string(),
+    };
+    Some(format!("{base}/#alerts?open={}~{}", e.camera, e.id))
+}
+
+/// This computer's address on the local network.
+pub fn lan_ip() -> Option<std::net::IpAddr> {
+    // No packet is sent: connecting a UDP socket only picks the route.
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.168.0.1:9")
+        .or_else(|_| s.connect("8.8.8.8:53"))
+        .ok()?;
+    let ip = s.local_addr().ok()?.ip();
+    (!ip.is_unspecified() && !ip.is_loopback()).then_some(ip)
 }
 
 /// Google Gemini looks at a few moments of the alert: what happened, and
@@ -277,6 +296,51 @@ async fn ask_gemini(
 /// The best picture of an alert, as a JPEG.
 fn picture(rt: &CameraRuntime, e: &Event) -> Option<Vec<u8>> {
     std::fs::read(rt.events.dir().join(e.thumb.as_ref()?)).ok()
+}
+
+/// The alert picture as the alert card shows it: a box around each
+/// recognized object with "PERSON 92%".
+fn alert_picture(rt: &CameraRuntime, e: &Event) -> Option<Vec<u8>> {
+    let raw = picture(rt, e)?;
+    let Ok(f) = crate::imgutil::decode_jpeg(&raw) else {
+        return Some(raw);
+    };
+    let labels: Vec<String> = e
+        .boxes
+        .iter()
+        .filter(|b| b.label != "motion")
+        .map(|b| format!("{} {:.0}%", b.label, b.score * 100.0))
+        .collect();
+    let mut marks: Vec<crate::draw::Mark> = e
+        .boxes
+        .iter()
+        .filter(|b| b.label != "motion")
+        .zip(&labels)
+        .map(|(b, l)| crate::draw::Mark {
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+            label: l,
+        })
+        .collect();
+    let fallback;
+    if marks.is_empty()
+        && let (Some([x, y, w, h]), Some(l)) = (e.focus, e.labels.first())
+    {
+        fallback = format!("{} {:.0}%", l.label, l.score * 100.0);
+        marks.push(crate::draw::Mark {
+            x,
+            y,
+            w,
+            h,
+            label: &fallback,
+        });
+    }
+    if marks.is_empty() {
+        return Some(raw);
+    }
+    crate::draw::boxes(&f, &marks).jpeg(85).ok().or(Some(raw))
 }
 
 struct Notifier {
@@ -412,8 +476,8 @@ impl Notifier {
                         },
                         tags: tags(&e, sus.is_some()),
                         priority: if sus.is_some() { 4 } else { 3 },
-                        click: link(n, &e),
-                        picture: Some(pic),
+                        click: link(n, &cfg.server.listen, &e),
+                        picture: alert_picture(&rt, &e).or(Some(pic)),
                     };
                     if self.report(send(n, msg).await) {
                         info!("[{}] notification sent: {}", rt.cfg.name, what(&e));
@@ -519,8 +583,8 @@ impl Notifier {
                     body,
                     tags: tags(&e, sus.is_some()),
                     priority: if sus.is_some() { 5 } else { 2 },
-                    click: link(n, &e),
-                    picture: picture(&rt, &e),
+                    click: link(n, &cfg.server.listen, &e),
+                    picture: alert_picture(&rt, &e),
                 };
                 if self.report(send(n, msg).await) {
                     self.last.insert(rt.cfg.id.clone(), now);

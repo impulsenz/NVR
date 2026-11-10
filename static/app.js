@@ -4138,7 +4138,7 @@ async function renderNotify(body) {
       <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
         <div class="hint">What happened, who was recognised, number plates, parcels — from smart search and faces &amp; plates, or from Gemini.</div></div>
       <label for="n-link">Open GAZE at</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
-        <div class="hint">Tapping a notification opens this address at the alert. Use an address that works away from home, e.g. your computer's Tailscale name.</div></div>
+        <div class="hint">Tapping a notification opens that alert in GAZE. Left empty, this computer's address on your home network is used (works on your Wi-Fi); for away from home use e.g. your computer's Tailscale name.</div></div>
     </div></div>
     <div class="card"><h2>Gemini summaries <span class="muted small">(optional)</span></h2>
       <div class="form">

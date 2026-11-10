@@ -9,6 +9,7 @@ mod cloud;
 mod config;
 mod detect;
 mod discover;
+mod draw;
 mod events;
 mod ffmpeg;
 mod finalize;

@@ -22,7 +22,7 @@
 - **Phone notifications** (ntfy): the alert picture right away, then a summary of what happened (with names, plates, parcels). Optional Google Gemini summaries that also judge what's suspicious; suspicious activity is sent with high priority. One per camera every few minutes (shorter at night); tapping opens the alert.
 - **Smart load balancing**: when the GPU is busy, new live views, conversions and exports run on the CPU, and motion detection moves its decoding to whichever has room (Settings → GPU acceleration).
 - **Camera AI tab**: object recognition, stationary objects (choose which kinds) and package delivery with its own drawing window now have their own tab in camera settings.
-- **Notifications wait for the AI's description** and send it with the picture.
+- **Notifications wait for the AI's description** and send it with the picture, which now shows a box and “PERSON 92%” on each object like the alert cards; tapping opens the alert (this computer's home-network address is used when none is set).
 - **New faces & number plates inbox** (Settings → People & vehicles): unknown faces (grouped by person) and plates from recent alerts — assign them to someone, or hide them.
 - **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
