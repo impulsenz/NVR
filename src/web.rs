@@ -1636,7 +1636,7 @@ async fn play_converted(
     };
     let cfg = m.config();
     let hw = &cfg.hardware;
-    let gpu = hw.uses_gpu();
+    let gpu = hw.uses_gpu() && !crate::load::gpu_too_busy("video conversion");
     let encoder = if gpu {
         hw.resolved_encoder()
     } else {

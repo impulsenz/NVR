@@ -322,7 +322,7 @@ impl Live {
         let url = self.url().to_string();
         let mut cmd = crate::load::cmd(&self.env.ffmpeg_path);
         cmd.args(["-hide_banner", "-loglevel", "error"]);
-        if use_gpu {
+        if use_gpu && !crate::load::gpu_too_busy("live view decoding") {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
         let mut child = cmd

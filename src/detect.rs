@@ -334,8 +334,10 @@ impl Detector {
         let use_gpu = *use_gpu_now;
         // Automatic CPU/GPU choice (when a GPU is set up but sub-streams are
         // not forced onto it): move when one side is overloaded for a while.
-        let auto =
-            self.env.hardware.hwaccel != "none" && !self.env.hardware.gpu_substreams && !gpu_failed;
+        let auto = crate::load::balance()
+            && self.env.hardware.hwaccel != "none"
+            && !self.env.hardware.gpu_substreams
+            && !gpu_failed;
         let mut strain_since: Option<Instant> = None;
         let d = &self.cam.detect;
         let (w, h) = self.frame_size().await;

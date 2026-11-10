@@ -47,6 +47,8 @@ pub struct Current {
     pub gpu_temp: Option<f32>,
     /// How the GPU is read, e.g. "nvidia-smi".
     pub gpu_source: Option<String>,
+    /// Video jobs moved to the CPU because the GPU was busy.
+    pub moved_to_cpu: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -217,6 +219,7 @@ impl Monitor {
                     .or_else(|| last_gpu.as_ref().and_then(|g| g.name.clone())),
                 gpu_temp: last_gpu.as_ref().and_then(|g| g.temp),
                 gpu_source: (source != GpuSource::None).then(|| format!("{source:?}")),
+                moved_to_cpu: crate::load::moved_to_cpu(),
             };
             {
                 let mut f = self.fine.lock().unwrap();

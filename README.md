@@ -128,6 +128,9 @@ viewing, finding footage, and managing everything, all from the browser.
   open the timeline (older days are prepared when you open them).
 
 **System & logs**
+- **Smart load balancing** (on by default): when the GPU is busy (a game, another program) and the
+  processor has room, new live views, conversions and exports run on the CPU, and motion detection moves
+  its decoding to whichever has capacity — and back. The System page shows how often work was moved.
 - **Tasks**: what's running in the background (AI work on alerts, model downloads, previews, cloud
   backup) with progress, and buttons to rebuild previews or refresh alert pictures from the HD recordings.
 - On Windows GAZE runs **without a console window**: an icon by the clock opens it (click) and has a

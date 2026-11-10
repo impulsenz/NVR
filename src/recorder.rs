@@ -184,6 +184,8 @@ impl Recorder {
         }
         if cam.reencode() {
             let hw = &env.hardware;
+            let use_gpu = use_gpu
+                && !crate::load::gpu_too_busy(&format!("{} recording conversion", cam.name));
             let (encoder, keep) = if use_gpu {
                 (hw.resolved_encoder(), ffmpeg::full_gpu_pipeline(hw))
             } else {

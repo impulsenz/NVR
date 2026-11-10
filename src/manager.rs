@@ -380,6 +380,7 @@ pub struct Manager {
 
 impl Manager {
     pub fn new(cfg_path: PathBuf, data_dir: PathBuf, config: Config) -> Arc<Self> {
+        crate::load::set_balance(config.hardware.balance);
         let _ = std::fs::create_dir_all(data_dir.join("tmp"));
         let ai = Arc::new(AiHandle::new(config.ai.clone(), &data_dir));
         let data_dir_for_clip = data_dir.clone();
@@ -698,6 +699,7 @@ impl Manager {
             cfg.display = d;
         }
         if let Some(h) = up.hardware {
+            crate::load::set_balance(h.balance);
             cfg.hardware = h;
         }
         if let Some(mut a) = up.ai {

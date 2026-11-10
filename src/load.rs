@@ -3,7 +3,7 @@
 //! often under heavy load, and video decoding for motion detection moves
 //! between the CPU and the GPU depending on which one has capacity.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 static CPU: AtomicU32 = AtomicU32::new(0);
@@ -27,6 +27,38 @@ pub fn gpu() -> Option<u32> {
         0 => None,
         g => Some(g - 1),
     }
+}
+
+/// Smart load balancing (Settings → GPU acceleration).
+static BALANCE: AtomicBool = AtomicBool::new(true);
+/// Video jobs started on the CPU because the GPU was busy.
+static MOVED: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_balance(on: bool) {
+    BALANCE.store(on, Ordering::Relaxed);
+}
+
+pub fn balance() -> bool {
+    BALANCE.load(Ordering::Relaxed)
+}
+
+pub fn moved_to_cpu() -> u64 {
+    MOVED.load(Ordering::Relaxed)
+}
+
+/// Is the GPU too busy for new video work while the CPU has room? Counts
+/// (and logs) the job `what` as moved to the CPU when so.
+pub fn gpu_too_busy(what: &str) -> bool {
+    let busy = balance() && gpu().is_some_and(|g| g >= 85) && cpu() < 75;
+    if busy {
+        MOVED.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(
+            "load balancing: GPU at {}%, {what} runs on the CPU (CPU {}%)",
+            gpu().unwrap_or(0),
+            cpu()
+        );
+    }
+    busy
 }
 
 /// Wait (up to `max`) while the CPU is busier than `limit` %.
@@ -105,6 +137,17 @@ mod tests {
         update(50.0, None);
         assert_eq!(pick_decoder(Pick::Cpu), Pick::Cpu);
         assert_eq!(ai_slowdown(), 1.0);
+        // New video work: CPU when the GPU is busy and the CPU has room.
+        update(40.0, Some(92.0));
+        assert!(gpu_too_busy("test"));
+        update(90.0, Some(92.0));
+        assert!(!gpu_too_busy("test"), "both busy: stay where configured");
+        update(40.0, Some(50.0));
+        assert!(!gpu_too_busy("test"));
+        set_balance(false);
+        update(40.0, Some(99.0));
+        assert!(!gpu_too_busy("test"), "balancing off");
+        set_balance(true);
         update(0.0, None);
     }
 }

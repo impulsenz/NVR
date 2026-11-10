@@ -187,6 +187,9 @@ pub struct HardwareConfig {
     /// worth it: copying frames back from the GPU costs more than decoding
     /// small streams on the CPU.
     pub gpu_substreams: bool,
+    /// Smart load balancing: when the GPU is busy, new video work goes to
+    /// the CPU (and motion-detection decoding moves back and forth).
+    pub balance: bool,
 }
 
 impl Default for HardwareConfig {
@@ -196,6 +199,7 @@ impl Default for HardwareConfig {
             encoder: "auto".into(),
             device: String::new(),
             gpu_substreams: false,
+            balance: true,
         }
     }
 }
