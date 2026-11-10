@@ -598,67 +598,129 @@ pub struct SpriteInfo {
     pub version: u64,
 }
 
-pub const SPRITE_W: u32 = 480;
-pub const SPRITE_H: u32 = 270;
-const SPRITE_COLS: u32 = 5;
-const SPRITE_PER_PAGE: u32 = 25;
-
-/// Pictures through a recording for scrubbing and time-lapse previews:
-/// pages of 5×5 pictures, 480×270 each, saved as `<prefix>-000.jpg`, ...
-/// Only keyframes are decoded, so this is fast even for long files.
+/// Preview pictures ("sprites") for scrubbing and time-lapse: pages of
+/// 10×10 small pictures, saved as `<prefix>-000.jpg`, `<prefix>-001.jpg` …
+///
+/// `dense`: one picture per second, every frame decoded (for the light
+/// sub-stream copies). Otherwise keyframes only (fast for big HD files),
+/// one picture per 2 seconds. Pictures are put together here rather than
+/// by ffmpeg, so the count is exact (no black filler pictures) and a
+/// picture that decoded black is replaced by the previous one.
 pub async fn sprite(
     ffmpeg: &str,
     file: &std::path::Path,
     prefix: &std::path::Path,
+    dense: bool,
 ) -> Result<SpriteInfo> {
-    let duration = duration(ffmpeg, file)
-        .await
-        .context("cannot read recording length")?;
-    let count = ((duration / 2.0).ceil() as u32).clamp(1, 300);
-    let interval = (duration / count as f64).max(0.5);
-    let (tw, th) = (SPRITE_W, SPRITE_H);
+    use tokio::io::AsyncReadExt;
+    const COLS: u32 = 10;
+    const PER_PAGE: u32 = 100;
+    let (tw, th) = (256u32, 144u32);
+    let duration = duration(ffmpeg, file).await.unwrap_or(0.0);
+    let interval = if dense { 1.0 } else { 2.0 };
     let vf = format!(
-        "fps=1/{interval:.3},scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:-1:-1,tile={SPRITE_COLS}x{}",
-        SPRITE_PER_PAGE / SPRITE_COLS
+        "fps=1/{interval},scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:-1:-1"
     );
-    let pattern = format!("{}-%03d.jpg", prefix.display());
-    let o = run(
-        crate::load::background(&mut Command::new(ffmpeg))
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-skip_frame",
-                "nokey",
-                "-i",
-            ])
-            .arg(file)
-            .args(["-an", "-vf", &vf, "-q:v", "5", "-start_number", "0"])
-            .arg(&pattern),
-        180,
-    )
-    .await?;
-    let first = std::path::PathBuf::from(format!("{}-000.jpg", prefix.display()));
-    if !o.status.success() || !first.exists() {
-        bail!("{}", first_error(&o.stderr));
+    let mut command = Command::new(ffmpeg);
+    let cmd = crate::load::background(&mut command);
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    if !dense {
+        cmd.args(["-skip_frame", "nokey"]);
     }
-    let pages = (0..)
-        .take_while(|i| std::path::Path::new(&format!("{}-{i:03}.jpg", prefix.display())).exists())
-        .count() as u32;
+    let mut child = cmd
+        .arg("-i")
+        .arg(file)
+        .args([
+            "-an", "-vf", &vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .context("starting ffmpeg for previews")?;
+    let mut out = child.stdout.take().context("no output")?;
+    let frame_len = (tw * th * 3) as usize;
+    let mut page: Vec<Vec<u8>> = Vec::new();
+    let mut last: Option<Vec<u8>> = None;
+    let (mut count, mut pages) = (0u32, 0u32);
+    let save = |tiles: Vec<Vec<u8>>, n: u32| {
+        let p = std::path::PathBuf::from(format!("{}-{n:03}.jpg", prefix.display()));
+        async move {
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let rows = (tiles.len() as u32).div_ceil(COLS);
+                let (w, h) = (COLS * tw, rows * th);
+                let mut img = vec![0u8; (w * h * 3) as usize];
+                for (i, t) in tiles.iter().enumerate() {
+                    let (cx, cy) = ((i as u32 % COLS) * tw, (i as u32 / COLS) * th);
+                    for y in 0..th {
+                        let dst = (((cy + y) * w + cx) * 3) as usize;
+                        let src = (y * tw * 3) as usize;
+                        img[dst..dst + (tw * 3) as usize]
+                            .copy_from_slice(&t[src..src + (tw * 3) as usize]);
+                    }
+                }
+                let jpg = crate::imgutil::encode_jpeg(&img, w, h, 70)?;
+                let tmp = p.with_extension("jpg.tmp");
+                std::fs::write(&tmp, jpg)?;
+                std::fs::rename(&tmp, &p)?;
+                Ok(())
+            })
+            .await?
+        }
+    };
+    let timeout = Duration::from_secs(600);
+    let started = Instant::now();
+    loop {
+        let mut buf = vec![0u8; frame_len];
+        match tokio::time::timeout(Duration::from_secs(60), out.read_exact(&mut buf)).await {
+            Ok(Ok(_)) => {}
+            _ => break,
+        }
+        // A picture that decoded as (nearly) solid black: keep the previous one.
+        let sample = buf.iter().step_by(37);
+        let (sum, n) = sample.fold((0u64, 0u64), |(s, n), v| (s + *v as u64, n + 1));
+        if sum / n.max(1) < 3
+            && let Some(prev) = &last
+        {
+            buf = prev.clone();
+        }
+        last = Some(buf.clone());
+        page.push(buf);
+        count += 1;
+        if page.len() as u32 == PER_PAGE {
+            save(std::mem::take(&mut page), pages).await?;
+            pages += 1;
+        }
+        if started.elapsed() > timeout {
+            break;
+        }
+    }
+    let _ = child.kill().await;
+    if !page.is_empty() {
+        save(page, pages).await?;
+        pages += 1;
+    }
+    if count == 0 {
+        bail!("no pictures could be read from the recording");
+    }
     let version = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     Ok(SpriteInfo {
         interval,
-        count: count.min(pages * SPRITE_PER_PAGE),
-        columns: SPRITE_COLS,
-        per_page: SPRITE_PER_PAGE,
+        count,
+        columns: COLS,
+        per_page: PER_PAGE,
         pages,
         tile_width: tw,
         tile_height: th,
-        duration,
+        duration: if duration > 0.0 {
+            duration
+        } else {
+            count as f64 * interval
+        },
         version,
     })
 }

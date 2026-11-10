@@ -129,7 +129,12 @@ pub fn commit(part: &Path, dest: &Path) -> std::io::Result<()> {
 pub fn repair_dir(dir: &Path, hours: u64) -> usize {
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(hours * 3600);
     let mut fixed = 0;
-    let mut dirs = vec![dir.to_path_buf(), dir.join("events"), dir.join(".buffer")];
+    let mut dirs = vec![
+        dir.to_path_buf(),
+        dir.join("events"),
+        dir.join(".buffer"),
+        dir.join("timeline"),
+    ];
     while let Some(d) = dirs.pop() {
         let Ok(rd) = std::fs::read_dir(&d) else {
             continue;

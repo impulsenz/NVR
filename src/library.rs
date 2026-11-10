@@ -309,6 +309,19 @@ pub fn recordings(rt: &CameraRuntime) -> Vec<Recording> {
     recs
 }
 
+/// The light sub-stream copy for the timeline (newest still growing).
+pub fn timeline_recordings(rt: &CameraRuntime) -> Vec<Recording> {
+    let mut recs = storage::list(&storage::timeline_dir(&rt.dir));
+    let live = rt
+        .timeline_recorder
+        .as_ref()
+        .is_some_and(|r| r.status().state == crate::recorder::RecState::Recording);
+    if live && let Some(r) = recs.first_mut() {
+        r.end = Local::now();
+    }
+    recs
+}
+
 pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
     let mut items = Vec::new();
     for rt in mgr.cameras() {
@@ -446,7 +459,7 @@ pub struct Segment {
     pub end: DateTime<Local>,
     pub url: String,
     pub name: String,
-    /// "recording" or "clip".
+    /// "recording" (as recorded), "sub" (light copy for the timeline) or "clip".
     pub kind: &'static str,
 }
 
@@ -481,6 +494,18 @@ pub fn timeline(
                 kind: "recording",
             })
             .collect();
+        segments.extend(
+            timeline_recordings(&rt)
+                .into_iter()
+                .filter(|r| r.end >= from && r.start <= to)
+                .map(|r| Segment {
+                    start: r.start,
+                    end: r.end,
+                    url: format!("media/{}/tl/{}", enc(id), enc(&r.name)),
+                    name: r.name,
+                    kind: "sub",
+                }),
+        );
         let events = rt.events.between(from, to);
         for e in &events {
             if let (Some(clip), Some(cs)) = (&e.clip, e.clip_start) {

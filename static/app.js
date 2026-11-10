@@ -1260,7 +1260,8 @@ const camTl = {
   playAt(T) {
     const segs = (this.data && this.data.segments) || [];
     const hit = (sg) => new Date(sg.start).getTime() <= T && T < new Date(sg.end).getTime() + 1000;
-    const sg = segs.find(x => x.kind === 'recording' && hit(x)) || segs.find(hit);
+    // The light stream 2 copy opens fastest; otherwise the recording.
+    const sg = segs.find(x => x.kind === 'sub' && hit(x)) || segs.find(x => x.kind === 'recording' && hit(x)) || segs.find(hit);
     if (!sg) { toast('No recorded footage at that time (camera offline or not recording).'); return; }
     playInFocus({camera: this.id, play: {url: sg.url, name: sg.name, kind: sg.kind, file_start: sg.start, offset: (T - new Date(sg.start).getTime()) / 1000}});
   },
@@ -1278,7 +1279,8 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
     pv.hidden = false;
     pv.style.left = Math.min(Math.max(x, 100), lane.clientWidth - 100) + 'px';
     pv.querySelector('.t').textContent = fmtDate(new Date(T));
-    const sg = camTl.data.segments.find(s => new Date(s.start).getTime() <= T && T < new Date(s.end).getTime() + 1000);
+    const hitT = (s) => new Date(s.start).getTime() <= T && T < new Date(s.end).getTime() + 1000;
+    const sg = camTl.data.segments.find(s => s.kind === 'sub' && hitT(s)) || camTl.data.segments.find(hitT);
     const im = pv.querySelector('.img');
     if (!sg) { im.style.backgroundImage = ''; return; }
     const sp = await spriteFor(camTl.id, sg);
@@ -1480,6 +1482,7 @@ function renderFilters() {
   pop.innerHTML = `<label class="check" style="display:flex"><input type="checkbox" data-all ${rec.cameras.size ? '' : 'checked'}> All cameras</label><hr style="border-color:var(--border)">` +
     status.cameras.map(c => `<label class="check" style="display:flex"><input type="checkbox" value="${esc(c.id)}" ${rec.cameras.has(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('');
   pop.querySelectorAll('input').forEach(i => i.onchange = () => {
+    rec.prevCameras = null; tl.hd = null;
     if (i.dataset.all !== undefined) rec.cameras.clear();
     else if (i.checked) rec.cameras.add(i.value); else rec.cameras.delete(i.value);
     renderFilters(); reloadRec();
@@ -1740,12 +1743,19 @@ function nextSegment(c, s) {
   return c.segments.find(x => x !== s && x.kind === s.kind && Math.abs(new Date(x.start).getTime() - end) < 5000);
 }
 function segAt(c, T) {
-  // The newest recording of a camera that was recording when the timeline
+  // The newest file of a camera that was recording when the timeline
   // loaded is still growing: treat it as running up to now.
-  const last = c.segments.filter(s => s.kind === 'recording').slice(-1)[0];
-  const end = (s) => s === last && tl.loadedAt - new Date(s.end).getTime() < 90000 ? Date.now() : new Date(s.end).getTime() + 1000;
+  const lasts = new Set(['recording', 'sub'].map(k => c.segments.filter(s => s.kind === k).slice(-1)[0]));
+  const end = (s) => lasts.has(s) && tl.loadedAt - new Date(s.end).getTime() < 90000 ? Date.now() : new Date(s.end).getTime() + 1000;
   const hit = (s) => new Date(s.start).getTime() <= T && T < end(s);
-  return c.segments.find(s => s.kind === 'recording' && hit(s)) || c.segments.find(hit);
+  // Normally the light stream 2 copy (opens instantly); after clicking an
+  // alert, its full-quality footage until the alert is over.
+  const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
+  for (const k of hd ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip']) {
+    const s = c.segments.find(x => x.kind === k && hit(x));
+    if (s) return s;
+  }
+  return null;
 }
 // Keep the timeline current while looking at recent footage.
 setInterval(() => {
@@ -1800,13 +1810,17 @@ function tlSync(force) {
     v.playbackRate = tl.speed;
     if (tl.playing && v.paused) v.play().catch(() => {});
     if (!tl.playing && !v.paused) v.pause();
-    // Near the end of this file: load the next one in the other player.
-    const left = (new Date(s.end).getTime() - tl.T) / 1000;
-    const nx = left < 10 * Math.max(1, tl.speed) && nextSegment(c, s);
+    // Near the end of this file (or of the alert's HD part): load what comes
+    // next in the other player, at the right moment, for a seamless switch.
+    const segEnd = new Date(s.end).getTime();
+    const boundary = tl.hd && tl.hd.camera === c.camera && s.kind !== 'sub' ? Math.min(segEnd, tl.hd.until) : segEnd;
+    const left = (boundary - tl.T) / 1000;
+    const nx = left < 10 * Math.max(1, tl.speed) && segAt(c, boundary + 100);
     const other = el._vids[1 - el._active];
-    if (nx && other.dataset.url !== nx.url) {
+    if (nx && nx.url !== s.url && other.dataset.url !== nx.url) {
       other.dataset.url = nx.url; other.preload = 'auto'; other.src = nx.url;
-      other.addEventListener('loadedmetadata', () => { other.currentTime = 0; }, {once: true});
+      const at = Math.max(0, (boundary - new Date(nx.start).getTime()) / 1000);
+      other.addEventListener('loadedmetadata', () => { other.currentTime = at; }, {once: true});
     }
   }
   drawHead();
@@ -1840,10 +1854,28 @@ function allEvents() { return tl.data.flatMap(c => c.events).map(e => new Date(e
 $('tl-prev-ev').onclick = () => { const e = allEvents().filter(t => t < tl.T - 4000).pop(); if (e) jumpTo(e - 3000); };
 $('tl-next-ev').onclick = () => { const e = allEvents().find(t => t > tl.T + 4000); if (e) jumpTo(e - 3000); };
 // Watch one alert: that camera's video large (others hidden), from just before it.
-function tlShowEvent(camId, T) {
-  tlSolo(camId);
-  jumpTo(T - 3000);
+// Watch one alert: just that camera (the camera choice follows; "← All
+// cameras" goes back), in full quality from just before the alert, then on
+// into the light stream 2 recording without a break.
+async function tlShowEvent(camId, T) {
+  const c = tl.data.find(x => x.camera === camId);
+  const e = c && c.events.find(x => Math.abs(new Date(x.start).getTime() - T) < 1000);
+  const clip = c && c.segments.find(s => s.kind === 'clip' && new Date(s.start).getTime() <= T && new Date(s.end).getTime() > T);
+  const until = clip ? new Date(clip.end).getTime() : (e ? new Date(e.end).getTime() + 10000 : T + 30000);
+  tl.hd = {camera: camId, from: T - 3000, until};
+  if (!(rec.cameras.size === 1 && rec.cameras.has(camId))) {
+    if (!rec.prevCameras) rec.prevCameras = new Set(rec.cameras);
+    rec.cameras = new Set([camId]);
+    renderFilters();
+  }
+  tl.jump = T;
+  await loadTimeline();
   tlPlay(true);
+}
+function tlBackToAll() {
+  rec.cameras = rec.prevCameras || new Set();
+  rec.prevCameras = null; tl.hd = null;
+  renderFilters(); loadTimeline();
 }
 function tlSolo(camId) {
   tl.solo = camId || null;
@@ -1859,7 +1891,11 @@ function jumpTo(T) { tl.T = T; if (T < tl.winStart || T > tl.winStart + tl.zoom 
 $('tl-in').onclick = () => { tl.inT = tl.T; if (tl.outT != null && tl.outT <= tl.inT) tl.outT = null; drawTimeline(); };
 $('tl-out').onclick = () => { tl.outT = tl.T; if (tl.inT == null || tl.inT >= tl.outT) tl.inT = tl.outT - 30000; drawTimeline(); };
 $('tl-clear').onclick = () => { tl.inT = tl.outT = null; drawTimeline(); };
+$('tl-back').onclick = tlBackToAll;
 
+function selStyle(pct) {
+  return `left:calc(var(--tl-label) + (100% - var(--tl-label)) * ${pct(tl.inT) / 100});width:calc((100% - var(--tl-label)) * ${(pct(tl.outT) - pct(tl.inT)) / 100})`;
+}
 function drawTimeline() {
   const box = $('tl'), W0 = tl.winStart, span = tl.zoom * 1000;
   const pct = (t) => ((t - W0) / span * 100);
@@ -1885,12 +1921,13 @@ function drawTimeline() {
     }
     rows += `<div class="tl-row"><div class="label" title="${esc(c.name)}">${esc(c.name)}</div><div class="lane">${lane}</div></div>`;
   }
-  const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="left:calc(120px + (100% - 120px) * ${pct(tl.inT) / 100});width:calc((100% - 120px) * ${(pct(tl.outT) - pct(tl.inT)) / 100})"></div>` : '';
+  const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="${selStyle(pct)}"><div class="tl-h in" title="Drag to change the clip start"></div><div class="tl-h out" title="Drag to change the clip end"></div></div>` : '';
   box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"></div>`;
   box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
   // Clip export
   const has = tl.inT != null && tl.outT != null;
   $('tl-clear').hidden = !has;
+  $('tl-back').hidden = !rec.prevCameras;
   $('tl-sel-info').textContent = has ? `Clip ${fmtTime(new Date(tl.inT))} – ${fmtTime(new Date(tl.outT))} (${fmtClock((tl.outT - tl.inT) / 1000)})` : '';
   $('tl-export').innerHTML = has ? tl.data.map(c => `<a class="btn small" href="api/export?camera=${enc(c.camera)}&from=${enc(new Date(tl.inT).toISOString())}&to=${enc(new Date(tl.outT).toISOString())}">⇩ ${esc(c.name)}</a>`).join('') : '';
   drawHead();
@@ -1899,7 +1936,7 @@ function drawHead() {
   const h = $('tl-head'); if (!h) return;
   const p = (tl.T - tl.winStart) / (tl.zoom * 1000);
   h.hidden = p < 0 || p > 1;
-  h.style.left = `calc(120px + (100% - 120px) * ${p})`;
+  h.style.left = `calc(var(--tl-label) + (100% - var(--tl-label)) * ${p})`;
   $('tl-time').textContent = fmtDate(new Date(tl.T));
 }
 
@@ -1912,7 +1949,11 @@ function drawHead() {
     const r = lane.getBoundingClientRect();
     return tl.winStart + Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1) * tl.zoom * 1000;
   };
+  let handle = null;
   box.addEventListener('pointerdown', (e) => {
+    // Clip start / end handles: drag to change the clip.
+    const hd = e.target.closest('.tl-h');
+    if (hd) { e.preventDefault(); handle = hd.classList.contains('in') ? 'in' : 'out'; box.setPointerCapture(e.pointerId); return; }
     // An alert marker or symbol: watch that alert on that camera.
     const mark = e.target.closest('.ev');
     if (mark) { e.preventDefault(); tlShowEvent(mark.dataset.cam, +mark.dataset.t); return; }
@@ -1921,8 +1962,21 @@ function drawHead() {
     box.setPointerCapture(e.pointerId);
     tl.T = t; drawHead(); previewAll();
   });
-  box.addEventListener('pointermove', (e) => { if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewAll(); });
+  box.addEventListener('pointermove', (e) => {
+    if (handle) {
+      const t = Math.min(tAt(e), Date.now());
+      if (handle === 'in') tl.inT = Math.min(t, tl.outT - 1000); else tl.outT = Math.max(t, tl.inT + 1000);
+      const pct = (x) => ((x - tl.winStart) / (tl.zoom * 1000) * 100);
+      const sel = box.querySelector('.tl-sel'); if (sel) sel.style.cssText = selStyle(pct);
+      $('tl-sel-info').textContent = `Clip ${fmtTime(new Date(tl.inT))} – ${fmtTime(new Date(tl.outT))} (${fmtClock((tl.outT - tl.inT) / 1000)})`;
+      // Show the picture at the handle while dragging.
+      tl.T = handle === 'in' ? tl.inT : tl.outT; drawHead(); previewAll();
+      return;
+    }
+    if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewAll();
+  });
   const end = () => {
+    if (handle) { handle = null; document.querySelectorAll('#tl-videos .sprite').forEach(s => s.hidden = true); drawTimeline(); tlSync(true); return; }
     if (!drag) return; drag = false;
     document.querySelectorAll('#tl-videos .sprite').forEach(s => s.hidden = true);
     tlSync(true); if (was) tlPlay(true);
@@ -1933,7 +1987,8 @@ function drawHead() {
 async function spriteFor(cam, seg) {
   const key = seg.url;
   if (!tl.sprites.has(key)) {
-    tl.sprites.set(key, api(`api/sprite/${enc(cam)}/${seg.kind === 'clip' ? 'clip' : 'rec'}/${enc(seg.name)}`).then(preloadSprite).catch(() => null));
+    const kind = {clip: 'clip', sub: 'tl'}[seg.kind] || 'rec';
+    tl.sprites.set(key, api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`).then(preloadSprite).catch(() => null));
   }
   return tl.sprites.get(key);
 }
@@ -1943,7 +1998,7 @@ function prefetchSprites() {
   const gen = tl.pfGen = (tl.pfGen || 0) + 1;
   const a = tl.winStart, b = a + tl.zoom * 1000;
   const list = [];
-  for (const c of tl.data) for (const sg of c.segments) {
+  for (const c of tl.data) for (const sg of c.segments.filter(x => !(x.kind === 'recording' && c.segments.some(y => y.kind === 'sub')))) {
     const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
     if (s1 >= a && s0 <= b) list.push({cam: c.camera, sg, d: Math.abs((s0 + s1) / 2 - tl.T)});
   }

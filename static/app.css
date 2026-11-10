@@ -184,11 +184,11 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 .tl-videos { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .tl-videos .surface { aspect-ratio: 16/9; }
 .tl-videos .sprite { position: absolute; inset: 0; background-repeat: no-repeat; background-color: #000; z-index: 1; }
-.tl { position: relative; margin-top: 12px; user-select: none; touch-action: none; }
-.tl-axis { position: relative; height: 22px; margin-left: 120px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+.tl { --tl-label: 120px; position: relative; margin-top: 12px; user-select: none; touch-action: none; }
+.tl-axis { position: relative; height: 22px; margin-left: var(--tl-label); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
 .tl-axis span { position: absolute; top: 3px; transform: translateX(-50%); white-space: nowrap; }
 .tl-row { display: flex; align-items: center; height: 30px; border-bottom: 1px solid var(--border); }
-.tl-row .label { width: 120px; flex: none; padding-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.tl-row .label { width: var(--tl-label); flex: none; padding-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .tl-row .lane { position: relative; flex: 1; height: 100%; background: var(--panel); cursor: crosshair; }
 .tl-row .seg { position: absolute; top: 8px; height: 14px; background: #2d5a3a; border-radius: 2px; }
 .tl-row .seg.clip { background: #5b3f8f; }
@@ -391,7 +391,7 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
   .ctl-lane { height: 64px; }
   .ctl-lane .ic { font-size: 22px; top: 0; }
   .tl-row { height: 44px; }
-  .tl-row .label { width: 84px; }
+  .tl { --tl-label: 84px; }
   .tl-row .ev .ic { font-size: 18px; top: -2px; }
   .legend { font-size: 13px; }
 
@@ -487,3 +487,10 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 /* Clip handles: easier to grab */
 .scrub .handle { cursor: ew-resize; }
 .scrub .handle::before { content: ""; position: absolute; left: -10px; right: -10px; top: -8px; bottom: -8px; }
+
+/* Timeline clip handles */
+.tl-sel { pointer-events: none; }
+.tl-h { position: absolute; top: 0; bottom: 0; width: 14px; pointer-events: auto; cursor: ew-resize; z-index: 3; }
+.tl-h::after { content: ""; position: absolute; top: 40%; height: 26px; left: 4px; width: 6px; border-radius: 3px; background: var(--amber); box-shadow: 0 0 0 1px #111; }
+.tl-h.in { left: -8px; }
+.tl-h.out { right: -8px; }

@@ -116,6 +116,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/live/ws", get(live_ws))
         .route("/media/{id}/rec/{name}", get(serve_recording))
         .route("/media/{id}/events/{name}", get(serve_event_file))
+        .route("/media/{id}/tl/{name}", get(serve_timeline_file))
         .route("/media/{id}/thumb/{name}", get(recording_thumb))
         .route("/media/{id}/play/{kind}/{name}", get(play_converted))
         .route("/media/{id}/sprite/{kind}/{name}", get(sprite_image))
@@ -1297,6 +1298,18 @@ async fn serve_recording(
     }
 }
 
+async fn serve_timeline_file(
+    State(m): App,
+    Path((id, name)): Path<(String, String)>,
+    req: Request,
+) -> Response {
+    let c = camera!(m, id);
+    match storage::resolve(&storage::timeline_dir(&c.dir), &name) {
+        Ok(p) => serve_file(p, req, Some(name), false).await,
+        Err(e) => err(StatusCode::NOT_FOUND, e),
+    }
+}
+
 async fn serve_event_file(
     State(m): App,
     Path((id, name)): Path<(String, String)>,
@@ -1417,6 +1430,7 @@ fn media_path(
 ) -> anyhow::Result<PathBuf> {
     match kind {
         "clip" => storage::resolve(c.events.dir(), name),
+        "tl" => storage::resolve(&storage::timeline_dir(&c.dir), name),
         _ => storage::resolve(&c.dir, name),
     }
 }
@@ -1492,7 +1506,8 @@ async fn ensure_sprite(
             }
         }
     }
-    let info = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &prefix).await?;
+    // The light timeline copies get one picture per second.
+    let info = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &prefix, kind == "tl").await?;
     std::fs::write(&meta, serde_json::to_vec(&info)?)?;
     Ok((prefix, info))
 }
@@ -1514,13 +1529,22 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                 DateTime<Local>,
             )> = Vec::new();
             for c in m.cameras() {
-                let recs = library::recordings(&c);
-                for r in recs.iter().filter(|r| r.end >= since) {
-                    // Skip the file still being written (it keeps growing).
-                    if (Local::now() - r.end).num_seconds() < 30 {
-                        continue;
+                // Cameras with a light timeline copy: previews from that
+                // (cheap, also for the file still being recorded, refreshed
+                // each round). Otherwise from the recordings themselves.
+                let copies = library::timeline_recordings(&c);
+                if !copies.is_empty() {
+                    for r in copies.iter().filter(|r| r.end >= since) {
+                        todo.push((c.clone(), "tl", r.name.clone(), r.start));
                     }
-                    todo.push((c.clone(), "rec", r.name.clone(), r.start));
+                } else {
+                    for r in library::recordings(&c).iter().filter(|r| r.end >= since) {
+                        // Skip the file still being written (it keeps growing).
+                        if (Local::now() - r.end).num_seconds() < 30 {
+                            continue;
+                        }
+                        todo.push((c.clone(), "rec", r.name.clone(), r.start));
+                    }
                 }
                 for e in c.events.between(since, Local::now()) {
                     if let Some(clip) = e.clip {

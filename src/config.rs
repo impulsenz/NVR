@@ -680,6 +680,9 @@ pub struct CameraConfig {
     pub retention_days: u64,
     /// Space this camera may use in GB (0 = no per-camera limit).
     pub max_storage_gb: f64,
+    /// When recording the main stream 24/7: also keep a light sub-stream copy
+    /// for fast timeline browsing and previews.
+    pub timeline_copy: bool,
     pub detect: DetectConfig,
     pub osd: OsdConfig,
     pub view: ViewConfig,
@@ -705,6 +708,7 @@ impl Default for CameraConfig {
             storage_dir: String::new(),
             retention_days: 0,
             max_storage_gb: 0.0,
+            timeline_copy: true,
             detect: DetectConfig::default(),
             osd: OsdConfig::default(),
             view: ViewConfig::default(),

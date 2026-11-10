@@ -208,6 +208,11 @@ impl Candidate {
 
 /// Apply retention rules once across all cameras. The newest recording of
 /// each camera (possibly still being written) is never deleted.
+/// Where a camera's light sub-stream copy for the timeline is kept.
+pub fn timeline_dir(camera_dir: &Path) -> PathBuf {
+    camera_dir.join("timeline")
+}
+
 pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize {
     let now = Local::now();
     let mut removed = 0;
@@ -260,6 +265,20 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
                 },
             })
             .collect();
+        // The timeline copy ages out with the recordings.
+        let tdir = timeline_dir(&dir);
+        let mut trecs = list(&tdir);
+        if !trecs.is_empty() {
+            trecs.remove(0);
+        }
+        cands.extend(trecs.into_iter().map(|r| Candidate {
+            start: r.start,
+            size: r.size,
+            item: Item::File {
+                dir: tdir.clone(),
+                name: r.name,
+            },
+        }));
         if let Some(store) = &store {
             for e in store.all() {
                 if let Some(clip) = &e.clip {

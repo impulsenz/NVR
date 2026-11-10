@@ -8,6 +8,7 @@ mod config;
 mod detect;
 mod events;
 mod ffmpeg;
+mod finalize;
 mod fsbrowse;
 mod imgutil;
 mod library;
@@ -97,6 +98,7 @@ async fn main() -> Result<()> {
     tokio::spawn(cloud::run(mgr.clone()));
     tokio::spawn(web::prebuild_timelapse(mgr.clone()));
     tokio::spawn(smart::run(mgr.clone()));
+    tokio::spawn(finalize::run(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

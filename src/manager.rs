@@ -55,6 +55,8 @@ pub struct CameraRuntime {
     pub recorder: Option<Arc<Recorder>>,
     /// Full-quality pre-event buffer recorder, in event-clip modes.
     pub buffer_recorder: Option<Arc<Recorder>>,
+    /// Light sub-stream copy for the timeline (HD 24/7 cameras).
+    pub timeline_recorder: Option<Arc<Recorder>>,
     pub detector: Mutex<Option<Arc<Detector>>>,
     pub live_sub: Arc<Live>,
     pub live_main: Arc<Live>,
@@ -146,7 +148,29 @@ impl CameraRuntime {
         } else {
             (None, None)
         };
-        for r in recorder.iter().chain(buffer_recorder.iter()) {
+        // HD 24/7: also record the sub-stream, for a timeline that opens and
+        // scrubs instantly (small files the browser can play directly).
+        let timeline_recorder = (cfg.timeline_copy
+            && cfg.has_sub()
+            && cfg.record_mode.continuous_stream() == Some(false))
+        .then(|| {
+            let mut c = cfg.clone();
+            c.transcode = false;
+            c.record_fps = 0;
+            let spec = RecSpec {
+                label: "timeline copy (sub-stream)",
+                relay: relay_sub.clone(),
+                dir: crate::storage::timeline_dir(&dir),
+                prefix: cfg.id.clone(),
+                segment_seconds: segment,
+            };
+            Recorder::new(c, spec, env.clone(), cancel.clone())
+        });
+        for r in recorder
+            .iter()
+            .chain(buffer_recorder.iter())
+            .chain(timeline_recorder.iter())
+        {
             tasks.push(tokio::spawn(r.clone().run()));
         }
 
@@ -187,6 +211,7 @@ impl CameraRuntime {
             dir,
             recorder,
             buffer_recorder,
+            timeline_recorder,
             detector: Mutex::new(detector),
             live_sub,
             live_main,
@@ -222,13 +247,23 @@ impl CameraRuntime {
     }
 
     pub fn pause(&self) {
-        for r in self.recorder.iter().chain(self.buffer_recorder.iter()) {
+        for r in self
+            .recorder
+            .iter()
+            .chain(self.buffer_recorder.iter())
+            .chain(self.timeline_recorder.iter())
+        {
             r.pause();
         }
     }
 
     pub fn resume(&self) {
-        for r in self.recorder.iter().chain(self.buffer_recorder.iter()) {
+        for r in self
+            .recorder
+            .iter()
+            .chain(self.buffer_recorder.iter())
+            .chain(self.timeline_recorder.iter())
+        {
             r.resume();
         }
     }
