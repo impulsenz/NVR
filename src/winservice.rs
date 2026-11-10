@@ -139,13 +139,6 @@ mod win {
             .is_some()
     }
 
-    /// Running right now?
-    pub fn running() -> bool {
-        manager(SC_MANAGER_CONNECT)
-            .and_then(|m| service(&m, SERVICE_QUERY_STATUS))
-            .is_some_and(|s| state(&s) == SERVICE_RUNNING)
-    }
-
     fn wait_state(s: &Handle, want: u32, max: Duration) -> bool {
         let t = Instant::now();
         while t.elapsed() < max {
@@ -436,9 +429,5 @@ mod win {
             },
         ];
         unsafe { StartServiceCtrlDispatcherW(table.as_ptr()) != 0 }
-    }
-
-    pub fn message(text: &str, error: bool) {
-        msg(text, error)
     }
 }

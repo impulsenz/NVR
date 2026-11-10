@@ -389,19 +389,20 @@ impl Relay {
             if level == "info" || level == "verbose" {
                 if msg.contains("Output #0") {
                     in_input = false;
-                } else if in_input && self.info.borrow().is_none() {
-                    if let Some(i) = parse_stream_line(msg) {
-                        info!(
-                            "[{}] {}: {} {}×{} {} fps",
-                            self.name,
-                            self.label,
-                            i.codec,
-                            i.width.unwrap_or(0),
-                            i.height.unwrap_or(0),
-                            i.fps.unwrap_or(0.0)
-                        );
-                        self.info.send_replace(Some(i));
-                    }
+                } else if in_input
+                    && self.info.borrow().is_none()
+                    && let Some(i) = parse_stream_line(msg)
+                {
+                    info!(
+                        "[{}] {}: {} {}×{} {} fps",
+                        self.name,
+                        self.label,
+                        i.codec,
+                        i.width.unwrap_or(0),
+                        i.height.unwrap_or(0),
+                        i.fps.unwrap_or(0.0)
+                    );
+                    self.info.send_replace(Some(i));
                 }
                 continue;
             }
@@ -548,7 +549,7 @@ impl Relay {
     /// players and browsers follow, without re-encoding.
     pub fn input_args(&self) -> Vec<String> {
         let mut a = Vec::new();
-        if self.rotate % 360 != 0 {
+        if !self.rotate.is_multiple_of(360) {
             // ffmpeg counts anticlockwise.
             a.extend([
                 "-display_rotation".to_string(),

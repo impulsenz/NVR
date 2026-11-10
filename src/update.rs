@@ -337,10 +337,14 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
             .cameras()
             .iter()
             .any(|c| c.detector().is_some_and(|d| d.status().event_active));
-        if st.available && mgr.config().update.auto && night && !busy && st.state == "idle" {
-            if let Err(e) = install().await {
-                warn!("automatic update failed: {e:#}");
-            }
+        if st.available
+            && mgr.config().update.auto
+            && night
+            && !busy
+            && st.state == "idle"
+            && let Err(e) = install().await
+        {
+            warn!("automatic update failed: {e:#}");
         }
         tokio::time::sleep(Duration::from_secs(300)).await;
     }

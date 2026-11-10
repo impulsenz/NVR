@@ -16,6 +16,14 @@
 - **Notifications wait for the AI's description** and send it with the picture, which now shows a box and “PERSON 92%” on each object like the alert cards; tapping opens the alert (this computer's home-network address is used when none is set).
 - **New faces & number plates inbox** (Settings → People & vehicles): unknown faces (grouped by person) and plates from recent alerts — assign them to someone, or hide them.
 
+**Security**
+- Sign-in: repeated wrong passwords lock out the user name *and* the address they come from, for longer each time (30 s up to 15 min); a wrong user name takes as long as a wrong password; password checks no longer slow down the rest of GAZE.
+- Sessions: only a fingerprint of each sign-in is stored, so the sessions file can't be used to sign in (everyone signs in once after updating). The cookie is marked Secure over HTTPS.
+- Requests from other websites (including live video and talk connections) are refused; pages can't be framed by other sites.
+- Passwords need at least 8 characters. The old single login in `nvr.toml` (versions before 0.4) becomes an account and its password is removed from the file.
+- Settings, accounts and sessions files can only be read by their owner (Linux). Logs and system details are for admins only; viewers only see the cameras they're allowed in "New faces & plates".
+- Number plates the reader isn't sure of are ignored.
+
 **Smaller changes**
 - Alerts are only described and identified once they're over; notifications, descriptions and faces added while an alert is still going are no longer lost.
 

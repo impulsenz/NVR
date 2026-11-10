@@ -313,10 +313,10 @@ fn load(path: &Path, visual: bool) -> Result<Plan> {
         m.with_input_fact(0, i64::fact([1, CONTEXT]).into())
     }
     .map_err(|e| anyhow!("{e}"))?;
-    Ok(m.into_optimized()
+    m.into_optimized()
         .map_err(|e| anyhow!("{e}"))?
         .into_runnable()
-        .map_err(|e| anyhow!("{e}"))?)
+        .map_err(|e| anyhow!("{e}"))
 }
 
 fn run(plan: &Plan, input: tract_onnx::prelude::Tensor) -> Result<Vec<f32>> {
@@ -340,7 +340,7 @@ pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 /// CLIP's picture input: shortest side to 224, centre crop, normalized.
 fn preprocess(f: &Frame) -> tract_onnx::prelude::Tensor {
     const MEAN: [f32; 3] = [0.481_454_66, 0.457_827_5, 0.408_210_73];
-    const STD: [f32; 3] = [0.268_629_54, 0.261_302_58, 0.275_777_1];
+    const STD: [f32; 3] = [0.268_629_54, 0.261_302_6, 0.275_777_1];
     let s = 224.0 / f.width.min(f.height).max(1) as f32;
     let (w, h) = (
         ((f.width as f32 * s).round() as u32).max(224),

@@ -53,16 +53,13 @@ pub struct Face {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Plate {
     pub text: String,
-    pub confidence: f32,
-    /// Box in the picture, pixels.
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
 }
+
+/// Plate readings less sure than this are ignored (a wrong plate is worse
+/// than none: it could match someone else's car).
+const PLATE_MIN_CONFIDENCE: f32 = 0.6;
 
 #[derive(Default)]
 struct Loaded {
@@ -138,10 +135,10 @@ impl Recog {
                     .with_input_fact(0, u8::fact(shape).into())
                     .map_err(|e| anyhow!("{e}"))?;
             }
-            Ok(m.into_optimized()
+            m.into_optimized()
                 .map_err(|e| anyhow!("{e}"))?
                 .into_runnable()
-                .map_err(|e| anyhow!("{e}"))?)
+                .map_err(|e| anyhow!("{e}"))
         })
         .await??;
         *pick(&mut self.loaded.lock().unwrap()) = Some(plan.clone());
@@ -197,15 +194,9 @@ impl Recog {
                 let crop = crop(&f, x, y, w, h);
                 if let Some((text, confidence)) = read_plate(&ocr, &crop)?
                     && text.len() >= 3
+                    && confidence >= PLATE_MIN_CONFIDENCE
                 {
-                    out.push(Plate {
-                        text,
-                        confidence,
-                        x,
-                        y,
-                        w,
-                        h,
-                    });
+                    out.push(Plate { text });
                 }
             }
             Ok(out)

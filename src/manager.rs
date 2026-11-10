@@ -300,10 +300,6 @@ pub struct SettingsUpdate {
 pub struct ServerUpdate {
     pub name: String,
     pub listen: String,
-    pub username: String,
-    /// Empty = keep the current password.
-    #[serde(default)]
-    pub password: String,
     pub ffmpeg_path: String,
 }
 
@@ -679,13 +675,7 @@ impl Manager {
         if let Some(s) = up.server {
             cfg.server.name = s.name.trim().to_string();
             cfg.server.listen = s.listen.trim().to_string();
-            cfg.server.username = s.username.trim().to_string();
             cfg.server.ffmpeg_path = s.ffmpeg_path.trim().to_string();
-            if cfg.server.username.is_empty() {
-                cfg.server.password.clear();
-            } else if !s.password.is_empty() {
-                cfg.server.password = s.password;
-            }
             if cfg.server.ffmpeg_path.is_empty() {
                 cfg.server.ffmpeg_path = "ffmpeg".into();
             }
@@ -738,8 +728,6 @@ impl Manager {
         let _g = self.edit.lock().await;
         let old = self.config();
         if keep_login {
-            new.server.username = old.server.username.clone();
-            new.server.password = old.server.password.clone();
             new.server.listen = old.server.listen.clone();
         }
         // Stop cameras that no longer exist.
@@ -776,16 +764,17 @@ impl Manager {
             }
         }
         // Folders of removed cameras follow the default folder.
-        if only.is_none() && old.storage.dir != new.storage.dir {
-            if let Ok(rd) = std::fs::read_dir(&old.storage.dir) {
-                for e in rd.flatten() {
-                    let p = e.path();
-                    if p.is_dir()
-                        && !jobs.iter().any(|j| j.0 == p)
-                        && !new.cameras.iter().any(|c| new.camera_dir(c) == p)
-                    {
-                        jobs.push((p.clone(), new.storage.dir.join(e.file_name())));
-                    }
+        if only.is_none()
+            && old.storage.dir != new.storage.dir
+            && let Ok(rd) = std::fs::read_dir(&old.storage.dir)
+        {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir()
+                    && !jobs.iter().any(|j| j.0 == p)
+                    && !new.cameras.iter().any(|c| new.camera_dir(c) == p)
+                {
+                    jobs.push((p.clone(), new.storage.dir.join(e.file_name())));
                 }
             }
         }

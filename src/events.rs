@@ -183,7 +183,7 @@ impl EventStore {
             && let Ok(line) = serde_json::to_string(e)
         {
             let nl = if torn { "\n" } else { "" };
-            let _ = write!(f, "{nl}{line}\n");
+            let _ = writeln!(f, "{nl}{line}");
             let _ = f.sync_data();
         }
     }

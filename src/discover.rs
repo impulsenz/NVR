@@ -189,7 +189,7 @@ pub async fn scan(mgr: &Manager) -> Vec<Found> {
         .collect();
     let mut list: Vec<Found> = all.into_values().collect();
     for f in &mut list {
-        if f.rtsp == false && f.onvif_port > 0 {
+        if !f.rtsp && f.onvif_port > 0 {
             // ONVIF cameras nearly always stream on 554 too.
             f.rtsp = true;
         }
@@ -231,8 +231,8 @@ pub async fn daily(mgr: Arc<Manager>) {
         *mgr.new_cameras.lock().unwrap() = found
             .iter()
             .filter(|f| !f.added)
+            .filter(|&f| new.iter().any(|n| n.ip == f.ip) || !seen.contains(&f.ip))
             .cloned()
-            .filter(|f| new.iter().any(|n| n.ip == f.ip) || !seen.contains(&f.ip))
             .collect();
         let all: HashSet<String> = seen
             .into_iter()

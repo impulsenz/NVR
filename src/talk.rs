@@ -334,7 +334,7 @@ fn find_speaker(sdp: &str, base: &str) -> Result<Speaker> {
     let mut other = None;
     for media in sdp.split("\nm=").skip(1) {
         let lines: Vec<&str> = media.lines().map(str::trim).collect();
-        if !lines[0].starts_with("audio") || !lines.iter().any(|l| *l == "a=sendonly") {
+        if !lines[0].starts_with("audio") || !lines.contains(&"a=sendonly") {
             continue;
         }
         let pts: Vec<u8> = lines[0]

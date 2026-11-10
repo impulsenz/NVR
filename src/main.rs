@@ -217,6 +217,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let (cfg, needs_save) = config::Config::load_or_create(&path)?;
+    config::private_file(&path);
     // Logs, statistics and AI models live next to the config file.
     let data_dir = path
         .parent()
@@ -260,7 +261,12 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     );
 
     let listen = cfg.server.listen.clone();
-    let mgr = manager::Manager::new(path, data_dir, cfg);
+    let legacy_login = !cfg.server.password.is_empty();
+    let mgr = manager::Manager::new(path.clone(), data_dir, cfg);
+    if legacy_login {
+        // The old login is now an account: take its password out of the file.
+        mgr.config().save(&path)?;
+    }
     tokio::spawn(mgr.clone().housekeeping());
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));

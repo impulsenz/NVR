@@ -70,15 +70,17 @@ fn set_text(xml: &str, name: &str, value: &str) -> String {
         let tag = &xml[start..end];
         let qname = tag.split_whitespace().next().unwrap_or("");
         let local = qname.rsplit(':').next().unwrap_or(qname);
-        if local == name && !tag.starts_with('/') && !tag.ends_with('/') {
-            if let Some(c) = xml[end + 1..].find("</") {
-                return format!(
-                    "{}{}{}",
-                    &xml[..end + 1],
-                    xml_escape(value),
-                    &xml[end + 1 + c..]
-                );
-            }
+        if local == name
+            && !tag.starts_with('/')
+            && !tag.ends_with('/')
+            && let Some(c) = xml[end + 1..].find("</")
+        {
+            return format!(
+                "{}{}{}",
+                &xml[..end + 1],
+                xml_escape(value),
+                &xml[end + 1 + c..]
+            );
         }
         pos = end + 1;
     }
@@ -539,9 +541,7 @@ impl Onvif {
                 .map_err(|e| anyhow!("time server: {e:#}"))?;
         }
         let manual = now.is_some();
-        let mode = if manual {
-            "Manual"
-        } else if s.mode == "Manual" {
+        let mode = if manual || s.mode == "Manual" {
             "Manual"
         } else {
             "NTP"

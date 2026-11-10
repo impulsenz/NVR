@@ -382,7 +382,6 @@ async fn download_logs(req: Request) -> Response {
 
 async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
-    let has_password = !cfg.server.password.is_empty();
     let has_key = !cfg.ai.api_key.is_empty();
     let (has_token, has_gemini) = (
         !cfg.notify.token.is_empty(),
@@ -393,7 +392,6 @@ async fn get_settings(State(m): App) -> Response {
     cfg.notify.token.clear();
     cfg.notify.gemini_key.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
-    v["server"]["has_password"] = json!(has_password);
     v["ai"]["has_key"] = json!(has_key);
     v["notify"]["has_token"] = json!(has_token);
     v["notify"]["has_gemini_key"] = json!(has_gemini);
@@ -645,8 +643,10 @@ fn recent_events(m: &Manager, days: i64) -> Vec<crate::events::Event> {
         .collect()
 }
 
-async fn inbox_list(State(m): App) -> Response {
-    let evs = recent_events(&m, 30);
+async fn inbox_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let vis = visible(&user);
+    let mut evs = recent_events(&m, 30);
+    evs.retain(|e| vis.as_ref().is_none_or(|v| v.contains(&e.camera)));
     let d = crate::inbox::dismissed(&m.data_dir);
     let faces = crate::inbox::group_faces(&evs, &d);
     let plates = crate::inbox::group_plates(&evs, &d, |p| m.known.match_plate(p).is_some());
@@ -2666,12 +2666,48 @@ fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|(_, v)| v.to_string())
 }
 
-fn session_cookie(token: &str, remember: bool) -> HeaderValue {
+/// Reached over HTTPS (e.g. through `tailscale serve` or another proxy)?
+fn https(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+}
+
+fn session_cookie(token: &str, remember: bool, secure: bool) -> HeaderValue {
     let age = if remember { "; Max-Age=2592000" } else { "" };
+    let sec = if secure { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(
-        "{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax{age}"
+        "{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax{age}{sec}"
     ))
     .unwrap()
+}
+
+/// The address a request comes from (the real one behind a proxy on this
+/// computer, such as `tailscale serve`).
+fn client_ip(addr: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> std::net::IpAddr {
+    let ip = addr.ip();
+    if ip.is_loopback()
+        && let Some(f) = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .and_then(|v| v.trim().parse().ok())
+    {
+        return f;
+    }
+    ip
+}
+
+/// Password checks are slow on purpose (Argon2); a few at a time, off the
+/// web server's threads, so a flood of sign-in attempts can't stall GAZE.
+static PASSWORD_CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+async fn check_password_blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let _slot = PASSWORD_CHECKS.acquire().await.ok()?;
+    tokio::task::spawn_blocking(f).await.ok()
 }
 
 /// The signed-in user, put on each request by the sign-in check.
@@ -2712,6 +2748,8 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/notify",
         "/api/talk-test",
         "/api/update",
+        "/api/logs",
+        "/api/system",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"
@@ -2747,7 +2785,54 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
                 && (path.contains("/events/") || path.contains("/recordings/"))))
 }
 
-async fn auth(State(m): App, mut req: Request, next: Next) -> Response {
+/// Same-origin check: a change (or a live connection) must come from GAZE's
+/// own page, not from another website open in the same browser.
+fn foreign_origin(req: &Request) -> bool {
+    let h = req.headers();
+    let upgrade = h.get(header::UPGRADE).is_some();
+    let read = matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    );
+    if read && !upgrade {
+        return false;
+    }
+    let Some(origin) = h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return false; // not a browser (curl, scripts with a session)
+    };
+    let origin_host = origin.split("://").nth(1).unwrap_or("");
+    let host = h
+        .get("x-forwarded-host")
+        .or_else(|| h.get(header::HOST))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let bare = |s: &str| s.split(':').next().unwrap_or("").to_ascii_lowercase();
+    origin == "null" || bare(origin_host) != bare(host)
+}
+
+/// Security headers on every answer.
+fn harden(mut r: Response) -> Response {
+    let h = r.headers_mut();
+    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    h.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert("referrer-policy", HeaderValue::from_static("same-origin"));
+    r
+}
+
+async fn auth(State(m): App, req: Request, next: Next) -> Response {
+    if foreign_origin(&req) {
+        return harden(err(
+            StatusCode::FORBIDDEN,
+            "requests from other websites are not allowed",
+        ));
+    }
+    harden(check_access(m, req, next).await)
+}
+
+async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     // The page itself, its pictures and the sign-in API are open: the page
     // shows the sign-in (or first-time setup) screen.
@@ -2811,12 +2896,22 @@ struct LoginReq {
     remember: bool,
 }
 
-async fn auth_setup(State(m): App, Json(r): Json<LoginReq>) -> Response {
-    match m.users.setup(&r.username, &r.password) {
+async fn auth_setup(
+    State(m): App,
+    headers: axum::http::HeaderMap,
+    Json(r): Json<LoginReq>,
+) -> Response {
+    let m2 = m.clone();
+    let (u, p) = (r.username.clone(), r.password.clone());
+    let res = check_password_blocking(move || m2.users.setup(&u, &p)).await;
+    match res.unwrap_or_else(|| Err(anyhow::anyhow!("busy, try again"))) {
         Ok(t) => {
-            tracing::info!("admin account \"{}\" created", r.username.trim());
+            tracing::info!("admin account {:?} created", r.username.trim());
             (
-                [(header::SET_COOKIE, session_cookie(&t, true))],
+                [(
+                    header::SET_COOKIE,
+                    session_cookie(&t, true, https(&headers)),
+                )],
                 Json(json!({ "ok": true })),
             )
                 .into_response()
@@ -2825,17 +2920,33 @@ async fn auth_setup(State(m): App, Json(r): Json<LoginReq>) -> Response {
     }
 }
 
-async fn auth_login(State(m): App, Json(r): Json<LoginReq>) -> Response {
-    // A little delay makes guessing passwords slow.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    match m.users.login(&r.username, &r.password, r.remember) {
+async fn auth_login(
+    State(m): App,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Json(r): Json<LoginReq>,
+) -> Response {
+    let ip = client_ip(addr, &headers).to_string();
+    let m2 = m.clone();
+    let (u, p, remember, from) = (
+        r.username.clone(),
+        r.password.clone(),
+        r.remember,
+        ip.clone(),
+    );
+    let res = check_password_blocking(move || m2.users.login(&u, &p, remember, &from)).await;
+    match res.unwrap_or_else(|| Err(anyhow::anyhow!("busy, try again"))) {
         Ok(t) => (
-            [(header::SET_COOKIE, session_cookie(&t, r.remember))],
+            [(
+                header::SET_COOKIE,
+                session_cookie(&t, r.remember, https(&headers)),
+            )],
             Json(json!({ "ok": true })),
         )
             .into_response(),
         Err(e) => {
-            tracing::warn!("failed sign-in for \"{}\"", r.username.trim());
+            // {:?}: a user name can't add lines to the log.
+            tracing::warn!("failed sign-in for {:?} from {ip}", r.username.trim());
             err(StatusCode::UNAUTHORIZED, format!("{e:#}"))
         }
     }
@@ -2863,19 +2974,31 @@ struct PasswordReq {
 
 async fn auth_password(
     State(m): App,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     user: axum::Extension<CurrentUser>,
     Json(r): Json<PasswordReq>,
 ) -> Response {
     let name = user.0.0.username.clone();
-    if m.users.login(&name, &r.current, false).is_err() {
-        return err(StatusCode::BAD_REQUEST, "the current password is wrong");
+    let ip = client_ip(addr, &headers).to_string();
+    let (m2, n2, cur) = (m.clone(), name.clone(), r.current.clone());
+    let ok = check_password_blocking(move || m2.users.check(&n2, &cur, &ip)).await;
+    match ok {
+        Some(Ok(_)) => {}
+        Some(Err(e)) if e.to_string().contains("wait") => return err(StatusCode::BAD_REQUEST, e),
+        _ => return err(StatusCode::BAD_REQUEST, "the current password is wrong"),
     }
-    match m.users.update(&name, None, None, Some(&r.new)) {
+    let (m3, n3, new) = (m.clone(), name.clone(), r.new.clone());
+    let res = check_password_blocking(move || m3.users.update(&n3, None, None, Some(&new))).await;
+    match res.unwrap_or_else(|| Err(anyhow::anyhow!("busy, try again"))) {
         Ok(()) => {
-            // Sign in again with the new password on this browser.
-            let t = m.users.login(&name, &r.new, true).unwrap_or_default();
+            // Signed out everywhere; stay signed in on this browser.
+            let t = m.users.new_session(&name, true);
             (
-                [(header::SET_COOKIE, session_cookie(&t, true))],
+                [(
+                    header::SET_COOKIE,
+                    session_cookie(&t, true, https(&headers)),
+                )],
                 Json(json!({ "ok": true })),
             )
                 .into_response()

@@ -66,8 +66,11 @@ pub struct ServerConfig {
     pub name: String,
     /// Address and port the web interface listens on (restart required).
     pub listen: String,
-    /// HTTP basic-auth username; login is disabled when empty.
+    /// The single login of versions before 0.4: read once to create the
+    /// admin account, never written back (accounts live in nvr-data).
+    #[serde(skip_serializing)]
     pub username: String,
+    #[serde(skip_serializing)]
     pub password: String,
     pub ffmpeg_path: String,
 }
@@ -1243,9 +1246,6 @@ impl Config {
         if self.server.listen.parse::<std::net::SocketAddr>().is_err() {
             bail!("listen address must look like 0.0.0.0:8080");
         }
-        if !self.server.username.is_empty() && self.server.password.is_empty() {
-            bail!("a password is required when a username is set");
-        }
         let mut ids = std::collections::HashSet::new();
         for c in &self.cameras {
             c.validate()
@@ -1259,9 +1259,11 @@ impl Config {
 
     /// Write the config atomically.
     pub fn save(&self, path: &Path) -> Result<()> {
+        // Camera passwords and API keys are in here: only the owner reads it.
         let text = self.to_toml()?;
         let tmp = path.with_extension("toml.tmp");
         std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+        private_file(&tmp);
         std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
         Ok(())
     }
@@ -1310,6 +1312,18 @@ pub fn slug(name: &str) -> String {
 }
 
 /// Hide the password in a URL like `rtsp://user:pass@host/...`.
+/// Only the owner may read this file (Unix; on Windows the user's own
+/// folders already are).
+pub fn private_file(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 pub fn mask_url(url: &str) -> String {
     if let Some(scheme_end) = url.find("://") {
         let rest = &url[scheme_end + 3..];

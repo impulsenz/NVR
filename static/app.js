@@ -1966,11 +1966,6 @@ function showVideo(el, i) {
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
 }
-// The camera's recording after segment `s`, if it follows on (no gap).
-function nextSegment(c, s) {
-  const end = new Date(s.end).getTime();
-  return c.segments.find(x => x !== s && x.kind === s.kind && Math.abs(new Date(x.start).getTime() - end) < 5000);
-}
 function segAt(c, T) {
   // The newest file of a camera that was recording when the timeline
   // loaded is still growing: treat it as running up to now.
@@ -3907,7 +3902,7 @@ async function renderSystemSettings(body) {
   $('f-sys').onsubmit = async (e) => {
     e.preventDefault();
     const listen = `${val('y-bind')}:${Math.round(num('y-port'))}`;
-    if (await saveSettings({server: {name: val('y-name'), listen, username: '', password: '', ffmpeg_path: val('y-ffmpeg')}})) { sysinfo = null; renderSystemSettings(body); }
+    if (await saveSettings({server: {name: val('y-name'), listen, ffmpeg_path: val('y-ffmpeg')}})) { sysinfo = null; renderSystemSettings(body); }
   };
 }
 
@@ -4033,14 +4028,13 @@ async function boot() {
   route();
 }
 const isAdmin = () => me && me.role === 'admin';
-const canOperate = () => me && me.role !== 'viewer';
 $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $('um-pop').hidden = !$('um-pop').hidden; };
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
 $('um-out').onclick = async () => { await fetch('api/auth/logout', {method: 'POST'}); location.hash = '#live'; location.reload(); };
 $('um-pass').onclick = async () => {
   $('um-pop').hidden = true;
   const cur = prompt('Current password:'); if (cur == null) return;
-  const nw = prompt('New password (at least 6 characters):'); if (!nw) return;
+  const nw = prompt('New password (at least 8 characters):'); if (!nw) return;
   if (prompt('New password again:') !== nw) return toast('The two passwords are different.', true);
   try { await api('api/auth/password', {method: 'POST', json: {current: cur, new: nw}}); toast('Password changed'); } catch (e) { toast(e.message, true); }
 };
@@ -4220,7 +4214,7 @@ async function renderUsers(body) {
     </tbody></table></div>
     <form class="card" id="u-new"><h2>Add a user</h2><div class="form">
       <label for="un-name">User name</label><div><input type="text" id="un-name" required autocomplete="off"></div>
-      <label for="un-pass">Password</label><div><input type="password" id="un-pass" required minlength="6" autocomplete="new-password"><div class="hint">At least 6 characters. They can change it later from the 👤 menu.</div></div>
+      <label for="un-pass">Password</label><div><input type="password" id="un-pass" required minlength="8" autocomplete="new-password"><div class="hint">At least 8 characters. They can change it later from the 👤 menu.</div></div>
       <label>Access</label><div id="un-role">${roleSel('viewer')}</div>
       <label>Cameras</label><div id="un-cams">${camPick([])}</div>
     </div><div class="actions"><button class="primary">Add user</button></div></form>`;
@@ -4229,7 +4223,7 @@ async function renderUsers(body) {
     const name = tr.dataset.u;
     tr.querySelector('.u-save').onclick = async () => { try { await api(`api/users/${enc(name)}`, {method: 'PUT', json: rowData(tr)}); toast(`Saved ${name}`); } catch (e) { toast(e.message, true); } };
     tr.querySelector('.u-pw').onclick = async () => {
-      const p = prompt(`New password for ${name} (at least 6 characters):`); if (!p) return;
+      const p = prompt(`New password for ${name} (at least 8 characters):`); if (!p) return;
       try { await api(`api/users/${enc(name)}`, {method: 'PUT', json: {password: p}}); toast(`Password set for ${name} (signed out everywhere)`); } catch (e) { toast(e.message, true); }
     };
     tr.querySelector('.u-del').onclick = async () => {
