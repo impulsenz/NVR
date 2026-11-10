@@ -581,3 +581,17 @@ table.users .chips { margin: 0; }
 .cl-methods { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)) !important; margin-bottom: 10px; }
 #f-cloud h3 { margin: 16px 0 8px; }
 .ai-explain ol { margin: 0 0 8px; padding-left: 20px; line-height: 1.5; } .ai-explain li { margin: 4px 0; }
+
+/* People & vehicles */
+.known-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.known { background: var(--panel2); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.k-photos { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.k-photos img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; }
+.k-add { cursor: pointer; }
+.ad-side .faces { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.ad-side .faces .small { flex-basis: 100%; text-transform: uppercase; font-size: 11px; letter-spacing: .5px; }
+.ad-side .face { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 96px; }
+.ad-side .face img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; }
+.ad-side .face select { max-width: 96px; font-size: 12px; padding: 2px; }
+.plates { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.plate { font-family: ui-monospace, monospace; font-weight: 700; letter-spacing: 1px; background: #f4f4f0; color: #111; border: 2px solid #111; border-radius: 4px; padding: 1px 8px; }

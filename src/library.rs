@@ -626,6 +626,10 @@ mod text_tests {
             boxes: Vec::new(),
             summary: String::new(),
             notes: Vec::new(),
+            thumb_at: None,
+            faces: Vec::new(),
+            plates: Vec::new(),
+            identified: false,
         }
     }
 

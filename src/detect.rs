@@ -585,6 +585,10 @@ impl Detector {
                 boxes: Vec::new(),
                 summary: String::new(),
                 notes: Vec::new(),
+                thumb_at: None,
+                faces: Vec::new(),
+                plates: Vec::new(),
+                identified: false,
             },
             last_activity: now,
             qualified: false,
@@ -820,6 +824,8 @@ impl Detector {
         {
             a.event.thumb = Some(name);
             a.event.focus = (score > 0.0).then_some([x, y, w, h]);
+            // The picture is from a moment ago (analysis delay, AI time).
+            a.event.thumb_at = Some(Local::now() - CDuration::milliseconds(1200));
             a.event.boxes = boxes;
             a.thumb_score = score;
             a.thumb_at = Instant::now();

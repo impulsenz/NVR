@@ -1712,10 +1712,14 @@ function renderRecordings() {
   }
 }
 
+// Known people, for "Who is this?".
+let knownPeople = [];
+async function loadKnownPeople() { knownPeople = (await api('api/known').catch(() => [])).filter(k => k.kind === 'person'); }
 // Alerts open in a pop-up; the list stays where it is.
 let alertIdx = -1;
-function playItem(it, card) {
+async function playItem(it, card) {
   if (!it.play) return noVideo(it);
+  if (it.event && it.event.faces && it.event.faces.length) await loadKnownPeople();
   alertIdx = rec.items.indexOf(it);
   document.querySelectorAll('.rc.active').forEach(c => c.classList.remove('active'));
   if (card) card.classList.add('active');
@@ -1733,6 +1737,9 @@ function playItem(it, card) {
     ${e ? `<div class="what"><div class="muted small">What happened</div>${what ? esc(what) : `<span class="muted">${status && status.smart_search_on ? 'Being described… (a moment after the activity ends)' : 'Turn on Smart search (Settings → AI) to get a description of what happened.'}</span>`}</div>` : ''}
     ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
+    ${e && e.faces && e.faces.length ? `<div class="faces"><div class="muted small">Faces</div>${e.faces.map((f, i) => `<div class="face"><img src="media/${enc(it.camera)}/events/${enc(f.file)}" alt="">
+      ${f.name ? `<b>${esc(f.name)}</b>` : `<select class="who op-only" data-face="${i}"><option value="">Who is this?</option>${knownPeople.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">New person…</option></select>`}</div>`).join('')}</div>` : ''}
+    ${e && e.plates && e.plates.length ? `<div class="plates">${e.plates.map(p => `<span class="plate">${esc(p)}</span>`).join('')}</div>` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
     ${e ? `<dt>Detected</dt><dd>${labelTags(e.labels, e.motion) || '–'}</dd>${e.desc && e.desc !== what ? `<dt>AI description</dt><dd>${esc(e.desc)}</dd>` : ''}<dt>Video</dt><dd>${e.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
     ${it.size ? `<dt>Size</dt><dd>${fmtBytes(it.size)}</dd>` : ''}</dl>
@@ -1740,6 +1747,20 @@ function playItem(it, card) {
     <div class="actions"><a class="btn small" href="#recordings/${enc(it.camera)}/timeline" onclick="tl.jump='${it.start}'">Open in timeline</a></div>`;
   const t = $('rp-info').querySelector('.bx-toggle');
   if (t) t.onchange = () => { showBoxes = t.checked; store.set('show-boxes', showBoxes); document.body.classList.toggle('no-boxes', !showBoxes); };
+  // "Who is this?": name a face; GAZE learns it.
+  $('rp-info').querySelectorAll('.who').forEach(sel => sel.onchange = async () => {
+    let id = sel.value; if (!id) return;
+    if (id === '+') {
+      const name = (prompt('Name of this person:') || '').trim(); if (!name) { sel.value = ''; return; }
+      try { id = (await api('api/known', {method: 'POST', json: {kind: 'person', name}})).id; } catch (err) { toast(err.message, true); return; }
+    }
+    try {
+      const r = await api(`api/known/${enc(id)}/learn`, {method: 'POST', json: {camera: it.camera, event: e.id, face: +sel.dataset.face}});
+      toast(r.message); await loadKnownPeople();
+      e.faces[+sel.dataset.face].name = (knownPeople.find(k => k.id === id) || {}).name;
+      playItem(it, card);
+    } catch (err) { toast(err.message, true); }
+  });
   // Viewed.
   if (e && !it.seen) {
     it.seen = true;
@@ -2284,7 +2305,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
+const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -2297,7 +2318,7 @@ async function showSettings(sec) {
   camPreviewUnbind.splice(0).forEach(u => u());
   const body = $('settings-body');
   ({cameras: renderCameras, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, users: renderUsers, system: renderSystemSettings, info: renderInfo})[section](body);
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, system: renderSystemSettings, info: renderInfo})[section](body);
 }
 function settingsTick() {
   if (section !== 'cameras') return;
@@ -3752,6 +3773,72 @@ $('um-pass').onclick = async () => {
   if (prompt('New password again:') !== nw) return toast('The two passwords are different.', true);
   try { await api('api/auth/password', {method: 'POST', json: {current: cur, new: nw}}); toast('Password changed'); } catch (e) { toast(e.message, true); }
 };
+
+// ---------- Settings → People & vehicles ----------
+// Photos are shrunk in the browser and sent as JPEG.
+function photoToJpeg(file, max = 1600) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(b => b ? resolve(b) : reject(new Error('could not read the photo')), 'image/jpeg', 0.9);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => reject(new Error('could not read the photo'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function renderKnown(body) {
+  const list = await api('api/known').catch(() => []);
+  const a = settings.ai;
+  body.innerHTML = `<div class="card"><h2>People &amp; vehicles</h2>
+    <p class="muted" style="margin-top:0">Teach GAZE who and what it sees. Alerts then say “Recognized Mum” or “Plate ABC123 — Dad's car”, and you can search for them. Everything runs on this computer.</p>
+    <div class="form">
+      <span></span><div><label class="check"><input type="checkbox" id="k-faces" ${a.faces ? 'checked' : ''}> Look for faces in alerts and name the people below</label>
+        <div class="hint">Uses OpenCV's YuNet (finds faces) and SFace (recognises them), about 40 MB downloaded once. Faces need to be reasonably large and facing the camera; it works best on door and entrance cameras.</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="k-plates" ${a.plates ? 'checked' : ''}> Read number plates of vehicles in alerts</label>
+        <div class="hint">Uses fast-alpr's plate finder and reader (about 10 MB). Plates must be readable in the full-quality recording.</div></div>
+    </div><div class="actions"><button type="button" class="primary" id="k-save-ai">Save</button></div></div>
+    <div class="card"><div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:1">Known people and vehicles</h2>
+      <button type="button" id="k-add-person">＋ Person</button><button type="button" id="k-add-vehicle">＋ Vehicle</button></div>
+      ${list.length ? '' : '<div class="hint">Nobody yet. Add a person and upload a few clear photos of their face, or a vehicle with its number plate — or name faces straight from an alert (“Who is this?”).</div>'}
+      <div class="known-grid">${list.map(k => `<div class="known" data-id="${esc(k.id)}">
+        <div class="row"><b style="flex:1">${k.kind === 'person' ? '🧑' : '🚗'} ${esc(k.name)}</b><button type="button" class="small k-ren">Rename</button><button type="button" class="small danger k-del">Delete</button></div>
+        <div class="k-photos">${k.photos.map(p => `<img src="api/known/${enc(k.id)}/photo/${enc(p)}" alt="">`).join('')}
+          <label class="k-add btn small">＋ Photo<input type="file" accept="image/*" multiple hidden></label></div>
+        <div class="hint">${k.kind === 'person' ? `${k.faces} face${k.faces === 1 ? '' : 's'} learned${k.faces < 3 ? ' — 3 or more clear photos work best' : ''}`
+          : `Plates: <input type="text" class="k-plates" value="${esc(k.plates.join(', '))}" placeholder="ABC123, …" style="width:180px"> <button type="button" class="small k-psave">Save</button>${k.looks ? ` · ${k.looks} look${k.looks === 1 ? '' : 's'} learned` : ''}`}</div>
+      </div>`).join('')}</div></div>`;
+  $('k-save-ai').onclick = async () => { await saveSettings({ai: {...settings.ai, api_key: '', faces: chk('k-faces'), plates: chk('k-plates')}}, 'Saved'); };
+  const add = async (kind) => {
+    const name = (prompt(kind === 'person' ? 'Name of the person:' : 'Name of the vehicle (e.g. Dad’s car):') || '').trim(); if (!name) return;
+    const plates = kind === 'vehicle' ? (prompt('Number plate (optional):') || '').split(',').map(x => x.trim()).filter(Boolean) : [];
+    try { await api('api/known', {method: 'POST', json: {kind, name, plates}}); renderKnown(body); } catch (e) { toast(e.message, true); }
+  };
+  $('k-add-person').onclick = () => add('person');
+  $('k-add-vehicle').onclick = () => add('vehicle');
+  body.querySelectorAll('.known').forEach(el => {
+    const id = el.dataset.id;
+    el.querySelector('.k-del').onclick = async () => { if (confirm('Forget this ' + (el.querySelector('b').textContent.trim()) + '?')) { await api(`api/known/${enc(id)}`, {method: 'DELETE'}).catch(e => toast(e.message, true)); renderKnown(body); } };
+    el.querySelector('.k-ren').onclick = async () => { const n = prompt('New name:'); if (n) { await api(`api/known/${enc(id)}`, {method: 'PUT', json: {name: n}}).catch(e => toast(e.message, true)); renderKnown(body); } };
+    const ps = el.querySelector('.k-psave');
+    if (ps) ps.onclick = async () => { await api(`api/known/${enc(id)}`, {method: 'PUT', json: {plates: el.querySelector('.k-plates').value.split(',').map(x => x.trim()).filter(Boolean)}}).then(() => toast('Plates saved')).catch(e => toast(e.message, true)); };
+    el.querySelector('.k-add input').onchange = async (e) => {
+      for (const f of e.target.files) {
+        toast('Learning from ' + f.name + '… (the first time downloads the models)');
+        try {
+          const jpg = await photoToJpeg(f);
+          const r = await fetch(`api/known/${enc(id)}/photo`, {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: jpg});
+          const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText);
+          toast(j.message);
+        } catch (err) { toast(`${f.name}: ${err.message}`, true); }
+      }
+      renderKnown(body);
+    };
+  });
+}
 
 // ---------- Settings → Users (admin) ----------
 async function renderUsers(body) {

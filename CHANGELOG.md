@@ -10,9 +10,12 @@
 - **Linked profiles**: cameras follow a profile; changing the profile changes every camera that follows it.
 - **Pan / tilt / zoom on the picture**: drag on the video, scroll to zoom, presets on screen.
 - **Rotate** a camera's picture in 90° steps.
+- **Zones**: areas and lines drawn on the picture, with line crossing, lingering and items left or taken (packages).
+- **Faces & number plates**: GAZE recognises the people and vehicles you teach it (Settings → People & vehicles, or "Who is this?" on an alert).
+- **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
 **Smaller changes**
-- Camera offline notice, error-only log count, one Save button for camera settings, HD clip downloads, volume slider, data saver in Settings, bandwidth shown, on-screen display fixes and corner pickers, many small fixes.
+- Camera offline notice, error-only log count, one Save button for camera settings, HD clip downloads, volume slider, data saver in Settings, bandwidth shown, CPU use that matches Windows, GPU name and usage, on-screen display fixes and corner pickers, many small fixes.
 
 ## 0.3.0 — November 2026
 **Major**

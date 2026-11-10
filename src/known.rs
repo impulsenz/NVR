@@ -1,0 +1,338 @@
+//! Known people and vehicles: what GAZE has been taught to recognise.
+//!
+//! A **person** has faceprints (from photos you upload, or faces you name
+//! in alerts). A **vehicle** has number plates and, with smart search on,
+//! "looks" (CLIP vectors of photos of it). Kept in `nvr-data/known.json`,
+//! photos in `nvr-data/known/<id>/`.
+
+use anyhow::{Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Known {
+    pub id: String,
+    /// "person" or "vehicle".
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub plates: Vec<String>,
+    /// Faceprints, packed.
+    #[serde(default)]
+    pub faces: Vec<String>,
+    /// CLIP vectors of photos (vehicles), packed.
+    #[serde(default)]
+    pub looks: Vec<String>,
+    /// Photo file names.
+    #[serde(default)]
+    pub photos: Vec<String>,
+}
+
+/// Shown to the browser (without the vectors).
+#[derive(Debug, Clone, Serialize)]
+pub struct KnownInfo {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub plates: Vec<String>,
+    pub faces: usize,
+    pub looks: usize,
+    pub photos: Vec<String>,
+}
+
+pub struct KnownStore {
+    file: PathBuf,
+    pub dir: PathBuf,
+    items: RwLock<Vec<Known>>,
+}
+
+/// Unit vector ↔ compact text (one signed byte per number).
+pub fn pack(v: &[f32]) -> String {
+    use base64::Engine;
+    let b: Vec<u8> = v
+        .iter()
+        .map(|x| ((x * 127.0).round().clamp(-127.0, 127.0) as i8) as u8)
+        .collect();
+    base64::engine::general_purpose::STANDARD.encode(b)
+}
+
+pub fn unpack(s: &str) -> Vec<f32> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map(|b| b.into_iter().map(|x| x as i8 as f32 / 127.0).collect())
+        .unwrap_or_default()
+}
+
+pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let (mut d, mut na, mut nb) = (0f32, 0f32, 0f32);
+    for (x, y) in a.iter().zip(b) {
+        d += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    d / (na.sqrt() * nb.sqrt()).max(1e-6)
+}
+
+impl KnownStore {
+    pub fn open(data_dir: &Path) -> Self {
+        let file = data_dir.join("known.json");
+        let items = std::fs::read(&file)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        Self {
+            file,
+            dir: data_dir.join("known"),
+            items: RwLock::new(items),
+        }
+    }
+
+    fn save(&self) -> Result<()> {
+        let b = serde_json::to_vec_pretty(&*self.items.read().unwrap())?;
+        let tmp = self.file.with_extension("json.tmp");
+        std::fs::write(&tmp, b)?;
+        std::fs::rename(&tmp, &self.file)?;
+        Ok(())
+    }
+
+    pub fn list(&self) -> Vec<KnownInfo> {
+        self.items
+            .read()
+            .unwrap()
+            .iter()
+            .map(|k| KnownInfo {
+                id: k.id.clone(),
+                kind: k.kind.clone(),
+                name: k.name.clone(),
+                plates: k.plates.clone(),
+                faces: k.faces.len(),
+                looks: k.looks.len(),
+                photos: k.photos.clone(),
+            })
+            .collect()
+    }
+
+    pub fn get(&self, id: &str) -> Option<Known> {
+        self.items
+            .read()
+            .unwrap()
+            .iter()
+            .find(|k| k.id == id)
+            .cloned()
+    }
+
+    pub fn create(&self, kind: &str, name: &str, plates: Vec<String>) -> Result<String> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("enter a name");
+        }
+        if kind != "person" && kind != "vehicle" {
+            bail!("unknown kind");
+        }
+        let base: String = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let mut id = base.trim_matches('-').to_string();
+        if id.is_empty() {
+            id = "known".into();
+        }
+        {
+            let mut items = self.items.write().unwrap();
+            let mut n = 2;
+            let root = id.clone();
+            while items.iter().any(|k| k.id == id) {
+                id = format!("{root}-{n}");
+                n += 1;
+            }
+            items.push(Known {
+                id: id.clone(),
+                kind: kind.into(),
+                name: name.into(),
+                plates: clean_plates(plates),
+                ..Default::default()
+            });
+        }
+        self.save()?;
+        Ok(id)
+    }
+
+    pub fn update(&self, id: &str, name: Option<&str>, plates: Option<Vec<String>>) -> Result<()> {
+        {
+            let mut items = self.items.write().unwrap();
+            let k = items
+                .iter_mut()
+                .find(|k| k.id == id)
+                .ok_or_else(|| anyhow!("not found"))?;
+            if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
+                k.name = n.into();
+            }
+            if let Some(p) = plates {
+                k.plates = clean_plates(p);
+            }
+        }
+        self.save()
+    }
+
+    pub fn delete(&self, id: &str) -> Result<()> {
+        self.items.write().unwrap().retain(|k| k.id != id);
+        let _ = std::fs::remove_dir_all(self.dir.join(id));
+        self.save()
+    }
+
+    /// Teach: add a faceprint / look / plate / photo.
+    pub fn add(
+        &self,
+        id: &str,
+        face: Option<&[f32]>,
+        look: Option<&[f32]>,
+        plate: Option<&str>,
+        photo: Option<&[u8]>,
+    ) -> Result<()> {
+        {
+            let mut items = self.items.write().unwrap();
+            let k = items
+                .iter_mut()
+                .find(|k| k.id == id)
+                .ok_or_else(|| anyhow!("not found"))?;
+            if let Some(f) = face {
+                k.faces.push(pack(f));
+            }
+            if let Some(l) = look {
+                k.looks.push(pack(l));
+            }
+            if let Some(p) = plate {
+                let p = clean_plates(vec![p.into()]);
+                for x in p {
+                    if !k.plates.contains(&x) {
+                        k.plates.push(x);
+                    }
+                }
+            }
+            if let Some(bytes) = photo {
+                let dir = self.dir.join(&k.id);
+                std::fs::create_dir_all(&dir)?;
+                let name = format!(
+                    "{}.jpg",
+                    k.photos.len()
+                        + 1
+                        + k.photos
+                            .iter()
+                            .filter_map(|p| p.trim_end_matches(".jpg").parse::<usize>().ok())
+                            .max()
+                            .unwrap_or(0)
+                );
+                std::fs::write(dir.join(&name), bytes)?;
+                k.photos.push(name);
+            }
+        }
+        self.save()
+    }
+
+    /// The known person this faceprint belongs to (name, similarity).
+    pub fn match_face(&self, print: &[f32]) -> Option<(String, f32)> {
+        self.items
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|k| k.kind == "person")
+            .filter_map(|k| {
+                let best = k
+                    .faces
+                    .iter()
+                    .map(|f| cosine(&unpack(f), print))
+                    .fold(f32::MIN, f32::max);
+                (best >= crate::recog::FACE_MATCH).then(|| (k.name.clone(), best))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// The known vehicle with this plate.
+    pub fn match_plate(&self, plate: &str) -> Option<String> {
+        self.items
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|k| k.kind == "vehicle")
+            .find(|k| {
+                k.plates
+                    .iter()
+                    .any(|p| crate::recog::plate_matches(p, plate))
+            })
+            .map(|k| k.name.clone())
+    }
+
+    /// The known vehicle that looks like this (CLIP vector), if very similar.
+    pub fn match_look(&self, v: &[f32]) -> Option<(String, f32)> {
+        self.items
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|k| k.kind == "vehicle")
+            .filter_map(|k| {
+                let best = k
+                    .looks
+                    .iter()
+                    .map(|l| cosine(&unpack(l), v))
+                    .fold(f32::MIN, f32::max);
+                (best >= 0.88).then(|| (k.name.clone(), best))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    pub fn photo_path(&self, id: &str, name: &str) -> Option<PathBuf> {
+        let k = self.get(id)?;
+        k.photos
+            .iter()
+            .any(|p| p == name)
+            .then(|| self.dir.join(id).join(name))
+    }
+}
+
+fn clean_plates(p: Vec<String>) -> Vec<String> {
+    p.into_iter()
+        .map(|s| {
+            s.chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .map(|c| c.to_ascii_uppercase())
+                .collect::<String>()
+        })
+        .filter(|s| s.len() >= 2)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn people_and_vehicles() {
+        let dir = std::env::temp_dir().join(format!("nvr-known-{}", std::process::id()));
+        let s = KnownStore::open(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mum = s.create("person", "Mum", vec![]).unwrap();
+        let car = s
+            .create("vehicle", "Dad's car", vec!["abc 123".into()])
+            .unwrap();
+        let face: Vec<f32> =
+            crate::clip::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
+        s.add(&mum, Some(&face), None, None, Some(b"jpg")).unwrap();
+        assert_eq!(s.match_face(&face).unwrap().0, "Mum");
+        let other: Vec<f32> =
+            crate::clip::normalize((0..128).map(|i| (i as f32 * 1.91).cos()).collect());
+        assert!(s.match_face(&other).is_none());
+        assert_eq!(s.match_plate("ABC123").as_deref(), Some("Dad's car"));
+        assert_eq!(s.match_plate("A8C123").as_deref(), Some("Dad's car"));
+        let s2 = KnownStore::open(&dir);
+        assert_eq!(s2.list().len(), 2);
+        s2.delete(&car).unwrap();
+        assert!(s2.match_plate("ABC123").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

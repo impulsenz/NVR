@@ -11,7 +11,9 @@ mod events;
 mod ffmpeg;
 mod finalize;
 mod fsbrowse;
+mod identify;
 mod imgutil;
+mod known;
 mod library;
 mod live;
 mod load;
@@ -20,6 +22,7 @@ mod manager;
 mod mp4fix;
 mod onvif;
 mod onvif_device;
+mod recog;
 mod recorder;
 mod relay;
 mod seen;
@@ -103,6 +106,7 @@ async fn main() -> Result<()> {
     tokio::spawn(smart::run(mgr.clone()));
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));
+    tokio::spawn(identify::run(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

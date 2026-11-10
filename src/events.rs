@@ -54,6 +54,29 @@ pub struct Event {
     /// Zone happenings ("Person in Porch", "Car crossed Gate (A→B)").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// When the alert picture was taken (to find the same moment in HD).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumb_at: Option<DateTime<Local>>,
+    /// Faces found in the alert (in full quality).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<FaceSeen>,
+    /// Number plates read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plates: Vec<String>,
+    /// Faces and plates have been looked for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub identified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FaceSeen {
+    /// Picture of the face (in the events folder).
+    pub file: String,
+    /// Faceprint, packed.
+    pub print: String,
+    /// Who it is, if known.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -234,6 +257,10 @@ mod tests {
             boxes: Vec::new(),
             summary: String::new(),
             notes: Vec::new(),
+            thumb_at: None,
+            faces: Vec::new(),
+            plates: Vec::new(),
+            identified: false,
         };
         s.save(e.clone());
         e.labels.push(Label {

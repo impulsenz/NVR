@@ -355,6 +355,10 @@ pub struct Manager {
     pub seen: crate::seen::Seen,
     /// User accounts and sign-in sessions.
     pub users: crate::users::Users,
+    /// Faces and number plates.
+    pub recog: Arc<crate::recog::Recog>,
+    /// Known people and vehicles.
+    pub known: crate::known::KnownStore,
     /// Cameras the daily network scan found that aren't added yet.
     pub new_cameras: Mutex<Vec<crate::discover::Found>>,
     pub monitor: Arc<Monitor>,
@@ -385,6 +389,8 @@ impl Manager {
             smart: Arc::new(crate::smart::SmartIndex::default()),
             seen: crate::seen::Seen::open(&data_dir_for_clip),
             new_cameras: Mutex::new(Vec::new()),
+            recog: crate::recog::Recog::new(&data_dir_for_clip),
+            known: crate::known::KnownStore::open(&data_dir_for_clip),
             users: {
                 let u = crate::users::Users::open(&data_dir_for_clip);
                 u.migrate_legacy(&config.server.username, &config.server.password);

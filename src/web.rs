@@ -116,6 +116,14 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/profiles", get(get_profiles).put(put_profiles))
         .route("/api/client", get(client_info))
         .route("/api/discover", post(discover_now))
+        .route("/api/known", get(known_list).post(known_create))
+        .route("/api/known/{id}", put(known_update).delete(known_delete))
+        .route(
+            "/api/known/{id}/photo",
+            post(known_photo).layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
+        .route("/api/known/{id}/photo/{name}", get(known_photo_get))
+        .route("/api/known/{id}/learn", post(known_learn))
         .route("/api/cloud/status", get(cloud_status))
         .route("/api/cloud/remotes", post(cloud_remotes))
         .route("/api/alerts/seen", post(alerts_seen))
@@ -463,6 +471,141 @@ async fn discover_now(State(m): App) -> Response {
     let found = crate::discover::scan(&m).await;
     *m.new_cameras.lock().unwrap() = found.iter().filter(|f| !f.added).cloned().collect();
     Json(found).into_response()
+}
+
+async fn known_list(State(m): App) -> Response {
+    Json(m.known.list()).into_response()
+}
+
+#[derive(Deserialize)]
+struct KnownReq {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    name: String,
+    plates: Option<Vec<String>>,
+}
+
+async fn known_create(State(m): App, Json(r): Json<KnownReq>) -> Response {
+    match m
+        .known
+        .create(&r.kind, &r.name, r.plates.unwrap_or_default())
+    {
+        Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn known_update(State(m): App, Path(id): Path<String>, Json(r): Json<KnownReq>) -> Response {
+    match m.known.update(&id, Some(&r.name), r.plates) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn known_delete(State(m): App, Path(id): Path<String>) -> Response {
+    match m.known.delete(&id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// Teach with a photo (JPEG in the request body): a person's face, or a
+/// vehicle's plate and look.
+async fn known_photo(State(m): App, Path(id): Path<String>, body: Bytes) -> Response {
+    let res = async {
+        let k = m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?;
+        let img = crate::imgutil::decode_jpeg(&body).map_err(|_| anyhow::anyhow!("send the photo as a JPEG picture"))?;
+        if k.kind == "person" {
+            let mut faces: Vec<_> = m.recog.faces(&img).await?.into_iter().filter(|f| f.score >= 0.7).collect();
+            faces.sort_by(|a, b| (b.w * b.h).total_cmp(&(a.w * a.h)));
+            let face = faces.first().ok_or_else(|| anyhow::anyhow!("no face found in this photo — use a clear photo of the face"))?;
+            // Several people of similar size: we can't tell which one is meant.
+            if let Some(second) = faces.get(1)
+                && second.w * second.h > face.w * face.h * 0.5
+            {
+                anyhow::bail!("this photo has {} faces — use a photo of {} alone (or crop it)", faces.len(), k.name);
+            }
+            let print = m.recog.faceprint(&img, face).await?;
+            m.known.add(&id, Some(&print), None, None, Some(&body))?;
+            anyhow::Ok(json!({ "ok": true, "message": format!("Learned {}'s face", k.name) }))
+        } else {
+            let plates = m.recog.plates(&img).await.unwrap_or_default();
+            let look = if m.config().ai.smart_search { m.clip.embed_image(&img).await.ok() } else { None };
+            for p in &plates {
+                m.known.add(&id, None, None, Some(&p.text), None)?;
+            }
+            m.known.add(&id, None, look.as_deref(), None, Some(&body))?;
+            let what = match (plates.first(), look.is_some()) {
+                (Some(p), _) => format!("Read the plate {} and saved the photo", p.text),
+                (None, true) => "Saved how it looks (no plate could be read — type it in)".to_string(),
+                (None, false) => "Photo saved (no plate could be read — type it in; turn on smart search to also match how it looks)".to_string(),
+            };
+            anyhow::Ok(json!({ "ok": true, "message": what }))
+        }
+    }
+    .await;
+    match res {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn known_photo_get(
+    State(m): App,
+    Path((id, name)): Path<(String, String)>,
+    req: Request,
+) -> Response {
+    match m.known.photo_path(&id, &name) {
+        Some(p) => serve_file(p, req, None, false).await,
+        None => err(StatusCode::NOT_FOUND, "not found"),
+    }
+}
+
+#[derive(Deserialize)]
+struct LearnReq {
+    camera: String,
+    event: String,
+    face: usize,
+}
+
+/// "This is …": name a face seen in an alert (and learn it).
+async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnReq>) -> Response {
+    let res = (|| {
+        let k = m
+            .known
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("not found"))?;
+        let c = m
+            .camera(&r.camera)
+            .ok_or_else(|| anyhow::anyhow!("camera not found"))?;
+        let mut e = c
+            .events
+            .get(&r.event)
+            .ok_or_else(|| anyhow::anyhow!("alert not found"))?;
+        let f = e
+            .faces
+            .get_mut(r.face)
+            .ok_or_else(|| anyhow::anyhow!("face not found"))?;
+        let print = crate::known::unpack(&f.print);
+        let photo = std::fs::read(c.events.dir().join(&f.file)).ok();
+        m.known
+            .add(&id, Some(&print), None, None, photo.as_deref())?;
+        f.name = Some(k.name.clone());
+        e.notes.retain(|n| n != "Unknown face");
+        let note = format!("Recognized {}", k.name);
+        if !e.notes.contains(&note) {
+            e.notes.push(note);
+        }
+        e.summary.clear(); // described again, with the name
+        c.events.save(e);
+        anyhow::Ok(k.name)
+    })();
+    match res {
+        Ok(name) => Json(json!({ "ok": true, "message": format!("Learned — this is {name}") }))
+            .into_response(),
+        Err(e) => bad(e),
+    }
 }
 
 async fn get_profiles(State(m): App) -> Response {
@@ -2066,6 +2209,10 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         return false;
     }
     if read {
+        return true;
+    }
+    // Operators may teach who someone is from an alert.
+    if role == Operator && path.starts_with("/api/known/") && path.ends_with("/learn") {
         return true;
     }
     // Changes anyone signed in may make.

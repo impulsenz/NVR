@@ -79,6 +79,14 @@ viewing, finding footage, and managing everything, all from the browser.
   confident answer is kept.
 - Each recognized object gets a **colour**; language-model AIs also add a short description.
 - "Test on this camera" shows the camera's picture with detection boxes.
+- **Zones** (camera settings → Zones), like Frigate and Blue Iris: draw areas and lines on the picture.
+  Alert only for objects inside an area, when something **crosses a line** (in either or one direction),
+  when someone **lingers**, or when an **item is left or taken** (packages on the porch).
+- **Faces & number plates** (Settings → People & vehicles, optional): GAZE finds faces and reads number
+  plates in alerts, using the full-quality recording. Teach it people (upload a few photos, or answer
+  "Who is this?" on a face in an alert) and vehicles (number plate and photos). Alerts then say
+  "Recognized Mum" or "Plate ABC123 — Dad's car", and you can search for them. Runs on this computer
+  (OpenCV YuNet/SFace and fast-alpr models, about 50 MB, downloaded once).
 
 **Recordings**
 - **Calendar** to pick a single day or a range, optionally limited to a time of day.

@@ -347,6 +347,17 @@ pub async fn run(mgr: Arc<Manager>) {
                     // Finished alerts only (their picture won't change any more).
                     .filter(|e| (chrono::Local::now() - e.end).num_seconds() > 30)
                     .filter(|e| !mgr.smart.has(&store, &e.id) || e.summary.is_empty())
+                    // Faces / plates first, so names go into the description.
+                    .filter(|e| {
+                        let ai = mgr.config().ai;
+                        !(ai.faces || ai.plates)
+                            || e.identified
+                            || !e.boxes.iter().any(|b| {
+                                ["person", "car", "truck", "bus", "motorcycle"]
+                                    .contains(&b.label.as_str())
+                            })
+                            || (chrono::Local::now() - e.end).num_minutes() > 10
+                    })
                     .collect();
                 todo.sort_by(|a, b| b.start.cmp(&a.start));
                 for e in todo.into_iter().take(40) {
