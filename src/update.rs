@@ -17,7 +17,33 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tracing::{info, warn};
 
-pub const REPO: &str = "impulsenz/NVR";
+/// Where updates come from unless the settings say otherwise: the GitHub
+/// repository this program was built from (set by the release workflow),
+/// or the original GAZE repository.
+pub const DEFAULT_REPO: &str = match option_env!("GAZE_UPDATE_REPO") {
+    Some(r) => r,
+    None => "impulsenz/NVR",
+};
+
+/// "owner/name" of the repository to update from.
+pub fn repo(cfg: &crate::config::UpdateConfig) -> String {
+    let r = cfg
+        .repo
+        .trim()
+        .trim_start_matches("https://github.com/")
+        .trim_end_matches('/');
+    if r.split('/').count() == 2
+        && r.split('/').all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        })
+    {
+        r.to_string()
+    } else {
+        DEFAULT_REPO.to_string()
+    }
+}
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The release file for this system.
@@ -34,6 +60,8 @@ fn asset_name() -> Option<&'static str> {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Status {
     pub current: String,
+    /// Repository updates come from ("owner/name").
+    pub repo: String,
     /// Newest version on GitHub.
     pub latest: Option<String>,
     pub notes: String,
@@ -63,6 +91,7 @@ fn with<R>(f: impl FnOnce(&mut Status) -> R) -> R {
     let mut g = STATUS.lock().unwrap();
     let s = g.get_or_insert_with(|| Status {
         current: VERSION.into(),
+        repo: DEFAULT_REPO.into(),
         state: "idle".into(),
         ..Default::default()
     });
@@ -93,15 +122,16 @@ fn client() -> Result<reqwest::Client> {
 }
 
 /// Ask GitHub for the newest release.
-pub async fn check() -> Result<Status> {
+pub async fn check(repo: &str) -> Result<Status> {
     with(|s| {
         s.state = "checking".into();
         s.error = None;
+        s.repo = repo.to_string();
     });
     let res = async {
         let v: Value = client()?
             .get(format!(
-                "{}/repos/{REPO}/releases/latest",
+                "{}/repos/{repo}/releases/latest",
                 std::env::var("GAZE_UPDATE_API")
                     .unwrap_or_else(|_| "https://api.github.com".into())
             ))
@@ -293,7 +323,7 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
     loop {
         if last_check.is_none_or(|t| t.elapsed() > Duration::from_secs(6 * 3600)) {
             last_check = Some(std::time::Instant::now());
-            match check().await {
+            match check(&repo(&mgr.config().update)).await {
                 Ok(s) if s.available => {
                     info!("update available: GAZE {}", s.latest.unwrap_or_default())
                 }
@@ -333,5 +363,16 @@ mod tests {
             sibling(Path::new("/opt/gaze/nvr"), ".new"),
             Path::new("/opt/gaze/nvr.new")
         );
+        let r = |s: &str| {
+            repo(&crate::config::UpdateConfig {
+                auto: true,
+                repo: s.into(),
+            })
+        };
+        assert_eq!(r("me/NVR"), "me/NVR");
+        assert_eq!(r("https://github.com/me/my-gaze/"), "me/my-gaze");
+        assert_eq!(r(""), DEFAULT_REPO);
+        assert_eq!(r("me/NVR/../../x"), DEFAULT_REPO, "no paths");
+        assert_eq!(r("me/N V R"), DEFAULT_REPO);
     }
 }

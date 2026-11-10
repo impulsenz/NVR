@@ -3924,17 +3924,21 @@ async function renderInfo(body) {
     <dt>Log file</dt><dd>${esc(sysinfo.log_file || '–')}</dd><dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd></dl></div>
     <div class="card admin-only"><h2>Updates</h2><div id="upd"></div>
       <div class="form" style="margin-top:8px"><span></span><div><label class="check"><input type="checkbox" id="upd-auto" ${settings.update && settings.update.auto === false ? '' : 'checked'}> Install updates automatically</label>
-        <div class="hint">At night (2–5 am), when no alert is going on: GAZE downloads the new version from GitHub, checks it, swaps it in and restarts in a few seconds — also when it runs as a Windows service. Recording continues right after.</div></div></div></div>
+        <div class="hint">At night (2–5 am), when no alert is going on: GAZE downloads the new version from GitHub, checks it, swaps it in and restarts in a few seconds — also when it runs as a Windows service. Recording continues right after.</div></div>
+        <label for="upd-repo">Update from</label><div><div class="row"><span class="muted">github.com/</span><input type="text" id="upd-repo" value="${esc((settings.update && settings.update.repo) || '')}" placeholder="owner/repository" style="flex:1"><button type="button" id="upd-repo-save">Save</button></div>
+          <div class="hint">Empty: the GitHub repository this copy of GAZE was built from. Enter your own (e.g. <code>you/NVR</code>) to get updates from your fork's releases — see UPDATES.md.</div></div></div></div>
     <div class="card changelog"><h2>What's new</h2><div id="chlog" class="muted">Loading…</div></div>`;
   try { $('chlog').innerHTML = mdLite(await (await fetch('api/changelog')).text()); } catch (e) {}
   if (!$('upd')) return;
-  $('upd-auto').onchange = () => saveSettings({update: {auto: chk('upd-auto')}}, chk('upd-auto') ? 'Updates will install automatically' : 'Automatic updates off');
+  const saveUpd = (msg) => saveSettings({update: {auto: chk('upd-auto'), repo: val('upd-repo').trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '')}}, msg);
+  $('upd-auto').onchange = () => saveUpd(chk('upd-auto') ? 'Updates will install automatically' : 'Automatic updates off');
+  $('upd-repo-save').onclick = async () => { if (await saveUpd('Saved')) { try { show(await api('api/update/check', {method: 'POST'})); } catch (e) { toast(e.message, true); } } };
   let timer = null;
   const show = (u) => {
     const box = $('upd'); if (!box) { clearInterval(timer); return; }
     const busy = ['downloading', 'installing', 'restarting'].includes(u.state);
     const pct = u.total ? Math.round(100 * u.done / u.total) : null;
-    box.innerHTML = `<dl><dt>This version</dt><dd>${esc(u.current)}</dd><dt>Newest</dt><dd>${u.latest ? esc(u.latest) : '–'}${u.checked ? ` <span class="muted small">(checked ${fmtAgo(u.checked)})</span>` : ''}</dd></dl>
+    box.innerHTML = `<dl><dt>This version</dt><dd>${esc(u.current)}</dd><dt>Updates from</dt><dd><a href="https://github.com/${esc(u.repo || '')}/releases" target="_blank" rel="noopener">github.com/${esc(u.repo || '')}</a></dd><dt>Newest</dt><dd>${u.latest ? esc(u.latest) : '–'}${u.checked ? ` <span class="muted small">(checked ${fmtAgo(u.checked)})</span>` : ''}</dd></dl>
       ${u.error ? `<div class="errc small">${esc(u.error)}</div>` : ''}
       ${u.state === 'restarting' ? '<div class="okc">Installed — GAZE is restarting; this page reloads in a moment…</div>'
         : busy ? `<div>${u.state === 'downloading' ? 'Downloading' : 'Installing'} GAZE ${esc(u.latest || '')}… ${pct != null ? pct + '%' : ''}</div>${pct != null ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ''}`

@@ -2060,8 +2060,8 @@ async fn update_status() -> Response {
     Json(crate::update::status()).into_response()
 }
 
-async fn update_check() -> Response {
-    match crate::update::check().await {
+async fn update_check(State(m): App) -> Response {
+    match crate::update::check(&crate::update::repo(&m.config().update)).await {
         Ok(s) => Json(s).into_response(),
         Err(e) => bad(e),
     }

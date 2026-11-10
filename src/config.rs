@@ -296,11 +296,17 @@ impl Default for AiConfig {
 pub struct UpdateConfig {
     /// Install new versions automatically at night (2–5 am).
     pub auto: bool,
+    /// GitHub repository to update from ("owner/name"); empty = the one
+    /// this program was built from.
+    pub repo: String,
 }
 
 impl Default for UpdateConfig {
     fn default() -> Self {
-        Self { auto: true }
+        Self {
+            auto: true,
+            repo: String::new(),
+        }
     }
 }
 

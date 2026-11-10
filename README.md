@@ -140,9 +140,8 @@ viewing, finding footage, and managing everything, all from the browser.
   *Install updates automatically* (on by default) it updates at night when no alert is going on. The new
   program is downloaded, its checksum verified, swapped in, and GAZE restarts in seconds — also when it
   runs as a Windows service. The previous version is kept until the next start.
-- Making a release (for developers): bump `version` in `Cargo.toml`, add a section to `CHANGELOG.md`,
-  then `git tag v0.6.0 && git push origin v0.6.0`. GitHub Actions builds Windows and Linux and publishes
-  the release (`.github/workflows/release.yml`).
+- **[UPDATES.md](UPDATES.md)** explains downloading, publishing a new version (GitHub builds it from a
+  version tag) and hosting your own copy on your own GitHub (your builds then update from your releases).
 
 **System & logs**
 - **Smart load balancing** (on by default): when the GPU is busy (a game, another program) and the
@@ -194,7 +193,7 @@ viewing, finding footage, and managing everything, all from the browser.
 [latest release](https://github.com/impulsenz/NVR/releases/latest), put it in a folder of its own and
 start it. You also need [ffmpeg](https://ffmpeg.org) (with ffprobe) — on Windows:
 `winget install ffmpeg`. From then on GAZE **updates itself** (Settings → About): one click, or
-automatically at night.
+automatically at night. See [UPDATES.md](UPDATES.md).
 
 **Or build it yourself:** you need [Rust](https://rustup.rs) and [ffmpeg](https://ffmpeg.org) (with ffprobe).
 
