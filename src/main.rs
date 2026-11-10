@@ -39,35 +39,138 @@ mod talk;
 mod tray;
 mod users;
 mod web;
+mod winservice;
 mod zones;
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+
 use tracing::{error, info, warn};
 
-/// Set by the tray menu: stop (and maybe start again).
+/// Set by the tray menu or the service manager: stop.
 static QUIT: tokio::sync::Notify = tokio::sync::Notify::const_new();
-static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// What to do after stopping (a tray::Action).
+static AFTER: std::sync::Mutex<Option<tray::Action>> = std::sync::Mutex::new(None);
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn runtime() -> Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?)
+}
+
+fn main() -> Result<()> {
+    #[cfg(windows)]
+    use winservice::Mode;
+    let (mode, path, dir) = winservice::parse_args();
+    if let Some(d) = &dir {
+        let _ = std::env::set_current_dir(d);
+    }
+    #[cfg(windows)]
+    match mode {
+        Mode::Install => {
+            let listen = config::Config::load_or_create(&path)
+                .map(|(c, _)| c.server.listen)
+                .unwrap_or_default();
+            let dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            std::process::exit(winservice::install(&path, &dir, &listen));
+        }
+        Mode::Uninstall => std::process::exit(winservice::uninstall()),
+        Mode::RestartService => std::process::exit(winservice::restart()),
+        Mode::Service => {
+            let p = path.clone();
+            let ok = winservice::run_service(
+                move || {
+                    if let Ok(rt) = runtime() {
+                        let _ = rt.block_on(run(&p, false));
+                    }
+                },
+                || QUIT.notify_one(),
+            );
+            if !ok {
+                eprintln!(
+                    "--service is used by the Windows service manager; start nvr.exe without it."
+                );
+            }
+            return Ok(());
+        }
+        Mode::Companion | Mode::Normal => {
+            // GAZE runs as a service (now, or about to): just the icon.
+            if mode == Mode::Companion || winservice::installed() {
+                return companion(&path, mode == Mode::Companion);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = mode;
     tray::attach_console();
-    let res = run().await;
+    let res = runtime()?.block_on(run(&path, true));
     if let Err(e) = &res {
         error!("{e:#}");
         tray::fatal(&format!("{e:#}"));
     }
     tray::remove();
-    if res.is_ok() && RESTART.load(std::sync::atomic::Ordering::SeqCst) {
-        let exe = std::env::current_exe()?;
-        std::process::Command::new(exe)
-            .args(std::env::args_os().skip(1))
-            .spawn()?;
+    let exe = std::env::current_exe()?;
+    match *AFTER.lock().unwrap() {
+        Some(tray::Action::Restart) if res.is_ok() => {
+            std::process::Command::new(exe)
+                .args(std::env::args_os().skip(1))
+                .spawn()?;
+        }
+        Some(tray::Action::BecomeService) => {
+            // The service is taking over; the icon stays for this user.
+            std::process::Command::new(exe)
+                .arg("--companion")
+                .arg(&path)
+                .spawn()?;
+        }
+        _ => {}
     }
     res
 }
 
-async fn run() -> Result<()> {
+/// Windows, when GAZE runs as a service: only the tray icon for the
+/// signed-in user (open GAZE, restart, turn the service off).
+#[cfg(windows)]
+fn companion(path: &std::path::Path, just_installed: bool) -> Result<()> {
+    // Right after "Run as a Windows service": wait for it to appear.
+    let t = std::time::Instant::now();
+    while just_installed
+        && !winservice::installed()
+        && t.elapsed() < std::time::Duration::from_secs(180)
+    {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    if !winservice::installed() {
+        return Ok(());
+    }
+    let (cfg, _) = config::Config::load_or_create(path)?;
+    let base = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let port = cfg
+        .server
+        .listen
+        .rsplit(':')
+        .next()
+        .unwrap_or("8080")
+        .to_string();
+    tray::start(
+        tray::TrayInfo {
+            url: format!("http://localhost:{port}/"),
+            recordings: std::path::absolute(&cfg.storage.dir).unwrap_or(cfg.storage.dir.clone()),
+            log: std::path::absolute(base.join("nvr-data").join("nvr.log")).unwrap_or_default(),
+            config: path.to_path_buf(),
+            companion: true,
+        },
+        Box::new(|_| QUIT.notify_one()),
+    );
+    runtime()?.block_on(QUIT.notified());
+    tray::remove();
+    Ok(())
+}
+
+async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
+    let path = path.to_path_buf();
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     tracing_subscriber::registry()
@@ -82,7 +185,6 @@ async fn run() -> Result<()> {
     // HTTPS (cloud AI, model download) uses rustls with the ring crypto backend.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let path = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "nvr.toml".into()));
     let (cfg, needs_save) = config::Config::load_or_create(&path)?;
     // Logs, statistics and AI models live next to the config file.
     let data_dir = path
@@ -144,18 +246,22 @@ async fn run() -> Result<()> {
     info!("web interface on http://{listen}");
     let port = listen.rsplit(':').next().unwrap_or("8080");
     let cfg = mgr.config();
-    tray::start(
-        tray::TrayInfo {
-            url: format!("http://localhost:{port}/"),
-            recordings: std::path::absolute(&cfg.storage.dir).unwrap_or(cfg.storage.dir.clone()),
-            log: std::path::absolute(mgr.data_dir.join("nvr.log")).unwrap_or_default(),
-            config: mgr.cfg_path.clone(),
-        },
-        Box::new(|restart| {
-            RESTART.store(restart, std::sync::atomic::Ordering::SeqCst);
-            QUIT.notify_one();
-        }),
-    );
+    if with_tray {
+        tray::start(
+            tray::TrayInfo {
+                url: format!("http://localhost:{port}/"),
+                recordings: std::path::absolute(&cfg.storage.dir)
+                    .unwrap_or(cfg.storage.dir.clone()),
+                log: std::path::absolute(mgr.data_dir.join("nvr.log")).unwrap_or_default(),
+                config: mgr.cfg_path.clone(),
+                companion: false,
+            },
+            Box::new(|action| {
+                *AFTER.lock().unwrap() = Some(action);
+                QUIT.notify_one();
+            }),
+        );
+    }
 
     tokio::select! {
         res = axum::serve(listener, web::router(mgr.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()) => {

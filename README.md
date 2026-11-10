@@ -144,7 +144,11 @@ viewing, finding footage, and managing everything, all from the browser.
   buttons to rebuild previews, refresh alert pictures from the HD recordings, describe alerts again or
   look for faces & plates again.
 - On Windows GAZE runs **without a console window**: an icon by the clock opens it (click) and has a
-  menu (right-click) for the recordings folder, the log, **start with Windows**, restart and quit.
+  menu (right-click) for the recordings folder, the log, start when you sign in, restart and quit.
+- **Run as a Windows service** (tray menu): one click (Windows asks for permission once) and GAZE starts
+  with the computer — before anyone signs in — keeps recording after you sign out, and is restarted
+  automatically if it ever crashes. The tray icon still appears when you sign in (open GAZE, restart,
+  or turn it back into a normal program).
 - **CPU, GPU and memory** usage with graphs (1 hour to 30 days, kept across restarts), so you can see if
   the server was overloaded while you were away. NVIDIA GPUs are read via nvidia-smi, AMD on Linux via
   sysfs, and any GPU on Windows via performance counters.

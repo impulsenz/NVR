@@ -16,10 +16,20 @@ pub struct TrayInfo {
     pub log: PathBuf,
     /// The settings file (passed again when starting with Windows).
     pub config: PathBuf,
+    /// GAZE runs as a Windows service; this is only the icon.
+    pub companion: bool,
 }
 
-/// Called from the tray when the user picks Quit (false) or Restart (true).
-type OnQuit = Box<dyn Fn(bool) + Send + Sync>;
+/// What the user chose in the tray menu.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Action {
+    Quit,
+    Restart,
+    /// The service is being set up: stop so it can take over.
+    BecomeService,
+}
+
+type OnQuit = Box<dyn Fn(Action) + Send + Sync>;
 
 static INFO: OnceLock<(TrayInfo, OnQuit)> = OnceLock::new();
 
@@ -37,7 +47,7 @@ pub fn fatal(_msg: &str) {}
 
 #[cfg(windows)]
 mod win {
-    use super::{INFO, OnQuit, TrayInfo};
+    use super::{Action, INFO, OnQuit, TrayInfo};
     use std::ffi::c_void;
     use std::ptr::{null, null_mut};
     use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
@@ -60,6 +70,7 @@ mod win {
     const ID_AUTOSTART: usize = 4;
     const ID_RESTART: usize = 5;
     const ID_QUIT: usize = 6;
+    const ID_SERVICE: usize = 7;
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
     static HWND_: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
@@ -112,6 +123,18 @@ mod win {
         }
     }
 
+    fn ask(hwnd: HWND, text: &str, title: &str) -> bool {
+        let (t, c) = (w(text), w(title));
+        unsafe { MessageBoxW(hwnd, t.as_ptr(), c.as_ptr(), MB_YESNO | MB_ICONQUESTION) == IDYES }
+    }
+
+    fn tell(hwnd: HWND, text: &str, title: &str) {
+        let (t, c) = (w(text), w(title));
+        unsafe {
+            MessageBoxW(hwnd, t.as_ptr(), c.as_ptr(), MB_OK | MB_ICONINFORMATION);
+        }
+    }
+
     fn open(target: &str) {
         let (op, t) = (w("open"), w(target));
         unsafe {
@@ -139,13 +162,32 @@ mod win {
         d.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         d.uCallbackMessage = WM_TRAY;
         d.hIcon = ICON.load(Ordering::SeqCst);
-        copy(&mut d.szTip, "GAZE — recording your cameras");
+        let companion = INFO.get().is_some_and(|(i, _)| i.companion);
+        copy(
+            &mut d.szTip,
+            if companion {
+                "GAZE — running as a Windows service"
+            } else {
+                "GAZE — recording your cameras"
+            },
+        );
         if greet {
             d.uFlags |= NIF_INFO;
-            copy(&mut d.szInfoTitle, "GAZE is running");
+            copy(
+                &mut d.szInfoTitle,
+                if companion {
+                    "GAZE runs as a Windows service"
+                } else {
+                    "GAZE is running"
+                },
+            );
             copy(
                 &mut d.szInfo,
-                "Click this icon to open GAZE. Right-click for more.",
+                if companion {
+                    "It starts with the computer. Click this icon to open GAZE."
+                } else {
+                    "Click this icon to open GAZE. Right-click for more."
+                },
             );
         }
         unsafe { Shell_NotifyIconW(NIM_ADD, &d) };
@@ -204,13 +246,29 @@ mod win {
             add(ID_FOLDER, "Open recordings folder", 0);
             add(ID_LOG, "Open log file", 0);
             AppendMenuW(m, MF_SEPARATOR, 0, null());
-            add(
-                ID_AUTOSTART,
-                "Start with Windows",
-                if autostart_on() { MF_CHECKED } else { 0 },
-            );
-            add(ID_RESTART, "Restart GAZE", 0);
-            add(ID_QUIT, "Quit GAZE", 0);
+            if info.companion {
+                add(ID_SERVICE, "Running as a Windows service", MF_CHECKED);
+                add(
+                    ID_AUTOSTART,
+                    "Show this icon when I sign in",
+                    if autostart_on() { MF_CHECKED } else { 0 },
+                );
+                add(ID_RESTART, "Restart GAZE", 0);
+                add(ID_QUIT, "Hide this icon", 0);
+            } else {
+                add(
+                    ID_SERVICE,
+                    "Run as a Windows service (starts with the computer)…",
+                    0,
+                );
+                add(
+                    ID_AUTOSTART,
+                    "Start when I sign in",
+                    if autostart_on() { MF_CHECKED } else { 0 },
+                );
+                add(ID_RESTART, "Restart GAZE", 0);
+                add(ID_QUIT, "Quit GAZE", 0);
+            }
             SetMenuDefaultItem(m, ID_OPEN as u32, 0);
             let mut p = POINT { x: 0, y: 0 };
             GetCursorPos(&mut p);
@@ -234,7 +292,75 @@ mod win {
                 }
                 ID_LOG => open(&info.log.to_string_lossy()),
                 ID_AUTOSTART => set_autostart(!autostart_on()),
-                ID_RESTART => on_quit(true),
+                ID_SERVICE if !info.companion => {
+                    if ask(
+                        hwnd,
+                        "Run GAZE as a Windows service?\n\nGAZE will start when the computer starts — even before anyone signs in — and keep recording after you sign out. Windows will ask for permission once.\n\nYou can turn this back into a normal program from this icon.",
+                        "Run as a Windows service",
+                    ) {
+                        let cfg = std::path::absolute(&info.config).unwrap_or(info.config.clone());
+                        let dir = std::env::current_dir().unwrap_or_default();
+                        match crate::winservice::elevate(
+                            &format!(
+                                "--install-service \"{}\" --dir \"{}\"",
+                                cfg.display(),
+                                dir.display()
+                            ),
+                            false,
+                        ) {
+                            Some(_) => {
+                                // The icon comes back at sign-in.
+                                set_autostart(true);
+                                on_quit(Action::BecomeService);
+                            }
+                            None => tell(
+                                hwnd,
+                                "Nothing was changed: Windows didn't give permission.",
+                                "GAZE",
+                            ),
+                        }
+                    }
+                }
+                ID_SERVICE => {
+                    if ask(
+                        hwnd,
+                        "Stop running GAZE as a Windows service?\n\nGAZE will run as a normal program again: it records while someone is signed in to this computer.",
+                        "GAZE",
+                    ) {
+                        match crate::winservice::elevate("--uninstall-service", true) {
+                            Some(0) => {
+                                let exe = std::env::current_exe().unwrap_or_default();
+                                let _ = std::process::Command::new(exe).arg(&info.config).spawn();
+                                on_quit(Action::Quit);
+                            }
+                            Some(_) => {}
+                            None => tell(
+                                hwnd,
+                                "Nothing was changed: Windows didn't give permission.",
+                                "GAZE",
+                            ),
+                        }
+                    }
+                }
+                ID_RESTART if info.companion => {
+                    if crate::winservice::elevate("--restart-service", true).is_none() {
+                        tell(
+                            hwnd,
+                            "GAZE was not restarted: Windows didn't give permission.",
+                            "GAZE",
+                        );
+                    }
+                }
+                ID_RESTART => on_quit(Action::Restart),
+                ID_QUIT if info.companion => {
+                    if ask(
+                        hwnd,
+                        "Hide this icon?\n\nGAZE keeps recording in the background (it runs as a Windows service). Start nvr.exe to bring the icon back.",
+                        "GAZE",
+                    ) {
+                        on_quit(Action::Quit);
+                    }
+                }
                 ID_QUIT => {
                     let (t, c) = (
                         w(
@@ -249,7 +375,7 @@ mod win {
                         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
                     ) == IDYES
                     {
-                        on_quit(false);
+                        on_quit(Action::Quit);
                     }
                 }
                 _ => {}
