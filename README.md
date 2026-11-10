@@ -103,6 +103,9 @@ viewing, finding footage, and managing everything, all from the browser.
   "Recognized Mum" or "Plate ABC123 — Dad's car", and you can search for them. If the alert picture shows
   no face (or nobody known), up to six more moments of the HD recording are searched. Runs on this computer
   (OpenCV YuNet/SFace and fast-alpr models, about 50 MB, downloaded once).
+  **New faces & number plates** appear in Settings → People & vehicles, grouped (the same person across
+  many alerts is shown once): choose who it is or whose car, and GAZE names all those alerts and learns
+  them; hide passers-by. Vehicle photos teach both the plate and (with smart search) how it looks.
 
 **Phone notifications**
 - Through the free **ntfy** app (Android/iPhone), Settings → Notifications: the alert picture a few

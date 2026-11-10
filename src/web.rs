@@ -124,6 +124,9 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         )
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
+        .route("/api/known-inbox", get(inbox_list))
+        .route("/api/known-inbox/assign", post(inbox_assign))
+        .route("/api/known-inbox/dismiss", post(inbox_dismiss))
         .route("/api/cloud/status", get(cloud_status))
         .route("/api/cloud/remotes", post(cloud_remotes))
         .route("/api/alerts/seen", post(alerts_seen))
@@ -625,6 +628,148 @@ async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnR
     match res {
         Ok(name) => Json(json!({ "ok": true, "message": format!("Learned — this is {name}") }))
             .into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+// ---------- new faces & plates ----------
+
+fn recent_events(m: &Manager, days: i64) -> Vec<crate::events::Event> {
+    let now = Local::now();
+    m.cameras()
+        .iter()
+        .flat_map(|c| c.events.between(now - chrono::Duration::days(days), now))
+        .collect()
+}
+
+async fn inbox_list(State(m): App) -> Response {
+    let evs = recent_events(&m, 30);
+    let d = crate::inbox::dismissed(&m.data_dir);
+    let faces = crate::inbox::group_faces(&evs, &d);
+    let plates = crate::inbox::group_plates(&evs, &d, |p| m.known.match_plate(p).is_some());
+    Json(json!({ "faces": faces, "plates": plates })).into_response()
+}
+
+#[derive(Deserialize)]
+struct InboxReq {
+    /// Known person / vehicle id (assign).
+    #[serde(default)]
+    known: String,
+    #[serde(default)]
+    members: Vec<crate::inbox::FaceRef>,
+    #[serde(default)]
+    plate: String,
+}
+
+/// Name every alert a face group is in, and learn the face.
+async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
+    let res = (|| {
+        let k = m
+            .known
+            .get(&r.known)
+            .ok_or_else(|| anyhow::anyhow!("choose a person or vehicle"))?;
+        if !r.plate.is_empty() {
+            if k.kind != "vehicle" {
+                anyhow::bail!("a number plate belongs to a vehicle");
+            }
+            m.known.add(&k.id, None, None, Some(&r.plate), None)?;
+            // Alerts with this plate now say whose it is.
+            let mut n = 0;
+            for c in m.cameras() {
+                for mut e in c
+                    .events
+                    .between(Local::now() - chrono::Duration::days(30), Local::now())
+                {
+                    if !e
+                        .plates
+                        .iter()
+                        .any(|p| crate::recog::plate_matches(p, &r.plate))
+                    {
+                        continue;
+                    }
+                    let note = format!("Plate {} — {}", r.plate, k.name);
+                    e.notes
+                        .retain(|x| !x.ends_with(&format!(" plate {}", r.plate)));
+                    if !e.notes.contains(&note) {
+                        e.notes.push(note);
+                    }
+                    e.summary.clear();
+                    c.events.save(e);
+                    n += 1;
+                }
+            }
+            return anyhow::Ok(format!(
+                "Plate {} is {} — {n} alert(s) updated",
+                r.plate, k.name
+            ));
+        }
+        if k.kind != "person" {
+            anyhow::bail!("a face belongs to a person");
+        }
+        let mut prints = Vec::new();
+        let mut photo = None;
+        for f in &r.members {
+            let Some(c) = m.camera(&f.camera) else {
+                continue;
+            };
+            let Some(mut e) = c.events.get(&f.event) else {
+                continue;
+            };
+            let Some(face) = e.faces.get_mut(f.face) else {
+                continue;
+            };
+            prints.push(crate::known::unpack(&face.print));
+            if photo.is_none() {
+                photo = std::fs::read(c.events.dir().join(&face.file)).ok();
+            }
+            face.name = Some(k.name.clone());
+            if !e.faces.iter().any(|x| x.name.is_none()) {
+                e.notes.retain(|n| n != "Unknown face");
+            }
+            let note = format!("Recognized {}", k.name);
+            if !e.notes.contains(&note) {
+                e.notes.push(note);
+            }
+            e.summary.clear(); // described again, with the name
+            c.events.save(e);
+        }
+        anyhow::ensure!(!prints.is_empty(), "those alerts are gone");
+        for (i, p) in crate::inbox::learn_set(&prints).iter().enumerate() {
+            m.known.add(
+                &k.id,
+                Some(p),
+                None,
+                None,
+                if i == 0 { photo.as_deref() } else { None },
+            )?;
+        }
+        anyhow::Ok(format!(
+            "This is {} — {} alert(s) named and the face learned",
+            k.name,
+            r.members.len()
+        ))
+    })();
+    match res {
+        Ok(msg) => Json(json!({ "ok": true, "message": msg })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// "Not interesting": hide a face (a passer-by) or a plate from the list.
+async fn inbox_dismiss(State(m): App, Json(r): Json<InboxReq>) -> Response {
+    let mut d = crate::inbox::dismissed(&m.data_dir);
+    if !r.plate.is_empty() {
+        d.plates.push(r.plate.clone());
+    } else if let Some(f) = r.members.first()
+        && let Some(e) = m.camera(&f.camera).and_then(|c| c.events.get(&f.event))
+        && let Some(p) = crate::inbox::print_of(&e, f.face)
+    {
+        d.faces.push(p);
+    } else {
+        return err(StatusCode::BAD_REQUEST, "nothing to hide");
+    }
+    match crate::inbox::save_dismissed(&m.data_dir, &d) {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
         Err(e) => bad(e),
     }
 }

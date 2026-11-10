@@ -625,3 +625,10 @@ ol.steps code { user-select: all; }
 
 #focus-talk { user-select: none; -webkit-user-select: none; touch-action: none; -webkit-touch-callout: none; }
 #focus-talk.connecting { background: var(--panel2); animation: talkpulse 0.8s ease-in-out infinite; }
+
+/* New faces & plates */
+.ib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.ib { background: var(--panel2); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.ib img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; }
+.ib img.wide { width: 100%; height: 80px; }
+.ib select { width: 100%; font-size: 13px; }

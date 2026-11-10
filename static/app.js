@@ -4029,8 +4029,15 @@ function photoToJpeg(file, max = 1600) {
   });
 }
 async function renderKnown(body) {
-  const list = await api('api/known').catch(() => []);
+  const [list, inbox] = await Promise.all([api('api/known').catch(() => []), api('api/known-inbox').catch(() => ({faces: [], plates: []}))]);
   const a = settings.ai;
+  const people = list.filter(k => k.kind === 'person'), vehicles = list.filter(k => k.kind === 'vehicle');
+  const pick = (kind, i) => `<select class="ib-who" data-kind="${kind}" data-i="${i}"><option value="">${kind === 'face' ? 'Who is this?' : 'Whose vehicle?'}</option>${(kind === 'face' ? people : vehicles).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">${kind === 'face' ? 'New person…' : 'New vehicle…'}</option></select>`;
+  const inboxCard = `<div class="card"><h2>New faces &amp; number plates <span class="muted small">${inbox.faces.length + inbox.plates.length ? `(${inbox.faces.length + inbox.plates.length})` : ''}</span></h2>
+    <p class="muted" style="margin-top:0">Faces GAZE couldn't name and number plates of no known vehicle, from the last 30 days. The same person seen in several alerts is shown once. Choose who it is and GAZE names all those alerts and learns the face; or hide passers-by.</p>
+    ${inbox.faces.length + inbox.plates.length ? '' : `<div class="hint">${a.faces || a.plates ? 'Nothing new. New faces and plates appear here as alerts come in.' : 'Turn on faces and/or number plates below first.'}</div>`}
+    <div class="ib-grid">${inbox.faces.map((g, i) => `<div class="ib"><img src="${esc(g.picture)}" alt=""><div class="muted small">${g.count} alert${g.count === 1 ? '' : 's'} · ${fmtAgo(g.last)}</div>${pick('face', i)}<button type="button" class="small ib-hide" data-kind="face" data-i="${i}">Hide</button></div>`).join('')}
+    ${inbox.plates.map((g, i) => `<div class="ib">${g.picture ? `<img src="${esc(g.picture)}" alt="" class="wide">` : ''}<span class="plate">${esc(g.plate)}</span><div class="muted small">${g.count} alert${g.count === 1 ? '' : 's'} · ${fmtAgo(g.last)}</div>${pick('plate', i)}<button type="button" class="small ib-hide" data-kind="plate" data-i="${i}">Hide</button></div>`).join('')}</div></div>`;
   body.innerHTML = `<div class="card"><h2>People &amp; vehicles</h2>
     <p class="muted" style="margin-top:0">Teach GAZE who and what it sees. Alerts then say “Recognized Mum” or “Plate ABC123 — Dad's car”, and you can search for them. Everything runs on this computer.</p>
     <div class="form">
@@ -4039,6 +4046,7 @@ async function renderKnown(body) {
       <span></span><div><label class="check"><input type="checkbox" id="k-plates" ${a.plates ? 'checked' : ''}> Read number plates of vehicles in alerts</label>
         <div class="hint">Uses fast-alpr's plate finder and reader (about 10 MB). Plates must be readable in the full-quality recording.</div></div>
     </div><div class="actions"><button type="button" class="primary" id="k-save-ai">Save</button></div></div>
+    ${inboxCard}
     <div class="card"><div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:1">Known people and vehicles</h2>
       <button type="button" id="k-add-person">＋ Person</button><button type="button" id="k-add-vehicle">＋ Vehicle</button></div>
       ${list.length ? '' : '<div class="hint">Nobody yet. Add a person and upload a few clear photos of their face, or a vehicle with its number plate — or name faces straight from an alert (“Who is this?”).</div>'}
@@ -4047,7 +4055,7 @@ async function renderKnown(body) {
         <div class="k-photos">${k.photos.map(p => `<img src="api/known/${enc(k.id)}/photo/${enc(p)}" alt="">`).join('')}
           <label class="k-add btn small">＋ Photo<input type="file" accept="image/*" multiple hidden></label></div>
         <div class="hint">${k.kind === 'person' ? `${k.faces} face${k.faces === 1 ? '' : 's'} learned${k.faces < 3 ? ' — 3 or more clear photos work best' : ''}`
-          : `Plates: <input type="text" class="k-plates" value="${esc(k.plates.join(', '))}" placeholder="ABC123, …" style="width:180px"> <button type="button" class="small k-psave">Save</button>${k.looks ? ` · ${k.looks} look${k.looks === 1 ? '' : 's'} learned` : ''}`}</div>
+          : `Add photos of the vehicle: GAZE reads its plate and (with smart search) learns how it looks, so it's recognised by either.<br>Plates: <input type="text" class="k-plates" value="${esc(k.plates.join(', '))}" placeholder="ABC123, …" style="width:180px"> <button type="button" class="small k-psave">Save</button>${k.looks ? ` · ${k.looks} look${k.looks === 1 ? '' : 's'} learned` : ''}`}</div>
       </div>`).join('')}</div></div>`;
   $('k-save-ai').onclick = async () => { await saveSettings({ai: {...settings.ai, api_key: '', faces: chk('k-faces'), plates: chk('k-plates')}}, 'Saved'); };
   const add = async (kind) => {
@@ -4055,6 +4063,24 @@ async function renderKnown(body) {
     const plates = kind === 'vehicle' ? (prompt('Number plate (optional):') || '').split(',').map(x => x.trim()).filter(Boolean) : [];
     try { await api('api/known', {method: 'POST', json: {kind, name, plates}}); renderKnown(body); } catch (e) { toast(e.message, true); }
   };
+  // New faces & plates: assign or hide.
+  body.querySelectorAll('.ib-who').forEach(sel => sel.onchange = async () => {
+    let id = sel.value; if (!id) return;
+    const face = sel.dataset.kind === 'face', g = (face ? inbox.faces : inbox.plates)[+sel.dataset.i];
+    if (id === '+') {
+      const name = (prompt(face ? 'Name of this person:' : 'Name of the vehicle (e.g. Dad’s car):') || '').trim();
+      if (!name) { sel.value = ''; return; }
+      try { id = (await api('api/known', {method: 'POST', json: {kind: face ? 'person' : 'vehicle', name, plates: []}})).id; } catch (e) { toast(e.message, true); return; }
+    }
+    try {
+      const r = await api('api/known-inbox/assign', {method: 'POST', json: face ? {known: id, members: g.members} : {known: id, plate: g.plate}});
+      toast(r.message); renderKnown(body);
+    } catch (e) { toast(e.message, true); }
+  });
+  body.querySelectorAll('.ib-hide').forEach(b => b.onclick = async () => {
+    const face = b.dataset.kind === 'face', g = (face ? inbox.faces : inbox.plates)[+b.dataset.i];
+    try { await api('api/known-inbox/dismiss', {method: 'POST', json: face ? {members: g.members} : {plate: g.plate}}); renderKnown(body); } catch (e) { toast(e.message, true); }
+  });
   $('k-add-person').onclick = () => add('person');
   $('k-add-vehicle').onclick = () => add('vehicle');
   body.querySelectorAll('.known').forEach(el => {
