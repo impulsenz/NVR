@@ -20,6 +20,7 @@ mod onvif;
 mod onvif_device;
 mod recorder;
 mod relay;
+mod seen;
 mod smart;
 mod storage;
 mod sysmon;

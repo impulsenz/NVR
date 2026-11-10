@@ -63,6 +63,9 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/dashboard", put(put_dashboard))
         .route("/api/profiles", get(get_profiles).put(put_profiles))
         .route("/api/client", get(client_info))
+        .route("/api/alerts/seen", post(alerts_seen))
+        .route("/api/alerts/seen-all", post(alerts_seen_all))
+        .route("/api/alerts/unseen", post(alerts_unseen))
         .route("/api/config/export", get(export_config))
         .route("/api/config/import", post(import_config))
         .route("/api/cameras", get(list_cameras).post(add_camera))
@@ -197,6 +200,8 @@ async fn status(State(m): App) -> Response {
         "cameras": cameras,
         "ai": m.ai.get().status(),
         "smart_search": m.clip.status(),
+        "alerts_unseen": library::unseen_count(&m),
+        "smart_search_on": cfg.ai.smart_search,
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
     }))
@@ -342,6 +347,39 @@ pub fn is_remote(ip: std::net::IpAddr) -> bool {
                 || (s[0] & 0xffc0) == 0xfe80
                 || v.is_unspecified())
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct SeenReq {
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    camera: String,
+    #[serde(default)]
+    id: String,
+}
+
+async fn alerts_seen(State(m): App, Json(r): Json<SeenReq>) -> Response {
+    m.seen.mark(&r.ids);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn alerts_seen_all(State(m): App) -> Response {
+    m.seen.mark_all();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn alerts_unseen(State(m): App, Json(r): Json<SeenReq>) -> Response {
+    let Some(c) = m.camera(&r.camera) else {
+        return err(StatusCode::NOT_FOUND, "camera not found");
+    };
+    match c.events.get(&r.id) {
+        Some(e) => {
+            m.seen.unmark(&e.id, e.start);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        None => err(StatusCode::NOT_FOUND, "alert not found"),
     }
 }
 
@@ -1068,6 +1106,9 @@ struct SearchQuery {
     /// Words to search for ("red van", "black cat").
     #[serde(default)]
     q: String,
+    /// "new" or "viewed" alerts only.
+    #[serde(default)]
+    seen: String,
     limit: Option<usize>,
 }
 
@@ -1134,6 +1175,11 @@ async fn search(State(m): App, Query(q): Query<SearchQuery>) -> Response {
         types: split_list(&q.types).into_iter().collect(),
         text: library::parse_text(&q.q),
         smart,
+        seen: match q.seen.as_str() {
+            "new" => Some(false),
+            "viewed" => Some(true),
+            _ => None,
+        },
         limit: q.limit.unwrap_or(500).min(5000),
     };
     let items = tokio::task::spawn_blocking(move || library::search(&m, &lq))

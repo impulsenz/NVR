@@ -48,6 +48,9 @@ pub struct Event {
     /// picture), so the alert can be reviewed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boxes: Vec<SeenBox>,
+    /// What happened, written after the alert ends (smart search / AI).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -226,6 +229,7 @@ mod tests {
             focus: None,
             desc: String::new(),
             boxes: Vec::new(),
+            summary: String::new(),
         };
         s.save(e.clone());
         e.labels.push(Label {

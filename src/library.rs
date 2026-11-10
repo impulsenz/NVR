@@ -50,6 +50,8 @@ pub struct Item {
     pub download: Option<String>,
     /// An alert whose full-quality clip is still being recorded.
     pub pending: bool,
+    /// Alert already viewed.
+    pub seen: bool,
     /// Smart search: how well the alert matches the words (0..1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
@@ -65,6 +67,8 @@ pub struct Query {
     pub types: HashSet<String>,
     /// Words searched for (see `parse_text`). Empty = no text search.
     pub text: Vec<Term>,
+    /// Only viewed (Some(true)) or only new (Some(false)) alerts.
+    pub seen: Option<bool>,
     /// Smart search: the index and the search words as a CLIP vector.
     pub smart: Option<(Arc<crate::smart::SmartIndex>, crate::smart::Query)>,
     pub limit: usize,
@@ -338,6 +342,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                     }),
                     download: Some(format!("{}?download=1", rec_url(id, &r.name))),
                     pending: false,
+                    seen: true,
                     score: None,
                 });
             }
@@ -349,6 +354,11 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             .unwrap_or_default();
         for e in rt.events.between(q.from, q.to) {
             if !in_tod(e.start, q.tod) || !event_matches(&e, &q.types) {
+                continue;
+            }
+            if let Some(want) = q.seen
+                && mgr.seen.is_seen(&e.id, e.start) != want
+            {
                 continue;
             }
             let keyword = !q.text.is_empty() && text_matches(&e, &rt.cfg.name, &q.text);
@@ -399,6 +409,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                     .map(|c| format!("{}?download=1", event_file_url(id, c))),
                 play,
                 pending,
+                seen: mgr.seen.is_seen(&e.id, e.start),
                 score,
                 event: Some(e),
             });
@@ -586,6 +597,7 @@ mod text_tests {
             focus: None,
             desc: desc.into(),
             boxes: Vec::new(),
+            summary: String::new(),
         }
     }
 
@@ -614,4 +626,14 @@ mod text_tests {
         assert!(m(&ev(&[("person", None)], ""), "people"));
         assert!(m(&ev(&[("bus", None)], ""), "buses"));
     }
+}
+
+/// New (not yet viewed) alerts in the last week.
+pub fn unseen_count(mgr: &Manager) -> usize {
+    let from = Local::now() - CDuration::days(7);
+    mgr.cameras()
+        .iter()
+        .flat_map(|rt| rt.events.between(from, Local::now()))
+        .filter(|e| !mgr.seen.is_seen(&e.id, e.start))
+        .count()
 }

@@ -183,6 +183,7 @@ mod tests {
             focus: None,
             desc: String::new(),
             boxes: Vec::new(),
+            summary: String::new(),
         };
         store.save(ev(
             "ev-person",

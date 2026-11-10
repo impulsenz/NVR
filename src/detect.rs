@@ -558,6 +558,7 @@ impl Detector {
                 focus: None,
                 desc: String::new(),
                 boxes: Vec::new(),
+                summary: String::new(),
             },
             last_activity: now,
             qualified: false,

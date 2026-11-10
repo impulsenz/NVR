@@ -409,14 +409,17 @@ function updateOverlay(surface, c, q) {
 // ======================================================================
 const PAGES = ['live', 'recordings', 'system', 'logs', 'settings'];
 function route() {
-  const [p, sub, extra] = (location.hash.slice(1) || 'live').split('/');
+  const [p0, sub, extra] = (location.hash.slice(1) || 'live').split('/');
+  // Alerts and Recordings (timeline) share one page section.
+  const p = p0 === 'alerts' ? 'recordings' : p0;
   page = PAGES.includes(p) ? p : 'live';
+  const navPage = p0 === 'alerts' ? 'alerts' : page;
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
-  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
   if (page !== 'recordings') { pauseAllPlayback(); if ($('page-recordings').classList.contains('rec-fs')) recFullscreen(false); }
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
-  else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, extra);
+  else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
   else if (page === 'system') showSystem();
   else if (page === 'logs') showLogs();
   else showSettings(sub || 'cameras');
@@ -428,6 +431,17 @@ async function refreshStatus() {
   try { status = await api('api/status'); } catch (e) { return; }
   $('nvr-name').textContent = status.name;
   document.title = status.name;
+  // New alerts.
+  const ab = $('alert-badge'), n = status.alerts_unseen || 0;
+  ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
+  // Smart search model download, in plain sight.
+  const ss = status.smart_search, gb = $('g-banner');
+  if (ss && ss.downloading) {
+    gb.hidden = false;
+    gb.innerHTML = `<b>Downloading the smart-search model</b> (one time, about 600 MB) — ${Math.round(ss.download_percent || 0)}%<div class="bar"><div style="width:${(ss.download_percent || 0).toFixed(1)}%"></div></div>`;
+  } else if (ss && ss.error && status.smart_search_on) {
+    gb.hidden = false; gb.innerHTML = `<b>Smart search problem:</b> ${esc(ss.error)} <a href="#settings/ai">Settings</a>`;
+  } else gb.hidden = true;
   // Only errors count, until dismissed.
   const seen = store.get('errors-seen', 0), fresh = (status.problems.error_ids || []).filter(i => i > seen);
   const b = $('log-badge');
@@ -1407,25 +1421,38 @@ let recPlayer = null;
 
 function showRecordings(camId, mode) {
   if (camId && cam(camId)) rec.cameras = new Set([camId]);
-  if (mode === 'timeline') rec.mode = 'timeline';
   renderFilters();
-  setRecMode(rec.mode);
+  setRecMode(mode || 'timeline');
 }
 
 function setRecMode(mode) {
   rec.mode = mode;
-  document.querySelectorAll('#page-recordings .tabs button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  $('rec-title').textContent = mode === 'list' ? 'Alerts' : 'Recordings';
   $('rec-list').hidden = mode !== 'list';
   $('rec-timeline').hidden = mode !== 'timeline';
   $('f-types').hidden = mode !== 'list';
+  document.querySelectorAll('#page-recordings .list-only').forEach(e => e.hidden = mode !== 'list');
   if (mode === 'list') { tlStop(); loadRecordings(); }
-  else { $('rec-player').hidden = true; if (recPlayer) recPlayer.stop(); loadTimeline(); }
+  else { closeAlert(); loadTimeline(); }
 }
-document.querySelectorAll('#page-recordings .tabs button').forEach(b => b.onclick = () => setRecMode(b.dataset.mode));
+$('f-seen').onchange = () => { rec.seen = val('f-seen'); loadRecordings(); };
+$('f-seen-all').onclick = async () => {
+  await api('api/alerts/seen-all', {method: 'POST'}).catch(e => toast(e.message, true));
+  rec.items.forEach(i => i.seen = true);
+  renderRecordings(); refreshStatus();
+};
+// New alerts appear by themselves (no need to refresh the page).
+setInterval(async () => {
+  if (page !== 'recordings' || rec.mode !== 'list' || document.hidden || rec.loading) return;
+  const before = rec.items.map(i => i.event ? i.event.id + i.event.end + (i.event.summary || '') + i.seen : i.name).join();
+  const r = await fetchRecordings().catch(() => null);
+  if (!r) return;
+  if (r.map(i => i.event ? i.event.id + i.event.end + (i.event.summary || '') + i.seen : i.name).join() !== before) { rec.items = r; renderRecordings(); }
+}, 8000);
 // Search box: as you type (after a short pause) or on Enter.
 {
   let t = null;
-  const go = () => { clearTimeout(t); const v = $('f-q').value.trim(); if (v === rec.q) return; rec.q = v; if (rec.mode !== 'list') setRecMode('list'); else loadRecordings(); };
+  const go = () => { clearTimeout(t); const v = $('f-q').value.trim(); if (v === rec.q) return; rec.q = v; if (rec.mode !== 'list') location.hash = '#alerts'; else loadRecordings(); };
   $('f-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 500); });
   $('f-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 }
@@ -1518,22 +1545,34 @@ const Calendar = {
 };
 
 // ---------- list ----------
-async function loadRecordings() {
+// The alert list for the current filters (shares the query with loadRecordings).
+async function fetchRecordings() {
+  const q = recQuery();
+  const r = await fetch('api/recordings?' + q);
+  if (!r.ok) throw new Error(r.statusText);
+  return r.json();
+}
+function recQuery() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString(), limit: 2000});
   if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
-  // Alerts only (plain recordings are on the Timeline tab).
+  // Alerts only (plain recordings are on the Recordings tab).
   q.set('types', (rec.types.size ? [...rec.types] : FILTER_TYPES.map(t => t[0])).join(','));
   if (rec.todFrom) q.set('tod_from', rec.todFrom);
   if (rec.todTo) q.set('tod_to', rec.todTo);
   if (rec.q) q.set('q', rec.q);
+  if (rec.seen) q.set('seen', rec.seen);
+  return q;
+}
+async function loadRecordings() {
   $('rec-count').textContent = 'Loading…';
-  rec.smart = '';
+  rec.smart = ''; rec.loading = true;
   try {
-    const r = await fetch('api/recordings?' + q);
+    const r = await fetch('api/recordings?' + recQuery());
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
     rec.items = await r.json();
     rec.smart = r.headers.get('x-smart-search') || '';
   } catch (e) { rec.items = []; toast(e.message, true); }
+  rec.loading = false;
   renderRecordings();
 }
 
@@ -1549,16 +1588,17 @@ function renderRecordings() {
     const d = fmtDay(it.start);
     if (d !== day && it.score == null) { day = d; box.insertAdjacentHTML('beforeend', `<div class="dayhead">${esc(d)}</div>`); }
     const card = document.createElement('div');
-    card.className = 'rc';
+    card.className = 'rc' + (it.kind === 'event' && !it.seen ? ' new' : '');
+    card.dataset.eid = it.event ? it.event.id : '';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
     const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc((l.color ? l.color + ' ' : '') + l.label)} ${Math.round(l.score * 100)}%">${l.color ? `<i class="cdot" style="background:${COLOR_CSS[l.color] || l.color}"></i>` : ''}${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
     card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw" style="${zoomStyle(it.event && it.event.focus)}"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
-        <div class="tags">${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
+        <div class="tags">${it.kind === 'event' && !it.seen ? '<span class="tag newtag">NEW</span>' : ''}${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
         <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${it.score != null ? fmtDate(it.start) : fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
-    card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && it.event.desc ? '\n' + it.event.desc : ''}`;
+    card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && (it.event.summary || it.event.desc) ? '\n' + (it.event.summary || it.event.desc) : ''}`;
     card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
       e.stopPropagation();
@@ -1574,26 +1614,67 @@ function renderRecordings() {
   }
 }
 
+// Alerts open in a pop-up; the list stays where it is.
+let alertIdx = -1;
 function playItem(it, card) {
   if (!it.play) return noVideo(it);
+  alertIdx = rec.items.indexOf(it);
   document.querySelectorAll('.rc.active').forEach(c => c.classList.remove('active'));
   if (card) card.classList.add('active');
-  $('rec-player').hidden = false;
+  const dlg = $('alert-dialog');
+  if (!dlg.open) dlg.showModal();
   if (!recPlayer) recPlayer = new Player($('rp-video'), $('rp-controls'), $('rp-msg'));
+  recPlayer.setHidden(false);
   recPlayer.load({...it.play, camera: it.camera, marks: it.event ? [it.event.start] : []});
   const dur = (new Date(it.end) - new Date(it.start)) / 1000;
-  $('rp-info').innerHTML = `<h2>${it.kind === 'event' ? 'Alert' : 'Recording'}</h2>
-    ${it.kind === 'event' && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(it.event, true)}</div>
-      ${it.event.boxes && it.event.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
+  const e = it.event;
+  $('ad-title').textContent = `${it.camera_name} — ${fmtDate(it.start)}`;
+  $('ad-prev').disabled = alertIdx <= 0; $('ad-next').disabled = alertIdx < 0 || alertIdx >= rec.items.length - 1;
+  const what = e && (e.summary || e.desc);
+  $('rp-info').innerHTML = `
+    ${e ? `<div class="what"><div class="muted small">What happened</div>${what ? esc(what) : `<span class="muted">${status && status.smart_search_on ? 'Being described… (a moment after the activity ends)' : 'Turn on Smart search (Settings → AI) to get a description of what happened.'}</span>`}</div>` : ''}
+    ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
+      ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
-    ${it.kind === 'event' ? `<dt>Detected</dt><dd>${labelTags(it.event.labels, it.event.motion) || '–'}</dd>${it.event.desc ? `<dt>Description</dt><dd>${esc(it.event.desc)}</dd>` : ''}<dt>Video</dt><dd>${it.event.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
+    ${e ? `<dt>Detected</dt><dd>${labelTags(e.labels, e.motion) || '–'}</dd>${e.desc && e.desc !== what ? `<dt>AI description</dt><dd>${esc(e.desc)}</dd>` : ''}<dt>Video</dt><dd>${e.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
     ${it.size ? `<dt>Size</dt><dd>${fmtBytes(it.size)}</dd>` : ''}</dl>
-    <div class="hint" style="margin-top:10px">Hover over the bar under the video to preview any moment. Use <b>[ Start</b> and <b>End ]</b> (or drag the orange handles) to cut out a clip.</div>
+    <div class="hint" style="margin-top:10px">Drag along the bar under the video to preview any moment. Use <b>[ Start</b> and <b>End ]</b> (or drag the orange handles) to cut out a clip — downloads are always in the best quality available.</div>
     <div class="actions"><a class="btn small" href="#recordings/${enc(it.camera)}/timeline" onclick="tl.jump='${it.start}'">Open in timeline</a></div>`;
   const t = $('rp-info').querySelector('.bx-toggle');
   if (t) t.onchange = () => { showBoxes = t.checked; store.set('show-boxes', showBoxes); document.body.classList.toggle('no-boxes', !showBoxes); };
-  $('rec-player').scrollIntoView({behavior: 'smooth', block: 'start'});
+  // Viewed.
+  if (e && !it.seen) {
+    it.seen = true;
+    if (card) { card.classList.remove('new'); const n = card.querySelector('.newtag'); if (n) n.remove(); }
+    api('api/alerts/seen', {method: 'POST', json: {ids: [e.id]}}).then(refreshStatus).catch(() => {});
+  }
 }
+function closeAlert() {
+  const dlg = $('alert-dialog');
+  if (recPlayer) recPlayer.stop();
+  if (dlg.open) dlg.close();
+  document.querySelectorAll('.rc.active').forEach(c => c.classList.remove('active'));
+}
+function stepAlert(d) {
+  const it = rec.items[alertIdx + d];
+  if (!it) return;
+  const card = [...document.querySelectorAll('#rec-cards .rc')][alertIdx + d];
+  playItem(it, card);
+}
+$('ad-close').onclick = closeAlert;
+$('alert-dialog').addEventListener('close', () => { if (recPlayer) recPlayer.stop(); });
+$('alert-dialog').addEventListener('click', (e) => { if (e.target === $('alert-dialog')) closeAlert(); });
+$('ad-prev').onclick = () => stepAlert(-1);
+$('ad-next').onclick = () => stepAlert(1);
+$('ad-unseen').onclick = async () => {
+  const it = rec.items[alertIdx]; if (!it || !it.event) return;
+  await api('api/alerts/unseen', {method: 'POST', json: {camera: it.camera, id: it.event.id}}).catch(e => toast(e.message, true));
+  it.seen = false; renderRecordings(); refreshStatus(); toast('Marked as new');
+};
+document.addEventListener('keydown', (e) => {
+  if (!$('alert-dialog').open || e.target.closest('input, select, textarea')) return;
+  if (e.key === 'ArrowLeft') stepAlert(-1); else if (e.key === 'ArrowRight') stepAlert(1);
+});
 
 // ---------- multi-camera timeline ----------
 const tl = {data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};

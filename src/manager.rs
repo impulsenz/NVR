@@ -314,6 +314,8 @@ pub struct Manager {
     /// Smart search (CLIP) model and index.
     pub clip: Arc<crate::clip::Clip>,
     pub smart: Arc<crate::smart::SmartIndex>,
+    /// Which alerts have been viewed.
+    pub seen: crate::seen::Seen,
     pub monitor: Arc<Monitor>,
     usage: Mutex<UsageReport>,
     /// Temporary stream previews for the camera editor: token → (url, transport).
@@ -340,6 +342,7 @@ impl Manager {
             ai,
             clip: crate::clip::Clip::new(&data_dir_for_clip),
             smart: Arc::new(crate::smart::SmartIndex::default()),
+            seen: crate::seen::Seen::open(&data_dir_for_clip),
             usage: Mutex::new(UsageReport::default()),
             previews: Mutex::new(HashMap::new()),
             onvif: Mutex::new(HashMap::new()),
