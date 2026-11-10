@@ -96,7 +96,7 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 .surface .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: var(--muted); text-align: center; padding: 16px; pointer-events: none; font-size: 13px; }
 .ov { position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 7px; pointer-events: none; z-index: 2; max-width: 75%; }
-.ov.tl { top: 0; left: 0; align-items: flex-start; }
+.ov.tl { top: 0; left: 0; align-items: flex-start; position: absolute; margin: 0; padding: 7px; border: 0; background: none; overflow: visible; }
 .ov.tr { top: 0; right: 0; align-items: flex-end; }
 .ov.bl { bottom: 0; left: 0; align-items: flex-start; }
 .ov.br { bottom: 0; right: 0; align-items: flex-end; }
@@ -441,3 +441,13 @@ dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; ma
 dl.kv dt { color: var(--muted); }
 dl.kv dd { margin: 0; }
 .spinner.small { width: 14px; height: 14px; border-width: 2px; display: inline-block; vertical-align: -2px; }
+
+.bx.right span { left: auto; right: -2px; border-radius: 3px 3px 0 3px; }
+.bx.top.right span { border-radius: 0 0 0 3px; }
+.surface > img.fill { object-fit: fill; }
+/* Timeline: stream 2 recordings fill the box like stream 1 */
+.tl-videos video { object-fit: fill; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: var(--panel2); }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent); color: #fff; }

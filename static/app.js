@@ -126,7 +126,7 @@ function boxesHtml(ev, labels) {
   return '<div class="bxs">' + ev.boxes.map(b => {
     const motion = b.label === 'motion';
     const tip = motion ? 'motion' : `${b.label} ${Math.round(b.score * 100)}%`;
-    return `<div class="bx ${motion ? 'motion' : ''} ${b.y < 0.07 ? 'top' : ''}" title="${esc(tip)}" style="left:${(b.x * 100).toFixed(2)}%;top:${(b.y * 100).toFixed(2)}%;width:${(b.w * 100).toFixed(2)}%;height:${(b.h * 100).toFixed(2)}%">${labels ? `<span>${motion ? labelIcon('motion') + ' motion' : labelIcon(b.label) + ' ' + esc(tip)}</span>` : ''}</div>`;
+    return `<div class="bx ${motion ? 'motion' : ''} ${b.y < 0.07 ? 'top' : ''} ${b.x + b.w > 0.6 ? 'right' : ''}" title="${esc(tip)}" style="left:${(b.x * 100).toFixed(2)}%;top:${(b.y * 100).toFixed(2)}%;width:${(b.w * 100).toFixed(2)}%;height:${(b.h * 100).toFixed(2)}%">${labels ? `<span>${motion ? labelIcon('motion') + ' motion' : labelIcon(b.label) + ' ' + esc(tip)}</span>` : ''}</div>`;
   }).join('') + '</div>';
 }
 function labelTags(labels, motion) {
@@ -246,11 +246,27 @@ document.addEventListener('visibilitychange', () => Live.send());
 // one enlarged on the video wall). The viewer can switch each one with the
 // "S1/S2" button on the picture; the choice is remembered in this browser.
 const streamPref = store_get('stream-pref', {});
+// The Stream 1 / Stream 2 switch above the grid sets every camera at once
+// (stream 2 unless chosen otherwise).
+let gridStream = store_get('grid-stream', 'sub');
 function feedQ(c, ctx) {
   const p = streamPref[c.id + '|' + ctx];
   if (p === 'main' || p === 'sub') return p;
-  return ctx === 'focus' || (c.view && c.view.grid_quality === 'main') ? 'main' : 'sub';
+  return ctx === 'focus' ? 'main' : gridStream;
 }
+function setGridStream(q) {
+  gridStream = q;
+  try { localStorage.setItem('nvr-grid-stream', JSON.stringify(q)); } catch (e) {}
+  for (const k of Object.keys(streamPref)) if (k.endsWith('|grid')) delete streamPref[k];
+  try { localStorage.setItem('nvr-stream-pref', JSON.stringify(streamPref)); } catch (e) {}
+  paintGridStream();
+  renderDash(); updateSubscriptions();
+}
+function paintGridStream() {
+  document.querySelectorAll('#grid-stream button').forEach(b => b.classList.toggle('on', b.dataset.q === gridStream));
+}
+document.querySelectorAll('#grid-stream button').forEach(b => b.onclick = () => setGridStream(b.dataset.q));
+paintGridStream();
 function setFeedQ(c, ctx, q) {
   streamPref[c.id + '|' + ctx] = q;
   try { localStorage.setItem('nvr-stream-pref', JSON.stringify(streamPref)); } catch (e) {}
@@ -308,7 +324,7 @@ function osdFor(c) {
   return {show_name: d.show_name, name_corner: 'bl', show_clock: d.show_clock, clock_corner: d.clock_corner, clock_format: d.clock_format,
     show_status: true, status_corner: 'tr', show_detections: true, detections_corner: 'bl', show_fps: d.show_fps, fps_corner: 'tl', text: '', text_corner: 'br'};
 }
-function overlayHtml(c, q) {
+function overlayHtml(c, q, noFs) {
   const d = status.display, o = osdFor(c);
   const parts = {tl: [], tr: [], bl: [], br: []};
   if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name">${esc(c.name)}</span>`);
@@ -318,9 +334,10 @@ function overlayHtml(c, q) {
   if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}">${esc(fmtDate(new Date(), o.clock_format || d.clock_format || undefined))}</span>`);
   if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps"></span>');
   // Stream 1 / Stream 2 switch, next to the first fullscreen button (or top right).
-  const sc = d.fullscreen_corners[0] || 'tr';
+  const corners = noFs ? [] : d.fullscreen_corners;
+  const sc = corners[0] || 'tr';
   parts[sc].push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
-  for (const corner of d.fullscreen_corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen">⛶</button>');
+  for (const corner of corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen (or double-click the picture)">⛶</button>');
   return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => `<div class="ov ${k}">${v.join('')}</div>`).join('');
 }
 function wireOverlay(surface) {
@@ -347,7 +364,7 @@ function updateOverlay(surface, c, q) {
   const sig = JSON.stringify([osdFor(c), status.display.fullscreen_corners, c.name, q]);
   if (surface.dataset.osd !== sig) {
     surface.querySelectorAll(':scope > .ov').forEach(o => o.remove());
-    surface.insertAdjacentHTML('beforeend', overlayHtml(c, q));
+    surface.insertAdjacentHTML('beforeend', overlayHtml(c, q, surface.id === 'focus-surface'));
     wireOverlay(surface);
     surface.dataset.osd = sig;
   }
@@ -1066,7 +1083,7 @@ let loadingTimer = null;
 function bindFocusImage(c) {
   const surf = $('focus-surface'), q = feedQ(c, 'focus');
   surf.querySelectorAll(':scope > .ov').forEach(o => o.remove());
-  surf.insertAdjacentHTML('beforeend', overlayHtml(c, q));
+  surf.insertAdjacentHTML('beforeend', overlayHtml(c, q, true));
   delete surf.dataset.osd;
   wireOverlay(surf);
   if (focusUnbind) focusUnbind();
@@ -1075,6 +1092,8 @@ function bindFocusImage(c) {
   $('focus-msg').hidden = false; $('focus-msg').textContent = 'Connecting…';
   img.onload = () => { $('focus-msg').hidden = true; };
   focusUnbind = Live.bind(img, c.id, q);
+  // Stream 2 is often another shape (4:3): fill the box like stream 1.
+  img.classList.toggle('fill', q === 'sub');
   if (img.getAttribute('src')) $('focus-msg').hidden = true;
   // Spinner until the first full-quality frame arrives (the sub-stream
   // picture is shown meanwhile).
