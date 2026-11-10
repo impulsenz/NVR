@@ -21,9 +21,11 @@ viewing, finding footage, and managing everything, all from the browser.
   **date & time** (format and corner), recording status, what is moving, **frames per second**, your own
   text, and **fullscreen buttons** in any corners.
 - Active alerts are highlighted on the tile ("person", "car", …).
-- **Two-way audio**: the 🎙️ Talk button on an opened camera sends your microphone to the camera's
-  speaker (cameras with an ONVIF audio backchannel and G.711 audio — most Dahua, Hikvision, Amcrest,
-  Axis…). Browsers only allow the microphone on https:// pages or on http://localhost.
+- **Two-way audio / push to talk**: switch it on per camera (camera settings → General → Two-way audio,
+  with a test that beeps on the camera). The live view then has a **🎙️ Hold to talk** button: hold it and
+  speak into your phone's or computer's microphone; a quick tap keeps talking until the next tap. For
+  cameras with a speaker and the ONVIF audio back-channel (G.711 — most Dahua, Hikvision, Amcrest, Axis…).
+  Browsers only allow the microphone on https:// pages or on http://localhost.
 - **S1 / S2 button on every live picture** switches between stream 1 (main, full quality) and stream 2
   (sub-stream), separately for the grid and the opened camera; each browser remembers the choice.
 

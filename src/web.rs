@@ -147,6 +147,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/device/reboot", post(device_reboot))
         .route("/api/cameras/{id}/ptz/stop", post(ptz_stop))
         .route("/api/cameras/{id}/talk", get(talk_ws))
+        .route("/api/talk-test", post(talk_test))
         .route("/api/jobs", get(jobs_list))
         .route("/api/notify/test", post(notify_test))
         .route("/api/notify/status", get(notify_status))
@@ -263,6 +264,7 @@ async fn status(
                 "enabled": c.cfg.enabled,
                 "record_mode": c.cfg.record_mode,
                 "has_sub": c.cfg.has_sub(),
+                "talk": c.cfg.talk,
                 "url": mask_url(&c.cfg.url),
                 "transcode": c.cfg.reencode(),
                 "detection": c.cfg.detection_enabled(),
@@ -2250,9 +2252,20 @@ async fn talk_ws(
     let Some(cam) = cam.filter(|_| vis.as_ref().is_none_or(|v| v.contains(&id))) else {
         return err(StatusCode::NOT_FOUND, "no such camera");
     };
+    if !cam.talk {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "two-way audio is off for this camera (camera settings → General)",
+        );
+    }
+    let talk_url = if cam.talk_url.trim().is_empty() {
+        cam.url.clone()
+    } else {
+        cam.talk_url.trim().to_string()
+    };
     let who = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
     ws.on_upgrade(move |mut socket| async move {
-        let mut talk = match crate::talk::Talk::open(&cam.id, &cam.url).await {
+        let mut talk = match crate::talk::Talk::open(&cam.id, &talk_url).await {
             Ok(t) => t,
             Err(e) => {
                 let _ = socket.send(Message::Text(json!({"error": format!("{e:#}")}).to_string().into())).await;
@@ -2288,6 +2301,62 @@ async fn talk_ws(
         talk.stop().await;
         tracing::info!("[{}] talking stopped", cam.name);
     })
+}
+
+#[derive(Deserialize)]
+struct TalkTest {
+    /// Existing camera (for its saved address when `url` is empty).
+    #[serde(default)]
+    camera: String,
+    #[serde(default)]
+    url: String,
+}
+
+/// Camera settings → "Test two-way audio": connect to the speaker and play
+/// a short beep.
+async fn talk_test(State(m): App, Json(t): Json<TalkTest>) -> Response {
+    let cfg = m.config();
+    let saved = cfg.cameras.iter().find(|c| c.id == t.camera);
+    let url = if !t.url.trim().is_empty() {
+        t.url.trim().to_string()
+    } else if let Some(c) = saved {
+        if c.talk_url.trim().is_empty() {
+            c.url.clone()
+        } else {
+            c.talk_url.clone()
+        }
+    } else {
+        return err(StatusCode::BAD_REQUEST, "enter the camera's address first");
+    };
+    let key = if t.camera.is_empty() {
+        "test".to_string()
+    } else {
+        t.camera.clone()
+    };
+    let mut talk = match crate::talk::Talk::open(&key, &url).await {
+        Ok(t) => t,
+        Err(e) => return bad(e),
+    };
+    // Two short beeps (8 kHz).
+    let beep: Vec<i16> = (0..8000)
+        .map(|i| {
+            let on = (i % 4000) < 2400;
+            if on {
+                ((i as f32 * 2.0 * std::f32::consts::PI * 880.0 / 8000.0).sin() * 9000.0) as i16
+            } else {
+                0
+            }
+        })
+        .collect();
+    let codec = talk.codec().to_string();
+    for chunk in beep.chunks(800) {
+        if let Err(e) = talk.send(chunk).await {
+            return bad(e);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    talk.stop().await;
+    Json(json!({"ok": true, "message": format!("Connected to the camera's speaker ({codec} audio) and played two beeps")})).into_response()
 }
 
 #[derive(Deserialize, Clone, PartialEq)]
@@ -2466,6 +2535,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/profiles",
         "/api/maintenance",
         "/api/notify",
+        "/api/talk-test",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"

@@ -835,6 +835,10 @@ pub struct CameraConfig {
     pub schedule_enabled: bool,
     pub schedule: Schedule,
     pub record_audio: bool,
+    /// Two-way audio: talk through the camera's speaker from the live view.
+    pub talk: bool,
+    /// RTSP address with the camera's audio back-channel (empty = main stream).
+    pub talk_url: String,
     /// Re-encode recordings to H.264 (uses the GPU encoder if configured).
     pub transcode: bool,
     /// Recording frame rate (0 = camera's own; other values re-encode).
@@ -876,6 +880,8 @@ impl Default for CameraConfig {
             schedule_enabled: false,
             schedule: Schedule::default(),
             record_audio: true,
+            talk: false,
+            talk_url: String::new(),
             transcode: false,
             record_fps: 0,
             segment_seconds: 0,

@@ -12,7 +12,7 @@
 - **Rotate** a camera's picture in 90° steps.
 - **Zones**: areas and lines drawn on the picture, with line crossing, lingering and items left or taken (packages).
 - **Faces & number plates**: GAZE recognises the people and vehicles you teach it (Settings → People & vehicles, or "Who is this?" on an alert).
-- **Two-way audio**: talk through a camera's speaker from the camera view.
+- **Two-way audio with push to talk**: a per-camera setting (with a beep test); hold the 🎙️ button in the live view to talk through the camera's speaker, or tap to keep talking.
 - **System tray (Windows)**: no more console window; GAZE has an icon by the clock with open, recordings, log, start with Windows, restart and quit.
 - **Tasks** (Settings → Tasks, also on the System page): see what GAZE is doing in the background — AI descriptions, faces & plates, downloads with progress, previews, cloud backup — plus *Rebuild previews*, *Refresh alert pictures* (sharper pictures from the HD recordings), *Describe alerts again* and *Look for faces & plates again*, and how many alerts are waiting.
 - **Parked vehicles are ignored**: a car that stays in the same place stops making alerts and alerts again when it moves (camera settings → Detection).

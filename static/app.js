@@ -1173,8 +1173,7 @@ function showLive(id) {
   const surf = $('focus-surface');
   bindFocusImage(c);
   $('focus-snap').href = 'snapshot/' + enc(c.id);
-  if (talk && talk.cam !== c.id) stopTalk();
-  $('focus-talk').onclick = () => talk ? stopTalk() : startTalk(c.id);
+  setupTalkButton(c);
   $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
   setupQuickView(c);
@@ -1398,55 +1397,101 @@ setInterval(() => { if (page === 'live' && focusId && !camTl.end) camTl.load(); 
 function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); stopTalk(); }
 
 // ---------- two-way audio ----------
-// The microphone is captured in an AudioWorklet, brought down to 8 kHz
-// 16-bit mono and sent over a WebSocket; GAZE plays it on the camera's speaker.
+// Push to talk: hold the button and speak; a quick tap keeps talking until
+// the next tap. The microphone is captured in an AudioWorklet, brought down
+// to 8 kHz 16-bit mono and sent over a WebSocket; GAZE plays it on the
+// camera's speaker. What's said while connecting is kept and sent once the
+// speaker is ready, so the first words aren't lost.
 let talk = null;
 const TALK_WORKLET = `class Mic extends AudioWorkletProcessor {
   process(inputs) { const ch = inputs[0][0]; if (ch) this.port.postMessage(ch.slice(0)); return true; }
 }
 registerProcessor('gaze-mic', Mic);`;
+function talkLabel(text, cls) {
+  const b = $('focus-talk'); if (!b) return;
+  b.querySelector('span').textContent = text;
+  b.classList.toggle('talking', cls === 'talking'); b.classList.toggle('connecting', cls === 'connecting');
+}
 function stopTalk() {
   if (!talk) return;
   const t = talk; talk = null;
-  try { t.ws.close(); } catch (_) {}
+  // Send what's left, then close.
+  try { if (t.flush) t.flush(); } catch (_) {}
+  setTimeout(() => { try { t.ws && t.ws.close(); } catch (_) {} }, 150);
   t.stream && t.stream.getTracks().forEach(tr => tr.stop());
   t.ctx && t.ctx.close().catch(() => {});
-  const b = $('focus-talk'); b.classList.remove('talking'); b.querySelector('span').textContent = 'Talk';
+  talkLabel('Hold to talk');
 }
-async function startTalk(camId) {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+async function startTalk(camId, latch) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.AudioWorkletNode) {
     toast('The browser only allows the microphone on secure pages: open GAZE as https://… (for example through Tailscale) or as http://localhost on this computer.', true);
     return;
   }
-  const b = $('focus-talk');
-  b.querySelector('span').textContent = 'Connecting…';
-  const t = talk = {cam: camId};
-  try {
-    t.stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
-  } catch (e) { talk = null; b.querySelector('span').textContent = 'Talk'; toast('No microphone: ' + e.message, true); return; }
-  if (talk !== t) { t.stream.getTracks().forEach(tr => tr.stop()); return; }
+  const t = talk = {cam: camId, latch, ready: false, queue: []};
+  talkLabel('Connecting…', 'connecting');
+  // Connect to the speaker and open the microphone at the same time.
   t.ws = new WebSocket(location.href.replace(/^http/, 'ws').replace(/[#?].*$/, '').replace(/[^/]*$/, '') + `api/cameras/${enc(camId)}/talk`);
   t.ws.binaryType = 'arraybuffer';
-  t.ws.onmessage = async (ev) => {
+  t.ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
-    if (m.error) { toast(m.error, true); stopTalk(); return; }
+    if (m.error) { toast(m.error, true); if (talk === t) stopTalk(); return; }
     if (!m.ok || talk !== t) return;
-    t.ctx = new AudioContext();
-    await t.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([TALK_WORKLET], {type: 'text/javascript'})));
-    const src = t.ctx.createMediaStreamSource(t.stream), node = new AudioWorkletNode(t.ctx, 'gaze-mic');
-    const ratio = t.ctx.sampleRate / 8000; let pos = 0, acc = 0, cnt = 0, out = [];
-    node.port.onmessage = (e2) => {
-      // Average the samples that fall into each 1/8000 s (a simple low-pass).
-      for (const v of e2.data) {
-        acc += v; cnt++; pos += 1;
-        if (pos >= ratio) { pos -= ratio; out.push(Math.max(-1, Math.min(1, acc / cnt)) * 32767); acc = 0; cnt = 0; }
-      }
-      if (out.length >= 320 && t.ws.readyState === 1) { t.ws.send(new Int16Array(out).buffer); out = []; }
-    };
-    src.connect(node);
-    b.classList.add('talking'); b.querySelector('span').textContent = 'Stop talking';
+    t.ready = true;
+    for (const b of t.queue) t.ws.send(b);
+    t.queue = [];
+    talkLabel(t.latch ? 'Talking — tap to stop' : 'Talking… release to stop', 'talking');
   };
-  t.ws.onclose = () => { if (talk === t) { toast('Talking stopped'); stopTalk(); } };
+  t.ws.onclose = () => { if (talk === t) { if (t.ready) toast('Talking stopped'); else toast('Could not connect to the camera speaker', true); stopTalk(); } };
+  try {
+    t.stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
+  } catch (e) { toast('No microphone: ' + e.message, true); if (talk === t) stopTalk(); return; }
+  if (talk !== t) { t.stream.getTracks().forEach(tr => tr.stop()); return; }
+  t.ctx = new AudioContext();
+  await t.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([TALK_WORKLET], {type: 'text/javascript'})));
+  if (talk !== t) { t.ctx.close(); t.stream.getTracks().forEach(tr => tr.stop()); return; }
+  const src = t.ctx.createMediaStreamSource(t.stream), node = new AudioWorkletNode(t.ctx, 'gaze-mic');
+  const ratio = t.ctx.sampleRate / 8000; let pos = 0, acc = 0, cnt = 0, out = [];
+  const push = () => {
+    if (!out.length) return;
+    const buf = new Int16Array(out).buffer; out = [];
+    if (t.ready && t.ws.readyState === 1) t.ws.send(buf);
+    else if (t.queue.length < 100) t.queue.push(buf); // up to ~4 s while connecting
+  };
+  t.flush = push;
+  node.port.onmessage = (e2) => {
+    // Average the samples that fall into each 1/8000 s (a simple low-pass).
+    for (const v of e2.data) {
+      acc += v; cnt++; pos += 1;
+      if (pos >= ratio) { pos -= ratio; out.push(Math.max(-1, Math.min(1, acc / cnt)) * 32767); acc = 0; cnt = 0; }
+    }
+    if (out.length >= 320) push();
+  };
+  src.connect(node);
+}
+// Hold to talk; a quick tap latches (tap again to stop).
+function setupTalkButton(c) {
+  const b = $('focus-talk');
+  b.hidden = !c.talk;
+  if (talk && talk.cam !== c.id) stopTalk();
+  if (!c.talk) return;
+  talkLabel(talk ? (talk.latch ? 'Talking — tap to stop' : 'Talking…') : 'Hold to talk', talk ? 'talking' : '');
+  let downAt = 0;
+  b.onclick = null;
+  b.oncontextmenu = (e) => e.preventDefault();
+  b.onpointerdown = (e) => {
+    e.preventDefault();
+    if (talk && talk.latch) { stopTalk(); downAt = 0; return; }
+    downAt = Date.now();
+    try { b.setPointerCapture(e.pointerId); } catch (_) {}
+    startTalk(c.id, false);
+  };
+  const up = () => {
+    if (!downAt || !talk) return;
+    const held = Date.now() - downAt; downAt = 0;
+    if (held < 350) { talk.latch = true; talkLabel(talk.ready ? 'Talking — tap to stop' : 'Connecting…', talk.ready ? 'talking' : 'connecting'); }
+    else stopTalk();
+  };
+  b.onpointerup = up; b.onpointercancel = up;
 }
 
 function updateFocus() {
@@ -2615,7 +2660,7 @@ async function openCameraDialog(id, clone) {
   const base = id ? cameraCfgs.find(c => c.id === id) : null;
   const c = base ? JSON.parse(JSON.stringify(base)) : {
     name: '', enabled: true, url: '', live_url: '', rtsp_transport: 'tcp', record_mode: 'continuous', schedule_enabled: false,
-    schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, transcode: false, record_fps: 0,
+    schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, talk: false, talk_url: '', transcode: false, record_fps: 0,
     segment_seconds: 0, storage_dir: '', retention_days: 0, max_storage_gb: 0,
     osd: {custom: false, show_name: true, name_corner: 'bl', show_clock: true, clock_corner: 'tl', clock_format: '', show_status: true, status_corner: 'tr',
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
@@ -2660,6 +2705,11 @@ async function openCameraDialog(id, clone) {
         <label for="c-transport">RTSP transport</label>
         <div><select id="c-transport"><option value="tcp">TCP (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
+        <label>Two-way audio</label>
+        <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker</label>
+          <div class="hint">Shows a <b>🎙️ Hold to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
+          <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
+          <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
       </div>
 
       <div data-tab="recording" class="form" hidden>
@@ -2804,6 +2854,14 @@ async function openCameraDialog(id, clone) {
   setupProfiles(c);
   setupZones(c, id && !clone ? id : null);
   setupPackageArea(c, id && !clone ? id : null);
+  $('c-talk-test').onclick = async () => {
+    const r = $('c-talk-res'); r.textContent = 'Connecting to the speaker…'; r.className = 'hint';
+    try {
+      const j = await api('api/talk-test', {method: 'POST', json: {camera: id && !clone ? id : '', url: val('c-talk-url').trim() || val('c-url').trim()}});
+      r.textContent = '✓ ' + j.message; r.className = 'hint okc';
+      $('c-talk').checked = true;
+    } catch (e) { r.textContent = '✗ ' + e.message; r.className = 'hint errc'; }
+  };
   // A field the browser rejects may be on a hidden tab: show that tab and say why.
   f.addEventListener('invalid', (e) => {
     const tab = e.target.closest('[data-tab]');
@@ -3083,6 +3141,7 @@ function collectCamera() {
     name: val('c-name').trim(), enabled: chk('c-enabled'), url: val('c-url').trim(), live_url: val('c-live').trim(),
     rtsp_transport: val('c-transport'), record_mode: mode, schedule_enabled: chk('c-sched-on'),
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
+    talk: chk('c-talk'), talk_url: val('c-talk-url').trim(),
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
