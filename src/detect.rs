@@ -219,7 +219,7 @@ struct Active {
     seen: Vec<(Detection, Instant)>,
     /// "Item left or taken" areas: (zone index, how the area looked before).
     /// Watched areas before the activity: signature and picture.
-    zone_before: Vec<(usize, Vec<f32>, Frame)>,
+    zone_before: Vec<(Watched, Vec<f32>, Frame)>,
 }
 
 impl Detector {
@@ -568,19 +568,14 @@ impl Detector {
         }
         // How the "item left or taken" areas looked before the activity.
         let quiet = self.quiet.lock().unwrap().clone();
-        let zone_before: Vec<(usize, Vec<f32>, Frame)> = quiet
+        let zone_before: Vec<(Watched, Vec<f32>, Frame)> = quiet
             .map(|f| {
-                self.cam
-                    .zones
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, z)| z.kind == "area" && z.watch_items)
-                    .map(|(i, z)| {
-                        (
-                            i,
-                            crate::zones::area_signature(&f, &z.points),
-                            zone_picture(&f, &z.points),
-                        )
+                self.watched_areas()
+                    .into_iter()
+                    .map(|w| {
+                        let sig = crate::zones::area_signature(&f, &w.points);
+                        let pic = zone_picture(&f, &w.points);
+                        (w, sig, pic)
                     })
                     .collect()
             })
@@ -689,14 +684,10 @@ impl Detector {
             .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
             .collect();
         // Parked vehicles don't alert until they move.
-        if d.ignore_parked {
-            let kinds: Vec<String> = crate::stationary::PARKING
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+        if d.ignore_parked && !d.parked_objects.is_empty() {
             let (keep, notes) = self.parked.lock().unwrap().filter(
                 hits,
-                &kinds,
+                &d.parked_objects,
                 Duration::from_secs(d.parked_seconds.max(10) as u64),
             );
             hits = keep;
@@ -917,10 +908,7 @@ impl Detector {
             && let Some(now) = self.latest.lock().unwrap().clone()
         {
             let person = a.event.labels.iter().any(|l| l.label == "person");
-            for (zi, before, before_pic) in &a.zone_before {
-                let Some(z) = self.cam.zones.get(*zi) else {
-                    continue;
-                };
+            for (zi, (z, before, before_pic)) in a.zone_before.iter().enumerate() {
                 let change = crate::zones::area_change(
                     before,
                     &crate::zones::area_signature(&now, &z.points),
@@ -970,6 +958,37 @@ impl Detector {
                 a.event.end + CDuration::seconds(d.post_seconds as i64),
             );
         }
+    }
+}
+
+/// An area watched for items left or taken.
+struct Watched {
+    name: String,
+    points: Vec<[f32; 2]>,
+}
+
+impl Detector {
+    /// The package spot (camera → AI) and zones set to watch for items.
+    fn watched_areas(&self) -> Vec<Watched> {
+        let d = &self.cam.detect;
+        let mut v: Vec<Watched> = Vec::new();
+        if d.packages && d.package_area.len() >= 3 {
+            v.push(Watched {
+                name: "the package spot".into(),
+                points: d.package_area.clone(),
+            });
+        }
+        v.extend(
+            self.cam
+                .zones
+                .iter()
+                .filter(|z| z.kind == "area" && z.watch_items && z.points.len() >= 3)
+                .map(|z| Watched {
+                    name: z.name.clone(),
+                    points: z.points.clone(),
+                }),
+        );
+        v
     }
 }
 

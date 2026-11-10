@@ -413,6 +413,38 @@ fn merge_objects(per_picture: &[Vec<(String, String)>]) -> Vec<(String, usize)> 
     out
 }
 
+/// A quick description of an alert's picture ("Adult in a black top;
+/// White car"), for a notification sent while the alert is going on.
+pub async fn describe_now(mgr: &Manager, e: &Event) -> Option<String> {
+    if !mgr.config().ai.smart_search {
+        return None;
+    }
+    let rt = mgr.camera(&e.camera)?;
+    let bytes = std::fs::read(rt.events.dir().join(e.thumb.as_ref()?)).ok()?;
+    let f = crate::imgutil::decode_jpeg(&bytes).ok()?;
+    let mut objs = Vec::new();
+    for (p, what) in pictures(&f, e) {
+        if let Some((label, color)) = what {
+            let v = mgr.clip.embed_image(&p).await.ok()?;
+            let d = describe_object(&mgr.clip, &v, &label, color.as_deref()).await;
+            objs.push((label, d));
+        }
+    }
+    let m = merge_objects(&[objs]);
+    (!m.is_empty()).then(|| {
+        m.iter()
+            .map(|(t, n)| {
+                if *n > 1 {
+                    format!("{n} × {t}")
+                } else {
+                    t.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+}
+
 /// A parcel appeared between `before` and `after` (parcel scores).
 fn is_parcel_change(before: f32, after: f32) -> bool {
     after > 0.01 && after - before > 0.015

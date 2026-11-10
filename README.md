@@ -85,11 +85,13 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Zones** (camera settings → Zones), like Frigate and Blue Iris: draw areas and lines on the picture.
   Alert only for objects inside an area, when something **crosses a line** (in either or one direction),
   when someone **lingers**, or when an **item is left or taken** (packages on the porch).
-- **Parked vehicles**: a car, truck or bike that stays in one place stops alerting (after 60 s by default)
-  and alerts again as soon as it moves; it's remembered across restarts and quiet nights.
-- **Package delivery**: mark a zone around your doorstep to watch for parcels. GAZE compares the area
-  before and after each alert and (with smart search) says "Package delivered at Porch" or
-  "Package picked up from Porch", with before/after pictures in the alert.
+- **Stationary objects** (camera settings → AI): a car parked in the driveway alerts when it arrives,
+  then stays quiet while it stands still (60 s by default; choose which kinds of objects) and alerts
+  again as soon as it moves; remembered across restarts and quiet nights.
+- **Package delivery** (camera settings → AI): drag a box on the camera picture around where parcels are
+  left. GAZE compares that spot before and after each visit and (with smart search) says "Package
+  delivered" or "Package picked up", with before/after pictures in the alert. Zones can watch for
+  items left or taken too.
 - **Descriptions from the whole alert**: smart search describes several moments of each alert's
   full-quality video (4 by default), not only the alert picture, so a person who turns around or a
   second visitor is included.
@@ -101,8 +103,9 @@ viewing, finding footage, and managing everything, all from the browser.
   (OpenCV YuNet/SFace and fast-alpr models, about 50 MB, downloaded once).
 
 **Phone notifications**
-- Through the free **ntfy** app (Android/iPhone), Settings → Notifications: the alert picture as soon
-  as a person or vehicle is seen, then a **summary** when it's over ("Adult in a black top — 40 s.
+- Through the free **ntfy** app (Android/iPhone), Settings → Notifications: the alert picture a few
+  seconds after a person or vehicle is seen, **with the AI's description of it** ("Adult in a black
+  top", or Gemini's), then a **summary** when it's over ("Adult in a black top — 40 s.
   Recognized Mum; Package delivered at Porch").
 - Optional **Google Gemini** summaries: Gemini looks at the alert picture and 3 moments of the HD video,
   writes what happened and judges whether it's **suspicious** (lingering, trying doors, taking things…).

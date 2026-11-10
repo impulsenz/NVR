@@ -315,6 +315,8 @@ pub struct NotifyConfig {
     pub night_gap_minutes: u32,
     /// Send a summary after the alert (besides the picture right away).
     pub summary: bool,
+    /// Wait for the AI's description of the picture and send it with it.
+    pub describe_first: bool,
     /// Address that opens GAZE from the phone (e.g. your Tailscale name).
     pub link: String,
     /// Google Gemini writes the summary and judges what's suspicious.
@@ -346,6 +348,7 @@ impl Default for NotifyConfig {
             night_to: "06:00".into(),
             night_gap_minutes: 1,
             summary: true,
+            describe_first: true,
             link: String::new(),
             gemini: false,
             gemini_key: String::new(),
@@ -570,6 +573,12 @@ pub struct DetectConfig {
     pub ignore_parked: bool,
     /// Seconds without moving before something counts as parked.
     pub parked_seconds: u32,
+    /// Kinds of objects that stop alerting while they stand still.
+    pub parked_objects: Vec<String>,
+    /// Package delivery: watch `package_area` for parcels left or taken.
+    pub packages: bool,
+    /// Where parcels are left (polygon, 0..1 of the picture).
+    pub package_area: Vec<[f32; 2]>,
 }
 
 impl Default for DetectConfig {
@@ -597,6 +606,12 @@ impl Default for DetectConfig {
             ai_interval: 1.0,
             ignore_parked: true,
             parked_seconds: 60,
+            parked_objects: crate::stationary::PARKING
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            packages: false,
+            package_area: Vec::new(),
         }
     }
 }
@@ -769,9 +784,16 @@ impl Profile {
         cam.segment_seconds = self.segment_seconds;
         cam.retention_days = self.retention_days;
         cam.max_storage_gb = self.max_storage_gb;
+        // Areas drawn on this camera's own picture stay the camera's.
         let mask = std::mem::take(&mut cam.detect.mask);
+        let (packages, area) = (
+            cam.detect.packages,
+            std::mem::take(&mut cam.detect.package_area),
+        );
         cam.detect = self.detect.clone();
         cam.detect.mask = mask;
+        cam.detect.packages = packages;
+        cam.detect.package_area = area;
         cam.profile = self.name.clone();
     }
 }

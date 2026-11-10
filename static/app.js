@@ -2613,7 +2613,7 @@ async function openCameraDialog(id, clone) {
         <button type="button" class="small" id="c-prof-save" title="Save this camera's recording, motion and AI settings as a profile">💾 Save as profile…</button>
         <button type="button" class="small" id="c-prof-del" title="Delete the chosen profile">✕</button>
         <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button><button type="button" data-t="zones">Zones</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button><button type="button" data-t="zones">Zones</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
@@ -2697,6 +2697,14 @@ async function openCameraDialog(id, clone) {
           <div class="row" style="margin-top:6px"><button type="button" class="small" id="d-mask-clear">Clear</button><button type="button" class="small" id="d-mask-invert">Invert</button>
             <span class="hint" style="margin:0">Drag over the picture to mark areas to ignore (red). Drag again to unmark.</span></div>
           <div id="d-meter" class="hint" style="margin-top:8px"></div></div>
+        <label for="d-pre">Record before alert</label>
+        <div class="row"><input type="number" id="d-pre" min="0" max="120" value="${c.detect.pre_seconds}" style="width:110px"><span class="muted">seconds (pre-event buffer, in alert recording modes)</span></div>
+        <label for="d-post">Record after activity stops</label>
+        <div class="row"><input type="number" id="d-post" min="3" max="600" value="${c.detect.post_seconds}" style="width:110px"><span class="muted">seconds</span></div>
+        <label for="d-fps">Analysis frame rate</label>
+        <div class="row"><input type="number" id="d-fps" min="1" max="15" value="${c.detect.fps}" style="width:110px"><span class="muted">pictures per second checked for motion</span></div>
+      </div>
+      <div data-tab="ai" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="d-ai" ${c.detect.ai ? 'checked' : ''}> Object recognition (AI)</label>
           <div class="hint">${aiOn ? `Uses <b>${esc(settings.ai.provider)}</b>. Pictures are only sent to the AI while motion is seen (needs motion detection).` : '<span class="warnc">No AI is set up yet.</span> Choose one in Settings → Object recognition.'}</div></div>
         <label>Alert on</label>
@@ -2705,17 +2713,21 @@ async function openCameraDialog(id, clone) {
         <div class="row"><input type="range" id="d-conf" min="5" max="95" value="${Math.round(c.detect.min_confidence * 100)}" style="flex:1"><span id="d-conf-v" class="muted" style="width:40px">${Math.round(c.detect.min_confidence * 100)}%</span></div>
         <label for="d-trig">What makes an alert</label>
         <div><select id="d-trig"><option value="motion">Any motion</option><option value="objects">Only recognized objects (ignores trees, shadows, rain)</option></select></div>
-        <label for="d-pre">Record before alert</label>
-        <div class="row"><input type="number" id="d-pre" min="0" max="120" value="${c.detect.pre_seconds}" style="width:110px"><span class="muted">seconds (pre-event buffer, in alert recording modes)</span></div>
-        <label for="d-post">Record after activity stops</label>
-        <div class="row"><input type="number" id="d-post" min="3" max="600" value="${c.detect.post_seconds}" style="width:110px"><span class="muted">seconds</span></div>
-        <label for="d-fps">Analysis frame rate</label>
-        <div class="row"><input type="number" id="d-fps" min="1" max="15" value="${c.detect.fps}" style="width:110px"><span class="muted">pictures per second checked for motion</span></div>
         <label for="d-int">AI check interval</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks during motion (raise this for cloud AI)</span></div>
-        <span></span><div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Ignore parked vehicles</label>
-          <div class="row" style="margin-top:4px"><span class="muted">after</span><input type="number" id="d-parked-s" min="10" max="3600" value="${c.detect.parked_seconds || 60}" style="width:90px"><span class="muted">seconds without moving</span></div>
-          <div class="hint">A car, truck, motorbike or bike that stays in the same place stops making alerts (other things moving around it still do). It alerts again as soon as it moves. Needs object recognition (AI).</div></div>
+        <label>Stationary objects</label>
+        <div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Stop alerting for objects that stay in one place</label>
+          <div class="row" style="margin-top:4px"><span class="muted">after</span><input type="number" id="d-parked-s" min="10" max="3600" value="${c.detect.parked_seconds || 60}" style="width:90px"><span class="muted">seconds without moving, for:</span></div>
+          <div class="chips" id="d-parked-objs" style="margin-top:4px">${[...new Set([...objs, ...(c.detect.parked_objects || [])])].map(o => `<label><input type="checkbox" value="${o}" ${(c.detect.parked_objects || ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'boat']).includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
+          <div class="hint">A car parked in the driveway alerts when it arrives, then stays quiet while it stands still (people walking past still alert). It alerts again as soon as it moves or drives off.</div></div>
+        <label>Package delivery</label>
+        <div><label class="check"><input type="checkbox" id="d-pkg" ${c.detect.packages ? 'checked' : ''}> Notice parcels delivered or picked up</label>
+          <div class="surface" id="d-pkg-area" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair;margin-top:6px">
+            <img alt="" id="d-pkg-img" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div>
+            <svg id="d-pkg-svg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
+          <div class="row" style="margin-top:6px"><button type="button" class="small" id="d-pkg-clear">Clear</button>
+            <span class="hint" style="margin:0" id="d-pkg-hint">Drag a box on the picture around where parcels are left (doorstep, porch).</span></div>
+          <div class="hint">GAZE compares this spot before and after each visit. With smart search on (Settings → Object recognition) it tells “Package delivered” from “Package picked up”, with before/after pictures in the alert.</div></div>
       </div>
       <div data-tab="osd" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="o-custom" ${c.osd.custom ? 'checked' : ''}> Use settings just for this camera</label>
@@ -2767,6 +2779,7 @@ async function openCameraDialog(id, clone) {
   deviceLoaded = false; deviceDirty = new Set();
   setupProfiles(c);
   setupZones(c, id && !clone ? id : null);
+  setupPackageArea(c, id && !clone ? id : null);
   // A field the browser rejects may be on a hidden tab: show that tab and say why.
   f.addEventListener('invalid', (e) => {
     const tab = e.target.closest('[data-tab]');
@@ -2857,6 +2870,34 @@ function setupMaskEditor(mask, camId) {
     meterTimer = setInterval(() => updateMotionMeter(camId), 500);
   }
 }
+// Package delivery spot (camera → AI): drag a box on the camera picture.
+let pkgArea = [];
+function setupPackageArea(c, camId) {
+  pkgArea = (c.detect.package_area || []).map(p => [...p]);
+  const surf = $('d-pkg-area'), svg = $('d-pkg-svg');
+  const draw = () => {
+    svg.innerHTML = pkgArea.length >= 3 ? `<polygon points="${pkgArea.map(p => p.join(',')).join(' ')}" fill="rgba(255,176,32,.25)" stroke="#ffb020" stroke-width="0.006" vector-effect="non-scaling-stroke"/>` : '';
+    $('d-pkg-hint').textContent = pkgArea.length >= 3 ? 'Package spot set. Drag again to redraw it.' : 'Drag a box on the picture around where parcels are left (doorstep, porch).';
+  };
+  if (camId) { const img = $('d-pkg-img'); img.onload = () => { const m = surf.querySelector('.msg'); if (m) m.hidden = true; }; img.src = 'snapshot/' + enc(camId) + '?t=' + Date.now(); }
+  let start = null;
+  const at = (e) => { const r = surf.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
+  surf.onpointerdown = (e) => { start = at(e); surf.setPointerCapture(e.pointerId); e.preventDefault(); };
+  surf.onpointermove = (e) => {
+    if (!start) return;
+    const p = at(e), [x0, x1] = [Math.min(start[0], p[0]), Math.max(start[0], p[0])], [y0, y1] = [Math.min(start[1], p[1]), Math.max(start[1], p[1])];
+    pkgArea = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(q => q.map(v => Math.round(v * 1000) / 1000));
+    draw();
+  };
+  surf.onpointerup = () => {
+    if (start && pkgArea.length >= 3 && (pkgArea[1][0] - pkgArea[0][0] < 0.02 || pkgArea[2][1] - pkgArea[1][1] < 0.02)) pkgArea = [];
+    start = null; draw();
+    if (pkgArea.length >= 3) $('d-pkg').checked = true;
+  };
+  $('d-pkg-clear').onclick = () => { pkgArea = []; draw(); };
+  draw();
+}
+
 function stopMotionMeter() { clearInterval(meterTimer); meterTimer = null; if (maskUnbind) { maskUnbind(); maskUnbind = null; } }
 async function updateMotionMeter(camId) {
   const m = await api(`api/cameras/${enc(camId)}/motion`).catch(() => null);
@@ -3028,7 +3069,8 @@ function collectCamera() {
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
-      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60)},
+      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
+      parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgArea.length >= 3, package_area: pkgArea},
   };
 }
 // ---------- camera's own settings over ONVIF ----------
@@ -3326,8 +3368,9 @@ function applyProfile(p) {
   if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
   set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-parked-s', d.parked_seconds || 60);
+  if (d.parked_objects) document.querySelectorAll('#d-parked-objs input').forEach(i => i.checked = d.parked_objects.includes(i.value));
   // Let the form update anything that depends on these (hidden sections, hints).
-  for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
+  for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select, [data-tab=ai] input, [data-tab=ai] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
   $('d-objpx') && $('d-objpx').dispatchEvent(new Event('input', {bubbles: true}));
 }
 async function finishSave(body) {
@@ -3981,6 +4024,8 @@ async function renderNotify(body) {
       <label for="n-nfrom">At night</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sus" ${n.only_suspicious ? 'checked' : ''}> Only suspicious activity</label>
         <div class="hint">Suspicious: lines crossed, someone lingering, a parcel picked up, a person at night, or what Gemini judges suspicious (below). Suspicious activity is always sent, even within the time between notifications, with high priority.</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="n-desc" ${n.describe_first !== false ? 'checked' : ''}> Wait for the AI's description and send it with the picture</label>
+        <div class="hint">The picture arrives a few seconds later, saying what's in it (“Adult in a black top”, or Gemini's description when Gemini is on below). Needs smart search or Gemini; otherwise the picture is sent straight away.</div></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
         <div class="hint">What happened, who was recognised, number plates, parcels — from smart search and faces &amp; plates, or from Gemini.</div></div>
       <label for="n-link">Open GAZE at</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
@@ -4004,7 +4049,7 @@ async function renderNotify(body) {
     return {enabled: chk('n-on'), server: val('n-server').trim() || 'https://ntfy.sh', topic: val('n-topic').trim(), token: val('n-token'),
       objects: [...body.querySelectorAll('.n-obj:checked')].map(c => c.value), cameras: picked.length === cams.length ? [] : picked,
       only_suspicious: chk('n-sus'), gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
-      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), link: val('n-link').trim(),
+      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), describe_first: chk('n-desc'), link: val('n-link').trim(),
       gemini: chk('n-gem'), gemini_key: val('n-gkey'), gemini_model: val('n-gmodel').trim() || 'gemini-2.5-flash'};
   };
   $('n-save').onclick = async () => {

@@ -283,6 +283,11 @@ struct Notifier {
     /// When each camera last notified.
     last: HashMap<String, DateTime<Local>>,
     last_error: String,
+    /// Descriptions made for alerts whose picture isn't sent yet (so a
+    /// failed send doesn't ask the AI again).
+    described: HashMap<String, (Option<String>, Option<String>)>,
+    /// After a failed send: wait before trying again.
+    retry_after: Option<std::time::Instant>,
 }
 
 impl Notifier {
@@ -308,6 +313,7 @@ impl Notifier {
                 true
             }
             Err(e) => {
+                self.retry_after = Some(std::time::Instant::now() + Duration::from_secs(30));
                 let msg = format!("{e:#}");
                 if msg != self.last_error {
                     warn!("notifications: {msg}");
@@ -342,18 +348,67 @@ impl Notifier {
                     let Some(pic) = picture(&rt, &e) else {
                         continue;
                     };
-                    let sus = suspicious(n, &e);
-                    if sus.is_none() && (n.only_suspicious || !self.may_send(n, &rt.cfg.id, now)) {
-                        // Maybe later, if it turns out to be suspicious.
+                    let mut sus = suspicious(n, &e);
+                    if sus.is_none() && !self.may_send(n, &rt.cfg.id, now) {
+                        // Within the quiet time: maybe later, if it turns
+                        // out to be suspicious.
                         e.notified = HELD;
                         rt.events.save(e);
                         continue;
                     }
+                    // What the AI sees in the picture, sent along with it.
+                    let gemini = n.gemini && !n.gemini_key.trim().is_empty();
+                    let mut desc = None;
+                    if let Some((d, s)) = self.described.get(&e.id).cloned() {
+                        desc = d;
+                        if let Some(s) = s {
+                            sus.get_or_insert(s);
+                        }
+                    } else if n.describe_first || (n.only_suspicious && gemini) {
+                        if gemini {
+                            match ask_gemini(
+                                n,
+                                &rt.cfg.name,
+                                &e,
+                                std::slice::from_ref(&pic),
+                                is_night(n, e.start),
+                            )
+                            .await
+                            {
+                                Ok((story, s)) => {
+                                    desc = (!story.is_empty()).then_some(story);
+                                    if let Some(s) = s {
+                                        e.suspicious = s.clone();
+                                        sus.get_or_insert(s);
+                                    }
+                                }
+                                Err(err) => {
+                                    self.report(Err(err));
+                                }
+                            }
+                        }
+                        if desc.is_none() && n.describe_first {
+                            desc = crate::smart::describe_now(mgr, &e).await;
+                        }
+                        if self.described.len() > 200 {
+                            self.described.clear();
+                        }
+                        self.described
+                            .insert(e.id.clone(), (desc.clone(), sus.clone()));
+                    }
+                    if sus.is_none() && n.only_suspicious {
+                        e.notified = HELD;
+                        rt.events.save(e);
+                        continue;
+                    }
+                    let time = e.start.format("%H:%M:%S");
                     let msg = Message {
                         title: format!("{}: {}", rt.cfg.name, what(&e)),
-                        body: match &sus {
-                            Some(r) => format!("⚠ {r} — {}", e.start.format("%H:%M:%S")),
-                            None => format!("{} at {}", what(&e), e.start.format("%H:%M:%S")),
+                        body: match (&sus, &desc) {
+                            (Some(r), Some(d)) => format!("⚠ {r}\n{d} — {time}"),
+                            (Some(r), None) => format!("⚠ {r} — {time}"),
+                            (None, Some(d)) => format!("{d} — {time}"),
+                            (None, None) => format!("{} at {time}", what(&e)),
                         },
                         tags: tags(&e, sus.is_some()),
                         priority: if sus.is_some() { 4 } else { 3 },
@@ -494,10 +549,15 @@ pub async fn run(mgr: Arc<Manager>) {
     let mut n = Notifier {
         last: HashMap::new(),
         last_error: String::new(),
+        described: HashMap::new(),
+        retry_after: None,
     };
     loop {
         tokio::time::sleep(Duration::from_secs(3)).await;
         let cfg = mgr.config();
+        if n.retry_after.is_some_and(|t| t > std::time::Instant::now()) {
+            continue;
+        }
         if cfg.notify.enabled && !cfg.notify.topic.trim().is_empty() {
             n.round(&mgr).await;
         }
