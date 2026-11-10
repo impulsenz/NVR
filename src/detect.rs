@@ -196,6 +196,10 @@ pub struct Detector {
     frames: tokio::sync::watch::Sender<Option<Frame>>,
     /// (width, height) of the sub-stream, if known.
     relay: Arc<crate::relay::Relay>,
+    /// Follows objects through the camera's zones.
+    zones: Mutex<crate::zones::ZoneWatch>,
+    /// The latest picture without any activity (for "item left or taken").
+    quiet: Mutex<Option<Frame>>,
 }
 
 struct Active {
@@ -209,6 +213,8 @@ struct Active {
     motion_best: f32,
     /// Recent recognitions (to settle one label per object).
     seen: Vec<(Detection, Instant)>,
+    /// "Item left or taken" areas: (zone index, how the area looked before).
+    zone_before: Vec<(usize, Vec<f32>)>,
 }
 
 impl Detector {
@@ -230,6 +236,8 @@ impl Detector {
             latest: Mutex::new(None),
             frames: tokio::sync::watch::Sender::new(None),
             relay,
+            zones: Mutex::new(crate::zones::ZoneWatch::default()),
+            quiet: Mutex::new(None),
         })
     }
 
@@ -501,6 +509,9 @@ impl Detector {
                         peak_at = Instant::now();
                     }
                 }
+                if !moving && active.is_none() {
+                    *self.quiet.lock().unwrap() = Some(frame.clone());
+                }
                 let now = Local::now();
                 if moving && let Some(o) = m.as_ref().and_then(|m| m.objects.first()) {
                     // Thumbnail around the biggest moving object.
@@ -545,6 +556,19 @@ impl Detector {
         if let Some(b) = &self.buffer {
             b.hold(&id, now);
         }
+        // How the "item left or taken" areas looked before the activity.
+        let quiet = self.quiet.lock().unwrap().clone();
+        let zone_before: Vec<(usize, Vec<f32>)> = quiet
+            .map(|f| {
+                self.cam
+                    .zones
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, z)| z.kind == "area" && z.watch_items)
+                    .map(|(i, z)| (i, crate::zones::area_signature(&f, &z.points)))
+                    .collect()
+            })
+            .unwrap_or_default();
         Active {
             event: Event {
                 id,
@@ -560,6 +584,7 @@ impl Detector {
                 desc: String::new(),
                 boxes: Vec::new(),
                 summary: String::new(),
+                notes: Vec::new(),
             },
             last_activity: now,
             qualified: false,
@@ -567,6 +592,7 @@ impl Detector {
             thumb_at: Instant::now() - Duration::from_secs(10),
             motion_best: 0.0,
             seen: Vec::new(),
+            zone_before,
         }
     }
 
@@ -671,11 +697,24 @@ impl Detector {
                 }
             }
         }
+        // Zones: required areas, crossings, loitering.
+        let mut zone_notes = Vec::new();
+        if !self.cam.zones.is_empty() {
+            let r = self.zones.lock().unwrap().check(&self.cam.zones, hits);
+            hits = r.keep;
+            zone_notes = r.notes;
+        }
         if hits.is_empty() {
             return;
         }
         let now = Local::now();
         let a = active.get_or_insert_with(|| self.new_event(now));
+        for n in zone_notes {
+            if !a.event.notes.contains(&n) {
+                info!(target: "event", "[{}] {n}", self.cam.name);
+                a.event.notes.push(n);
+            }
+        }
         for h in &hits {
             a.seen.push((h.clone(), Instant::now()));
         }
@@ -824,6 +863,32 @@ impl Detector {
             return;
         }
         a.event.end = a.last_activity.max(a.event.start + CDuration::seconds(1));
+        // Item left or taken: the area looks different now that it's quiet.
+        if !a.zone_before.is_empty()
+            && let Some(now) = self.latest.lock().unwrap().clone()
+        {
+            for (zi, before) in &a.zone_before {
+                let Some(z) = self.cam.zones.get(*zi) else {
+                    continue;
+                };
+                let change = crate::zones::area_change(
+                    before,
+                    &crate::zones::area_signature(&now, &z.points),
+                );
+                if change > 0.12 {
+                    let note = format!("Item left or taken in {}", z.name);
+                    info!(target: "event", "[{}] {note} ({:.0}% of the area changed)", self.cam.name, change * 100.0);
+                    a.event.notes.push(note);
+                    if !a.event.labels.iter().any(|l| l.label == "package") {
+                        a.event.labels.push(Label {
+                            label: "package".into(),
+                            score: 1.0,
+                            color: None,
+                        });
+                    }
+                }
+            }
+        }
         self.store.save(a.event.clone());
         if let Some(b) = &self.buffer {
             b.finish(

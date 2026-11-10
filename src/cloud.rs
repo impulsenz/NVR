@@ -184,6 +184,7 @@ mod tests {
             desc: String::new(),
             boxes: Vec::new(),
             summary: String::new(),
+            notes: Vec::new(),
         };
         store.save(ev(
             "ev-person",

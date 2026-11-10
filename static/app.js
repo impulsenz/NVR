@@ -10,7 +10,7 @@ const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehic
   dog:'animal', cat:'animal', bird:'animal', horse:'animal', cow:'animal', sheep:'animal', bear:'animal'};
 // Alert types. Plain recordings aren't listed: they are on the timeline.
 const FILTER_TYPES = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],['bus','Bus'],
-  ['motorcycle','Motorcycle'],['bicycle','Bicycle'],['dog','Dog'],['cat','Cat'],['bird','Bird'],['other','Other objects']];
+  ['motorcycle','Motorcycle'],['bicycle','Bicycle'],['dog','Dog'],['cat','Cat'],['bird','Bird'],['package','Item left/taken'],['other','Other objects']];
 
 let status = null, settings = null, cameraCfgs = [], sysinfo = null;
 let page = 'live';
@@ -323,7 +323,7 @@ function updateSubscriptions() {
 // Overlays (name, clock, fps, status, fullscreen) for a live surface.
 // Little symbols for what was detected (also used on timelines).
 const LABEL_ICON = {person: '🚶', car: '🚗', truck: '🚚', bus: '🚌', motorcycle: '🏍️', bicycle: '🚲', dog: '🐕', cat: '🐈', bird: '🐦',
-  horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', motion: '〰️'};
+  horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', package: '📦', motion: '〰️'};
 const labelIcon = (l) => LABEL_ICON[l] || '🔷';
 // What the timeline colours and symbols mean.
 function legendHtml(kind) {
@@ -2445,7 +2445,7 @@ async function openCameraDialog(id, clone) {
         <button type="button" class="small" id="c-prof-save" title="Save this camera's recording, motion and AI settings as a profile">💾 Save as profile…</button>
         <button type="button" class="small" id="c-prof-del" title="Delete the chosen profile">✕</button>
         <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion &amp; AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button><button type="button" data-t="zones">Zones</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
@@ -2572,6 +2572,14 @@ async function openCameraDialog(id, clone) {
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
       <div data-tab="device" hidden><div id="dv-body"></div></div>
+      <div data-tab="zones" hidden>
+        <div class="hint" style="margin-bottom:8px">Like Frigate and Blue Iris: <b>areas</b> (an object counts as inside when its feet / wheels are) and <b>lines</b> objects cross.
+          Use them to alert only for the driveway, notice people crossing the gate, someone hanging around the porch, or a parcel left (or something taken) at the door.</div>
+        <div class="row" style="margin-bottom:8px"><button type="button" id="z-add-area">＋ Area</button><button type="button" id="z-add-line">＋ Line</button>
+          <span class="muted" id="z-msg">Click on the picture to place the corners; click the first corner (or Done) to finish.</span><button type="button" id="z-done" hidden class="primary">Done</button></div>
+        <div class="surface zone-ed" id="z-prev"><img alt=""><svg id="z-svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
+        <div id="z-list"></div>
+      </div>
       <div class="err" id="c-err" style="margin-top:12px" hidden></div>
     </div>
     <div class="foot"><button type="button" data-close>Cancel</button><button class="primary" id="c-save">Save camera</button></div>`;
@@ -2583,9 +2591,11 @@ async function openCameraDialog(id, clone) {
     f.querySelectorAll('#c-tabs button').forEach(x => x.classList.toggle('active', x === b));
     f.querySelectorAll('[data-tab]').forEach(t => t.hidden = t.dataset.tab !== b.dataset.t);
     if (b.dataset.t === 'device' && !deviceLoaded) loadDeviceTab();
+    if (b.dataset.t === 'zones') drawZones();
   });
   deviceLoaded = false; deviceDirty = new Set();
   setupProfiles(c);
+  setupZones(c, id && !clone ? id : null);
   // A field the browser rejects may be on a hidden tab: show that tab and say why.
   f.addEventListener('invalid', (e) => {
     const tab = e.target.closest('[data-tab]');
@@ -2637,7 +2647,7 @@ async function openCameraDialog(id, clone) {
   $('cam-dialog').showModal();
 }
 function closeCameraDialog() { stopPreviews(); $('cam-dialog').close(); }
-$('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } });
+$('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });
 
 // ---------- motion mask editor & live motion readout ----------
 let maskCells = [], maskUnbind = null, meterTimer = null;
@@ -2839,7 +2849,7 @@ function collectCamera() {
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
-    rotate: +val('c-rotate') || 0, profile: camProfile,
+    rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
     timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true,
     osd: readOsd(),
     view: (cameraCfgs.find(x => x.id === editingId) || {}).view || {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
@@ -2978,6 +2988,101 @@ async function loadDeviceTab() {
   };
 }
 let deviceDirty = new Set(), saveDevice = null;
+
+// ---------- zones ----------
+let dlgZones = [], zoneDraft = null, zoneUnbind = null;
+const ZONE_COLORS = ['#22c55e', '#4f8cff', '#f59e0b', '#ec4899', '#a78bfa', '#14b8a6', '#ef4444', '#eab308'];
+const ZONE_OBJECTS = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat', 'bird'];
+function setupZones(c, camId) {
+  dlgZones = JSON.parse(JSON.stringify(c.zones || []));
+  zoneDraft = null;
+  if (zoneUnbind) zoneUnbind();
+  zoneUnbind = camId ? Live.bind($('z-prev').querySelector('img'), camId, 'sub') : null;
+  const svg = $('z-svg');
+  const at = (e) => { const r = svg.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
+  const startDraft = (kind) => { zoneDraft = {kind, points: []}; $('z-done').hidden = kind === 'line'; $('z-msg').textContent = kind === 'line' ? 'Click the two ends of the line.' : 'Click the corners; click the first corner or Done to finish.'; drawZones(); };
+  $('z-add-area').onclick = () => startDraft('area');
+  $('z-add-line').onclick = () => startDraft('line');
+  $('z-done').onclick = () => finishDraft();
+  // Drag corners to adjust; click to place new corners.
+  let drag = null;
+  svg.onpointerdown = (e) => {
+    const h = e.target.closest('[data-zi]');
+    if (h && !zoneDraft) { e.preventDefault(); drag = {zi: +h.dataset.zi, pi: +h.dataset.pi}; svg.setPointerCapture(e.pointerId); return; }
+    if (!zoneDraft) return;
+    const p = at(e), d = zoneDraft;
+    if (d.kind === 'area' && d.points.length >= 3 && Math.hypot(p[0] - d.points[0][0], p[1] - d.points[0][1]) < 0.03) return finishDraft();
+    d.points.push(p);
+    if (d.kind === 'line' && d.points.length === 2) return finishDraft();
+    drawZones();
+  };
+  svg.onpointermove = (e) => { if (!drag) return; dlgZones[drag.zi].points[drag.pi] = at(e); drawZones(); };
+  svg.onpointerup = svg.onpointercancel = () => { drag = null; };
+  drawZones(); renderZoneList();
+}
+function finishDraft() {
+  const d = zoneDraft; zoneDraft = null;
+  $('z-done').hidden = true; $('z-msg').textContent = 'Drag the corners to adjust.';
+  if (!d || d.points.length < (d.kind === 'line' ? 2 : 3)) { drawZones(); return; }
+  const n = dlgZones.filter(z => z.kind === d.kind).length + 1;
+  dlgZones.push({name: d.kind === 'line' ? `Line ${n}` : `Area ${n}`, kind: d.kind, points: d.points, objects: [], required: false, loiter_seconds: 0, direction: 'any', watch_items: false});
+  drawZones(); renderZoneList();
+}
+function drawZones() {
+  const svg = $('z-svg'); if (!svg) return;
+  const pts = (p) => p.map(q => q.join(',')).join(' ');
+  let h = '';
+  dlgZones.forEach((z, zi) => {
+    const c = ZONE_COLORS[zi % ZONE_COLORS.length];
+    if (z.kind === 'line') {
+      const [a, b] = z.points;
+      h += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="${c}" stroke-width="3" vector-effect="non-scaling-stroke"/>`;
+    } else h += `<polygon points="${pts(z.points)}" fill="${c}" fill-opacity=".22" stroke="${c}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  });
+  if (zoneDraft && zoneDraft.points.length) {
+    h += zoneDraft.kind === 'area' ? `<polyline points="${pts(zoneDraft.points)}" fill="none" stroke="#fff" stroke-dasharray="4 3" stroke-width="2" vector-effect="non-scaling-stroke"/>` : '';
+  }
+  svg.innerHTML = h;
+  // Corner handles and labels as HTML on top (round at any picture shape).
+  const box = $('z-prev');
+  box.querySelectorAll('.zh, .zl').forEach(e => e.remove());
+  dlgZones.forEach((z, zi) => {
+    const c = ZONE_COLORS[zi % ZONE_COLORS.length];
+    z.points.forEach((p, pi) => box.insertAdjacentHTML('beforeend', `<span class="zh" data-zi="${zi}" data-pi="${pi}" style="left:${p[0] * 100}%;top:${p[1] * 100}%;background:${c}">${z.kind === 'line' ? (pi ? 'B' : 'A') : ''}</span>`));
+    const cx = z.points.reduce((s, p) => s + p[0], 0) / z.points.length, cy = z.points.reduce((s, p) => s + p[1], 0) / z.points.length;
+    box.insertAdjacentHTML('beforeend', `<span class="zl" style="left:${cx * 100}%;top:${cy * 100}%;border-color:${c}">${esc(z.name)}</span>`);
+  });
+  if (zoneDraft) zoneDraft.points.forEach(p => box.insertAdjacentHTML('beforeend', `<span class="zh draft" style="left:${p[0] * 100}%;top:${p[1] * 100}%"></span>`));
+  // Handles are HTML; pass their presses to the SVG handler.
+  box.querySelectorAll('.zh[data-zi]').forEach(hd => hd.onpointerdown = (e) => { if (!zoneDraft) $('z-svg').onpointerdown(e); });
+}
+function renderZoneList() {
+  const box = $('z-list'); if (!box) return;
+  box.innerHTML = dlgZones.length ? '' : '<div class="hint">No zones yet: the whole picture counts.</div>';
+  dlgZones.forEach((z, zi) => {
+    const c = ZONE_COLORS[zi % ZONE_COLORS.length], el = document.createElement('div');
+    el.className = 'zone-item';
+    el.style.borderLeftColor = c;
+    el.innerHTML = `<div class="row"><input type="text" class="z-name" value="${esc(z.name)}" style="width:180px"><span class="muted">${z.kind === 'line' ? 'Line' : 'Area'}</span><span class="spacer"></span><button type="button" class="small danger z-del">Delete</button></div>
+      <div class="chips z-objs"><span class="muted small">Objects:</span>${ZONE_OBJECTS.map(o => `<label><input type="checkbox" value="${o}" ${z.objects.includes(o) ? 'checked' : ''}>${labelIcon(o)} ${o}</label>`).join('')}<span class="muted small">(none ticked = any)</span></div>
+      ${z.kind === 'line' ? `<div class="row"><span class="muted">Report crossings</span><select class="z-dir"><option value="any">both ways</option><option value="ab">only A → B</option><option value="ba">only B → A</option></select></div>`
+        : `<div class="row" style="flex-wrap:wrap;gap:14px">
+            <label class="check"><input type="checkbox" class="z-req" ${z.required ? 'checked' : ''}> Only alert for objects inside this area</label>
+            <label class="check">Loitering after <input type="number" class="z-loiter" min="0" max="3600" value="${z.loiter_seconds}" style="width:80px"> s <span class="muted">(0 = off)</span></label>
+            <label class="check"><input type="checkbox" class="z-items" ${z.watch_items ? 'checked' : ''}> Notice items left or taken (parcels, theft)</label></div>`}`;
+    const upd = () => {
+      z.name = el.querySelector('.z-name').value.trim() || z.name;
+      z.objects = [...el.querySelectorAll('.z-objs input:checked')].map(i => i.value);
+      if (z.kind === 'line') z.direction = el.querySelector('.z-dir').value;
+      else { z.required = el.querySelector('.z-req').checked; z.loiter_seconds = Math.max(0, Math.round(+el.querySelector('.z-loiter').value || 0)); z.watch_items = el.querySelector('.z-items').checked; }
+      drawZones();
+    };
+    if (z.kind === 'line') el.querySelector('.z-dir').value = z.direction || 'any';
+    el.addEventListener('input', upd); el.addEventListener('change', upd);
+    el.querySelector('.z-del').onclick = () => { dlgZones.splice(zi, 1); drawZones(); renderZoneList(); };
+    box.appendChild(el);
+  });
+}
 
 // ---------- recording profiles ----------
 const PROFILE_KEYS = ['record_mode', 'schedule_enabled', 'schedule', 'record_audio', 'transcode', 'record_fps', 'segment_seconds', 'retention_days', 'max_storage_gb', 'detect'];

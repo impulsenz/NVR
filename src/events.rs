@@ -51,6 +51,9 @@ pub struct Event {
     /// What happened, written after the alert ends (smart search / AI).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    /// Zone happenings ("Person in Porch", "Car crossed Gate (A→B)").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -230,6 +233,7 @@ mod tests {
             desc: String::new(),
             boxes: Vec::new(),
             summary: String::new(),
+            notes: Vec::new(),
         };
         s.save(e.clone());
         e.labels.push(Label {

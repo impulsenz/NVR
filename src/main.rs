@@ -27,6 +27,7 @@ mod storage;
 mod sysmon;
 mod users;
 mod web;
+mod zones;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;

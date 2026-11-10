@@ -559,3 +559,14 @@ table.users .chips { margin: 0; }
 .pe-row.off label { color: var(--muted); }
 .pe-row span { display: flex; gap: 6px; }
 #dash.editing:has(.phone-edit) { height: auto !important; }
+
+/* Zones editor */
+.zone-ed { aspect-ratio: 16/9; max-width: 720px; position: relative; touch-action: none; }
+.zone-ed img { object-fit: fill !important; }
+.zone-ed svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 2; }
+.zh { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid #fff; z-index: 3; cursor: grab;
+  font-size: 9px; font-weight: 700; color: #000; display: flex; align-items: center; justify-content: center; touch-action: none; }
+.zh.draft { background: #fff; width: 10px; height: 10px; margin: -5px 0 0 -5px; pointer-events: none; }
+.zl { position: absolute; transform: translate(-50%, -50%); z-index: 2; pointer-events: none; background: rgba(0,0,0,.6); border: 1px solid; border-radius: 4px; padding: 0 6px; font-size: 12px; }
+.zone-item { border-left: 4px solid; background: var(--panel2); border-radius: 6px; padding: 8px 10px; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.zone-item .chips { margin: 0; }

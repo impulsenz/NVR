@@ -613,6 +613,42 @@ impl Default for PtzConfig {
     }
 }
 
+/// A zone on the camera picture (see `zones.rs`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ZoneConfig {
+    pub name: String,
+    /// "area" (polygon) or "line" (two points).
+    pub kind: String,
+    /// Corners (area) or ends (line), 0..1 of the picture.
+    pub points: Vec<[f32; 2]>,
+    /// Objects that count here (empty = any).
+    pub objects: Vec<String>,
+    /// Area: alerts only for objects inside required areas.
+    pub required: bool,
+    /// Area: report an object staying this many seconds (0 = off).
+    pub loiter_seconds: u32,
+    /// Line: "any", "ab" or "ba".
+    pub direction: String,
+    /// Area: report when something was left or taken (parcel, theft).
+    pub watch_items: bool,
+}
+
+impl Default for ZoneConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            kind: "area".into(),
+            points: vec![],
+            objects: vec![],
+            required: false,
+            loiter_seconds: 0,
+            direction: "any".into(),
+            watch_items: false,
+        }
+    }
+}
+
 /// A named set of recording, motion and AI settings that can be applied to
 /// any camera (the camera's own detection mask is kept).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -708,6 +744,8 @@ pub struct CameraConfig {
     /// Name of the recording profile this camera follows ("" = none). When
     /// the profile is changed, the camera's settings follow.
     pub profile: String,
+    /// Zones and lines on the picture.
+    pub zones: Vec<ZoneConfig>,
     pub detect: DetectConfig,
     pub osd: OsdConfig,
     pub view: ViewConfig,
@@ -736,6 +774,7 @@ impl Default for CameraConfig {
             timeline_copy: true,
             rotate: 0,
             profile: String::new(),
+            zones: Vec::new(),
             detect: DetectConfig::default(),
             osd: OsdConfig::default(),
             view: ViewConfig::default(),
@@ -748,6 +787,19 @@ impl CameraConfig {
     pub fn validate(&self) -> Result<()> {
         if ![0, 90, 180, 270].contains(&self.rotate) {
             bail!("rotation must be 0, 90, 180 or 270 degrees");
+        }
+        for z in &self.zones {
+            if z.name.trim().is_empty() {
+                bail!("every zone needs a name");
+            }
+            let need = if z.kind == "line" { 2 } else { 3 };
+            if z.points.len() < need || (z.kind == "line" && z.points.len() != 2) {
+                bail!(
+                    "zone \"{}\" needs {} points",
+                    z.name,
+                    if z.kind == "line" { "2" } else { "at least 3" }
+                );
+            }
         }
         if self.name.trim().is_empty() {
             bail!("camera name is required");

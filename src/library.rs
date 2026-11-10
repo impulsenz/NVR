@@ -21,6 +21,7 @@ pub const FILTER_LABELS: &[&str] = &[
     "dog",
     "cat",
     "bird",
+    "package",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,7 +183,8 @@ pub fn parse_text(q: &str) -> Vec<Term> {
 
 /// Does an event match every part of a text search?
 pub fn text_matches(e: &Event, camera_name: &str, terms: &[Term]) -> bool {
-    let desc = e.desc.to_lowercase();
+    // The AI description, the smart-search summary and zone notes.
+    let desc = format!("{}; {}; {}", e.desc, e.summary, e.notes.join("; ")).to_lowercase();
     // Description parts ("white delivery van; man in red jacket").
     let parts: Vec<&str> = desc.split(';').map(str::trim).collect();
     let has_word = |text: &str, w: &str| {
@@ -623,6 +625,7 @@ mod text_tests {
             desc: desc.into(),
             boxes: Vec::new(),
             summary: String::new(),
+            notes: Vec::new(),
         }
     }
 

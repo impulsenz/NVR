@@ -387,7 +387,12 @@ pub async fn run(mgr: Arc<Manager>) {
                         .unwrap_or_default();
                     tracing::info!(target: "event", "[{cam}] alert described: {what} ({})", fmt_secs(secs));
                     let mut updated = e.clone();
-                    updated.summary = format!("{what} — {}", fmt_secs(secs));
+                    let notes = if e.notes.is_empty() {
+                        String::new()
+                    } else {
+                        format!(". {}", e.notes.join("; "))
+                    };
+                    updated.summary = format!("{what} — {}{notes}", fmt_secs(secs));
                     store.save(updated);
                     if !announced {
                         info!("smart search: describing alert pictures in the background");
