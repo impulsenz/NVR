@@ -151,6 +151,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/notify/test", post(notify_test))
         .route("/api/notify/status", get(notify_status))
         .route("/api/maintenance/previews", post(rebuild_previews))
+        .route("/api/maintenance/redescribe", post(redescribe))
+        .route("/api/maintenance/reidentify", post(reidentify))
         .route(
             "/api/maintenance/alert-pictures",
             post(refresh_alert_pictures),
@@ -1950,8 +1952,88 @@ async fn notify_status() -> Response {
 
 // ---------- System → Tasks ----------
 
-async fn jobs_list() -> Response {
-    Json(json!({ "jobs": crate::jobs::list() })).into_response()
+async fn jobs_list(State(m): App) -> Response {
+    // Alerts still waiting for the background AI.
+    let cfg = m.config();
+    let now = Local::now();
+    let (mut describe, mut identify) = (0, 0);
+    for c in m.cameras() {
+        for e in c.events.between(now - chrono::Duration::days(60), now) {
+            if cfg.ai.smart_search && e.thumb.is_some() && e.summary.is_empty() {
+                describe += 1;
+            }
+            if (cfg.ai.faces || cfg.ai.plates)
+                && !e.identified
+                && e.start > now - chrono::Duration::days(7)
+                && e.boxes.iter().any(|b| {
+                    ["person", "car", "truck", "bus", "motorcycle"].contains(&b.label.as_str())
+                })
+            {
+                identify += 1;
+            }
+        }
+    }
+    Json(json!({ "jobs": crate::jobs::list(), "waiting": {"describe": describe, "identify": identify} })).into_response()
+}
+
+/// Describe the alerts of the last `days` again (smart search), e.g. after
+/// changing the model or the number of moments looked at.
+async fn redescribe(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
+    if !m.config().ai.smart_search {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Smart search is off (Settings → Object recognition)",
+        );
+    }
+    let since = Local::now() - chrono::Duration::days(r.days.clamp(1, 60));
+    let mut n = 0;
+    for c in m.cameras() {
+        for mut e in c.events.between(since, Local::now()) {
+            if !e.summary.is_empty() {
+                e.summary.clear();
+                c.events.save(e);
+                n += 1;
+            }
+        }
+    }
+    Json(json!({"ok": true, "message": format!("{n} alert(s) will be described again (see the list below)")})).into_response()
+}
+
+/// Look for faces and number plates in the alerts of the last `days` again,
+/// e.g. after teaching GAZE new people.
+async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
+    let cfg = m.config();
+    if !(cfg.ai.faces || cfg.ai.plates) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Faces & plates are off (Settings → People & vehicles)",
+        );
+    }
+    let since = Local::now() - chrono::Duration::days(r.days.clamp(1, 7));
+    let mut n = 0;
+    for c in m.cameras() {
+        for mut e in c.events.between(since, Local::now()) {
+            if !e.identified {
+                continue;
+            }
+            for f in e.faces.drain(..) {
+                let _ = std::fs::remove_file(c.events.dir().join(&f.file));
+            }
+            e.notes.retain(|x| {
+                !(x.starts_with("Recognized ")
+                    || x == "Unknown face"
+                    || x.contains(" plate ")
+                    || x.starts_with("Plate ")
+                    || x.starts_with("Looks like "))
+            });
+            e.plates.clear();
+            e.identified = false;
+            e.summary.clear(); // so names go into the description
+            c.events.save(e);
+            n += 1;
+        }
+    }
+    Json(json!({"ok": true, "message": format!("{n} alert(s) will be checked for faces and plates again (see the list below)")})).into_response()
 }
 
 /// Throw away all scrub / time-lapse previews and make those of the last

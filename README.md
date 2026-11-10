@@ -134,8 +134,10 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Smart load balancing** (on by default): when the GPU is busy (a game, another program) and the
   processor has room, new live views, conversions and exports run on the CPU, and motion detection moves
   its decoding to whichever has capacity — and back. The System page shows how often work was moved.
-- **Tasks**: what's running in the background (AI work on alerts, model downloads, previews, cloud
-  backup) with progress, and buttons to rebuild previews or refresh alert pictures from the HD recordings.
+- **Tasks** (Settings → Tasks): what the AI is doing in the background (describing alerts, faces and
+  plates, model downloads, previews, cloud backup) with progress and how many alerts are waiting, and
+  buttons to rebuild previews, refresh alert pictures from the HD recordings, describe alerts again or
+  look for faces & plates again.
 - On Windows GAZE runs **without a console window**: an icon by the clock opens it (click) and has a
   menu (right-click) for the recordings folder, the log, **start with Windows**, restart and quit.
 - **CPU, GPU and memory** usage with graphs (1 hour to 30 days, kept across restarts), so you can see if

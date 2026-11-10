@@ -2266,17 +2266,41 @@ async function loadJobs() {
       ${j.error ? `<div class="errc small">${esc(j.error)}</div>` : ''}
       ${!j.finished && pct != null ? `<div class="bar"><div style="width:${pct.toFixed(1)}%"></div></div>` : ''}</div>`;
   };
-  $('sys-tasks').innerHTML = (live.length ? live.map(row).join('') : '<div class="hint">Nothing running right now.</div>') +
+  const target = $('set-tasks') || $('sys-tasks');
+  const w = $('tasks-waiting');
+  if (w && r.waiting) w.innerHTML = `<span class="pill">${r.waiting.describe} alert${r.waiting.describe === 1 ? '' : 's'} waiting to be described</span> <span class="pill">${r.waiting.identify} waiting for faces &amp; plates</span>`;
+  target.innerHTML = (live.length ? live.map(row).join('') : '<div class="hint">Nothing running right now.</div>') +
     (done.length ? `<details class="jobs-done" ${showDoneJobs ? 'open' : ''}><summary>Finished (${done.length})</summary>${done.map(row).join('')}</details>` : '');
-  const d = $('sys-tasks').querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
+  const d = target.querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
 }
-$('sys-rebuild').onclick = async () => {
-  if (!confirm('Throw away all scrub and time-lapse previews and make them again? Older days are remade when you look at them.')) return;
-  try { toast((await api('api/maintenance/previews', {method: 'POST'})).message); loadJobs(); } catch (e) { toast(e.message, true); }
-};
-$('sys-sharpen').onclick = async () => {
-  try { toast((await api('api/maintenance/alert-pictures', {method: 'POST', json: {days: 7}})).message); setTimeout(loadJobs, 800); } catch (e) { toast(e.message, true); }
-};
+
+// ---------- Settings → Tasks ----------
+const TASK_ACTIONS = [
+  ['previews', '🖼️ Rebuild previews', 'Throws away the scrub and time-lapse previews and makes the last 24 hours again. Use it if previews look wrong or black.', null,
+    'Throw away all scrub and time-lapse previews and make them again? Older days are remade when you look at them.'],
+  ['alert-pictures', '📸 Refresh alert pictures', 'Replaces the pictures of the last 7 days of alerts with full-quality frames from the recordings (sharper thumbnails).', {days: 7}, null],
+  ['redescribe', '🧠 Describe alerts again', 'Smart search describes the last 7 days of alerts again — after changing the model or how many moments it looks at.', {days: 7},
+    'Describe the alerts of the last 7 days again? This runs in the background and can take a while.'],
+  ['reidentify', '🧑 Look for faces & plates again', 'Checks the last 7 days of alerts for faces and number plates again — after teaching GAZE new people or vehicles.', {days: 7},
+    'Look for faces and number plates in the last 7 days of alerts again?'],
+];
+function renderTasks(body) {
+  body.innerHTML = `<div class="card"><h2>What the AI is doing</h2>
+    <p class="muted" style="margin-top:0">Besides recording, GAZE works on alerts in the background: describing them (smart search), finding faces and number plates, preparing previews, downloading AI models and copying to the cloud. It waits for spare processor time, so it never slows down recording or live view.</p>
+    <div id="tasks-waiting" style="margin-bottom:8px"></div>
+    <div id="set-tasks"></div></div>
+    <div class="card"><h2>Run again</h2><div class="task-actions">${TASK_ACTIONS.map(([k, t, d]) => `<div class="task-action"><button type="button" data-k="${k}">${t}</button><div class="hint">${d}</div></div>`).join('')}</div></div>`;
+  body.querySelectorAll('.task-actions button').forEach(b => b.onclick = async () => {
+    const [k, , , json, ask] = TASK_ACTIONS.find(a => a[0] === b.dataset.k);
+    if (ask && !confirm(ask)) return;
+    b.disabled = true;
+    try { toast((await api('api/maintenance/' + k, {method: 'POST', json: json || {}})).message); setTimeout(loadJobs, 800); } catch (e) { toast(e.message, true); }
+    setTimeout(() => { b.disabled = false; }, 3000);
+  });
+  loadJobs();
+  clearInterval(jobsTimer);
+  jobsTimer = setInterval(() => { if ($('set-tasks') && location.hash.startsWith('#settings/tasks')) loadJobs(); else clearInterval(jobsTimer); }, 2000);
+}
 
 function showSystem() {
   loadSystem(); loadJobs();
@@ -2410,7 +2434,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'notify', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
+const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'notify', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -2423,7 +2447,7 @@ async function showSettings(sec) {
   camPreviewUnbind.splice(0).forEach(u => u());
   const body = $('settings-body');
   ({cameras: renderCameras, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, system: renderSystemSettings, info: renderInfo})[section](body);
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, tasks: renderTasks, system: renderSystemSettings, info: renderInfo})[section](body);
 }
 function settingsTick() {
   if (section !== 'cameras') return;
