@@ -14,6 +14,7 @@
 - **Faces & number plates**: GAZE recognises the people and vehicles you teach it (Settings → People & vehicles, or "Who is this?" on an alert).
 - **Two-way audio**: talk through a camera's speaker from the camera view.
 - **System tray (Windows)**: no more console window; GAZE has an icon by the clock with open, recordings, log, start with Windows, restart and quit.
+- **Tasks** (System page): see what GAZE is doing in the background — AI descriptions, faces & plates, downloads with progress, previews, cloud backup — plus *Rebuild previews* and *Refresh alert pictures* (sharper pictures from the HD recordings).
 - **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
 **Smaller changes**

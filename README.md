@@ -107,6 +107,8 @@ viewing, finding footage, and managing everything, all from the browser.
   open the timeline (older days are prepared when you open them).
 
 **System & logs**
+- **Tasks**: what's running in the background (AI work on alerts, model downloads, previews, cloud
+  backup) with progress, and buttons to rebuild previews or refresh alert pictures from the HD recordings.
 - On Windows GAZE runs **without a console window**: an icon by the clock opens it (click) and has a
   menu (right-click) for the recordings folder, the log, **start with Windows**, restart and quit.
 - **CPU, GPU and memory** usage with graphs (1 hour to 30 days, kept across restarts), so you can see if

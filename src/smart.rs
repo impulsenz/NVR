@@ -360,11 +360,26 @@ pub async fn run(mgr: Arc<Manager>) {
                     })
                     .collect();
                 todo.sort_by(|a, b| b.start.cmp(&a.start));
-                for e in todo.into_iter().take(40) {
+                todo.truncate(40);
+                if todo.is_empty() {
+                    continue;
+                }
+                let job = crate::jobs::start("ai", "Smart search — describing alerts");
+                job.total(todo.len() as u64);
+                for e in todo {
                     if !mgr.config().ai.smart_search {
                         break 'stores;
                     }
+                    job.waiting();
                     crate::load::wait_for_cpu(75, Duration::from_secs(300)).await;
+                    job.step(format!(
+                        "{} — {}",
+                        mgr.camera(&e.camera)
+                            .map(|c| c.cfg.name.clone())
+                            .unwrap_or_default(),
+                        e.start.format("%d/%m %H:%M:%S")
+                    ));
+                    job.done_one();
                     let Ok(bytes) = std::fs::read(store.dir().join(e.thumb.as_ref().unwrap()))
                     else {
                         continue;
@@ -385,7 +400,11 @@ pub async fn run(mgr: Arc<Manager>) {
                                 }
                                 vecs.push(v);
                             }
-                            Err(_) => break 'stores, // model unavailable; status shows why
+                            Err(err) => {
+                                // Model unavailable; the AI settings show why.
+                                job.fail(format!("{err:#}"));
+                                break 'stores;
+                            }
                         }
                     }
                     // What happened, for the alert's side panel and notifications.

@@ -2229,8 +2229,45 @@ const SERIES = [
 // Graph lines switched off by the viewer (remembered).
 const graphHidden = new Set(store.get('graph-hidden', []));
 
+// ---------- System → Tasks ----------
+const JOB_ICON = {ai: '🧠', download: '⬇️', previews: '🖼️', cloud: '☁️', scan: '📡', maintenance: '🛠️'};
+let jobsTimer = null, showDoneJobs = false;
+function fmtAgo(t) {
+  const s = Math.max(0, (Date.now() - new Date(t)) / 1000);
+  return s < 60 ? Math.round(s) + ' s ago' : s < 3600 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago';
+}
+function fmtTook(a, b) {
+  const s = Math.max(0, (new Date(b || Date.now()) - new Date(a)) / 1000);
+  return s < 60 ? Math.round(s) + ' s' : s < 3600 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h';
+}
+async function loadJobs() {
+  let r; try { r = await api('api/jobs'); } catch (_) { return; }
+  const live = r.jobs.filter(j => !j.finished), done = r.jobs.filter(j => j.finished);
+  const row = (j) => {
+    const pct = j.total ? Math.min(100, 100 * j.done / j.total) : null;
+    const prog = j.bytes ? `${fmtBytes(j.done)}${j.total ? ' of ' + fmtBytes(j.total) : ''}` : j.total ? `${j.done} of ${j.total}` : j.done ? `${j.done} done` : '';
+    const state = j.state === 'waiting' ? '<span class="muted">waiting for spare CPU</span>' : j.state === 'failed' ? '<span class="errc">failed</span>' : j.state === 'done' ? '<span class="okc">done</span>' : '<span class="spin-dot"></span>';
+    return `<div class="job ${j.state}"><div class="row"><span class="ji">${JOB_ICON[j.kind] || '•'}</span><b style="flex:1">${esc(j.title)}</b>${state}</div>
+      <div class="muted small">${esc(j.detail)}${prog ? ` · ${prog}` : ''} · ${j.finished ? 'took ' + fmtTook(j.started, j.finished) + ', ' + fmtAgo(j.finished) : 'running ' + fmtTook(j.started)}</div>
+      ${j.error ? `<div class="errc small">${esc(j.error)}</div>` : ''}
+      ${!j.finished && pct != null ? `<div class="bar"><div style="width:${pct.toFixed(1)}%"></div></div>` : ''}</div>`;
+  };
+  $('sys-tasks').innerHTML = (live.length ? live.map(row).join('') : '<div class="hint">Nothing running right now.</div>') +
+    (done.length ? `<details class="jobs-done" ${showDoneJobs ? 'open' : ''}><summary>Finished (${done.length})</summary>${done.map(row).join('')}</details>` : '');
+  const d = $('sys-tasks').querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
+}
+$('sys-rebuild').onclick = async () => {
+  if (!confirm('Throw away all scrub and time-lapse previews and make them again? Older days are remade when you look at them.')) return;
+  try { toast((await api('api/maintenance/previews', {method: 'POST'})).message); loadJobs(); } catch (e) { toast(e.message, true); }
+};
+$('sys-sharpen').onclick = async () => {
+  try { toast((await api('api/maintenance/alert-pictures', {method: 'POST', json: {days: 7}})).message); setTimeout(loadJobs, 800); } catch (e) { toast(e.message, true); }
+};
+
 function showSystem() {
-  loadSystem();
+  loadSystem(); loadJobs();
+  clearInterval(jobsTimer);
+  jobsTimer = setInterval(() => { if (page === 'system') loadJobs(); else clearInterval(jobsTimer); }, 2000);
   clearInterval(sysTimer);
   sysTimer = setInterval(() => { if (page === 'system') loadSystem(); else clearInterval(sysTimer); }, 5000);
 }

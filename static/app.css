@@ -599,3 +599,12 @@ table.users .chips { margin: 0; }
 /* Two-way audio */
 #focus-talk.talking { background: var(--danger, #e5484d); border-color: transparent; color: #fff; animation: talkpulse 1.4s ease-in-out infinite; }
 @keyframes talkpulse { 50% { opacity: .75; } }
+
+/* System → Tasks */
+.job { padding: 8px 0; border-top: 1px solid var(--line, #2a2f3a); }
+.job:first-child { border-top: 0; }
+.job .ji { width: 22px; }
+.job .bar { margin-top: 6px; }
+.jobs-done summary { cursor: pointer; color: var(--muted); padding: 8px 0 4px; }
+.errc { color: var(--red, #e5484d); } .okc { color: var(--green, #3dd68c); }
+.spin-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent, #4c8dff); animation: talkpulse 1s ease-in-out infinite; display: inline-block; }

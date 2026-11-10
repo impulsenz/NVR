@@ -190,6 +190,13 @@
   <!-- ============ SYSTEM ============ -->
   <section id="page-system" hidden>
     <div class="grid2" id="sys-cards"></div>
+    <div class="card" id="sys-tasks-card">
+      <div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Tasks</h2>
+        <button type="button" class="small admin-only" id="sys-rebuild" title="Throw away the scrub and time-lapse previews and make them again">↻ Rebuild previews</button>
+        <button type="button" class="small admin-only" id="sys-sharpen" title="Replace the pictures of the last 7 days of alerts with full-quality frames from the recordings">↻ Refresh alert pictures</button></div>
+      <div class="hint" style="margin-top:0">What GAZE is doing in the background besides recording: AI work on alerts, downloads, previews and backups.</div>
+      <div id="sys-tasks"></div>
+    </div>
     <div class="card">
       <div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:1">Server load</h2>
         <div class="tabs" id="sys-range" style="margin:0;border:0">

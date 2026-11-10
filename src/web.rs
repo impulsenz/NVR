@@ -147,6 +147,12 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/device/reboot", post(device_reboot))
         .route("/api/cameras/{id}/ptz/stop", post(ptz_stop))
         .route("/api/cameras/{id}/talk", get(talk_ws))
+        .route("/api/jobs", get(jobs_list))
+        .route("/api/maintenance/previews", post(rebuild_previews))
+        .route(
+            "/api/maintenance/alert-pictures",
+            post(refresh_alert_pictures),
+        )
         .route(
             "/api/cameras/{id}/ptz/presets",
             get(ptz_presets).post(ptz_save_preset),
@@ -1789,12 +1795,22 @@ async fn ensure_sprite(
 /// Background job: keep the time-lapse previews of the last 24 hours ready
 /// for every camera (newest first), one file at a time and only while
 /// nobody is waiting for previews. Older days are still made on demand.
+/// "Rebuild previews" (System → Tasks): run the job now, even if
+/// preparing previews in advance is off.
+static PREBUILD_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static PREBUILD_FORCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub async fn prebuild_timelapse(m: Arc<Manager>) {
-    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    tokio::select! {
+        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+        _ = PREBUILD_NOW.notified() => {}
+    }
     let mut announced = false;
     loop {
         let mut built = 0usize;
-        if m.config().storage.prebuild_timelapse {
+        let force = PREBUILD_FORCE.swap(false, std::sync::atomic::Ordering::SeqCst);
+        let mut job: Option<crate::jobs::Job> = None;
+        if force || m.config().storage.prebuild_timelapse {
             let since = Local::now() - chrono::Duration::hours(24);
             let mut todo: Vec<(
                 Arc<crate::manager::CameraRuntime>,
@@ -1827,8 +1843,8 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                 }
             }
             todo.sort_by(|a, b| b.3.cmp(&a.3));
-            for (c, kind, name, _) in todo {
-                if !m.config().storage.prebuild_timelapse {
+            for (c, kind, name, start) in todo {
+                if !force && !m.config().storage.prebuild_timelapse {
                     break;
                 }
                 let Ok(src) = media_path(&c, kind, &name) else {
@@ -1842,8 +1858,13 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                 if fresh(&first, &src) {
                     continue;
                 }
+                let j = job.get_or_insert_with(|| {
+                    crate::jobs::start("previews", "Time-lapse previews (last 24 hours)")
+                });
+                j.waiting();
                 // Only when the computer has room to spare.
                 crate::load::wait_for_cpu(75, std::time::Duration::from_secs(600)).await;
+                j.step(format!("{} — {}", c.cfg.name, start.format("%H:%M")));
                 // Let people scrubbing the timeline go first.
                 while THUMB_JOBS.available_permits() < 3 {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -1856,14 +1877,65 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                 }
                 if ensure_sprite(&m, &c, kind, &name).await.is_ok() {
                     built += 1;
+                    j.done_one();
                 }
             }
         }
+        drop(job);
         if built > 0 {
             tracing::info!("time-lapse previews ready ({built} file(s) prepared)");
         }
-        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {}
+            _ = PREBUILD_NOW.notified() => {}
+        }
     }
+}
+
+// ---------- System → Tasks ----------
+
+async fn jobs_list() -> Response {
+    Json(json!({ "jobs": crate::jobs::list() })).into_response()
+}
+
+/// Throw away all scrub / time-lapse previews and make those of the last
+/// 24 hours again (older ones are made when looked at).
+async fn rebuild_previews(State(m): App) -> Response {
+    let mut removed = 0;
+    for c in m.cameras() {
+        for dir in [
+            c.dir.clone(),
+            crate::storage::timeline_dir(&c.dir),
+            c.events.dir().to_path_buf(),
+        ] {
+            let t = dir.join(".thumbs");
+            if t.is_dir() && std::fs::remove_dir_all(&t).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    tracing::info!("previews cleared ({removed} folder(s)); making them again");
+    PREBUILD_FORCE.store(true, std::sync::atomic::Ordering::SeqCst);
+    PREBUILD_NOW.notify_one();
+    Json(json!({"ok": true, "message": "Previews cleared — the last 24 hours are being made again (see Tasks)"})).into_response()
+}
+
+#[derive(Deserialize)]
+struct RefreshPictures {
+    #[serde(default = "seven")]
+    days: i64,
+}
+fn seven() -> i64 {
+    7
+}
+
+/// Alert pictures again, from the full-quality recordings.
+async fn refresh_alert_pictures(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
+    tokio::spawn(crate::identify::refresh_pictures(
+        m.clone(),
+        r.days.clamp(1, 90),
+    ));
+    Json(json!({"ok": true, "message": "Making sharper alert pictures from the recordings (see Tasks)"})).into_response()
 }
 
 async fn sprite_info(
@@ -2254,6 +2326,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/cloud/",
         "/api/ptz/test",
         "/api/profiles",
+        "/api/maintenance",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"

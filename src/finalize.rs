@@ -98,6 +98,7 @@ pub async fn run(mgr: Arc<Manager>) {
     loop {
         let ffmpeg = mgr.config().server.ffmpeg_path.clone();
         let mut done = 0;
+        let mut job: Option<crate::jobs::Job> = None;
         for c in mgr.cameras() {
             for dir in [c.dir.clone(), crate::storage::timeline_dir(&c.dir)] {
                 let recs = crate::storage::list(&dir);
@@ -114,7 +115,13 @@ pub async fn run(mgr: Arc<Manager>) {
                     if !old_enough || !is_fragmented(&p) {
                         continue;
                     }
+                    let j = job.get_or_insert_with(|| {
+                        crate::jobs::start("maintenance", "Making recordings quick to open")
+                    });
+                    j.waiting();
                     crate::load::wait_for_cpu(80, Duration::from_secs(300)).await;
+                    j.step(format!("{} — {}", c.cfg.name, r.name));
+                    j.done_one();
                     if !announced {
                         info!("making finished recordings quick to open (background)");
                         announced = true;

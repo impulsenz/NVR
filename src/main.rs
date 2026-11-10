@@ -15,6 +15,7 @@ mod finalize;
 mod fsbrowse;
 mod identify;
 mod imgutil;
+mod jobs;
 mod known;
 mod library;
 mod live;

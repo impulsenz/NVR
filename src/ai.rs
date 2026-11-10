@@ -353,9 +353,11 @@ impl Ai {
         let tmp = path.with_extension("part");
         let mut file = tokio::fs::File::create(&tmp).await?;
         let mut got = 0u64;
+        let job = crate::jobs::start("download", format!("Downloading the {name} AI model"));
         while let Some(chunk) = resp.chunk().await? {
             tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
             got += chunk.len() as u64;
+            job.bytes(got, total.unwrap_or(0));
             if let Some(t) = total {
                 self.status.lock().unwrap().download_percent = Some(got as f32 * 100.0 / t as f32);
             }

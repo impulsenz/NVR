@@ -192,6 +192,62 @@ async fn identify(
     Ok(())
 }
 
+/// Replace alert pictures with full-quality ones from the recordings
+/// (System → Tasks → Refresh alert pictures).
+pub async fn refresh_pictures(mgr: Arc<Manager>, days: i64) {
+    let cutoff = chrono::Local::now() - chrono::Duration::days(days);
+    let ffmpeg = mgr.config().server.ffmpeg_path.clone();
+    let mut todo = Vec::new();
+    for rt in mgr.cameras() {
+        for e in rt.events.all() {
+            if e.start > cutoff && e.thumb.as_deref().is_some_and(|t| !t.ends_with("-hd.jpg")) {
+                todo.push((rt.clone(), e));
+            }
+        }
+    }
+    todo.sort_by(|a, b| b.1.start.cmp(&a.1.start));
+    let job = crate::jobs::start(
+        "previews",
+        format!("Sharper alert pictures (last {days} days)"),
+    );
+    job.total(todo.len() as u64);
+    let (mut done, mut skipped) = (0, 0);
+    for (rt, mut e) in todo {
+        job.waiting();
+        crate::load::wait_for_cpu(80, Duration::from_secs(300)).await;
+        job.step(format!(
+            "{} — {}",
+            rt.cfg.name,
+            e.start.format("%d/%m %H:%M:%S")
+        ));
+        job.done_one();
+        let t = e.thumb_at.unwrap_or(e.start + chrono::Duration::seconds(1));
+        let Some((file, off)) = hd_source(&rt, &e, t) else {
+            skipped += 1;
+            continue;
+        };
+        let Ok(frame) = grab(&ffmpeg, &file, off).await else {
+            skipped += 1;
+            continue;
+        };
+        let name = format!("{}-hd.jpg", e.id);
+        let dir = rt.events.dir();
+        let tmp = dir.join(format!("{name}.tmp"));
+        let Ok(jpg) = frame.fit(1280).jpeg(85) else {
+            continue;
+        };
+        if std::fs::write(&tmp, jpg).is_err() || std::fs::rename(&tmp, dir.join(&name)).is_err() {
+            continue;
+        }
+        if let Some(old) = e.thumb.replace(name) {
+            let _ = std::fs::remove_file(dir.join(old));
+        }
+        rt.events.save(e);
+        done += 1;
+    }
+    info!("alert pictures: {done} made sharper from recordings, {skipped} without a recording");
+}
+
 /// Background job: alerts with people or vehicles, newest first.
 pub async fn run(mgr: Arc<Manager>) {
     tokio::time::sleep(Duration::from_secs(40)).await;
@@ -217,16 +273,27 @@ pub async fn run(mgr: Arc<Manager>) {
                     })
                     .collect();
                 todo.sort_by(|a, b| b.start.cmp(&a.start));
-                for e in todo.into_iter().take(20) {
+                todo.truncate(20);
+                if todo.is_empty() {
+                    continue;
+                }
+                let job = crate::jobs::start("ai", format!("Faces & plates — {}", rt.cfg.name));
+                job.total(todo.len() as u64);
+                for e in todo {
+                    job.waiting();
                     crate::load::wait_for_cpu(80, Duration::from_secs(300)).await;
-                    if let Err(err) = identify(&mgr, &rt, &store, e.clone()).await {
+                    job.step(format!("Alert at {}", e.start.format("%d/%m %H:%M:%S")));
+                    let res = identify(&mgr, &rt, &store, e.clone()).await;
+                    job.done_one();
+                    if let Err(err) = res {
                         let msg = format!("{err:#}");
                         if msg != last_err {
                             warn!("faces & plates: {msg}");
                             last_err = msg.clone();
                         }
-                        *mgr.recog.error.lock().unwrap() = Some(msg);
+                        *mgr.recog.error.lock().unwrap() = Some(msg.clone());
                         // Don't try the same alert forever.
+                        job.problem(&msg);
                         let mut done = e;
                         done.identified = true;
                         store.save(done);

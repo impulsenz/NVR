@@ -201,7 +201,15 @@ pub async fn run(mgr: Arc<Manager>) {
             let store = stores.get(&cam.id).map(|s| s.as_ref());
             let todo = pending(&dir, &cfg.cloud.upload, store, &done);
             STATUS.lock().unwrap().waiting = todo.len();
+            let job = (!todo.is_empty()).then(|| {
+                let j = crate::jobs::start("cloud", format!("Cloud backup — {}", cam.name));
+                j.total(todo.len() as u64);
+                j
+            });
             for (path, rel) in todo {
+                if let Some(j) = &job {
+                    j.step(rel.clone());
+                }
                 let res = if is_local(&remote) {
                     let dest = PathBuf::from(&remote).join(&cam.id).join(&rel);
                     let p = path.clone();
@@ -222,6 +230,9 @@ pub async fn run(mgr: Arc<Manager>) {
                 match res {
                     Ok(()) => {
                         mark_uploaded(&dir, &rel);
+                        if let Some(j) = &job {
+                            j.done_one();
+                        }
                         info!("[{}] cloud: uploaded {rel}", cam.name);
                         last_error.clear();
                         let mut st = STATUS.lock().unwrap();
@@ -235,6 +246,9 @@ pub async fn run(mgr: Arc<Manager>) {
                         if msg != last_error {
                             warn!("[{}] cloud upload failed: {msg}", cam.name);
                             last_error = msg.clone();
+                        }
+                        if let Some(j) = &job {
+                            j.fail(&msg);
                         }
                         STATUS.lock().unwrap().last_error = Some(msg);
                         break;

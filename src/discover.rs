@@ -156,6 +156,8 @@ async fn sweep(nets: Vec<[u8; 3]>, port: u16) -> Vec<String> {
 
 /// Scan the network now.
 pub async fn scan(mgr: &Manager) -> Vec<Found> {
+    let job = crate::jobs::start("scan", "Looking for cameras on the network");
+    job.step("ONVIF discovery and port 554 on local networks");
     let (onvif, rtsp) = tokio::join!(ws_discovery(Duration::from_secs(3)), rtsp_sweep());
     let mut all: BTreeMap<String, Found> = onvif.into_iter().map(|f| (f.ip.clone(), f)).collect();
     for ip in rtsp {

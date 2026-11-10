@@ -215,27 +215,8 @@ impl Recog {
 }
 
 async fn download(url: &str, path: &Path) -> Result<()> {
-    if let Some(p) = path.parent() {
-        std::fs::create_dir_all(p)?;
-    }
     info!("faces & plates: downloading {url}");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(900))
-        .build()?;
-    let bytes = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    if bytes.len() < 10_000 {
-        anyhow::bail!("the download looks wrong ({} bytes)", bytes.len());
-    }
-    let tmp = path.with_extension("part");
-    std::fs::write(&tmp, &bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    crate::jobs::download("a faces & plates model", url, path, 10_000).await
 }
 
 /// Cut a box (pixels) out of a frame.
