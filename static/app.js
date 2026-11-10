@@ -3922,8 +3922,37 @@ async function renderInfo(body) {
     <dt>GPU decoders in ffmpeg</dt><dd>${esc(c.hwaccels.join(', ') || 'none')}</dd><dt>H.264 encoders</dt><dd>${esc(c.encoders.join(', ') || 'none')}</dd>
     <dt>Config file</dt><dd>${esc(sysinfo.config_path)}</dd><dt>Data folder</dt><dd>${esc(sysinfo.data_dir)}</dd>
     <dt>Log file</dt><dd>${esc(sysinfo.log_file || '–')}</dd><dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd></dl></div>
+    <div class="card admin-only"><h2>Updates</h2><div id="upd"></div>
+      <div class="form" style="margin-top:8px"><span></span><div><label class="check"><input type="checkbox" id="upd-auto" ${settings.update && settings.update.auto === false ? '' : 'checked'}> Install updates automatically</label>
+        <div class="hint">At night (2–5 am), when no alert is going on: GAZE downloads the new version from GitHub, checks it, swaps it in and restarts in a few seconds — also when it runs as a Windows service. Recording continues right after.</div></div></div></div>
     <div class="card changelog"><h2>What's new</h2><div id="chlog" class="muted">Loading…</div></div>`;
   try { $('chlog').innerHTML = mdLite(await (await fetch('api/changelog')).text()); } catch (e) {}
+  if (!$('upd')) return;
+  $('upd-auto').onchange = () => saveSettings({update: {auto: chk('upd-auto')}}, chk('upd-auto') ? 'Updates will install automatically' : 'Automatic updates off');
+  let timer = null;
+  const show = (u) => {
+    const box = $('upd'); if (!box) { clearInterval(timer); return; }
+    const busy = ['downloading', 'installing', 'restarting'].includes(u.state);
+    const pct = u.total ? Math.round(100 * u.done / u.total) : null;
+    box.innerHTML = `<dl><dt>This version</dt><dd>${esc(u.current)}</dd><dt>Newest</dt><dd>${u.latest ? esc(u.latest) : '–'}${u.checked ? ` <span class="muted small">(checked ${fmtAgo(u.checked)})</span>` : ''}</dd></dl>
+      ${u.error ? `<div class="errc small">${esc(u.error)}</div>` : ''}
+      ${u.state === 'restarting' ? '<div class="okc">Installed — GAZE is restarting; this page reloads in a moment…</div>'
+        : busy ? `<div>${u.state === 'downloading' ? 'Downloading' : 'Installing'} GAZE ${esc(u.latest || '')}… ${pct != null ? pct + '%' : ''}</div>${pct != null ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ''}`
+        : u.available ? `<div class="row" style="gap:8px"><b class="okc">GAZE ${esc(u.latest)} is available</b><button type="button" class="primary" id="upd-go">Update now</button></div>${u.notes ? `<details style="margin-top:6px"><summary>What's new in ${esc(u.latest)}</summary><div class="muted">${mdLite(u.notes)}</div></details>` : ''}`
+        : `<div class="row" style="gap:8px"><span class="muted">${u.latest ? 'GAZE is up to date.' : ''}</span><button type="button" id="upd-check">Check for updates</button></div>`}`;
+    if ($('upd-check')) $('upd-check').onclick = async () => { $('upd-check').disabled = true; try { show(await api('api/update/check', {method: 'POST'})); } catch (e) { toast(e.message, true); show(await api('api/update')); } };
+    if ($('upd-go')) $('upd-go').onclick = async () => {
+      if (!confirm(`Update to GAZE ${u.latest} now? GAZE restarts (a few seconds without recording).`)) return;
+      try { await api('api/update/install', {method: 'POST'}); poll(); } catch (e) { toast(e.message, true); }
+    };
+    if (u.state === 'restarting') waitForRestart();
+  };
+  const poll = () => { clearInterval(timer); timer = setInterval(async () => { try { show(await api('api/update')); } catch (_) {} }, 1000); };
+  const waitForRestart = () => {
+    clearInterval(timer);
+    const t = setInterval(async () => { try { const r = await fetch('api/update'); if (r.ok) { const u = await r.json(); if (u.state !== 'restarting') { clearInterval(t); location.reload(); } } } catch (_) {} }, 2000);
+  };
+  show(await api('api/update').catch(() => ({current: sysinfo.version, state: 'idle'})));
 }
 
 // ======================================================================

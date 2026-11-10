@@ -46,6 +46,7 @@ pub struct Config {
     pub ai: AiConfig,
     pub cloud: CloudConfig,
     pub notify: NotifyConfig,
+    pub update: UpdateConfig,
     pub dashboard: DashboardConfig,
     /// Saved recording / motion / AI settings to apply to cameras.
     pub profiles: Vec<Profile>,
@@ -286,6 +287,20 @@ impl Default for AiConfig {
             faces: false,
             plates: false,
         }
+    }
+}
+
+/// Updates from GitHub (Settings → About).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct UpdateConfig {
+    /// Install new versions automatically at night (2–5 am).
+    pub auto: bool,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self { auto: true }
     }
 }
 

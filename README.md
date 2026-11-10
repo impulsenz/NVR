@@ -135,6 +135,15 @@ viewing, finding footage, and managing everything, all from the browser.
 - Time-lapse previews for the last 24 hours are prepared in the background, so they're ready when you
   open the timeline (older days are prepared when you open them).
 
+**Updates**
+- GAZE checks GitHub for new versions. Settings → About shows what's new and has **Update now**; with
+  *Install updates automatically* (on by default) it updates at night when no alert is going on. The new
+  program is downloaded, its checksum verified, swapped in, and GAZE restarts in seconds — also when it
+  runs as a Windows service. The previous version is kept until the next start.
+- Making a release (for developers): bump `version` in `Cargo.toml`, add a section to `CHANGELOG.md`,
+  then `git tag v0.6.0 && git push origin v0.6.0`. GitHub Actions builds Windows and Linux and publishes
+  the release (`.github/workflows/release.yml`).
+
 **System & logs**
 - **Smart load balancing** (on by default): when the GPU is busy (a game, another program) and the
   processor has room, new live views, conversions and exports run on the CPU, and motion detection moves
@@ -181,7 +190,13 @@ viewing, finding footage, and managing everything, all from the browser.
 
 ## Install
 
-You need [Rust](https://rustup.rs) and [ffmpeg](https://ffmpeg.org) (with ffprobe).
+**Easiest — download it:** get `nvr-windows-x64.exe` (Windows) or `nvr-linux-x64` (Linux) from the
+[latest release](https://github.com/impulsenz/NVR/releases/latest), put it in a folder of its own and
+start it. You also need [ffmpeg](https://ffmpeg.org) (with ffprobe) — on Windows:
+`winget install ffmpeg`. From then on GAZE **updates itself** (Settings → About): one click, or
+automatically at night.
+
+**Or build it yourself:** you need [Rust](https://rustup.rs) and [ffmpeg](https://ffmpeg.org) (with ffprobe).
 
 **Windows** (PowerShell; accept the Visual Studio Build Tools when the Rust installer asks):
 ```bash

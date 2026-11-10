@@ -1,17 +1,8 @@
 # What's new in GAZE
 
-## 0.4.0 — November 2026
+## 0.5.0 — November 2026
 **Major**
-- **GAZE**: new name and logo.
-- **User accounts**: the first visit sets up an admin account. The admin can add users as *Admin*, *Operator* (also moves PTZ cameras, pauses recording, removes alerts) or *Viewer* (watch only), optionally limited to some cameras. A proper sign-in page replaces the browser's login pop-up.
-- **Personal layouts**: each user has their own camera layout, kept separately for phones and computers. Layouts are easier to edit on a phone.
-- **Alerts tab**: its own tab with a count of new alerts, pop-up review (the list stays put), new/viewed marks and a description of what happened.
-- **Fast timeline**: a light stream 2 copy is recorded alongside HD for instant browsing; clicking an alert plays it in HD and carries on in stream 2. Finished recordings open and seek much faster.
-- **Linked profiles**: cameras follow a profile; changing the profile changes every camera that follows it.
-- **Pan / tilt / zoom on the picture**: drag on the video, scroll to zoom, presets on screen.
-- **Rotate** a camera's picture in 90° steps.
-- **Zones**: areas and lines drawn on the picture, with line crossing, lingering and items left or taken (packages).
-- **Faces & number plates**: GAZE recognises the people and vehicles you teach it (Settings → People & vehicles, or "Who is this?" on an alert).
+- **Updates from GitHub** (Settings → About): GAZE checks for new versions, downloads and checks them, and restarts itself — with one click, or automatically at night. No more building it yourself.
 - **Two-way audio with push to talk**: a per-camera setting (with a beep test); hold the 🎙️ button in the live view to talk through the camera's speaker, or tap to keep talking.
 - **System tray (Windows)**: no more console window; GAZE has an icon by the clock with open, recordings, log, start when you sign in, restart and quit.
 - **Run as a Windows service** from the tray icon: starts with the computer (before sign-in), keeps recording after sign-out, restarts after a crash; the icon can turn it back into a normal program.
@@ -24,10 +15,25 @@
 - **Camera AI tab**: object recognition, stationary objects (choose which kinds) and package delivery with its own drawing window now have their own tab in camera settings.
 - **Notifications wait for the AI's description** and send it with the picture, which now shows a box and “PERSON 92%” on each object like the alert cards; tapping opens the alert (this computer's home-network address is used when none is set).
 - **New faces & number plates inbox** (Settings → People & vehicles): unknown faces (grouped by person) and plates from recent alerts — assign them to someone, or hide them.
-- **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
 **Smaller changes**
 - Alerts are only described and identified once they're over; notifications, descriptions and faces added while an alert is still going are no longer lost.
+
+## 0.4.0 — November 2026
+**Major**
+- **GAZE**: new name and logo.
+- **User accounts**: the first visit sets up an admin account. The admin can add users as *Admin*, *Operator* (also moves PTZ cameras, pauses recording, removes alerts) or *Viewer* (watch only), optionally limited to some cameras. A proper sign-in page replaces the browser's login pop-up.
+- **Personal layouts**: each user has their own camera layout, kept separately for phones and computers. Layouts are easier to edit on a phone.
+- **Alerts tab**: its own tab with a count of new alerts, pop-up review (the list stays put), new/viewed marks and a description of what happened.
+- **Fast timeline**: a light stream 2 copy is recorded alongside HD for instant browsing; clicking an alert plays it in HD and carries on in stream 2. Finished recordings open and seek much faster.
+- **Linked profiles**: cameras follow a profile; changing the profile changes every camera that follows it.
+- **Pan / tilt / zoom on the picture**: drag on the video, scroll to zoom, presets on screen.
+- **Rotate** a camera's picture in 90° steps.
+- **Zones**: areas and lines drawn on the picture, with line crossing, lingering and items left or taken (packages).
+- **Faces & number plates**: GAZE recognises the people and vehicles you teach it (Settings → People & vehicles, or "Who is this?" on an alert).
+- **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
+
+**Smaller changes**
 - Camera offline notice, error-only log count, one Save button for camera settings, HD clip downloads, volume slider, data saver in Settings, bandwidth shown, CPU use that matches Windows, GPU name and usage, on-screen display fixes and corner pickers, many small fixes.
 
 ## 0.3.0 — November 2026

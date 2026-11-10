@@ -152,6 +152,9 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/talk", get(talk_ws))
         .route("/api/talk-test", post(talk_test))
         .route("/api/jobs", get(jobs_list))
+        .route("/api/update", get(update_status))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/install", post(update_install))
         .route("/api/notify/test", post(notify_test))
         .route("/api/notify/status", get(notify_status))
         .route("/api/maintenance/previews", post(rebuild_previews))
@@ -2051,6 +2054,33 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
     }
 }
 
+// ---------- updates ----------
+
+async fn update_status() -> Response {
+    Json(crate::update::status()).into_response()
+}
+
+async fn update_check() -> Response {
+    match crate::update::check().await {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// Download and install the newest version, then restart (in the
+/// background; the page follows along with /api/update).
+async fn update_install() -> Response {
+    if !crate::update::status().available {
+        return err(StatusCode::BAD_REQUEST, "no update available");
+    }
+    tokio::spawn(async {
+        if let Err(e) = crate::update::install().await {
+            tracing::warn!("update failed: {e:#}");
+        }
+    });
+    Json(json!({"ok": true})).into_response()
+}
+
 // ---------- notifications ----------
 
 /// Send a test notification (with the newest alert picture, if any), using
@@ -2681,6 +2711,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/maintenance",
         "/api/notify",
         "/api/talk-test",
+        "/api/update",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"

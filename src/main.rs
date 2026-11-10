@@ -38,6 +38,7 @@ mod storage;
 mod sysmon;
 mod talk;
 mod tray;
+mod update;
 mod users;
 mod web;
 mod winservice;
@@ -51,6 +52,14 @@ use tracing::{error, info, warn};
 static QUIT: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// What to do after stopping (a tray::Action).
 static AFTER: std::sync::Mutex<Option<tray::Action>> = std::sync::Mutex::new(None);
+/// This program, as it was started (an update renames the running file).
+static EXE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+fn exe() -> std::path::PathBuf {
+    EXE.get()
+        .cloned()
+        .unwrap_or_else(|| std::env::current_exe().unwrap_or_default())
+}
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
     Ok(tokio::runtime::Builder::new_multi_thread()
@@ -61,6 +70,7 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
 fn main() -> Result<()> {
     #[cfg(windows)]
     use winservice::Mode;
+    let _ = EXE.set(std::env::current_exe()?);
     let (mode, path, dir) = winservice::parse_args();
     if let Some(d) = &dir {
         let _ = std::env::set_current_dir(d);
@@ -77,6 +87,12 @@ fn main() -> Result<()> {
         Mode::Uninstall => std::process::exit(winservice::uninstall()),
         Mode::RestartService => std::process::exit(winservice::restart()),
         Mode::Service => {
+            // After an update: the new program restarts the service.
+            update::set_restart(|| {
+                let _ = std::process::Command::new(exe())
+                    .arg("--restart-service")
+                    .spawn();
+            });
             let p = path.clone();
             let ok = winservice::run_service(
                 move || {
@@ -103,15 +119,29 @@ fn main() -> Result<()> {
     #[cfg(not(windows))]
     let _ = mode;
     tray::attach_console();
+    update::set_restart(|| {
+        *AFTER.lock().unwrap() = Some(tray::Action::Restart);
+        QUIT.notify_one();
+    });
     let res = runtime()?.block_on(run(&path, true));
     if let Err(e) = &res {
         error!("{e:#}");
         tray::fatal(&format!("{e:#}"));
     }
     tray::remove();
-    let exe = std::env::current_exe()?;
+    let exe = exe();
     match *AFTER.lock().unwrap() {
         Some(tray::Action::Restart) if res.is_ok() => {
+            // Unix: replace this process (same process for systemd & co).
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                let e = std::process::Command::new(&exe)
+                    .args(std::env::args_os().skip(1))
+                    .exec();
+                return Err(e.into());
+            }
+            #[cfg(not(unix))]
             std::process::Command::new(exe)
                 .args(std::env::args_os().skip(1))
                 .spawn()?;
@@ -240,6 +270,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(discover::daily(mgr.clone()));
     tokio::spawn(identify::run(mgr.clone()));
     tokio::spawn(notify::run(mgr.clone()));
+    tokio::spawn(update::run(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

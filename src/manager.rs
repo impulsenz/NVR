@@ -290,6 +290,7 @@ pub struct SettingsUpdate {
     pub ai: Option<AiConfig>,
     pub cloud: Option<CloudConfig>,
     pub notify: Option<crate::config::NotifyConfig>,
+    pub update: Option<crate::config::UpdateConfig>,
     /// When the recordings folder changes, move existing recordings there.
     #[serde(default)]
     pub move_recordings: bool,
@@ -708,6 +709,9 @@ impl Manager {
                 a.api_key = old.ai.api_key.clone();
             }
             cfg.ai = a;
+        }
+        if let Some(u) = up.update {
+            cfg.update = u;
         }
         if let Some(mut n) = up.notify {
             // Empty secrets: keep the saved ones.
