@@ -142,6 +142,21 @@ impl LogBuffer {
         out
     }
 
+    /// Ids of errors since `since` (newest last), at most 500.
+    pub fn error_ids_since(&self, since: DateTime<Local>) -> Vec<u64> {
+        let e = self.entries.lock().unwrap();
+        let mut v: Vec<u64> = e
+            .iter()
+            .rev()
+            .take_while(|x| x.time >= since)
+            .filter(|x| x.level == "error")
+            .map(|x| x.id)
+            .take(500)
+            .collect();
+        v.reverse();
+        v
+    }
+
     /// Count of warnings/errors since `since`.
     pub fn problems_since(&self, since: DateTime<Local>) -> (usize, usize) {
         let e = self.entries.lock().unwrap();

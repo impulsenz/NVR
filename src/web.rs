@@ -197,7 +197,7 @@ async fn status(State(m): App) -> Response {
         "cameras": cameras,
         "ai": m.ai.get().status(),
         "smart_search": m.clip.status(),
-        "problems": { "warnings": warnings, "errors": errors },
+        "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
     }))
     .into_response()

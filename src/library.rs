@@ -521,8 +521,12 @@ pub fn export_parts(
             )
         })
         .collect();
-    if parts.is_empty() {
-        // Event-only cameras: use full-quality clips. Back-to-back clips
+    // Always the higher quality: when the continuous recording is the
+    // sub-stream, use the full-quality alert clips where there are any.
+    let main_recordings = rt.cfg.record_mode.continuous_stream() == Some(false);
+    let rec_parts = std::mem::take(&mut parts);
+    {
+        // Full-quality clips. Back-to-back clips
         // overlap (each includes its pre-event buffer), so each clip only
         // adds the time not already covered.
         let post = chrono::Duration::seconds(rt.cfg.detect.post_seconds as i64 + 2);
@@ -548,7 +552,12 @@ pub fn export_parts(
         }
     }
     parts.retain(|p| p.2 > p.1);
-    parts
+    let clip_parts = parts;
+    if main_recordings && !rec_parts.is_empty() || clip_parts.is_empty() {
+        rec_parts.into_iter().filter(|p| p.2 > p.1).collect()
+    } else {
+        clip_parts
+    }
 }
 
 #[cfg(test)]

@@ -451,3 +451,18 @@ dl.kv dd { margin: 0; }
 .seg button { border: 0; border-radius: 0; background: var(--panel2); }
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button.on { background: var(--accent); color: #fff; }
+
+/* Zoomed alert pictures: detection boxes keep a thin line */
+.zw .bx { border-width: calc(2px / var(--z, 1)); border-radius: calc(3px / var(--z, 1)); box-shadow: 0 0 0 calc(1px / var(--z, 1)) rgba(0,0,0,.5); }
+/* Camera offline */
+.msg.offline { color: #fecaca; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.msg.offline small { color: var(--muted); font-size: 12px; }
+.off-dot { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--red); position: relative; margin-bottom: 4px; }
+.off-dot::after { content: ""; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 3px; background: var(--red); transform: translateX(-50%) rotate(45deg); }
+/* Volume: slider appears on hover */
+.vol { display: inline-flex; align-items: center; gap: 4px; }
+.vol .p-vol { width: 0; opacity: 0; transition: width .15s, opacity .15s; padding: 0; }
+.vol:hover .p-vol, .vol:focus-within .p-vol { width: 90px; opacity: 1; }
+@media (hover: none) { .vol .p-vol { width: 70px; opacity: 1; } }
+.bw { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; margin-right: 12px; }
+@media (max-width: 760px) { .bw { display: none; } }
