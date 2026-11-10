@@ -204,7 +204,7 @@ impl Recorder {
             }
         }
         cmd.args(["-fflags", "+genpts"])
-            .args(crate::relay::pipe_input_args())
+            .args(self.spec.relay.input_args())
             .args(["-map", "0:v:0"]);
         if cam.record_audio {
             cmd.args(["-map", "0:a:0?", "-c:a", "copy"]);

@@ -88,6 +88,7 @@ impl CameraRuntime {
             &cfg.rtsp_transport,
             &env.ffmpeg_path,
             cancel.clone(),
+            cfg.rotate,
         );
         let relay_sub = if cfg.has_sub() {
             Relay::new(
@@ -97,6 +98,7 @@ impl CameraRuntime {
                 &cfg.rtsp_transport,
                 &env.ffmpeg_path,
                 cancel.clone(),
+                cfg.rotate,
             )
         } else {
             relay_main.clone()
@@ -604,8 +606,41 @@ impl Manager {
             x.detect.mask.clear();
         }
         let mut cfg = self.config();
-        cfg.profiles = p;
-        self.commit(cfg)
+        cfg.profiles = p.clone();
+        // Cameras following a deleted profile keep their settings, unlinked.
+        let mut changed = Vec::new();
+        for cam in cfg.cameras.iter_mut() {
+            if cam.profile.is_empty() {
+                continue;
+            }
+            match p.iter().find(|x| x.name.eq_ignore_ascii_case(&cam.profile)) {
+                Some(prof) => {
+                    let before = cam.clone();
+                    prof.apply(cam);
+                    if *cam != before {
+                        changed.push(cam.clone());
+                    }
+                }
+                None => {
+                    cam.profile.clear();
+                    changed.push(cam.clone());
+                }
+            }
+        }
+        self.commit(cfg.clone())?;
+        drop(_g);
+        // Cameras following a changed profile pick up its settings.
+        for cam in changed {
+            info!(
+                "[{}] settings updated from profile \"{}\"",
+                cam.name, cam.profile
+            );
+            let old = self.camera(&cam.id).map(|c| c.cfg.clone());
+            if old.as_ref().is_none_or(|o| cam.needs_restart(o)) {
+                self.restart_camera(&cam).await;
+            }
+        }
+        Ok(())
     }
 
     /// Apply settings. Returns true if a program restart is needed.

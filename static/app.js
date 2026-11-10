@@ -344,12 +344,12 @@ function osdFor(c) {
 function overlayHtml(c, q, noFs) {
   const d = status.display, o = osdFor(c);
   const parts = {tl: [], tr: [], bl: [], br: []};
-  if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name">${esc(c.name)}</span>`);
-  if (o.text) parts[o.text_corner].push(`<span class="ovtext">${esc(o.text)}</span>`);
-  if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill">${pillHtml(c)}</span>`);
-  if (o.show_detections) parts[o.detections_corner].push('<span class="ov-alert"></span>');
-  if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}">${esc(fmtDate(new Date(), o.clock_format || d.clock_format || undefined))}</span>`);
-  if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps"></span>');
+  if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name" data-osd="name">${esc(c.name)}</span>`);
+  if (o.text) parts[o.text_corner].push(`<span class="ovtext" data-osd="text">${esc(o.text)}</span>`);
+  if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill" data-osd="status">${pillHtml(c)}</span>`);
+  if (o.show_detections) parts[o.detections_corner].push('<span class="ov-alert" data-osd="detections"></span>');
+  if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-osd="clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}">${esc(fmtDate(new Date(), o.clock_format || d.clock_format || undefined))}</span>`);
+  if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps" data-osd="fps"></span>');
   // Stream 1 / Stream 2 switch, next to the first fullscreen button (or top right).
   const corners = noFs ? [] : d.fullscreen_corners;
   const sc = corners[0] || 'tr';
@@ -1177,35 +1177,83 @@ function setupQuickView(c) {
 }
 
 // ---------- PTZ controls ----------
+// Pan / tilt / zoom on the picture: the pad and zoom buttons (press and
+// hold), dragging on the picture (direction and speed follow the drag),
+// the mouse wheel to zoom, and the arrow / + / - keys.
+let ptzCam = null;
 function setupPtz(c) {
-  const pad = $('ptz-pad');
+  const pad = $('ptz-pad'), surf = $('focus-surface');
+  ptzCam = c.ptz ? c.id : null;
   pad.hidden = !c.ptz;
+  surf.classList.toggle('has-ptz', !!c.ptz);
   if (!c.ptz) return;
-  const id = c.id, msg = (t, bad) => { $('ptz-msg').textContent = t; $('ptz-msg').className = bad ? 'err' : 'hint'; };
+  const id = c.id, msg = (t, bad) => { $('ptz-msg').textContent = t; $('ptz-msg').classList.toggle('err', !!bad); };
   const move = (v) => api(`api/cameras/${enc(id)}/ptz/move`, {method: 'POST', json: {pan: v[0], tilt: v[1], zoom: v[2]}}).catch(e => msg(e.message, true));
   const stop = () => api(`api/cameras/${enc(id)}/ptz/stop`, {method: 'POST'}).catch(() => {});
+  ptzMove = move; ptzStop = stop;
   pad.querySelectorAll('[data-ptz]').forEach(b => {
     const v = b.dataset.ptz.split(',').map(Number);
     let held = false;
-    b.onpointerdown = (e) => { e.preventDefault(); held = true; b.setPointerCapture(e.pointerId); move(v); };
+    b.onpointerdown = (e) => { e.preventDefault(); e.stopPropagation(); held = true; b.setPointerCapture(e.pointerId); move(v); };
     b.onpointerup = b.onpointercancel = b.onlostpointercapture = () => { if (held) { held = false; stop(); } };
+    b.ondblclick = (e) => e.stopPropagation();
   });
   pad.querySelector('[data-ptz-home]').onclick = stop;
+  pad.onpointerdown = (e) => e.stopPropagation();
+  pad.ondblclick = (e) => e.stopPropagation();
   const loadPresets = async () => {
     try {
       const p = await api(`api/cameras/${enc(id)}/ptz/presets`);
       $('ptz-presets').innerHTML = `<option value="">Presets (${p.length})…</option>` + p.map(x => `<option value="${esc(x.token)}">${esc(x.name)}</option>`).join('');
-      msg('Press and hold to move.');
     } catch (e) { msg(e.message, true); }
   };
-  $('ptz-go').onclick = () => { const t = $('ptz-presets').value; if (t) api(`api/cameras/${enc(id)}/ptz/goto`, {method: 'POST', json: {token: t}}).catch(e => msg(e.message, true)); };
-  $('ptz-presets').onchange = $('ptz-go').onclick;
+  $('ptz-presets').onchange = () => { const t = $('ptz-presets').value; if (t) api(`api/cameras/${enc(id)}/ptz/goto`, {method: 'POST', json: {token: t}}).then(() => msg('Moving to the preset…')).catch(e => msg(e.message, true)); };
   $('ptz-save').onclick = async () => {
-    try { await api(`api/cameras/${enc(id)}/ptz/presets`, {method: 'POST', json: {name: $('ptz-name').value}}); $('ptz-name').value = ''; toast('Preset saved'); loadPresets(); }
+    const name = (prompt('Name for this position (e.g. Driveway, Gate):') || '').trim();
+    if (!name) return;
+    try { await api(`api/cameras/${enc(id)}/ptz/presets`, {method: 'POST', json: {name}}); toast('Preset saved'); loadPresets(); }
     catch (e) { msg(e.message, true); }
   };
   loadPresets();
 }
+let ptzMove = null, ptzStop = null;
+// Drag on the picture to pan / tilt.
+(function wirePtzDrag() {
+  const surf = $('focus-surface');
+  let start = null, last = '', moving = false, t = 0;
+  surf.addEventListener('pointerdown', (e) => {
+    if (!ptzCam || focusPlayback || e.button !== 0 || e.target.closest('button, select, .ov')) return;
+    start = {x: e.clientX, y: e.clientY}; last = ''; moving = false;
+  });
+  surf.addEventListener('pointermove', (e) => {
+    if (!start || !ptzMove) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y, d = Math.hypot(dx, dy);
+    if (d < 18) return;
+    if (!moving) { moving = true; surf.setPointerCapture(e.pointerId); surf.classList.add('ptz-dragging'); }
+    // Speed grows with the drag distance; snap tiny sideways components away.
+    const k = 0.35 + 0.65 * Math.min(1, (d - 18) / 150), px = Math.abs(dx) / d > 0.3 ? Math.sign(dx) * k : 0, py = Math.abs(dy) / d > 0.3 ? -Math.sign(dy) * k : 0;
+    const key = px.toFixed(1) + ',' + py.toFixed(1);
+    if (key !== last && performance.now() - t > 150) { last = key; t = performance.now(); ptzMove([px, py, 0]); }
+  });
+  const end = () => { if (moving && ptzStop) ptzStop(); start = null; moving = false; surf.classList.remove('ptz-dragging'); };
+  surf.addEventListener('pointerup', end); surf.addEventListener('pointercancel', end);
+  // Mouse wheel: a short zoom burst per notch.
+  let zt = null;
+  surf.addEventListener('wheel', (e) => {
+    if (!ptzCam || focusPlayback || !ptzMove) return;
+    e.preventDefault();
+    ptzMove([0, 0, e.deltaY < 0 ? 0.6 : -0.6]);
+    clearTimeout(zt); zt = setTimeout(() => ptzStop && ptzStop(), 350);
+  }, {passive: false});
+  // Arrow keys and + / - while the camera view is open.
+  const held = new Set();
+  const keyVec = {ArrowUp: [0, 1, 0], ArrowDown: [0, -1, 0], ArrowLeft: [-1, 0, 0], ArrowRight: [1, 0, 0], '+': [0, 0, 1], '=': [0, 0, 1], '-': [0, 0, -1]};
+  document.addEventListener('keydown', (e) => {
+    if (!ptzCam || page !== 'live' || focusId !== ptzCam || focusPlayback || e.target.closest('input, select, textarea, dialog') || !keyVec[e.key] || held.has(e.key)) return;
+    e.preventDefault(); held.add(e.key); ptzMove(keyVec[e.key]);
+  });
+  document.addEventListener('keyup', (e) => { if (held.delete(e.key) && ptzStop) ptzStop(); });
+})();
 
 // ---------- per-camera timeline (camera view) ----------
 const camTl = {
@@ -2235,7 +2283,7 @@ const chk = (id) => $(id).checked;
 function renderCameras(body) {
   body.innerHTML = `<div class="card">
     <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><button class="primary" id="add-cam">+ Add camera</button></div>
-    <table><thead><tr><th>Preview</th><th>Name</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead><tbody id="cam-table"></tbody></table>
+    <table><thead><tr><th>Preview</th><th>Name</th><th class="hide-sm">Profile</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead><tbody id="cam-table"></tbody></table>
     ${cameraCfgs.length ? '' : '<div class="empty">No cameras yet. Click “Add camera”.</div>'}</div>`;
   $('add-cam').onclick = () => openCameraDialog();
   const tb = $('cam-table');
@@ -2246,6 +2294,7 @@ function renderCameras(body) {
     const sched = cfg.schedule_enabled ? `<div class="sub">${cfg.schedule.days.map(d => DAYS[d]).join(', ')} ${esc(cfg.schedule.start)}–${esc(cfg.schedule.end)}</div>` : '';
     tr.innerHTML = `<td><div class="surface camprev"><img alt=""><div class="msg">${cfg.enabled ? '…' : 'off'}</div></div></td>
       <td><b>${esc(cfg.name)}</b><div class="sub">${esc(c ? c.url : '')}</div></td>
+      <td class="hide-sm">${cfg.profile ? `<span class="tag prof" title="Follows this profile: changing the profile changes this camera">${esc(cfg.profile)}</span>` : '<span class="muted">–</span>'}</td>
       <td class="hide-sm">${esc(MODE_TEXT[cfg.record_mode])}${cfg.detect.ai ? ' · AI' : cfg.detect.motion ? ' · motion' : ''}${sched}</td>
       <td class="st">${c ? pillHtml(c) + camErr(c) : ''}</td>
       <td style="text-align:right"><div class="row" style="justify-content:flex-end">
@@ -2370,6 +2419,9 @@ async function openCameraDialog(id, clone) {
         <label for="c-live">Sub-stream (low resolution)</label>
         <div><input type="text" id="c-live" value="${esc(c.live_url)}" placeholder="Optional – e.g. …/stream2">
           <div class="row" style="margin-top:6px"><select id="c-live-fmt">${brandOpts}</select><span class="hint" style="margin:0">Used for the live grid, motion detection and AI. Saves a lot of CPU.</span></div></div>
+        <label for="c-rotate">Rotate picture</label>
+        <div><select id="c-rotate">${[[0, 'No rotation'], [90, '90° clockwise'], [180, '180° (upside down)'], [270, '90° anticlockwise']].map(([v, t]) => `<option value="${v}" ${(c.rotate || 0) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+          <div class="hint">For cameras mounted sideways or upside down: live view, alerts and new recordings are turned the right way.</div></div>
         <label for="c-transport">RTSP transport</label>
         <div><select id="c-transport"><option value="tcp">TCP (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
@@ -2393,6 +2445,8 @@ async function openCameraDialog(id, clone) {
           <div class="hint">If the end is earlier than the start, recording runs overnight. Same start and end = all day.</div></div>
         <h3>Video</h3>
         <span></span><label class="check"><input type="checkbox" id="c-audio" ${c.record_audio ? 'checked' : ''}> Record audio</label>
+        <span></span><div><label class="check"><input type="checkbox" id="c-tlcopy" ${c.timeline_copy !== false ? 'checked' : ''}> Keep a light stream 2 copy for the timeline</label>
+          <div class="hint">With “HD 24/7”: the sub-stream is recorded too, so the timeline opens and scrubs instantly (alerts and downloads still use HD). Uses roughly 5–15% extra space.</div></div>
         <label for="c-fps">Recording frame rate</label>
         <div><select id="c-fps">${[0, 1, 2, 5, 10, 12, 15, 20, 25, 30].map(f => `<option value="${f}" ${c.record_fps === f ? 'selected' : ''}>${f ? f + ' fps' : "Camera's own (no re-encoding)"}</option>`).join('')}</select>
           <div class="hint">A lower frame rate saves space but re-encodes the video (uses the GPU encoder if set up).</div></div>
@@ -2454,7 +2508,7 @@ async function openCameraDialog(id, clone) {
           <div class="hint">Off: this camera uses Settings → Live view &amp; display.</div></div>
         <label>Preview</label>
         <div class="surface" id="o-prev" style="aspect-ratio:16/9;max-width:560px"><img alt="" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera to see its picture.'}</div></div>
-        ${[['name', 'Camera name'], ['clock', 'Date &amp; time'], ['status', 'Recording status (REC / armed / offline)'], ['detections', 'What is moving (motion, 🚶 person, 🚗 car …)'], ['fps', 'Frame rate and stream details']]
+        ${[['name', 'Camera name'], ['clock', 'Date &amp; time'], ['status', 'Recording status (REC / armed / offline)'], ['detections', 'Alert type (motion, 🚶 person, 🚗 car …)'], ['fps', 'Frame rate and stream details']]
           .map(([k, t]) => `<span></span><div class="row osd-row"><label class="check" style="padding:0;min-width:300px"><input type="checkbox" id="o-${k}" ${c.osd['show_' + k] ? 'checked' : ''}> ${t}</label>${cornerSel('o-' + k + '-c', c.osd[k + '_corner'])}</div>`).join('')}
         <label for="o-fmt2">Date &amp; time format</label>
         <div><select id="o-fmt2"><option value="">Same as everywhere (${esc(status.display.clock_format)})</option>${CLOCK_FORMATS.map(f => `<option ${f === c.osd.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom">Custom…</option></select>
@@ -2488,7 +2542,7 @@ async function openCameraDialog(id, clone) {
     if (b.dataset.t === 'device' && !deviceLoaded) loadDeviceTab();
   });
   deviceLoaded = false; deviceDirty = new Set();
-  setupProfiles();
+  setupProfiles(c);
   // A field the browser rejects may be on a hidden tab: show that tab and say why.
   f.addEventListener('invalid', (e) => {
     const tab = e.target.closest('[data-tab]');
@@ -2603,8 +2657,25 @@ function drawMotionBoxes(svg, objects) {
   }
   svg.innerHTML = out;
 }
+// Corner picker: four buttons laid out like the corners of the picture.
 function cornerSel(id, cur) {
-  return `<select id="${id}">${[['tl', 'Top left'], ['tr', 'Top right'], ['bl', 'Bottom left'], ['br', 'Bottom right']].map(([k, t]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+  return `<span class="corner-pick" data-for="${id}"><input type="hidden" id="${id}" value="${cur || 'tl'}">${[['tl', 'Top left'], ['tr', 'Top right'], ['bl', 'Bottom left'], ['br', 'Bottom right']]
+    .map(([k, t]) => `<button type="button" data-c="${k}" title="${t}" class="${k === (cur || 'tl') ? 'on' : ''}"></button>`).join('')}</span>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.corner-pick button');
+  if (!b || b.disabled) return;
+  const inp = b.parentElement.querySelector('input');
+  inp.value = b.dataset.c;
+  paintCorners();
+  inp.dispatchEvent(new Event('input', {bubbles: true}));
+  inp.dispatchEvent(new Event('change', {bubbles: true}));
+});
+function paintCorners() {
+  document.querySelectorAll('.corner-pick').forEach(p => {
+    const inp = p.querySelector('input');
+    p.querySelectorAll('button').forEach(b => { b.classList.toggle('on', b.dataset.c === inp.value); b.disabled = inp.disabled; });
+  });
 }
 // The camera's own on-screen display choices (kept while the controls show the global ones).
 let osdOwn = null;
@@ -2634,6 +2705,7 @@ function setupOsdTab(c, camId) {
       for (const k of ['name', 'clock', 'status', 'detections', 'fps']) { $('o-' + k).checked = !!osdOwn['show_' + k]; $('o-' + k + '-c').value = osdOwn[k + '_corner']; }
     }
     ctrls.forEach(id => { if ($(id)) $(id).disabled = !custom; });
+    paintCorners();
   };
   $('o-custom').addEventListener('change', showFollow);
   showFollow();
@@ -2643,9 +2715,34 @@ function setupOsdTab(c, camId) {
     if (!chk('o-custom')) fake.osd = {custom: false};
     fake.name = val('c-name') || fake.name;
     prev.insertAdjacentHTML('beforeend', overlayHtml(fake, 'sub'));
+    // Example alert so it can be seen and placed.
+    prev.querySelectorAll('.ov-alert').forEach(a => a.innerHTML = `<span class="alertbadge">${labelIcon('person')} person</span>`);
+    prev.querySelectorAll('[data-osd]').forEach(el => el.classList.add('osd-drag'));
+    paintCorners();
     if (live) updateOverlay(prev, fake, 'sub'); else prev.querySelectorAll('.ov-clock').forEach(e => e.textContent = fmtDate(new Date(), e.dataset.fmt || undefined));
   };
   $('f-cam').querySelector('[data-tab=osd]').addEventListener('input', redraw);
+  // Drag an item on the preview to a corner.
+  prev.onpointerdown = (e) => {
+    const item = e.target.closest('[data-osd]');
+    if (!item || !chk('o-custom')) { if (item) toast('Tick “Use settings just for this camera” to move items.'); return; }
+    e.preventDefault();
+    const k = item.dataset.osd, ghost = item.cloneNode(true);
+    ghost.classList.add('osd-ghost'); document.body.appendChild(ghost);
+    const move = (ev) => { ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px'; };
+    move(e);
+    item.style.opacity = .3;
+    const up = (ev) => {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+      ghost.remove(); item.style.opacity = '';
+      const r = prev.getBoundingClientRect();
+      if (ev.clientX < r.left - 40 || ev.clientX > r.right + 40 || ev.clientY < r.top - 40 || ev.clientY > r.bottom + 40) return;
+      const corner = (ev.clientY < r.top + r.height / 2 ? 't' : 'b') + (ev.clientX < r.left + r.width / 2 ? 'l' : 'r');
+      const inp = $(k === 'text' ? 'o-text-c' : `o-${k}-c`);
+      if (inp) { inp.value = corner; paintCorners(); redraw(); }
+    };
+    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+  };
   $('f-cam').querySelector('[data-tab=osd]').addEventListener('change', () => { $('o-fmt2-c').hidden = val('o-fmt2') !== 'custom'; redraw(); });
   if (osdPrevUnbind) osdPrevUnbind();
   osdPrevUnbind = camId ? Live.bind(prev.querySelector('img'), camId, 'sub') : null;
@@ -2699,6 +2796,8 @@ function collectCamera() {
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
+    rotate: +val('c-rotate') || 0, profile: camProfile,
+    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true,
     osd: readOsd(),
     view: (cameraCfgs.find(x => x.id === editingId) || {}).view || {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: chk('p-on'), host: val('p-host').trim(), port: Math.round(num('p-port')) || 80, username: val('p-user').trim(), password: $('p-pass').value,
@@ -2839,22 +2938,38 @@ let deviceDirty = new Set(), saveDevice = null;
 
 // ---------- recording profiles ----------
 const PROFILE_KEYS = ['record_mode', 'schedule_enabled', 'schedule', 'record_audio', 'transcode', 'record_fps', 'segment_seconds', 'retention_days', 'max_storage_gb', 'detect'];
-function setupProfiles() {
+// The profile the camera being edited follows ('' = none).
+let camProfile = '';
+function setupProfiles(cfg) {
   const sel = $('c-prof'), msg = (t) => $('c-prof-msg').textContent = t;
   const list = () => (settings && settings.profiles) || [];
   const fill = (cur) => {
-    sel.innerHTML = '<option value="">Choose a saved profile…</option>' + list().map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('');
+    sel.innerHTML = '<option value="">No profile (own settings)</option>' + list().map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('');
     if (cur != null) sel.value = String(cur);
   };
-  fill();
+  camProfile = (cfg && cfg.profile) || '';
+  const linkedIdx = list().findIndex(p => p.name.toLowerCase() === camProfile.toLowerCase());
+  if (linkedIdx < 0) camProfile = '';
+  fill(linkedIdx >= 0 ? linkedIdx : null);
+  const showLink = () => msg(camProfile ? `Follows the profile “${camProfile}”: when that profile is changed, this camera changes too. Choose “No profile” to give it its own settings.`
+    : 'Profiles hold recording, motion and AI settings (not the motion mask or camera connection settings).');
+  showLink();
+  // Editing a profile setting by hand gives the camera its own settings.
+  const tabs = $('f-cam').querySelectorAll('[data-tab=recording], [data-tab=detection]');
+  tabs.forEach(t => t.addEventListener('input', (e) => {
+    if (!camProfile || e.isTrusted === false || e.target.closest('#d-mask')) return;
+    toast(`Own settings now — no longer following “${camProfile}” (use “Save as profile” to change the profile for every camera).`);
+    camProfile = ''; sel.value = ''; showLink();
+  }));
   const save = async (profiles) => { await api('api/profiles', {method: 'PUT', json: profiles}); settings.profiles = profiles; };
   $('c-prof-apply').onclick = () => {
     const p = list()[+sel.value];
-    if (sel.value === '' || !p) return msg('Choose a profile first.');
+    if (sel.value === '' || !p) { camProfile = ''; showLink(); return; }
     applyProfile(p);
-    msg(`Applied “${p.name}” — check the Recording and Motion & AI tabs, then Save camera.`);
+    camProfile = p.name; showLink();
+    toast(`Following “${p.name}” — press Save camera to keep it.`);
   };
-  sel.onchange = () => { if (sel.value !== '') $('c-prof-apply').click(); };
+  sel.onchange = () => $('c-prof-apply').click();
   $('c-prof-save').onclick = async () => {
     const cur = sel.value !== '' ? list()[+sel.value] : null;
     const name = (prompt('Profile name (an existing name is replaced):', cur ? cur.name : '') || '').trim();
@@ -2863,12 +2978,17 @@ function setupProfiles() {
     for (const k of PROFILE_KEYS) p[k] = JSON.parse(JSON.stringify(body[k]));
     p.detect.mask = '';
     const profiles = list().filter(x => x.name.toLowerCase() !== name.toLowerCase()).concat([p]);
-    try { await save(profiles); fill(profiles.length - 1); msg(`Saved profile “${name}”. Choose it when editing any camera.`); } catch (e) { msg(e.message); }
+    try {
+      await save(profiles); fill(profiles.length - 1); camProfile = name; showLink();
+      const n = cameraCfgs.filter(c => (c.profile || '').toLowerCase() === name.toLowerCase() && c.id !== editingId).length;
+      toast(`Saved profile “${name}”${n ? ` — ${n} other camera${n === 1 ? '' : 's'} following it ${n === 1 ? 'was' : 'were'} updated` : ''}.`);
+      await loadSettings();
+    } catch (e) { msg(e.message); }
   };
   $('c-prof-del').onclick = async () => {
     const p = list()[+sel.value];
     if (sel.value === '' || !p || !confirm(`Delete the profile “${p.name}”? Cameras keep their settings.`)) return;
-    try { await save(list().filter(x => x !== p)); fill(); msg(`Deleted “${p.name}”.`); } catch (e) { msg(e.message); }
+    try { await save(list().filter(x => x !== p)); fill(); if (camProfile === p.name) camProfile = ''; showLink(); toast(`Deleted “${p.name}”; cameras that followed it keep their settings.`); await loadSettings(); } catch (e) { msg(e.message); }
   };
 }
 // Put a profile's settings into the camera form (the camera's mask stays).
@@ -3026,7 +3146,7 @@ function renderDisplay(body) {
     <h3>Overlays on live video</h3>
     <label>Fullscreen button</label><div class="chips" id="g-fs">${corners.map(([k, t]) => `<label><input type="checkbox" value="${k}" ${d.fullscreen_corners.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
     <span></span><label class="check"><input type="checkbox" id="g-clock" ${d.show_clock ? 'checked' : ''}> Show date and time</label>
-    <label for="g-corner">Date &amp; time position</label><div><select id="g-corner">${corners.map(([k, t]) => `<option value="${k}" ${k === d.clock_corner ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <label>Date &amp; time position</label><div>${cornerSel('g-corner', d.clock_corner)}</div>
     <label for="g-fmt">Date &amp; time format</label><div><select id="g-fmt">${CLOCK_FORMATS.map(f => `<option ${f === d.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom" ${custom ? 'selected' : ''}>Custom…</option></select>
       <input type="text" id="g-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
       <div class="hint">Preview: <b id="g-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>

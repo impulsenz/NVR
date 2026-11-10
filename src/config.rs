@@ -631,6 +631,26 @@ pub struct Profile {
     pub detect: DetectConfig,
 }
 
+impl Profile {
+    /// Put this profile's recording, motion and AI settings on a camera
+    /// (its motion mask and everything else stay).
+    pub fn apply(&self, cam: &mut CameraConfig) {
+        cam.record_mode = self.record_mode;
+        cam.schedule_enabled = self.schedule_enabled;
+        cam.schedule = self.schedule.clone();
+        cam.record_audio = self.record_audio;
+        cam.transcode = self.transcode;
+        cam.record_fps = self.record_fps;
+        cam.segment_seconds = self.segment_seconds;
+        cam.retention_days = self.retention_days;
+        cam.max_storage_gb = self.max_storage_gb;
+        let mask = std::mem::take(&mut cam.detect.mask);
+        cam.detect = self.detect.clone();
+        cam.detect.mask = mask;
+        cam.profile = self.name.clone();
+    }
+}
+
 impl Default for Profile {
     fn default() -> Self {
         let c = CameraConfig::default();
@@ -683,6 +703,11 @@ pub struct CameraConfig {
     /// When recording the main stream 24/7: also keep a light sub-stream copy
     /// for fast timeline browsing and previews.
     pub timeline_copy: bool,
+    /// Turn the picture, degrees clockwise: 0, 90, 180 or 270.
+    pub rotate: u16,
+    /// Name of the recording profile this camera follows ("" = none). When
+    /// the profile is changed, the camera's settings follow.
+    pub profile: String,
     pub detect: DetectConfig,
     pub osd: OsdConfig,
     pub view: ViewConfig,
@@ -709,6 +734,8 @@ impl Default for CameraConfig {
             retention_days: 0,
             max_storage_gb: 0.0,
             timeline_copy: true,
+            rotate: 0,
+            profile: String::new(),
             detect: DetectConfig::default(),
             osd: OsdConfig::default(),
             view: ViewConfig::default(),
@@ -719,6 +746,9 @@ impl Default for CameraConfig {
 
 impl CameraConfig {
     pub fn validate(&self) -> Result<()> {
+        if ![0, 90, 180, 270].contains(&self.rotate) {
+            bail!("rotation must be 0, 90, 180 or 270 degrees");
+        }
         if self.name.trim().is_empty() {
             bail!("camera name is required");
         }

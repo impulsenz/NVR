@@ -165,7 +165,7 @@ impl Live {
         // Uses the shared camera connection (no extra session on the camera).
         let mut child = Command::new(&self.env.ffmpeg_path)
             .args(["-hide_banner", "-loglevel", "error"])
-            .args(crate::relay::pipe_input_args())
+            .args(self.relay.input_args())
             .args([
                 "-frames:v",
                 "1",
@@ -333,7 +333,7 @@ impl Live {
                 "-flags",
                 "+low_delay-output_corrupt",
             ])
-            .args(crate::relay::pipe_input_args())
+            .args(self.relay.input_args())
             .args(["-an", "-vf", &vf, "-q:v", &live.quality.to_string()])
             .args(["-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
             .stdin(Stdio::piped())

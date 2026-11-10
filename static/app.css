@@ -288,11 +288,6 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
 .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.25); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* PTZ pad */
-.ptz { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 10px; margin-bottom: 0; }
-.ptz-grid { display: grid; grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(3, 40px); gap: 4px; }
-.ptz-grid button { justify-content: center; padding: 0; font-size: 16px; touch-action: none; }
-.ptz-side { display: flex; flex-direction: column; gap: 6px; }
-.ptz-side button[data-ptz] { touch-action: none; }
 /* per-camera timeline */
 .camtl { margin-top: 10px; }
 .ctl-axis { position: relative; height: 16px; font-size: 11px; color: var(--muted); }
@@ -494,3 +489,32 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 .tl-h::after { content: ""; position: absolute; top: 40%; height: 26px; left: 4px; width: 6px; border-radius: 3px; background: var(--amber); box-shadow: 0 0 0 1px #111; }
 .tl-h.in { left: -8px; }
 .tl-h.out { right: -8px; }
+
+/* Corner picker */
+.corner-pick { display: inline-grid; grid-template-columns: 18px 18px; grid-template-rows: 12px 12px; gap: 3px; padding: 4px; border: 1px solid var(--border); border-radius: 6px; background: #000; vertical-align: middle; }
+.corner-pick button { padding: 0; min-height: 0 !important; width: 18px; height: 12px; border-radius: 2px; background: #333; border: 0; cursor: pointer; }
+.corner-pick button.on { background: var(--accent); }
+.corner-pick button:disabled { cursor: default; opacity: .5; }
+@media (max-width: 760px) { .corner-pick { grid-template-columns: 26px 26px; grid-template-rows: 18px 18px; } .corner-pick button { width: 26px; height: 18px; } }
+/* OSD preview: items can be dragged to a corner */
+#o-prev .osd-drag { cursor: grab; outline: 1px dashed rgba(255,255,255,.35); outline-offset: 2px; touch-action: none; }
+.osd-ghost { position: fixed; z-index: 1000; pointer-events: none; transform: translate(-50%, -50%); opacity: .85; }
+
+/* Pan / tilt / zoom on the picture */
+.ptz-ov { position: absolute; right: 12px; bottom: 44px; z-index: 4; display: flex; align-items: flex-end; gap: 10px; opacity: 0; transition: opacity .2s; }
+#focus-surface:hover .ptz-ov, .ptz-ov:focus-within { opacity: 1; }
+@media (hover: none) { .ptz-ov { opacity: .9; } }
+#focus-surface.has-ptz { cursor: move; }
+#focus-surface.ptz-dragging { cursor: grabbing; }
+.ptz-ring { position: relative; width: 112px; height: 112px; border-radius: 50%; background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.2); backdrop-filter: blur(4px); }
+.ptz-ring button { position: absolute; width: 36px; height: 36px; min-height: 0 !important; padding: 0; border-radius: 50%; background: rgba(255,255,255,.12); border: 0; color: #fff; font-size: 14px; display: flex; align-items: center; justify-content: center; touch-action: none; }
+.ptz-ring button:active { background: var(--accent); }
+.ptz-ring .u { left: 38px; top: 4px; } .ptz-ring .d { left: 38px; bottom: 4px; }
+.ptz-ring .l { left: 4px; top: 38px; } .ptz-ring .r { right: 4px; top: 38px; }
+.ptz-ring .c { left: 38px; top: 38px; font-size: 11px; background: rgba(255,255,255,.06); }
+.ptz-zoom { display: flex; flex-direction: column; gap: 6px; }
+.ptz-zoom button, .ptz-presets button { width: 36px; height: 36px; min-height: 0 !important; padding: 0; border-radius: 50%; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.2); color: #fff; font-size: 18px; justify-content: center; touch-action: none; }
+.ptz-presets { display: flex; gap: 6px; align-items: center; }
+.ptz-presets select { background: rgba(0,0,0,.55); color: #fff; border-color: rgba(255,255,255,.2); max-width: 150px; }
+.ptz-msg { position: absolute; right: 0; bottom: -26px; white-space: nowrap; font-size: 11px; color: #ddd; text-shadow: 0 1px 2px #000; }
+.ptz-msg.err { color: #fecaca; }

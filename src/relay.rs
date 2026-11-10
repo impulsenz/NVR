@@ -75,6 +75,8 @@ pub struct Relay {
     wake: Notify,
     info: watch::Sender<Option<StreamInfo>>,
     cancel: CancellationToken,
+    /// Picture rotation for this camera, degrees clockwise (0, 90, 180, 270).
+    pub rotate: u16,
 }
 
 impl Relay {
@@ -85,8 +87,10 @@ impl Relay {
         transport: &str,
         ffmpeg: &str,
         cancel: CancellationToken,
+        rotate: u16,
     ) -> Arc<Self> {
         let r = Arc::new(Self {
+            rotate,
             name: name.into(),
             label,
             url: url.into(),
@@ -537,6 +541,34 @@ fn parse_pmt(body: &[u8]) -> Option<u16> {
 
 // ---------- consumers ----------
 
+impl Relay {
+    /// Input arguments for a consumer of this relay: the stream from stdin,
+    /// with the camera's rotation. Decoding consumers get upright pictures
+    /// (ffmpeg rotates them); copying recorders store a rotation flag that
+    /// players and browsers follow, without re-encoding.
+    pub fn input_args(&self) -> Vec<String> {
+        let mut a = Vec::new();
+        if self.rotate % 360 != 0 {
+            // ffmpeg counts anticlockwise.
+            a.extend([
+                "-display_rotation".to_string(),
+                ((360 - self.rotate % 360) % 360).to_string(),
+            ]);
+        }
+        a.extend(pipe_input_args());
+        a
+    }
+
+    /// Picture size after rotation.
+    pub fn rotated(&self, w: u32, h: u32) -> (u32, u32) {
+        if self.rotate % 180 == 90 {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
+}
+
 /// Input arguments for an ffmpeg process that reads a relay from stdin.
 /// The relay starts each consumer with the stream headers and a keyframe,
 /// so a short analysis is enough (ffmpeg's default waits 5 s).
@@ -583,7 +615,7 @@ pub fn feed(
 pub async fn grab_rgb(relay: &Relay, ffmpeg: &str, w: u32, h: u32) -> anyhow::Result<Vec<u8>> {
     let mut child: Child = tokio::process::Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error"])
-        .args(pipe_input_args())
+        .args(relay.input_args())
         .args([
             "-frames:v",
             "1",

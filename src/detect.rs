@@ -254,6 +254,7 @@ impl Detector {
         let info = self.relay.wait_info(Duration::from_secs(30)).await;
         let (sw, sh) = info
             .and_then(|i| Some((i.width?, i.height?)))
+            .map(|(w, h)| self.relay.rotated(w, h))
             .unwrap_or((16, 9));
         let w = ANALYSIS_WIDTH.min(sw.max(2)) & !1;
         let h = (((w as f32 * sh as f32 / sw.max(1) as f32).round() as u32).max(2)) & !1;
@@ -330,7 +331,7 @@ impl Detector {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
         let mut child = cmd
-            .args(crate::relay::pipe_input_args())
+            .args(self.relay.input_args())
             .args([
                 "-an",
                 "-vf",

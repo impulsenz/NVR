@@ -59,6 +59,18 @@
             <div class="loading" id="focus-loading" hidden><div class="spinner"></div><span>Loading full quality…</span></div>
             <svg id="focus-boxes" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute;pointer-events:none;z-index:1" hidden></svg>
             <div id="focus-motion-info" class="ovtext" style="position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:2" hidden></div>
+            <div class="ptz-ov" id="ptz-pad" hidden>
+              <div class="ptz-ring">
+                <button type="button" class="u" data-ptz="0,1,0" title="Tilt up (↑)">▲</button>
+                <button type="button" class="l" data-ptz="-1,0,0" title="Pan left (←)">◀</button>
+                <button type="button" class="c" data-ptz-home title="Stop">■</button>
+                <button type="button" class="r" data-ptz="1,0,0" title="Pan right (→)">▶</button>
+                <button type="button" class="d" data-ptz="0,-1,0" title="Tilt down (↓)">▼</button>
+              </div>
+              <div class="ptz-zoom"><button type="button" data-ptz="0,0,1" title="Zoom in (+ or scroll)">＋</button><button type="button" data-ptz="0,0,-1" title="Zoom out (− or scroll)">－</button></div>
+              <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button></div>
+              <div class="ptz-msg" id="ptz-msg">Drag on the picture to move · scroll to zoom</div>
+            </div>
           </div>
           <div id="focus-player-controls"></div>
           <div class="row focus-actions" style="margin-top:10px">
@@ -75,19 +87,6 @@
             <select id="fq-quality" title="What this camera shows in the camera grid"><option value="auto">Sub-stream (light)</option><option value="main">Full quality</option></select>
             <span class="muted">Grid fps</span><select id="fq-gfps"></select>
             <span class="muted">Full-screen fps</span><select id="fq-hfps"></select>
-          </div>
-          <div class="card ptz" id="ptz-pad" hidden>
-            <div class="ptz-grid">
-              <span></span><button type="button" data-ptz="0,1,0" title="Tilt up">▲</button><span></span>
-              <button type="button" data-ptz="-1,0,0" title="Pan left">◀</button><button type="button" data-ptz-home title="Stop">■</button><button type="button" data-ptz="1,0,0" title="Pan right">▶</button>
-              <span></span><button type="button" data-ptz="0,-1,0" title="Tilt down">▼</button><span></span>
-            </div>
-            <div class="ptz-side">
-              <div class="row"><button type="button" data-ptz="0,0,1" title="Zoom in">＋ Zoom</button><button type="button" data-ptz="0,0,-1" title="Zoom out">－ Zoom</button></div>
-              <div class="row"><select id="ptz-presets"><option value="">Presets…</option></select><button type="button" id="ptz-go">Go</button></div>
-              <div class="row"><input type="text" id="ptz-name" placeholder="New preset name" style="width:150px"><button type="button" id="ptz-save">Save position</button></div>
-              <div class="hint" id="ptz-msg">Press and hold to move.</div>
-            </div>
           </div>
           <div class="card camtl" id="cam-tl">
             <div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Timeline</h2>
