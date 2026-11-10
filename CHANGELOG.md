@@ -18,9 +18,11 @@
 - **Parked vehicles are ignored**: a car that stays in the same place stops making alerts and alerts again when it moves (camera settings → Detection).
 - **Package delivery**: a doorstep area set to watch for parcels says “Package delivered” or “Package picked up”, with before/after pictures.
 - **Looks at more of the video**: alert descriptions use several moments of the full-quality recording (not just one picture), and when no face (or no known face) is found GAZE searches more of the HD video for one.
+- **Phone notifications** (ntfy): the alert picture right away, then a summary of what happened (with names, plates, parcels). Optional Google Gemini summaries that also judge what's suspicious; suspicious activity is sent with high priority. One per camera every few minutes (shorter at night); tapping opens the alert.
 - **Find cameras**: scans the network for cameras, and once a day tells you about new ones.
 
 **Smaller changes**
+- Alerts are only described and identified once they're over; notifications, descriptions and faces added while an alert is still going are no longer lost.
 - Camera offline notice, error-only log count, one Save button for camera settings, HD clip downloads, volume slider, data saver in Settings, bandwidth shown, CPU use that matches Windows, GPU name and usage, on-screen display fixes and corner pickers, many small fixes.
 
 ## 0.3.0 — November 2026

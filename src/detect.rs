@@ -604,6 +604,9 @@ impl Detector {
                 plates: Vec::new(),
                 identified: false,
                 items: Vec::new(),
+                notified: 0,
+                story: String::new(),
+                suspicious: String::new(),
             },
             last_activity: now,
             qualified: false,
@@ -648,7 +651,7 @@ impl Detector {
         if self.cam.detect.trigger == "motion" && !a.qualified {
             a.qualified = true;
             info!(target: "event", "[{}] motion detected", self.cam.name);
-            self.store.save(a.event.clone());
+            self.store.save_detected(a.event.clone());
             self.mark_active(a);
         }
     }
@@ -835,7 +838,7 @@ impl Detector {
         a.qualified = true;
         // Only write when something changed (the final state is saved when the event ends).
         if changed {
-            self.store.save(a.event.clone());
+            self.store.save_detected(a.event.clone());
         }
         self.mark_active(a);
     }
@@ -957,7 +960,7 @@ impl Detector {
                 }
             }
         }
-        self.store.save(a.event.clone());
+        self.store.save_detected(a.event.clone());
         if let Some(b) = &self.buffer {
             b.finish(
                 &a.event.id,

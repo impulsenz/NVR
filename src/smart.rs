@@ -492,6 +492,7 @@ pub async fn run(mgr: Arc<Manager>) {
                     .filter(|e| e.start > cutoff && e.thumb.is_some())
                     // Finished alerts only (their picture won't change any more).
                     .filter(|e| (chrono::Local::now() - e.end).num_seconds() > 30)
+                    .filter(|e| !mgr.camera(&e.camera).is_some_and(|c| c.in_progress(e)))
                     .filter(|e| !mgr.smart.has(&store, &e.id) || e.summary.is_empty())
                     // Faces / plates first, so names go into the description.
                     .filter(|e| {
@@ -734,6 +735,9 @@ mod parcel_tests {
                 after: "e-z0-after.jpg".into(),
                 checked: false,
             }],
+            notified: 0,
+            story: String::new(),
+            suspicious: String::new(),
         };
         super::check_items(&clip, &store, &mut e).await;
         assert_eq!(e.notes, ["Package delivered at Porch"]);

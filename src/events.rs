@@ -69,6 +69,19 @@ pub struct Event {
     /// Areas where something was left or taken (checked for packages).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<ItemChange>,
+    /// Phone notifications sent: 1 = picture, 2 = picture and summary.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub notified: u8,
+    /// What happened, in words, from Gemini (notifications).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub story: String,
+    /// Why this looks suspicious (empty = not suspicious).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub suspicious: String,
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 /// Something left or taken in a watched area during an alert.
@@ -176,6 +189,42 @@ impl EventStore {
     }
 
     /// Add or update an event.
+    /// Save from the detector, which keeps its own copy of the alert in
+    /// progress: what background jobs added meanwhile (notifications sent,
+    /// descriptions, faces) is kept.
+    pub fn save_detected(&self, mut e: Event) {
+        if let Some(old) = self.get(&e.id) {
+            e.notified = e.notified.max(old.notified);
+            if e.story.is_empty() {
+                e.story = old.story;
+            }
+            if e.suspicious.is_empty() {
+                e.suspicious = old.suspicious;
+            }
+            if e.summary.is_empty() {
+                e.summary = old.summary;
+            }
+            if e.faces.is_empty() {
+                e.faces = old.faces;
+            }
+            if e.plates.is_empty() {
+                e.plates = old.plates;
+            }
+            e.identified |= old.identified;
+            for n in old.notes {
+                if !e.notes.contains(&n) {
+                    e.notes.push(n);
+                }
+            }
+            // Pictures replaced by "Refresh alert pictures".
+            if old.thumb.as_deref().is_some_and(|t| t.ends_with("-hd.jpg")) && e.thumb != old.thumb
+            {
+                e.thumb = old.thumb;
+            }
+        }
+        self.save(e);
+    }
+
     pub fn save(&self, e: Event) {
         self.append_line(&e);
         let mut ev = self.events.write().unwrap();
@@ -277,6 +326,9 @@ mod tests {
             plates: Vec::new(),
             identified: false,
             items: Vec::new(),
+            notified: 0,
+            story: String::new(),
+            suspicious: String::new(),
         };
         s.save(e.clone());
         e.labels.push(Label {

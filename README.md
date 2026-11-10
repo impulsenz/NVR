@@ -100,6 +100,18 @@ viewing, finding footage, and managing everything, all from the browser.
   no face (or nobody known), up to six more moments of the HD recording are searched. Runs on this computer
   (OpenCV YuNet/SFace and fast-alpr models, about 50 MB, downloaded once).
 
+**Phone notifications**
+- Through the free **ntfy** app (Android/iPhone), Settings → Notifications: the alert picture as soon
+  as a person or vehicle is seen, then a **summary** when it's over ("Adult in a black top — 40 s.
+  Recognized Mum; Package delivered at Porch").
+- Optional **Google Gemini** summaries: Gemini looks at the alert picture and 3 moments of the HD video,
+  writes what happened and judges whether it's **suspicious** (lingering, trying doors, taking things…).
+  Lines crossed, lingering, parcels picked up and people at night also count as suspicious; those are
+  sent with high priority, even within the quiet time.
+- At most one notification per camera every 5 minutes (1 minute at night, 22:00–06:00), per object type
+  and camera; or only suspicious activity. Tapping a notification opens the alert (set the address,
+  e.g. your Tailscale name).
+
 **Recordings**
 - **Calendar** to pick a single day or a range, optionally limited to a time of day.
 - Filter by **camera(s)** and **alert type** (tick any of Person, Car, Truck, Dog, Motion, Recordings, …).

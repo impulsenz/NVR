@@ -409,8 +409,13 @@ function updateOverlay(surface, c, q) {
 // Routing & status
 // ======================================================================
 const PAGES = ['live', 'recordings', 'system', 'logs', 'settings'];
+// A notification link: #alerts?open=<camera>~<alert id> opens that alert.
+let openAlertId = null;
 function route() {
-  const [p0, sub, extra] = (location.hash.slice(1) || 'live').split('/');
+  const [h, q] = (location.hash.slice(1) || 'live').split('?');
+  const want = q && new URLSearchParams(q).get('open');
+  if (want) { openAlertId = want.split('~').pop(); history.replaceState(null, '', '#' + h); }
+  const [p0, sub, extra] = h.split('/');
   // Alerts and Recordings (timeline) share one page section.
   const p = p0 === 'alerts' ? 'recordings' : p0;
   page = PAGES.includes(p) ? p : 'live';
@@ -1727,6 +1732,11 @@ async function loadRecordings() {
   } catch (e) { rec.items = []; toast(e.message, true); }
   rec.loading = false;
   renderRecordings();
+  if (openAlertId) {
+    const it = rec.items.find(i => i.event && i.event.id === openAlertId);
+    openAlertId = null;
+    if (it) playItem(it, null); else toast('That alert is no longer in the list', true);
+  }
 }
 
 function renderRecordings() {
@@ -1789,6 +1799,8 @@ async function playItem(it, card) {
   $('ad-prev').disabled = alertIdx <= 0; $('ad-next').disabled = alertIdx < 0 || alertIdx >= rec.items.length - 1;
   const what = e && (e.summary || e.desc);
   $('rp-info').innerHTML = `
+    ${e && e.suspicious ? `<div class="sus">⚠ ${esc(e.suspicious)}</div>` : ''}
+    ${e && e.story && e.story !== '-' ? `<div class="what"><div class="muted small">Gemini</div>${esc(e.story)}</div>` : ''}
     ${e ? `<div class="what"><div class="muted small">What happened</div>${what ? esc(what) : `<span class="muted">${status && status.smart_search_on ? 'Being described… (a moment after the activity ends)' : 'Turn on Smart search (Settings → AI) to get a description of what happened.'}</span>`}</div>` : ''}
     ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
@@ -2398,7 +2410,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
+const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'notify', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -2411,7 +2423,7 @@ async function showSettings(sec) {
   camPreviewUnbind.splice(0).forEach(u => u());
   const body = $('settings-body');
   ({cameras: renderCameras, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, system: renderSystemSettings, info: renderInfo})[section](body);
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, system: renderSystemSettings, info: renderInfo})[section](body);
 }
 function settingsTick() {
   if (section !== 'cameras') return;
@@ -3936,6 +3948,72 @@ async function renderKnown(body) {
       renderKnown(body);
     };
   });
+}
+
+// ---------- Settings → Notifications ----------
+const NOTIFY_OBJECTS = [['person', 'People'], ['car', 'Cars'], ['truck', 'Trucks'], ['bus', 'Buses'], ['motorcycle', 'Motorbikes'], ['bicycle', 'Bicycles'], ['package', 'Packages'], ['dog', 'Dogs'], ['cat', 'Cats']];
+function randomTopic() {
+  const a = new Uint8Array(16); crypto.getRandomValues(a);
+  return 'gaze-' + Array.from(a, b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+}
+async function renderNotify(body) {
+  const n = settings.notify, st = await api('api/notify/status').catch(() => ({}));
+  const sub = () => `${(val('n-server') || 'https://ntfy.sh').replace(/\/$/, '')}/${val('n-topic')}`;
+  body.innerHTML = `<div class="card"><h2>Phone notifications</h2>
+    <p class="muted" style="margin-top:0">GAZE sends the alert picture to your phone as soon as it sees someone, then a short summary of what happened. It uses <b>ntfy</b>, a free notification app (Android and iPhone).</p>
+    <ol class="steps">
+      <li>Install the <b>ntfy</b> app on your phone.</li>
+      <li>In the app, tap <b>+</b> and subscribe to your topic: <code id="n-sub"></code> <button type="button" class="small" id="n-copy">Copy</button></li>
+      <li>Switch notifications on below, save, and press <b>Send a test</b>.</li>
+    </ol>
+    <div class="form">
+      <span></span><div><label class="check"><input type="checkbox" id="n-on" ${n.enabled ? 'checked' : ''}> Send notifications</label></div>
+      <label for="n-topic">Topic</label><div><div class="row"><input type="text" id="n-topic" value="${esc(n.topic || randomTopic())}" style="flex:1"><button type="button" id="n-new">New private topic</button></div>
+        <div class="hint">On the public ntfy.sh server anyone who knows the topic name can read it, so keep this long random name.</div></div>
+      <label for="n-server">ntfy server</label><div><input type="text" id="n-server" value="${esc(n.server)}" placeholder="https://ntfy.sh">
+        <div class="hint">Pictures pass through this server. For full privacy run your own ntfy server and enter its address (and an access token below).</div></div>
+      <label for="n-token">Access token</label><div><input type="password" id="n-token" autocomplete="new-password" placeholder="${n.has_token ? 'Saved – leave empty to keep' : 'Only for a protected topic or your own server'}"></div>
+      <label>Notify for</label><div class="checks">${NOTIFY_OBJECTS.map(([k, t]) => `<label class="check"><input type="checkbox" class="n-obj" value="${k}" ${n.objects.includes(k) ? 'checked' : ''}> ${t}</label>`).join('')}</div>
+      <label>Cameras</label><div class="checks">${status.cameras.map(c => `<label class="check"><input type="checkbox" class="n-cam" value="${esc(c.id)}" ${!n.cameras.length || n.cameras.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('')}</div>
+      <label for="n-gap">How often</label><div class="row"><span class="muted">at most one every</span><input type="number" id="n-gap" min="0" max="240" value="${n.gap_minutes}" style="width:80px"><span class="muted">minutes per camera</span></div>
+      <label for="n-nfrom">At night</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
+      <span></span><div><label class="check"><input type="checkbox" id="n-sus" ${n.only_suspicious ? 'checked' : ''}> Only suspicious activity</label>
+        <div class="hint">Suspicious: lines crossed, someone lingering, a parcel picked up, a person at night, or what Gemini judges suspicious (below). Suspicious activity is always sent, even within the time between notifications, with high priority.</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
+        <div class="hint">What happened, who was recognised, number plates, parcels — from smart search and faces &amp; plates, or from Gemini.</div></div>
+      <label for="n-link">Open GAZE at</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
+        <div class="hint">Tapping a notification opens this address at the alert. Use an address that works away from home, e.g. your computer's Tailscale name.</div></div>
+    </div></div>
+    <div class="card"><h2>Gemini summaries <span class="muted small">(optional)</span></h2>
+      <div class="form">
+        <span></span><div><label class="check"><input type="checkbox" id="n-gem" ${n.gemini ? 'checked' : ''}> Let Google Gemini describe each alert and judge whether it's suspicious</label>
+          <div class="hint">Gemini looks at the alert picture and 3 moments of the HD video and writes e.g. “A delivery driver leaves a parcel at the front door and walks back to the van.” The pictures are sent to Google. Gemini has a free tier: get a key at aistudio.google.com.</div></div>
+        <label for="n-gkey">Gemini API key</label><div><input type="password" id="n-gkey" autocomplete="new-password" placeholder="${n.has_gemini_key ? 'Saved – leave empty to keep' : ''}"></div>
+        <label for="n-gmodel">Model</label><div><input type="text" id="n-gmodel" value="${esc(n.gemini_model)}" placeholder="gemini-2.5-flash"></div>
+      </div></div>
+    <div class="card"><div class="actions" style="margin:0"><button type="button" class="primary" id="n-save">Save</button><button type="button" id="n-test">Send a test</button>
+      <span class="muted" style="margin-left:auto">${st.sent ? `${st.sent} sent since GAZE started${st.last_sent ? ', last ' + fmtDate(st.last_sent) : ''}` : ''}${st.last_error ? ` <span class="errc">· ${esc(st.last_error)}</span>` : ''}</span></div></div>`;
+  const upd = () => { $('n-sub').textContent = sub(); };
+  upd(); $('n-topic').oninput = upd; $('n-server').oninput = upd;
+  $('n-new').onclick = () => { $('n-topic').value = randomTopic(); upd(); };
+  $('n-copy').onclick = () => { navigator.clipboard && navigator.clipboard.writeText(sub()).then(() => toast('Copied')); };
+  const form = () => {
+    const cams = [...body.querySelectorAll('.n-cam')], picked = cams.filter(c => c.checked).map(c => c.value);
+    return {enabled: chk('n-on'), server: val('n-server').trim() || 'https://ntfy.sh', topic: val('n-topic').trim(), token: val('n-token'),
+      objects: [...body.querySelectorAll('.n-obj:checked')].map(c => c.value), cameras: picked.length === cams.length ? [] : picked,
+      only_suspicious: chk('n-sus'), gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
+      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), link: val('n-link').trim(),
+      gemini: chk('n-gem'), gemini_key: val('n-gkey'), gemini_model: val('n-gmodel').trim() || 'gemini-2.5-flash'};
+  };
+  $('n-save').onclick = async () => {
+    const f = form();
+    if (f.enabled && !f.topic) return toast('Choose a topic first', true);
+    if (f.gemini && !f.gemini_key && !settings.notify.has_gemini_key) return toast('Enter a Gemini API key, or switch Gemini off', true);
+    if (await saveSettings({notify: f}, 'Notifications saved')) renderNotify(body);
+  };
+  $('n-test').onclick = async () => {
+    try { toast((await api('api/notify/test', {method: 'POST', json: form()})).message); } catch (e) { toast(e.message, true); }
+  };
 }
 
 // ---------- Settings → Users (admin) ----------

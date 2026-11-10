@@ -378,6 +378,7 @@ pub async fn run(mgr: Arc<Manager>) {
                         !e.identified
                             && e.start > cutoff
                             && (chrono::Local::now() - e.end).num_seconds() > 20
+                            && !rt.in_progress(e)
                     })
                     .filter(|e| {
                         e.boxes

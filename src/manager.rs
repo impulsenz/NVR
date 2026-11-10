@@ -241,6 +241,14 @@ impl CameraRuntime {
         self.detector.lock().unwrap().clone()
     }
 
+    /// Is this alert still going on (its end not known yet)?
+    pub fn in_progress(&self, e: &crate::events::Event) -> bool {
+        self.detector().is_some_and(|d| {
+            let s = d.status();
+            s.event_active && s.last_event == Some(e.start)
+        })
+    }
+
     pub fn live(&self, q: Quality) -> Arc<Live> {
         match q {
             Quality::Sub => self.live_sub.clone(),
@@ -281,6 +289,7 @@ pub struct SettingsUpdate {
     pub hardware: Option<HardwareConfig>,
     pub ai: Option<AiConfig>,
     pub cloud: Option<CloudConfig>,
+    pub notify: Option<crate::config::NotifyConfig>,
     /// When the recordings folder changes, move existing recordings there.
     #[serde(default)]
     pub move_recordings: bool,
@@ -697,6 +706,16 @@ impl Manager {
                 a.api_key = old.ai.api_key.clone();
             }
             cfg.ai = a;
+        }
+        if let Some(mut n) = up.notify {
+            // Empty secrets: keep the saved ones.
+            if n.token.is_empty() {
+                n.token = old.notify.token.clone();
+            }
+            if n.gemini_key.is_empty() {
+                n.gemini_key = old.notify.gemini_key.clone();
+            }
+            cfg.notify = n;
         }
         if let Some(c) = up.cloud {
             cfg.cloud = c;

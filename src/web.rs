@@ -148,6 +148,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/ptz/stop", post(ptz_stop))
         .route("/api/cameras/{id}/talk", get(talk_ws))
         .route("/api/jobs", get(jobs_list))
+        .route("/api/notify/test", post(notify_test))
+        .route("/api/notify/status", get(notify_status))
         .route("/api/maintenance/previews", post(rebuild_previews))
         .route(
             "/api/maintenance/alert-pictures",
@@ -372,11 +374,19 @@ async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_password = !cfg.server.password.is_empty();
     let has_key = !cfg.ai.api_key.is_empty();
+    let (has_token, has_gemini) = (
+        !cfg.notify.token.is_empty(),
+        !cfg.notify.gemini_key.is_empty(),
+    );
     cfg.server.password.clear();
     cfg.ai.api_key.clear();
+    cfg.notify.token.clear();
+    cfg.notify.gemini_key.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["server"]["has_password"] = json!(has_password);
     v["ai"]["has_key"] = json!(has_key);
+    v["notify"]["has_token"] = json!(has_token);
+    v["notify"]["has_gemini_key"] = json!(has_gemini);
     v.as_object_mut().unwrap().remove("cameras");
     Json(v).into_response()
 }
@@ -1892,6 +1902,52 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
     }
 }
 
+// ---------- notifications ----------
+
+/// Send a test notification (with the newest alert picture, if any), using
+/// the settings in the request (so they can be tried before saving).
+async fn notify_test(State(m): App, Json(mut n): Json<crate::config::NotifyConfig>) -> Response {
+    let saved = m.config().notify;
+    if n.token.is_empty() {
+        n.token = saved.token;
+    }
+    let newest = m
+        .cameras()
+        .into_iter()
+        .filter_map(|c| {
+            c.events
+                .all()
+                .into_iter()
+                .filter(|e| e.thumb.is_some())
+                .max_by_key(|e| e.start)
+                .map(|e| (c, e))
+        })
+        .max_by_key(|(_, e)| e.start);
+    let picture = newest
+        .as_ref()
+        .and_then(|(c, e)| std::fs::read(c.events.dir().join(e.thumb.as_ref()?)).ok());
+    let msg = crate::notify::Message {
+        title: format!("{}: test notification", m.config().server.name),
+        body: if picture.is_some() {
+            "Notifications work. This is the newest alert picture.".into()
+        } else {
+            "Notifications work.".into()
+        },
+        tags: "white_check_mark",
+        priority: 3,
+        click: (!n.link.trim().is_empty()).then(|| n.link.trim().to_string()),
+        picture,
+    };
+    match crate::notify::send(&n, msg).await {
+        Ok(()) => Json(json!({"ok": true, "message": "Sent — check your phone"})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn notify_status() -> Response {
+    Json(crate::notify::STATUS.lock().unwrap().clone()).into_response()
+}
+
 // ---------- System → Tasks ----------
 
 async fn jobs_list() -> Response {
@@ -2327,6 +2383,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/ptz/test",
         "/api/profiles",
         "/api/maintenance",
+        "/api/notify",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"

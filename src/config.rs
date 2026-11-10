@@ -45,6 +45,7 @@ pub struct Config {
     pub hardware: HardwareConfig,
     pub ai: AiConfig,
     pub cloud: CloudConfig,
+    pub notify: NotifyConfig,
     pub dashboard: DashboardConfig,
     /// Saved recording / motion / AI settings to apply to cameras.
     pub profiles: Vec<Profile>,
@@ -280,6 +281,71 @@ impl Default for AiConfig {
             summary_frames: 4,
             faces: false,
             plates: false,
+        }
+    }
+}
+
+/// Phone notifications through ntfy (https://ntfy.sh, or your own server).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct NotifyConfig {
+    pub enabled: bool,
+    /// ntfy server, e.g. https://ntfy.sh
+    pub server: String,
+    /// Topic to subscribe to in the ntfy app (long and random: on the public
+    /// server anyone who knows it can read it).
+    pub topic: String,
+    /// Access token for a protected topic / own server (optional).
+    pub token: String,
+    /// Objects that notify.
+    pub objects: Vec<String>,
+    /// Cameras that notify (empty = all).
+    pub cameras: Vec<String>,
+    /// Only for suspicious activity (AI judgement, zones, lingering, people at night).
+    pub only_suspicious: bool,
+    /// Minutes between notifications from one camera.
+    pub gap_minutes: u32,
+    /// At night: shorter gap (more watchful).
+    pub night_from: String,
+    pub night_to: String,
+    pub night_gap_minutes: u32,
+    /// Send a summary after the alert (besides the picture right away).
+    pub summary: bool,
+    /// Address that opens GAZE from the phone (e.g. your Tailscale name).
+    pub link: String,
+    /// Google Gemini writes the summary and judges what's suspicious.
+    pub gemini: bool,
+    pub gemini_key: String,
+    pub gemini_model: String,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server: "https://ntfy.sh".into(),
+            topic: String::new(),
+            token: String::new(),
+            objects: vec![
+                "person".into(),
+                "car".into(),
+                "truck".into(),
+                "bus".into(),
+                "motorcycle".into(),
+                "bicycle".into(),
+                "package".into(),
+            ],
+            cameras: Vec::new(),
+            only_suspicious: false,
+            gap_minutes: 5,
+            night_from: "22:00".into(),
+            night_to: "06:00".into(),
+            night_gap_minutes: 1,
+            summary: true,
+            link: String::new(),
+            gemini: false,
+            gemini_key: String::new(),
+            gemini_model: "gemini-2.5-flash".into(),
         }
     }
 }

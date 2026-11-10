@@ -611,3 +611,10 @@ table.users .chips { margin: 0; }
 
 .ad-side .items { margin-bottom: 10px; }
 .ad-side .item img { width: 45%; border-radius: 6px; }
+
+/* Notifications */
+.checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+ol.steps { margin: 0 0 12px; padding-left: 20px; line-height: 1.9; }
+ol.steps code { user-select: all; }
+
+.ad-side .sus { background: rgba(229, 72, 77, .15); color: var(--red, #e5484d); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; font-weight: 600; }

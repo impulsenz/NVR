@@ -23,6 +23,7 @@ mod load;
 mod logs;
 mod manager;
 mod mp4fix;
+mod notify;
 mod onvif;
 mod onvif_device;
 mod recog;
@@ -134,6 +135,7 @@ async fn run() -> Result<()> {
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));
     tokio::spawn(identify::run(mgr.clone()));
+    tokio::spawn(notify::run(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

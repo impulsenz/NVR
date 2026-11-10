@@ -631,6 +631,9 @@ mod text_tests {
             plates: Vec::new(),
             identified: false,
             items: Vec::new(),
+            notified: 0,
+            story: String::new(),
+            suspicious: String::new(),
         }
     }
 
