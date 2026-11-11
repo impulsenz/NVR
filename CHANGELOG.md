@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## 0.5.6 — November 2026
+- **Much better alert descriptions**: choose who writes them in Settings → Object recognition → **Descriptions written by**. A vision-language model looks at several moments of each alert together and writes what happened ("A courier in a hi-vis vest leaves a parcel at the door and walks back to a white van"), instead of set phrases. Use **Ollama or LM Studio on your own computer** (free, pictures stay at home), **Claude** or **Gemini** (cloud). A daily limit keeps cloud costs known, and **Describe the latest alert** tries it before saving.
+- **One AI for notifications too**: the same model writes the notification text and judges what looks suspicious. Notifications no longer have separate Gemini settings — an existing Gemini key moves over by itself.
+- **Time-lapse scrubbing fixed**: no more black blinks, it now goes right up to the current time (ending on the live picture), and the picture no longer jumps or zooms when you let go (previews keep the camera's own shape).
+- **Less disk work**: recordings are made quick to open only when they hold an alert, or the first time you open them, and are written once instead of twice.
+- Security: an account limited to some cameras could export clips of the others — fixed. Exporting the setup without passwords now leaves out every key and camera login.
+- Clean-up of unused code and settings.
+
 ## 0.5.5 — November 2026
 - **Live sound explains itself**: when a camera's sound can't be played, GAZE now says why instead of "no supported source" — most often the camera stream is set to video only (on Hikvision: Video/Audio → Video → Stream Type "Video&Audio"). G.711 µ-law/A-law, AAC and other camera audio is converted for the browser, and the sub-stream's sound is used when only it has sound. The log says which sound each camera stream sends.
 - **A nicer update bar**: the version change (0.5.4 → 0.5.5), when it was released, a progress bar while downloading, and **Try again** if an update fails. **Later** hides it until the next version.
