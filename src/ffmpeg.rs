@@ -754,6 +754,8 @@ pub async fn sprite(
     let frame_len = (tw * th * 3) as usize;
     let mut page: Vec<Vec<u8>> = Vec::new();
     let mut last: Option<Vec<u8>> = None;
+    // Flat pictures at the start of the current page, waiting for a good one.
+    let mut waiting: Vec<usize> = Vec::new();
     let (mut count, mut pages) = (0u32, 0u32);
     let save = |tiles: Vec<Vec<u8>>, n: u32| {
         let p = std::path::PathBuf::from(format!("{}-{n:03}.jpg", prefix.display()));
@@ -788,18 +790,26 @@ pub async fn sprite(
             Ok(Ok(_)) => {}
             _ => break,
         }
-        // A picture that decoded as (nearly) solid black: keep the previous one.
-        let sample = buf.iter().step_by(37);
-        let (sum, n) = sample.fold((0u64, 0u64), |(s, n), v| (s + *v as u64, n + 1));
-        if sum / n.max(1) < 3
-            && let Some(prev) = &last
-        {
-            buf = prev.clone();
+        // A picture that decoded as one flat colour (black, or the green of
+        // a frame that couldn't be decoded): keep the previous one, or, at
+        // the start, the next good one.
+        if flat_picture(&buf) {
+            match &last {
+                Some(prev) => buf = prev.clone(),
+                None => waiting.push(page.len()),
+            }
+        } else {
+            for i in waiting.drain(..) {
+                if let Some(t) = page.get_mut(i) {
+                    t.clone_from(&buf);
+                }
+            }
+            last = Some(buf.clone());
         }
-        last = Some(buf.clone());
         page.push(buf);
         count += 1;
         if page.len() as u32 == PER_PAGE {
+            waiting.clear();
             save(std::mem::take(&mut page), pages).await?;
             pages += 1;
         }
@@ -835,6 +845,26 @@ pub async fn sprite(
         },
         version,
     })
+}
+
+/// An RGB picture that is (nearly) one flat colour: nothing a camera
+/// really shows, but what a frame that couldn't be decoded turns into.
+fn flat_picture(rgb: &[u8]) -> bool {
+    let mut sum = [0f64; 3];
+    let mut sq = [0f64; 3];
+    let mut n = 0f64;
+    for px in rgb.chunks_exact(3).step_by(29) {
+        for c in 0..3 {
+            let v = px[c] as f64;
+            sum[c] += v;
+            sq[c] += v * v;
+        }
+        n += 1.0;
+    }
+    if n == 0.0 {
+        return true;
+    }
+    (0..3).all(|c| sq[c] / n - (sum[c] / n).powi(2) < 9.0)
 }
 
 /// A path for an ffmpeg concat list. ffmpeg resolves relative paths in the
@@ -911,6 +941,14 @@ fn parse_rate(r: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn flat_pictures() {
+        assert!(super::flat_picture(&[0, 135, 0].repeat(1000)));
+        assert!(super::flat_picture(&[0u8; 3000]));
+        let noisy: Vec<u8> = (0..3000u32).map(|i| (i * 7919 % 251) as u8).collect();
+        assert!(!super::flat_picture(&noisy));
+    }
+
     use super::*;
 
     #[test]

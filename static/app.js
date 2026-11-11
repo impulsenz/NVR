@@ -642,7 +642,12 @@ function fmtRate(bps) { const m = bps * 8 / 1e6; return m >= 1 ? m.toFixed(1) + 
 // Bandwidth this page is using: live pictures plus video/pictures loaded.
 const bw = {bytes: 0, since: performance.now()};
 try {
-  new PerformanceObserver((list) => { for (const e of list.getEntries()) bw.bytes += e.transferSize || e.encodedBodySize || 0; }).observe({type: 'resource', buffered: false});
+  // Only what actually came over the network from this server: not
+  // pictures shown from the browser's cache (transferSize 0), nor in-page
+  // copies (blob:/data:) of what was already counted.
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) if (e.transferSize > 0 && e.name.startsWith(location.origin)) bw.bytes += e.transferSize;
+  }).observe({type: 'resource', buffered: false});
 } catch (e) {}
 setInterval(() => {
   const now = performance.now(), secs = (now - bw.since) / 1000;
@@ -651,7 +656,7 @@ setInterval(() => {
   const el = $('bw');
   if (el) {
     el.textContent = '⇣ ' + fmtRate(rate);
-    el.title = `Data this page is using right now (live video, recordings, pictures)${dataSaver ? ' — data saver is on' : ''}`;
+    el.title = `Data streaming from GAZE to this device right now (live video, recordings, pictures)${dataSaver ? ' — data saver is on' : ''}`;
   }
 }, 3000);
 // Cameras whose recordings this browser can't play directly.
@@ -681,6 +686,9 @@ class Player {
     this.surface = video.parentElement;
     this.surface.classList.add('has-pov');
     if (controls) { controls.classList.add('pov'); this.surface.appendChild(controls); }
+    this.tlap = document.createElement('div');
+    this.tlap.className = 'pov-tlap'; this.tlap.hidden = true;
+    this.surface.appendChild(this.tlap);
     this.osd = document.createElement('div');
     this.osd.className = 'pov-osdbox';
     this.surface.appendChild(this.osd);
@@ -830,12 +838,44 @@ class Player {
     this.marks = item.marks || [];
     this.buildOsd();
     this.paint();
+    this.lightSegs = [];
+    this.findLightCopies(item);
     const kind = item.kind === 'clip' ? 'clip' : 'rec';
     try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
+  }
+  // The light timeline copies around this file: their time-lapse has a
+  // picture every second, shown full size while dragging along the bar.
+  async findLightCopies(item) {
+    const a = new Date(item.file_start).getTime();
+    try {
+      const [t] = await api(`api/timeline?cameras=${enc(item.camera)}&from=${enc(new Date(a - 60000).toISOString())}&to=${enc(new Date(a + 3 * 3600000).toISOString())}`);
+      if (this.item === item) this.lightSegs = ((t && t.segments) || []).filter(x => x.kind === 'sub');
+    } catch (e) {}
+  }
+  // While dragging: the time-lapse picture of moment `t` over the whole
+  // video (the full-quality video is loaded there on release).
+  showTimelapse(t) {
+    const ov = this.tlap; if (!ov || !this.item) return;
+    const W = this.wallAt(t).getTime(), cam = this.item.camera, want = this.tlapWant = t;
+    const seg = (this.lightSegs || []).find(x => new Date(x.start).getTime() <= W && W < new Date(x.end).getTime() + 1000);
+    const show = (sp, off) => {
+      if (!sp || this.tlapWant !== want) return;
+      if (spriteStyle(ov, sp, Math.floor(off / sp.info.interval), this.surface.clientWidth, this.surface.clientHeight, false)) ov.hidden = false;
+    };
+    if (seg) spriteFor(cam, seg).then(sp => sp ? show(sp, (W - new Date(seg.start).getTime()) / 1000) : show(this.sprite, t));
+    else show(this.sprite, t);
+  }
+  hideTimelapse() {
+    const ov = this.tlap; if (!ov || ov.hidden) return;
+    this.tlapWant = null;
+    const v = this.video, t0 = performance.now();
+    const check = () => { if ((v.readyState >= 2 && !v.seeking) || performance.now() - t0 > 5000) ov.hidden = true; else setTimeout(check, 80); };
+    setTimeout(check, 60);
   }
   stop() {
     for (const v of [this.video, this.alt]) { v.pause(); v.removeAttribute('src'); v.load(); }
     this.item = null; this.nextSeg = null;
+    if (this.tlap) this.tlap.hidden = true;
     if (this.osd) this.osd.innerHTML = '';
   }
   paintButtons() { if (this.el) this.el.play.textContent = this.video.paused ? '▶' : '❚❚'; }
@@ -880,7 +920,10 @@ class Player {
       if (drag === 'head') {
         // Seek while dragging, but not more often than the browser can keep up.
         // Seek while dragging (direct playback only; converted playback seeks on release).
-        if (!this.tc && performance.now() - lastSeek > 120) { this.video.currentTime = t; lastSeek = performance.now(); }
+        // Time-lapse (the Recordings scrub choice): pictures only, the video
+        // is loaded on release; otherwise seek the video itself.
+        if (tl.scrub === 'timelapse' || this.tc) this.showTimelapse(t);
+        else if (performance.now() - lastSeek > 120) { this.video.currentTime = t; lastSeek = performance.now(); }
         this.el.head.style.left = (t / this.dur() * 100) + '%';
       } else if (drag === 'in') { this.inT = Math.min(t, (this.outT ?? this.dur()) - 1); this.paint(); }
       else if (drag === 'out') { this.outT = Math.max(t, (this.inT ?? 0) + 1); this.paint(); }
@@ -890,11 +933,14 @@ class Player {
       if (!this.item) return;
       sc.setPointerCapture(e.pointerId);
       drag = e.target.classList.contains('in') ? 'in' : e.target.classList.contains('out') ? 'out' : 'head';
-      if (drag === 'head') { this.wasPlaying = !this.video.paused; this.video.pause(); if (!this.tc) this.video.currentTime = tAt(e)[0]; }
+      if (drag === 'head') {
+        this.wasPlaying = !this.video.paused; this.video.pause();
+        if (tl.scrub === 'timelapse' || this.tc) this.showTimelapse(tAt(e)[0]); else this.video.currentTime = tAt(e)[0];
+      }
     });
     const end = (e) => {
       if (!drag) return;
-      if (drag === 'head') this.seekTo(tAt(e)[0], this.wasPlaying);
+      if (drag === 'head') { this.seekTo(tAt(e)[0], this.wasPlaying); this.hideTimelapse(); }
       drag = null; this.el.prev.hidden = true; this.paint();
     };
     sc.addEventListener('pointerup', end);
@@ -2038,7 +2084,7 @@ const Calendar = {
       <div class="hint">${this.first != null ? 'Click another day to show the days in between too.' : 'Click a day to show it; click a second day for a range.'}</div>
       <div class="row" style="margin-top:8px;flex-wrap:wrap"><button type="button" class="small" data-p="0">Today</button><button type="button" class="small" data-p="1">Yesterday</button><button type="button" class="small" data-p="7">Last 7 days</button><button type="button" class="small" data-p="30">Last 30 days</button><button type="button" class="small" data-p="all">All time</button></div>
       <div class="row" style="margin-top:10px"><span class="muted">Only between</span><input type="time" id="cal-tf" value="${rec.todFrom}" style="width:auto"><span class="muted">and</span><input type="time" id="cal-tt" value="${rec.todTo}" style="width:auto"></div>
-      <div class="actions" style="margin-top:10px"><button type="button" class="primary" data-apply>Done</button><button type="button" data-clear-time>Whole day</button></div></div>`;
+      <div class="actions" style="margin-top:10px"><button type="button" class="primary" data-apply>Done</button><button type="button" data-clear-time title="Every alert there is, at any time of day">All time</button></div></div>`;
     p.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => { this.month.setMonth(this.month.getMonth() + +b.dataset.nav); this.render(); });
     p.querySelectorAll('[data-t]').forEach(b => b.onclick = (e) => {
       e.stopPropagation();
@@ -2061,7 +2107,12 @@ const Calendar = {
       }
       this.first = null; this.apply(true);
     });
-    p.querySelector('[data-clear-time]').onclick = () => { $('cal-tf').value = ''; $('cal-tt').value = ''; this.apply(false); };
+    // All time: every alert, from the first day, at any time of day.
+    p.querySelector('[data-clear-time]').onclick = () => {
+      $('cal-tf').value = ''; $('cal-tt').value = '';
+      this.b = startOfDay(new Date()).getTime(); this.a = new Date(2000, 0, 1).getTime(); this.first = null;
+      this.apply(true);
+    };
     p.querySelectorAll('#cal-tf, #cal-tt').forEach(i => i.onchange = () => this.apply(false));
     p.querySelector('[data-apply]').onclick = () => this.apply(true);
   },
@@ -2076,7 +2127,7 @@ async function fetchRecordings() {
   return r.json();
 }
 function recQuery() {
-  const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString(), limit: 2000});
+  const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString(), limit: rec.from.getFullYear() <= 2000 ? 5000 : 2000});
   if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
   // Alerts only (plain recordings are on the Recordings tab).
   q.set('types', (rec.types.size ? [...rec.types] : allAlertTypes()).join(','));
@@ -2259,7 +2310,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {scrub: store.get('tl-scrub', 'timelapse'), quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
@@ -2316,7 +2367,7 @@ function showVideo(el, i) {
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
 }
-function segAt(c, T) {
+function segAt(c, T, force) {
   // The newest file of a camera that was recording when the timeline
   // loaded is still growing: treat it as running up to now.
   const lasts = new Set(['recording', 'sub'].map(k => c.segments.filter(s => s.kind === k).slice(-1)[0]));
@@ -2325,7 +2376,8 @@ function segAt(c, T) {
   // Normally the light stream 2 copy (opens instantly); after clicking an
   // alert, its full-quality footage until the alert is over.
   const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
-  const order = hd || tl.quality === 'main' ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip'];
+  const order = force === 'main' ? ['clip', 'recording', 'sub'] : force === 'sub' ? ['sub', 'recording', 'clip']
+    : hd || tl.quality === 'main' ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip'];
   for (const k of order) {
     const s = c.segments.find(x => x.kind === k && hit(x));
     if (s) return s;
@@ -2431,6 +2483,16 @@ function tlStop() { if (tl.playing) tlPlay(false); document.querySelectorAll('#t
 $('tl-play').onclick = () => tlPlay(!tl.playing);
 $('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); };
 $('tl-quality').value = tl.quality;
+// What scrubbing shows: the time-lapse pictures, or the sub-stream or main
+// stream video itself (to compare how quickly each one keeps up).
+$('tl-scrub').querySelectorAll('button').forEach(b => {
+  b.classList.toggle('on', b.dataset.v === tl.scrub);
+  b.onclick = () => {
+    tl.scrub = b.dataset.v; store.set('tl-scrub', tl.scrub); tl.scrubMs = [];
+    $('tl-scrub').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    $('tl-scrub-ms').textContent = '';
+  };
+});
 $('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-quality', tl.quality); tlSync(true); };
 $('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
 $('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); prefetchSprites(); };
@@ -2588,6 +2650,7 @@ function drawHead() {
   const end = () => {
     if (handle) { handle = null; drawTimeline(); tlSync(true); hideSpritesWhenReady(); return; }
     if (!drag) return; drag = false; tl.dragging = false;
+    document.querySelectorAll('#tl-videos video').forEach(v => { v._want = null; });
     tlSync(true); hideSpritesWhenReady(); if (was) tlPlay(true);
   };
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
@@ -2735,14 +2798,48 @@ function previewAll() {
     if (!s) el._vids.forEach(x => x.style.visibility = 'hidden');
     if (!s) { sp.hidden = true; continue; }
     const T = tl.T;
+    // Scrubbing with the video itself (sub-stream or main stream): seek it.
+    if (tl.scrub !== 'timelapse' && !el._tc) {
+      const vs = segAt(c, T, tl.scrub) || s;
+      sp.hidden = true;
+      scrubVideo(el, vs, (T - new Date(vs.start).getTime()) / 1000);
+      continue;
+    }
     // The last moments (newer than the preview): the live picture.
     if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; continue; }
+    const asked = performance.now();
     spriteFor(c.camera, s).then(info => {
       if (!info || tl.T !== T) return;
       const off = (T - new Date(s.start).getTime()) / 1000;
-      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) sp.hidden = false;
+      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) { sp.hidden = false; scrubTiming(performance.now() - asked); }
     });
   }
+}
+// Seek a camera's video while scrubbing: one seek at a time, always to the
+// newest wanted moment, timing how long each picture takes to show.
+function scrubVideo(el, seg, at) {
+  const v = activeVideo(el);
+  showVideo(el, el._active);
+  v._want = Math.max(0, at);
+  if (!v._scrubWired) {
+    v._scrubWired = true;
+    v._go = () => { if (v._want == null || v.readyState < 1 || v.seeking) return; v._askedAt = performance.now(); if (v.fastSeek && tl.scrub === 'main') v.fastSeek(v._want); else v.currentTime = v._want; };
+    v.addEventListener('seeked', () => {
+      if (v._askedAt) { scrubTiming(performance.now() - v._askedAt); v._askedAt = 0; }
+      if (v._want != null && Math.abs(v.currentTime - v._want) > 0.3) v._go();
+    });
+    v.addEventListener('loadedmetadata', () => v._go());
+  }
+  if (v.dataset.url !== seg.url) { v.pause(); v.dataset.url = seg.url; v.preload = 'auto'; v.src = seg.url; v._askedAt = performance.now(); return; }
+  if (!v.paused) v.pause();
+  v._go();
+}
+// How quickly scrubbing shows each picture (average of the last few).
+function scrubTiming(ms) {
+  tl.scrubMs = tl.scrubMs || [];
+  tl.scrubMs.push(ms); if (tl.scrubMs.length > 12) tl.scrubMs.shift();
+  const avg = tl.scrubMs.reduce((a, b) => a + b, 0) / tl.scrubMs.length;
+  const e = $('tl-scrub-ms'); if (e) e.textContent = `~${Math.round(avg)} ms a picture`;
 }
 
 // ======================================================================

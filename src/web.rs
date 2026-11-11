@@ -1854,14 +1854,73 @@ async fn ensure_sprite(
     Ok((prefix, info))
 }
 
-/// Background job: keep the time-lapse previews of the last 24 hours ready
-/// for every camera (newest first), one file at a time and only while
-/// nobody is waiting for previews. Older days are still made on demand.
 /// "Rebuild previews" (System → Tasks): run the job now, even if
 /// preparing previews in advance is off.
 static PREBUILD_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static PREBUILD_FORCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+type PreviewTodo = (
+    Arc<crate::manager::CameraRuntime>,
+    &'static str,
+    String,
+    DateTime<Local>,
+    DateTime<Local>,
+);
+
+/// Files between `from` and `to` whose time-lapse preview is missing or out
+/// of date, newest first: the light timeline copies, the recordings of any
+/// time without a copy (e.g. while the copy was reconnecting) and alert clips.
+fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> Vec<PreviewTodo> {
+    let mut todo: Vec<PreviewTodo> = Vec::new();
+    let now = Local::now();
+    for c in m.cameras() {
+        let copies: Vec<_> = library::timeline_recordings(&c)
+            .into_iter()
+            .filter(|r| r.end >= from && r.start < to)
+            .collect();
+        for r in &copies {
+            todo.push((c.clone(), "tl", r.name.clone(), r.start, r.end));
+        }
+        for r in library::recordings(&c).iter().filter(|r| r.end >= from && r.start < to) {
+            // Skip the file still being written (it keeps growing).
+            if (now - r.end).num_seconds() < 30 {
+                continue;
+            }
+            let covered = copies.iter().any(|t| {
+                t.start <= r.start + chrono::Duration::seconds(5)
+                    && t.end >= r.end - chrono::Duration::seconds(5)
+            });
+            if !covered {
+                todo.push((c.clone(), "rec", r.name.clone(), r.start, r.end));
+            }
+        }
+        for e in c.events.between(from, to) {
+            if let Some(clip) = e.clip {
+                todo.push((c.clone(), "clip", clip, e.start, e.end));
+            }
+        }
+    }
+    todo.retain(|(c, kind, name, ..)| {
+        let Ok(src) = media_path(c, kind, name) else {
+            return false;
+        };
+        let first = src
+            .parent()
+            .unwrap()
+            .join(".thumbs")
+            .join(format!("{name}.sprite-000.jpg"));
+        let meta = first.with_file_name(format!("{name}.sprite.json"));
+        !(fresh(&first, &src) && sprite_meta_current(&meta))
+    });
+    todo.sort_by(|a, b| b.3.cmp(&a.3));
+    todo
+}
+
+/// Background job: keep the time-lapse previews of the last 24 hours ready
+/// (checked every minute), and go back over all older footage every ten
+/// minutes to make any preview that's missing (GAZE was busy or off, a file
+/// couldn't be read at the time …), a batch at a time while the computer
+/// is quiet. A file that fails is tried again later (a few times).
 pub async fn prebuild_timelapse(m: Arc<Manager>) {
     // Let the cameras connect first.
     tokio::select! {
@@ -1869,110 +1928,117 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
         _ = PREBUILD_NOW.notified() => {}
     }
     let mut announced = false;
+    // Files that failed: (tries, when).
+    let mut failed: std::collections::HashMap<String, (u32, std::time::Instant)> =
+        std::collections::HashMap::new();
+    let mut last_sweep: Option<std::time::Instant> = None;
     loop {
         let mut built = 0usize;
         let force = PREBUILD_FORCE.swap(false, std::sync::atomic::Ordering::SeqCst);
-        let mut job: Option<crate::jobs::Job> = None;
         if force || m.config().storage.prebuild_timelapse {
-            let since = Local::now() - chrono::Duration::hours(24);
-            type Todo = (
-                Arc<crate::manager::CameraRuntime>,
-                &'static str,
-                String,
-                DateTime<Local>,
-                DateTime<Local>,
-            );
-            let mut todo: Vec<Todo> = Vec::new();
-            for c in m.cameras() {
-                // The light timeline copies (cheap; also the file still being
-                // recorded, refreshed each round), and the recordings of any
-                // time without a copy (e.g. while the copy was reconnecting).
-                let copies: Vec<_> = library::timeline_recordings(&c)
-                    .into_iter()
-                    .filter(|r| r.end >= since)
-                    .collect();
-                for r in &copies {
-                    todo.push((c.clone(), "tl", r.name.clone(), r.start, r.end));
-                }
-                for r in library::recordings(&c).iter().filter(|r| r.end >= since) {
-                    // Skip the file still being written (it keeps growing).
-                    if (Local::now() - r.end).num_seconds() < 30 {
-                        continue;
-                    }
-                    let covered = copies.iter().any(|t| {
-                        t.start <= r.start + chrono::Duration::seconds(5)
-                            && t.end >= r.end - chrono::Duration::seconds(5)
-                    });
-                    if !covered {
-                        todo.push((c.clone(), "rec", r.name.clone(), r.start, r.end));
-                    }
-                }
-                for e in c.events.between(since, Local::now()) {
-                    if let Some(clip) = e.clip {
-                        todo.push((c.clone(), "clip", clip, e.start, e.end));
-                    }
-                }
-            }
-            // Only what isn't ready yet, newest first.
-            todo.retain(|(c, kind, name, ..)| {
-                let Ok(src) = media_path(c, kind, name) else {
-                    return false;
-                };
-                let first = src
-                    .parent()
-                    .unwrap()
-                    .join(".thumbs")
-                    .join(format!("{name}.sprite-000.jpg"));
-                let meta = first.with_file_name(format!("{name}.sprite.json"));
-                !(fresh(&first, &src) && sprite_meta_current(&meta))
-            });
-            todo.sort_by(|a, b| b.3.cmp(&a.3));
-            if !todo.is_empty() {
-                job.get_or_insert_with(|| {
-                    crate::jobs::start("previews", "Time-lapse previews (last 24 hours)")
+            let now = Local::now();
+            let day_ago = now - chrono::Duration::hours(24);
+            // Not again too soon after failing: 5 minutes, then longer each
+            // time (up to 6 hours); older footage at most 3 tries.
+            let retry_ok = |failed: &std::collections::HashMap<String, (u32, std::time::Instant)>,
+                            t: &PreviewTodo,
+                            old: bool| {
+                failed.get(&format!("{}/{}", t.0.cfg.id, t.2)).is_none_or(|(n, at)| {
+                    (!old || *n < 3)
+                        && at.elapsed()
+                            >= std::time::Duration::from_secs((300u64 << (*n - 1).min(6)).min(6 * 3600))
                 })
-                .total(todo.len() as u64);
+            };
+            let recent: Vec<PreviewTodo> = missing_previews(&m, day_ago, now + chrono::Duration::minutes(5))
+                .into_iter()
+                .filter(|t| force || retry_ok(&failed, t, false))
+                .collect();
+            let sweep = force || recent.is_empty() && last_sweep.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(600));
+            let mut older: Vec<PreviewTodo> = if sweep {
+                last_sweep = Some(std::time::Instant::now());
+                missing_previews(&m, now - chrono::Duration::days(3650), day_ago)
+                    .into_iter()
+                    .filter(|t| force || retry_ok(&failed, t, true))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // A batch at a time: new footage shouldn't wait behind a long backlog.
+            let backlog = older.len();
+            if !force {
+                older.truncate(30);
             }
-            for (c, kind, name, start, end) in todo {
-                if !force && !m.config().storage.prebuild_timelapse {
-                    break;
+            for (part, list, title) in [
+                (0, recent, "Time-lapse previews (last 24 hours)".to_string()),
+                (1, older, format!("Time-lapse previews — catching up on older footage ({backlog} missing)")),
+            ] {
+                if list.is_empty() {
+                    continue;
                 }
-                let j = job.get_or_insert_with(|| {
-                    crate::jobs::start("previews", "Time-lapse previews (last 24 hours)")
-                });
-                j.waiting();
-                // Room to spare first, but never held up for long: the
-                // newest footage should always be ready to scrub.
-                crate::load::wait_for_cpu(90, std::time::Duration::from_secs(60)).await;
-                j.pause_point().await;
-                j.step(format!(
-                    "{} — {} {}–{}",
-                    c.cfg.name,
-                    match kind {
-                        "tl" => "timeline copy",
-                        "clip" => "alert clip",
-                        _ => "recording",
-                    },
-                    start.format("%H:%M:%S"),
-                    end.format("%H:%M:%S")
-                ));
-                // Let people scrubbing the timeline go first.
-                while THUMB_JOBS.available_permits() < 3 {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let j = crate::jobs::start("previews", &title);
+                j.total(list.len() as u64);
+                for t in list {
+                    let (c, kind, name, start, end) = &t;
+                    if !force && !m.config().storage.prebuild_timelapse {
+                        break;
+                    }
+                    j.waiting();
+                    if part == 0 {
+                        // Room to spare first, but never held up for long: the
+                        // newest footage should always be ready to scrub.
+                        crate::load::wait_for_cpu(90, std::time::Duration::from_secs(60)).await;
+                    } else if !force {
+                        // Older footage only while the computer is quiet.
+                        crate::load::wait_for_cpu(70, std::time::Duration::from_secs(600)).await;
+                        if crate::load::cpu() > 85 {
+                            break;
+                        }
+                    }
+                    j.pause_point().await;
+                    j.step(format!(
+                        "{} — {} {}–{}",
+                        c.cfg.name,
+                        match *kind {
+                            "tl" => "timeline copy",
+                            "clip" => "alert clip",
+                            _ => "recording",
+                        },
+                        if part == 0 {
+                            start.format("%H:%M:%S").to_string()
+                        } else {
+                            start.format("%d/%m %H:%M:%S").to_string()
+                        },
+                        end.format("%H:%M:%S")
+                    ));
+                    // Let people scrubbing the timeline go first.
+                    while THUMB_JOBS.available_permits() < 3 {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                    if !announced {
+                        tracing::info!("preparing time-lapse previews in the background");
+                        announced = true;
+                    }
+                    let key = format!("{}/{}", c.cfg.id, name);
+                    match ensure_sprite(&m, c, kind, name).await {
+                        Ok(_) => {
+                            failed.remove(&key);
+                            built += 1;
+                        }
+                        Err(e) => {
+                            let n = failed.get(&key).map(|x| x.0).unwrap_or(0) + 1;
+                            if n == 1 {
+                                tracing::debug!("time-lapse preview of {name} failed: {e:#}");
+                            }
+                            failed.insert(key, (n, std::time::Instant::now()));
+                        }
+                    }
+                    j.done_one();
                 }
-                if !announced {
-                    tracing::info!(
-                        "preparing time-lapse previews for the last 24 hours in the background"
-                    );
-                    announced = true;
-                }
-                if ensure_sprite(&m, &c, kind, &name).await.is_ok() {
-                    built += 1;
-                }
-                j.done_one();
+            }
+            if failed.len() > 20_000 {
+                failed.clear();
             }
         }
-        drop(job);
         if built > 0 {
             tracing::info!("time-lapse previews ready ({built} file(s) prepared)");
         }

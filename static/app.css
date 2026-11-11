@@ -191,6 +191,7 @@ button.dayhead.fold.shut { opacity: .85; }
 /* timeline */
 .tl-videos { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .tl-videos .surface { aspect-ratio: 16/9; }
+.pov-tlap { position: absolute; inset: 0; background-repeat: no-repeat; z-index: 2; pointer-events: none; }
 .tl-videos .sprite { position: absolute; inset: 0; background-repeat: no-repeat; z-index: 1; }
 .tl { --tl-label: 120px; position: relative; margin-top: 12px; user-select: none; touch-action: none; }
 .tl-axis { position: relative; height: 30px; margin-left: var(--tl-label); border-bottom: 1px solid var(--border); font-size: 11.5px; color: var(--muted); }
