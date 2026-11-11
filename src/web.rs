@@ -1938,6 +1938,17 @@ async fn ensure_sprite(
     {
         return Ok((prefix, i));
     }
+    // The file still being recorded: show the preview made a minute or
+    // two ago straight away; the background job keeps it up to date.
+    let growing = std::fs::metadata(&src)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(120));
+    if growing
+        && m.config().storage.prebuild_timelapse
+        && let Some(i) = load()
+    {
+        return Ok((prefix, i));
+    }
     let _p = THUMB_JOBS.acquire().await;
     if fresh(&first, &src)
         && let Some(i) = load()
@@ -1969,8 +1980,9 @@ static PREBUILD_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static PREBUILD_FORCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub async fn prebuild_timelapse(m: Arc<Manager>) {
+    // Let the cameras connect first.
     tokio::select! {
-        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+        _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
         _ = PREBUILD_NOW.notified() => {}
     }
     let mut announced = false;
@@ -2053,8 +2065,9 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
         if built > 0 {
             tracing::info!("time-lapse previews ready ({built} file(s) prepared)");
         }
+        // Every minute, so new recordings get their previews right away.
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
             _ = PREBUILD_NOW.notified() => {}
         }
     }

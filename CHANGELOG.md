@@ -6,6 +6,7 @@
 - Alerts show just the object (“person 88%”) without colour words or dots.
 - Camera view: the status card is titled with the camera's name, with ✎ Edit next to it.
 - Camera settings: ◀ ▶ buttons switch to the previous/next camera without closing the editor (it stays on the same tab and asks before dropping unsaved changes).
+- Time-lapse previews of the last 24 hours are prepared every minute (they were every 5) and the file still being recorded shows its latest preview at once instead of making you wait; previews are only removed together with their recordings (retention or low disk space).
 - The red recording dot is back on camera tiles and in Settings → Cameras.
 - The recording mode is now called “Substream 24/7 plus HD AI alerts”.
 - Smart search downloads no longer leave a cut-off model that crashes GAZE; a model that does crash it is downloaded again, or smart search pauses instead of restarting over and over.
