@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.3 — November 2026
+- **Phones: one camera across the whole screen**: on a phone's Live page each camera now fills the full width of the screen, edge to edge, with the others stacked below it. Computers are unchanged. (Two side by side is still possible: Edit layout on the phone → 2 columns.)
+- The bar above the cameras wraps on phones instead of being cut off.
+
 ## 0.6.2 — November 2026
 - **Missing time-lapse is filled in**: besides the last 24 hours, GAZE now goes back over all older footage every ten minutes and makes any time-lapse preview that's missing (a batch at a time, while the computer is quiet). A file that fails is tried again later. Settings → Tasks shows how many are left.
 - **Choose what scrubbing shows** (Recordings, next to the clip buttons): the **time-lapse**, the **sub-stream** or the **main stream** video, with how long each picture takes to appear, so you can compare.
