@@ -512,7 +512,7 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 .corner-pick button:disabled { cursor: default; opacity: .5; }
 @media (max-width: 760px) { .corner-pick { grid-template-columns: 26px 26px 26px; grid-template-rows: 18px 18px 18px; } .corner-pick button { width: 26px; height: 18px; } }
 /* OSD preview: items can be dragged to a corner */
-#o-prev .osd-drag { cursor: grab; outline: 1px dashed rgba(255,255,255,.35); outline-offset: 2px; touch-action: none; }
+#o-prev .osd-drag, #go-prev .osd-drag { cursor: grab; outline: 1px dashed rgba(255,255,255,.35); outline-offset: 2px; touch-action: none; }
 .osd-ghost { position: fixed; z-index: 1000; pointer-events: none; transform: translate(-50%, -50%); opacity: .85; }
 
 /* Pan / tilt / zoom on the picture */
@@ -733,3 +733,6 @@ table.where td:first-child { width: 44px; }
 .pov-osdbox .p-rec { color: #fca5a5; }
 .surface:fullscreen.has-pov .pov { padding-bottom: 14px; }
 @media (max-width: 680px) { .surface.has-pov .pov .controls .p-back, .surface.has-pov .pov .controls .p-fwd { display: none; } }
+
+/* On-screen display placed anywhere ("p:X,Y") */
+.ov.free { position: absolute; }

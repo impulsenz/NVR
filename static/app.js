@@ -352,13 +352,13 @@ document.querySelectorAll('[data-legend]').forEach(el => el.innerHTML = legendHt
 // On-screen display: the camera's own settings, or the global ones.
 function osdFor(c) {
   if (c.osd && c.osd.custom) return c.osd;
-  const d = status.display;
-  return {show_name: d.show_name, name_corner: 'bl', show_clock: d.show_clock, clock_corner: d.clock_corner, clock_format: d.clock_format,
-    show_status: true, status_corner: 'tr', show_detections: true, detections_corner: 'bl', show_fps: d.show_fps, fps_corner: 'tl', text: '', text_corner: 'br'};
+  return {...status.display.osd, clock_format: status.display.osd.clock_format || ''};
 }
 function overlayHtml(c, q, noFs) {
   const d = status.display, o = osdFor(c);
   const parts = Object.fromEntries(SPOTS.map(([k]) => [k, []]));
+  // A spot that isn't one of the nine ("p:X,Y") gets its own box.
+  for (const k of ['name_corner', 'text_corner', 'status_corner', 'detections_corner', 'clock_corner', 'fps_corner']) if (o[k] && !parts[o[k]]) parts[o[k]] = [];
   if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name" data-osd="name">${esc(c.name)}</span>`);
   if (o.text) parts[o.text_corner].push(`<span class="ovtext" data-osd="text">${esc(o.text)}</span>`);
   if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill" data-osd="status">${pillHtml(c)}</span>`);
@@ -372,7 +372,56 @@ function overlayHtml(c, q, noFs) {
   if (c.sound !== false) parts[sc].push(`<span class="snd-wrap"><button type="button" class="fsbtn snd" data-cam="${esc(c.id)}" title="Sound on/off">${soundCam === c.id ? '🔊' : '🔇'}</button><input type="range" class="snd-vol" min="0" max="1" step="0.05" value="${soundVolume()}" title="Volume"></span>`);
   parts[sc].push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
   for (const corner of corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen (or double-click the picture)">⛶</button>');
-  return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => `<div class="ov ${k}">${v.join('')}</div>`).join('');
+  return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => ovBox(k, v.join(''))).join('');
+}
+// One on-screen display box: at one of the nine places, or anywhere
+// ("p:X,Y", per cent of the picture; the box stays inside the picture).
+function ovBox(k, inner, extra = '') {
+  const m = /^p:([\d.]+),([\d.]+)$/.exec(k || '');
+  if (m) return `<div class="ov free ${extra}" style="left:${m[1]}%;top:${m[2]}%;transform:translate(-${m[1]}%,-${m[2]}%)">${inner}</div>`;
+  return `<div class="ov ${k} ${extra}">${inner}</div>`;
+}
+// The on-screen display items and their places, as form rows (`px`: id prefix).
+const OSD_ITEMS = [['name', 'Camera name'], ['clock', 'Date &amp; time'], ['status', 'Recording status (REC / armed / offline)'], ['detections', 'Alert type (motion, 🚶 person, 🚗 car …)'], ['fps', 'Frame rate and stream details']];
+function osdItemsHtml(px, o) {
+  return OSD_ITEMS.map(([k, t]) => `<span></span><div class="row osd-row"><label class="check" style="padding:0;min-width:300px"><input type="checkbox" id="${px}-${k}" ${o['show_' + k] ? 'checked' : ''}> ${t}</label>${cornerSel(`${px}-${k}-c`, o[k + '_corner'])}</div>`).join('')
+    + `<label for="${px}-text">Extra text</label><div class="row"><input type="text" id="${px}-text" value="${esc(o.text || '')}" maxlength="200" placeholder="e.g. Driveway – north" style="flex:1">${cornerSel(px + '-text-c', o.text_corner)}</div>
+    <span></span><div><label class="check"><input type="checkbox" id="${px}-snap" ${store.get('osd-snap', true) ? 'checked' : ''}> Snap to the nine positions when dragging</label>
+      <div class="hint">Drag any item on the preview to move it. With snapping off it stays exactly where you drop it.</div></div>`;
+}
+function readOsdItems(px) {
+  const o = {};
+  for (const [k] of OSD_ITEMS) { o['show_' + k] = chk(`${px}-${k}`); o[k + '_corner'] = val(`${px}-${k}-c`); }
+  o.text = val(px + '-text').trim(); o.text_corner = val(px + '-text-c');
+  return o;
+}
+// Drag the items on a preview to place them (`enabled()`: may they move now).
+function wireOsdDrag(prev, px, enabled, redraw) {
+  const snap = $(px + '-snap'); if (snap) snap.onchange = () => store.set('osd-snap', snap.checked);
+  prev.onpointerdown = (e) => {
+    const item = e.target.closest('[data-osd]');
+    if (!item) return;
+    if (!enabled()) { toast('Tick “Use settings just for this camera” to move items.'); return; }
+    e.preventDefault();
+    const k = item.dataset.osd, ghost = item.cloneNode(true);
+    ghost.classList.add('osd-ghost'); document.body.appendChild(ghost);
+    const move = (ev) => { ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px'; };
+    move(e);
+    item.style.opacity = .3;
+    const up = (ev) => {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+      ghost.remove(); item.style.opacity = '';
+      const r = prev.getBoundingClientRect();
+      if (ev.clientX < r.left - 40 || ev.clientX > r.right + 40 || ev.clientY < r.top - 40 || ev.clientY > r.bottom + 40) return;
+      const fx = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), fy = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
+      const spot = !snap || snap.checked
+        ? (fy < 1 / 3 ? 't' : fy < 2 / 3 ? 'm' : 'b') + (fx < 1 / 3 ? 'l' : fx < 2 / 3 ? 'c' : 'r')
+        : `p:${(fx * 100).toFixed(1)},${(fy * 100).toFixed(1)}`;
+      const inp = $(`${px}-${k}-c`);
+      if (inp) { inp.value = spot; paintCorners(); redraw(); }
+    };
+    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+  };
 }
 function wireOverlay(surface) {
   surface.querySelectorAll('.snd').forEach(b => {
@@ -635,7 +684,7 @@ class Player {
     if (o.text) add(o.text_corner, `<span class="ovtext">${esc(o.text)}</span>`);
     if (o.show_clock) add(o.clock_corner, `<span class="ovtext p-clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}"></span>`);
     add(o.show_clock ? o.clock_corner : 'tl', '<span class="ovtext p-rec">▶ Recording</span>');
-    this.osd.innerHTML = Object.entries(parts).map(([k, v]) => `<div class="ov pov-osd ${k}">${v.join('')}</div>`).join('');
+    this.osd.innerHTML = Object.entries(parts).map(([k, v]) => ovBox(k, v.join(''), 'pov-osd')).join('');
   }
   wire(video) {
     const on = (ev, f) => video.addEventListener(ev, (e) => { if (video === this.video) f(e); });
@@ -3135,13 +3184,10 @@ async function openCameraDialog(id, clone) {
           <div class="hint">Off: this camera uses Settings → Live view &amp; display.</div></div>
         <label>Preview</label>
         <div class="surface" id="o-prev" style="aspect-ratio:16/9;max-width:560px"><img alt="" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera to see its picture.'}</div></div>
-        ${[['name', 'Camera name'], ['clock', 'Date &amp; time'], ['status', 'Recording status (REC / armed / offline)'], ['detections', 'Alert type (motion, 🚶 person, 🚗 car …)'], ['fps', 'Frame rate and stream details']]
-          .map(([k, t]) => `<span></span><div class="row osd-row"><label class="check" style="padding:0;min-width:300px"><input type="checkbox" id="o-${k}" ${c.osd['show_' + k] ? 'checked' : ''}> ${t}</label>${cornerSel('o-' + k + '-c', c.osd[k + '_corner'])}</div>`).join('')}
+        ${osdItemsHtml('o', c.osd)}
         <label for="o-fmt2">Date &amp; time format</label>
         <div><select id="o-fmt2"><option value="">Same as everywhere (${esc(status.display.clock_format)})</option>${CLOCK_FORMATS.map(f => `<option ${f === c.osd.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom">Custom…</option></select>
           <input type="text" id="o-fmt2-c" value="${esc(c.osd.clock_format)}" hidden style="margin-top:6px" placeholder="e.g. DD/MM/YYYY HH:mm:ss"></div>
-        <label for="o-text">Extra text</label>
-        <div class="row"><input type="text" id="o-text" value="${esc(c.osd.text)}" maxlength="200" placeholder="e.g. Driveway – north" style="flex:1">${cornerSel('o-text-c', c.osd.text_corner)}</div>
       </div>
 
       <div data-tab="ptz" class="form" hidden>
@@ -3416,28 +3462,8 @@ function setupOsdTab(c, camId) {
     if (live) updateOverlay(prev, fake, 'sub'); else prev.querySelectorAll('.ov-clock').forEach(e => e.textContent = fmtDate(new Date(), e.dataset.fmt || undefined));
   };
   $('f-cam').querySelector('[data-tab=osd]').addEventListener('input', redraw);
-  // Drag an item on the preview to a corner.
-  prev.onpointerdown = (e) => {
-    const item = e.target.closest('[data-osd]');
-    if (!item || !chk('o-custom')) { if (item) toast('Tick “Use settings just for this camera” to move items.'); return; }
-    e.preventDefault();
-    const k = item.dataset.osd, ghost = item.cloneNode(true);
-    ghost.classList.add('osd-ghost'); document.body.appendChild(ghost);
-    const move = (ev) => { ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px'; };
-    move(e);
-    item.style.opacity = .3;
-    const up = (ev) => {
-      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
-      ghost.remove(); item.style.opacity = '';
-      const r = prev.getBoundingClientRect();
-      if (ev.clientX < r.left - 40 || ev.clientX > r.right + 40 || ev.clientY < r.top - 40 || ev.clientY > r.bottom + 40) return;
-      const fy = (ev.clientY - r.top) / r.height, fx = (ev.clientX - r.left) / r.width;
-      const corner = (fy < 1 / 3 ? 't' : fy < 2 / 3 ? 'm' : 'b') + (fx < 1 / 3 ? 'l' : fx < 2 / 3 ? 'c' : 'r');
-      const inp = $(k === 'text' ? 'o-text-c' : `o-${k}-c`);
-      if (inp) { inp.value = corner; paintCorners(); redraw(); }
-    };
-    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
-  };
+  // Drag an item on the preview to place it.
+  wireOsdDrag(prev, 'o', () => chk('o-custom'), redraw);
   $('f-cam').querySelector('[data-tab=osd]').addEventListener('change', () => { $('o-fmt2-c').hidden = val('o-fmt2') !== 'custom'; redraw(); });
   if (osdPrevUnbind) osdPrevUnbind();
   osdPrevUnbind = camId ? Live.bind(prev.querySelector('img'), camId, 'sub') : null;
@@ -3823,8 +3849,10 @@ function renderDisplay(body) {
       <div class="hint">Off (recommended): a camera's full-quality stream is only decoded while you have it open; until it arrives you see the sub-stream picture. On: opening a camera shows HD instantly, but every camera's HD stream is decoded all the time — a lot of GPU/CPU.</div></div>
     <h3>Overlays on live video</h3>
     <label>Fullscreen button</label><div class="chips" id="g-fs">${corners.map(([k, t]) => `<label><input type="checkbox" value="${k}" ${d.fullscreen_corners.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
-    <span></span><label class="check"><input type="checkbox" id="g-clock" ${d.show_clock ? 'checked' : ''}> Show date and time</label>
-    <label>Date &amp; time position</label><div>${cornerSel('g-corner', d.clock_corner)}</div>
+    <label>Preview</label>
+    <div class="surface" id="go-prev" style="aspect-ratio:16/9;max-width:560px">${status.cameras[0] ? `<img alt="" style="object-fit:fill" src="live/${enc(status.cameras[0].id)}/frame.jpg">` : ''}</div>
+    <span></span><div class="hint" style="margin-top:-4px">For every camera without its own on-screen display (camera settings → On-screen display).</div>
+    ${osdItemsHtml('go', d.osd)}
     <label for="g-fmt">Date &amp; time format</label><div><select id="g-fmt">${CLOCK_FORMATS.map(f => `<option ${f === d.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom" ${custom ? 'selected' : ''}>Custom…</option></select>
       <input type="text" id="g-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
       <div class="hint">Preview: <b id="g-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>
@@ -3833,20 +3861,32 @@ function renderDisplay(body) {
       <option value="crop" ${d.tile_fit === 'crop' ? 'selected' : ''}>Zoom to fill (trims the edges)</option>
       <option value="fit" ${d.tile_fit === 'fit' ? 'selected' : ''}>Show the whole picture (black bars)</option></select>
       <div class="hint">For cameras whose picture shape differs from the tile (e.g. 4:3 sub-streams).</div></div>
-    <span></span><label class="check"><input type="checkbox" id="g-name" ${d.show_name ? 'checked' : ''}> Show camera name</label>
-    <span></span><label class="check"><input type="checkbox" id="g-fps" ${d.show_fps ? 'checked' : ''}> Show frames per second and stream details</label>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
   const fmt = () => val('g-fmt') === 'custom' ? val('g-custom') : val('g-fmt');
   const prev = () => $('g-prev').textContent = fmtDate(new Date(), fmt());
   $('g-fmt').onchange = () => { $('g-custom').hidden = val('g-fmt') !== 'custom'; prev(); };
   $('g-custom').oninput = prev; prev();
+  // Live preview of the layout; drag items on it.
+  const gp = $('go-prev');
+  const redrawG = () => {
+    gp.querySelectorAll('.ov').forEach(o => o.remove());
+    const c0 = status.cameras[0] || {id: '', name: 'Camera', enabled: true};
+    const fake = {...c0, sound: false, osd: {...readOsdItems('go'), custom: true, clock_format: fmt()}};
+    gp.insertAdjacentHTML('beforeend', overlayHtml(fake, 'sub', true));
+    gp.querySelectorAll('.ov-alert').forEach(a => a.innerHTML = `<span class="alertbadge">${labelIcon('person')} person</span>`);
+    gp.querySelectorAll('.ov-fps').forEach(a => a.textContent = '15 fps · 640×360');
+    gp.querySelectorAll('[data-osd]').forEach(el => el.classList.add('osd-drag'));
+  };
+  $('f-display').addEventListener('input', redrawG);
+  wireOsdDrag(gp, 'go', () => true, redrawG);
+  redrawG();
   $('l-ds').onchange = () => { setDataSaver(val('l-ds')); toast('Data saver: ' + $('l-ds').selectedOptions[0].textContent.split(' —')[0]); };
   $('f-display').onsubmit = (e) => {
     e.preventDefault();
     saveSettings({
       live: {fps: num('l-fps'), width: num('l-width'), quality: num('l-q'), hd_fps: num('l-hd'), preload_hd_streams: chk('l-pre')},
-      display: {fullscreen_corners: [...document.querySelectorAll('#g-fs input:checked')].map(i => i.value), show_clock: chk('g-clock'),
-        clock_corner: val('g-corner'), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss', show_name: chk('g-name'), show_fps: chk('g-fps'), tile_fit: val('g-tilefit')},
+      display: {fullscreen_corners: [...document.querySelectorAll('#g-fs input:checked')].map(i => i.value), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss',
+        tile_fit: val('g-tilefit'), osd: {...readOsdItems('go'), custom: false, clock_format: ''}},
     }, 'Saved').then(() => renderDash());
   };
 }

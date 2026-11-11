@@ -33,6 +33,18 @@ pub const MASK_W: usize = 32;
 pub const MASK_H: usize = 18;
 /// Places on the picture: top/middle/bottom × left/centre/right.
 pub const CORNERS: &[&str] = &["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
+
+/// An on-screen display position: one of the nine places, or anywhere on
+/// the picture as "p:X,Y" (per cent from the left and top).
+pub fn valid_position(c: &str) -> bool {
+    if CORNERS.contains(&c) {
+        return true;
+    }
+    c.strip_prefix("p:")
+        .and_then(|xy| xy.split_once(','))
+        .and_then(|(x, y)| Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?)))
+        .is_some_and(|(x, y)| (0.0..=100.0).contains(&x) && (0.0..=100.0).contains(&y))
+}
 /// Longest allowed recording file ("one long file").
 pub const MAX_SEGMENT_SECONDS: u64 = 86_400;
 
@@ -155,12 +167,19 @@ impl Default for LiveConfig {
 pub struct DisplayConfig {
     /// Corners with a fullscreen button: any of tl, tr, bl, br.
     pub fullscreen_corners: Vec<String>,
-    pub show_clock: bool,
-    pub clock_corner: String,
     /// Tokens: YYYY YY MMMM MMM MM M DD D dddd ddd HH H hh h mm ss A a
     pub clock_format: String,
-    pub show_name: bool,
-    pub show_fps: bool,
+    /// The on-screen display of every camera without its own.
+    pub osd: OsdConfig,
+    /// Before 0.5.7 (now in `osd`): read once, then dropped.
+    #[serde(default, skip_serializing)]
+    pub show_clock: Option<bool>,
+    #[serde(default, skip_serializing)]
+    pub clock_corner: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub show_name: Option<bool>,
+    #[serde(default, skip_serializing)]
+    pub show_fps: Option<bool>,
     /// How video fills the dashboard tiles: "stretch", "crop" (zoom) or "fit" (black bars).
     pub tile_fit: String,
 }
@@ -169,11 +188,12 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             fullscreen_corners: vec!["tr".into(), "br".into()],
-            show_clock: true,
-            clock_corner: "tl".into(),
             clock_format: "DD/MM/YYYY HH:mm:ss".into(),
-            show_name: true,
-            show_fps: false,
+            osd: OsdConfig::default(),
+            show_clock: None,
+            clock_corner: None,
+            show_name: None,
+            show_fps: None,
             tile_fit: "stretch".into(),
         }
     }
@@ -996,8 +1016,8 @@ impl CameraConfig {
             &o.fps_corner,
             &o.text_corner,
         ] {
-            if !CORNERS.contains(&c.as_str()) {
-                bail!("on-screen display positions must be tl, tr, bl or br");
+            if !valid_position(c) {
+                bail!("invalid on-screen display position {c:?}");
             }
         }
         if o.text.len() > 200 {
@@ -1106,6 +1126,27 @@ impl Config {
 
     fn migrate(&mut self) -> bool {
         let mut changed = false;
+        // 0.5.7: the global on-screen display became a full layout.
+        let d = &mut self.display;
+        if d.show_clock.is_some()
+            || d.clock_corner.is_some()
+            || d.show_name.is_some()
+            || d.show_fps.is_some()
+        {
+            if let Some(v) = d.show_clock.take() {
+                d.osd.show_clock = v;
+            }
+            if let Some(v) = d.clock_corner.take() {
+                d.osd.clock_corner = v;
+            }
+            if let Some(v) = d.show_name.take() {
+                d.osd.show_name = v;
+            }
+            if let Some(v) = d.show_fps.take() {
+                d.osd.show_fps = v;
+            }
+            changed = true;
+        }
         // Before 0.5.6 notifications had their own Gemini settings: no longer used.
         let n = &mut self.notify;
         if n.gemini || !n.gemini_key.is_empty() {
@@ -1192,10 +1233,25 @@ impl Config {
         let d = &self.display;
         if d.fullscreen_corners
             .iter()
-            .chain([&d.clock_corner])
             .any(|c| !CORNERS.contains(&c.as_str()))
         {
             bail!("positions must be one of {}", CORNERS.join(", "));
+        }
+        let o = &d.osd;
+        for c in [
+            &o.name_corner,
+            &o.clock_corner,
+            &o.status_corner,
+            &o.detections_corner,
+            &o.fps_corner,
+            &o.text_corner,
+        ] {
+            if !valid_position(c) {
+                bail!("invalid on-screen display position {c:?}");
+            }
+        }
+        if o.text.len() > 200 {
+            bail!("on-screen text is too long");
         }
         if d.clock_format.trim().is_empty() {
             bail!("clock format cannot be empty");
@@ -1405,6 +1461,28 @@ mod tests {
         assert!(cfg.cameras[0].record_audio);
         assert_eq!(cfg.storage.segment_seconds, 60);
         assert_eq!(cfg.storage.dir, PathBuf::from("rec"));
+    }
+
+    #[test]
+    fn display_layout() {
+        let (c, changed) = super::Config::from_toml(
+            "[display]\nshow_clock = false\nclock_corner = \"br\"\nshow_name = true\n",
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(
+            (
+                c.display.osd.show_clock,
+                c.display.osd.clock_corner.as_str()
+            ),
+            (false, "br")
+        );
+        assert!(c.display.show_clock.is_none() && c.display.clock_corner.is_none());
+        assert!(c.to_toml().unwrap().contains("[display.osd]"));
+        assert!(super::valid_position("p:12.5,90"));
+        assert!(super::valid_position("mc"));
+        assert!(!super::valid_position("p:120,4"));
+        assert!(!super::valid_position("p:x"));
     }
 
     #[test]
