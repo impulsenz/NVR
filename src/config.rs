@@ -284,6 +284,12 @@ pub struct AiConfig {
     pub describe_model: String,
     /// Most alerts a day sent to the vision model (keeps cloud costs known).
     pub describe_per_day: u32,
+    /// Most requests a minute to the vision model (free tiers allow about
+    /// 10–15); requests are spread out evenly. 0 = no limit.
+    pub describe_per_minute: u32,
+    /// Your own instructions for the vision model ("The white Tesla is
+    /// ours; the Back Yard camera looks at the pool").
+    pub describe_prompt: String,
     /// Look for faces in alerts and name known people.
     pub faces: bool,
     /// Read number plates of vehicles in alerts.
@@ -311,6 +317,8 @@ impl Default for AiConfig {
             describe_key: String::new(),
             describe_model: String::new(),
             describe_per_day: 200,
+            describe_per_minute: 10,
+            describe_prompt: String::new(),
             faces: true,
             plates: true,
         }
@@ -1274,6 +1282,9 @@ impl Config {
             }
             "claude" | "gemini" | "openai" => {}
             other => bail!("descriptions: unknown provider {other:?}"),
+        }
+        if ai.describe_prompt.chars().count() > 2000 {
+            bail!("descriptions: the instructions are too long (2000 characters at most)");
         }
         if ["gemini"].contains(&ai.provider.as_str()) && ai.api_key.trim().is_empty() {
             bail!("an API key is required for Gemini");

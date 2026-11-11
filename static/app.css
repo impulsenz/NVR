@@ -691,3 +691,10 @@ table.where td:first-child { width: 44px; }
 .paused-tag { color: #f59e0b; font-size: 12px; font-weight: 600; margin-right: 6px; }
 .job.paused { opacity: .75; }
 .job .job-pause { margin-left: 8px; }
+
+/* Describe one alert with the vision model */
+.ai-try { margin: 8px 0 10px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+.ai-try textarea { width: 100%; margin-top: 6px; box-sizing: border-box; font: inherit; font-size: 13px; }
+.ai-pics { display: flex; gap: 4px; overflow-x: auto; margin-top: 8px; }
+.ai-pics img { height: 64px; border-radius: 4px; flex: none; }
+.ai-answer { margin-top: 6px; }

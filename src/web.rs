@@ -194,6 +194,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/ai/test", post(ai_test))
         .route("/api/ai/models", post(ai_models))
         .route("/api/ai/describe-test", post(describe_test))
+        .route("/api/ai/describe-alert", post(describe_alert))
         .route("/api/cameras/{id}/motion", get(camera_motion))
         .route("/api/cloud/test", post(cloud_test))
         .route("/api/live/ws", get(live_ws))
@@ -1403,23 +1404,15 @@ async fn describe_test(State(m): App, Json(mut r): Json<DescribeTest>) -> Respon
     else {
         return err(StatusCode::NOT_FOUND, "this camera has no alerts yet");
     };
-    let thumb = match std::fs::read(c.events.dir().join(e.thumb.as_ref().unwrap()))
-        .map_err(anyhow::Error::from)
-        .and_then(|b| crate::imgutil::decode_jpeg(&b))
-    {
+    let n = r.ai.summary_frames as usize;
+    let frames = match alert_frames(&m, &c, &e, n).await {
         Ok(f) => f,
         Err(e) => return bad(e),
     };
-    let n = r.ai.summary_frames.clamp(1, 8) as usize - 1;
-    let mut pics: Vec<_> = crate::identify::timed_moments(&m, &c, &e, n)
-        .await
-        .into_iter()
-        .map(|(t, f, _)| (t, f))
-        .collect();
-    pics.push((e.thumb_at.unwrap_or(e.start), thumb));
-    pics.sort_by_key(|(t, _)| *t);
-    let info = crate::describe::AlertInfo::of(&e, &c.cfg.name, &m.config());
-    let frames: Vec<_> = pics.into_iter().map(|(_, f)| f).collect();
+    let mut info = crate::describe::AlertInfo::of(&e, &c.cfg.name, &m.config());
+    // The instructions in the form, saved or not.
+    info.extra = r.ai.describe_prompt.trim().chars().take(2000).collect();
+    info.interactive = true;
     let t0 = std::time::Instant::now();
     match crate::describe::describe(&r.ai, &frames, &info).await {
         Ok(d) => Json(json!({
@@ -1428,6 +1421,136 @@ async fn describe_test(State(m): App, Json(mut r): Json<DescribeTest>) -> Respon
             "start": e.start,
             "pictures": frames.len(),
             "ms": t0.elapsed().as_millis() as u64,
+        }))
+        .into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// The pictures a vision model sees of an alert, in time order: the alert
+/// picture and `n - 1` more moments from the full-quality recording.
+async fn alert_frames(
+    m: &Manager,
+    c: &crate::manager::CameraRuntime,
+    e: &crate::events::Event,
+    n: usize,
+) -> anyhow::Result<Vec<crate::imgutil::Frame>> {
+    let thumb = std::fs::read(
+        c.events.dir().join(
+            e.thumb
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("this alert has no picture"))?,
+        ),
+    )
+    .map_err(anyhow::Error::from)
+    .and_then(|b| crate::imgutil::decode_jpeg(&b))?;
+    let mut pics: Vec<_> = crate::identify::timed_moments(m, c, e, n.clamp(1, 12) - 1)
+        .await
+        .into_iter()
+        .map(|(t, f, _)| (t, f))
+        .collect();
+    pics.push((e.thumb_at.unwrap_or(e.start), thumb));
+    pics.sort_by_key(|(t, _)| *t);
+    Ok(pics.into_iter().map(|(_, f)| f).collect())
+}
+
+#[derive(Deserialize)]
+struct DescribeAlert {
+    camera: String,
+    id: String,
+    /// How many pictures to look at (default: the setting).
+    #[serde(default)]
+    frames: Option<usize>,
+    /// Instructions to try instead of the saved ones.
+    #[serde(default)]
+    prompt: Option<String>,
+    /// Save this description (from a try) to the alert, without asking the
+    /// model again.
+    #[serde(default)]
+    save: Option<SavedDescription>,
+}
+
+#[derive(Deserialize)]
+struct SavedDescription {
+    text: String,
+    #[serde(default)]
+    suspicious: Option<String>,
+}
+
+/// Describe one alert with the vision model, to check what it says (and
+/// keep it if it's right). Shows the pictures it looked at.
+async fn describe_alert(State(m): App, Json(r): Json<DescribeAlert>) -> Response {
+    let c = camera!(m, r.camera);
+    let Some(mut e) = c.events.get(&r.id) else {
+        return err(StatusCode::NOT_FOUND, "alert not found");
+    };
+    if let Some(sv) = r.save {
+        let text = sv
+            .text
+            .trim()
+            .trim_end_matches('.')
+            .chars()
+            .take(400)
+            .collect::<String>();
+        if text.is_empty() {
+            return err(StatusCode::BAD_REQUEST, "nothing to save");
+        }
+        let secs = (e.end - e.start).num_seconds().max(1);
+        let notes = if e.notes.is_empty() {
+            String::new()
+        } else {
+            format!(". {}", e.notes.join("; "))
+        };
+        let dur = if secs < 60 {
+            format!("{secs} s")
+        } else {
+            format!("{} min {} s", secs / 60, secs % 60)
+        };
+        e.summary = format!("{text} — {dur}{notes}");
+        e.suspicious = sv.suspicious.unwrap_or_default();
+        e.ai_pending = false;
+        c.events.save(e.clone());
+        tracing::info!(target: "event", "[{}] alert description replaced: {text}", c.cfg.name);
+        return Json(json!({"ok": true, "summary": e.summary})).into_response();
+    }
+    let mut cfg = m.config();
+    if !crate::describe::enabled(&cfg.ai) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "choose a vision model first (Settings → Object recognition → Descriptions written by)",
+        );
+    }
+    if let Some(p) = r.prompt {
+        cfg.ai.describe_prompt = p.chars().take(2000).collect();
+    }
+    let n = r.frames.unwrap_or(cfg.ai.summary_frames as usize);
+    let frames = match alert_frames(&m, &c, &e, n).await {
+        Ok(f) => f,
+        Err(e) => return bad(e),
+    };
+    let mut info = crate::describe::AlertInfo::of(&e, &c.cfg.name, &cfg);
+    info.interactive = true;
+    let t0 = std::time::Instant::now();
+    let res = crate::describe::describe(&cfg.ai, &frames, &info).await;
+    // Small copies of the pictures, to see what it looked at.
+    use base64::Engine;
+    let pictures: Vec<String> = frames
+        .iter()
+        .filter_map(|f| f.fit(320).jpeg(70).ok())
+        .map(|j| {
+            format!(
+                "data:image/jpeg;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(j)
+            )
+        })
+        .collect();
+    match res {
+        Ok(d) => Json(json!({
+            "description": d.text,
+            "suspicious": d.suspicious,
+            "pictures": pictures,
+            "ms": t0.elapsed().as_millis() as u64,
+            "model": if cfg.ai.describe_model.trim().is_empty() { cfg.ai.describe_with.clone() } else { cfg.ai.describe_model.clone() },
         }))
         .into_response(),
         Err(e) => bad(e),
@@ -2278,7 +2401,7 @@ async fn jobs_list(State(m): App) -> Response {
     let (mut describe, mut identify) = (0, 0);
     for c in m.cameras() {
         for e in c.events.between(now - chrono::Duration::days(60), now) {
-            if cfg.ai.smart_search && e.thumb.is_some() && e.summary.is_empty() {
+            if cfg.ai.smart_search && e.thumb.is_some() && (e.summary.is_empty() || e.ai_pending) {
                 describe += 1;
             }
             if (cfg.ai.faces || cfg.ai.plates)

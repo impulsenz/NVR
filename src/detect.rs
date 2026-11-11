@@ -605,6 +605,7 @@ impl Detector {
                 identified: false,
                 items: Vec::new(),
                 notified: 0,
+                ai_pending: false,
                 suspicious: String::new(),
             },
             last_activity: now,

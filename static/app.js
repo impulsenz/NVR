@@ -1951,6 +1951,11 @@ async function playItem(it, card) {
   $('rp-info').innerHTML = `
     ${e && e.suspicious ? `<div class="sus">⚠ ${esc(e.suspicious)}</div>` : ''}
     ${e ? `<div class="what"><div class="muted small">What happened</div>${what ? esc(what) : `<span class="muted">${status && status.smart_search_on ? 'Being described… (a moment after the activity ends)' : 'Turn on Smart search (Settings → AI) to get a description of what happened.'}</span>`}</div>` : ''}
+    ${e && it.thumb ? `<div class="ai-try admin-only"><div class="row"><button type="button" class="small" id="ad-ai">✨ Describe with the vision model</button>
+        <select id="ad-ai-n" class="small" title="How many moments of the full-quality video it looks at">${[2, 4, 6, 8, 12].map(n => `<option value="${n}" ${n === aiTryFrames ? 'selected' : ''}>${n} moments</option>`).join('')}</select>
+        <a href="javascript:void 0" id="ad-ai-p">Instructions…</a></div>
+        <textarea id="ad-ai-prompt" rows="3" hidden placeholder="Optional, e.g. The white Tesla is ours. People in orange vests are council workers. The Front Door camera looks at the driveway."></textarea>
+        <div id="ad-ai-out"></div></div>` : ''}
     ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     ${e && e.faces && e.faces.length ? `<div class="faces"><div class="muted small">Faces</div>${e.faces.map((f, i) => `<div class="face"><img src="media/${enc(it.camera)}/events/${enc(f.file)}" alt="">
@@ -1962,6 +1967,7 @@ async function playItem(it, card) {
     ${it.size ? `<dt>Size</dt><dd>${fmtBytes(it.size)}</dd>` : ''}</dl>
     <div class="hint" style="margin-top:10px">Drag along the bar under the video to preview any moment. Use <b>[ Start</b> and <b>End ]</b> (or drag the orange handles) to cut out a clip — downloads are always in the best quality available.</div>
     <div class="actions"><a class="btn small" href="#recordings/${enc(it.camera)}/timeline" onclick="tl.jump='${it.start}'">Open in timeline</a></div>`;
+  if ($('ad-ai')) wireAiTry(it);
   const t = $('rp-info').querySelector('.bx-toggle');
   if (t) t.onchange = () => { showBoxes = t.checked; store.set('show-boxes', showBoxes); document.body.classList.toggle('no-boxes', !showBoxes); };
   // "Who is this?": name a face; GAZE learns it.
@@ -2467,6 +2473,53 @@ async function loadJobs() {
     (done.length ? `<details class="jobs-done" ${showDoneJobs ? 'open' : ''}><summary>Finished (${done.length})</summary>${done.map(row).join('')}</details>` : '');
   const d = target.querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
   [target, pc].forEach(el => el && el.querySelectorAll('button[data-kind]').forEach(b => b.onclick = () => setPaused(b.dataset.kind, b.dataset.p === '1')));
+}
+
+// ---------- vision model: describe one alert (admins) ----------
+// Ask the vision model about this alert now, see the moments it looked at,
+// try instructions, and keep the description if it's right.
+let aiTryFrames = 4;
+function wireAiTry(it) {
+  const out = $('ad-ai-out'), pr = $('ad-ai-prompt');
+  let saved = null; // the saved instructions, once read
+  const loadPrompt = async () => {
+    if (saved != null) return;
+    try { saved = ((await api('api/settings')).ai || {}).describe_prompt || ''; } catch (_) { saved = ''; }
+    if (!pr.value) pr.value = saved;
+  };
+  $('ad-ai-p').onclick = async () => { pr.hidden = !pr.hidden; if (!pr.hidden) { await loadPrompt(); pr.focus(); } };
+  $('ad-ai-n').onchange = () => { aiTryFrames = +val('ad-ai-n'); };
+  $('ad-ai').onclick = async () => {
+    const b = $('ad-ai'); b.disabled = true;
+    out.innerHTML = '<div class="muted small" style="margin-top:6px">Getting the moments from the recording and asking the model… (up to a minute)</div>';
+    const body = {camera: it.camera, id: it.event.id, frames: +val('ad-ai-n')};
+    if (!pr.hidden) body.prompt = pr.value;
+    try {
+      const r = await api('api/ai/describe-alert', {method: 'POST', json: body});
+      out.innerHTML = `<div class="ai-pics">${r.pictures.map((u, i) => `<img src="${u}" alt="" title="Moment ${i + 1} of ${r.pictures.length}">`).join('')}</div>
+        <div class="ai-answer">${r.suspicious ? `<div class="sus">⚠ ${esc(r.suspicious)}</div>` : ''}<b>${esc(r.description)}</b>
+          <div class="muted small">${esc(r.model)} · ${r.pictures.length} moments · ${(r.ms / 1000).toFixed(1)} s</div></div>
+        <div class="row" style="margin-top:6px"><button type="button" class="small primary" id="ad-ai-use">Use this description</button>
+          ${!pr.hidden ? '<button type="button" class="small" id="ad-ai-keep">Save these instructions for all alerts</button>' : ''}</div>`;
+      $('ad-ai-use').onclick = async () => {
+        try {
+          const s2 = await api('api/ai/describe-alert', {method: 'POST', json: {camera: it.camera, id: it.event.id, save: {text: r.description, suspicious: r.suspicious}}});
+          it.event.summary = s2.summary; it.event.suspicious = r.suspicious || '';
+          toast('Description saved');
+          const w = $('rp-info').querySelector('.what'); if (w) w.innerHTML = `<div class="muted small">What happened</div>${esc(s2.summary)}`;
+          $('ad-ai-use').disabled = true; renderRecordings();
+        } catch (e) { toast(e.message, true); }
+      };
+      const keep = $('ad-ai-keep');
+      if (keep) keep.onclick = async () => {
+        try {
+          const cur = await api('api/settings');
+          if (await saveSettings({ai: {...cur.ai, describe_prompt: pr.value.trim()}}, 'Instructions saved — used for every alert from now on')) saved = pr.value.trim();
+        } catch (e) { toast(e.message, true); }
+      };
+    } catch (e) { out.innerHTML = `<div class="err small" style="margin-top:6px">${esc(e.message)}</div>`; }
+    b.disabled = false;
+  };
 }
 
 // ---------- update notice ----------
@@ -3948,7 +4001,7 @@ function renderAi(body) {
         <select id="ai-smodel" style="margin-top:6px">${[['ViT-B-32', 'Standard (CLIP ViT-B/32) — about 0.1 s per alert, 600 MB'], ['ViT-B-16', 'Detailed (CLIP ViT-B/16) — about 0.4 s per alert, 600 MB'], ['ViT-L-14', 'Most accurate (CLIP ViT-L/14) — about 2 s per alert, 1.7 GB, powerful PCs']]
           .map(([k, t]) => `<option value="${k}" ${(a.smart_model || 'ViT-B-32') === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <div class="hint">Changing the model describes the alerts again with it (in the background).</div>
-        <div class="row" style="margin-top:6px"><span class="muted">Look at</span><select id="ai-sframes">${[[1, 'only the best moment'], [2, '2 moments'], [4, '4 moments'], [6, '6 moments'], [8, '8 moments']].map(([k, t]) => `<option value="${k}" ${(a.summary_frames || 4) === k ? 'selected' : ''}>${t}</option>`).join('')}</select><span class="muted">of each alert's full-quality video</span></div>
+        <div class="row" style="margin-top:6px"><span class="muted">Look at</span><select id="ai-sframes">${[[1, 'only the best moment'], [2, '2 moments'], [4, '4 moments'], [6, '6 moments'], [8, '8 moments'], [12, '12 moments']].map(([k, t]) => `<option value="${k}" ${(a.summary_frames || 4) === k ? 'selected' : ''}>${t}</option>`).join('')}</select><span class="muted">of each alert's full-quality video</span></div>
         <div class="hint">More moments give fuller descriptions (someone who turns around, a second person who arrives later) and better search, at a little more work per alert. Needs recordings and the built-in AI or an AI server.</div></div>
       <span class="p-any"></span><div class="p-any"><b>Descriptions written by</b>
         <select id="ai-dw" style="margin-top:6px">${[['builtin', 'Smart search model (on this computer, short phrases)'], ['openai', 'Vision model on my own computer — Ollama, LM Studio (free, private)'], ['claude', 'Claude (Anthropic, cloud, paid per alert)'], ['gemini', 'Gemini (Google, cloud, free tier)']]
@@ -3957,7 +4010,12 @@ function renderAi(body) {
         <div class="d-url row" style="margin-top:6px"><span class="muted" style="width:110px">Server</span><input type="text" id="ai-durl" value="${esc(a.describe_url || '')}" placeholder="http://localhost:11434/v1" style="flex:1"></div>
         <div class="d-key row" style="margin-top:6px"><span class="muted" style="width:110px">API key</span><input type="password" id="ai-dkey" autocomplete="new-password" placeholder="${a.has_describe_key ? 'Saved – leave empty to keep' : ''}" style="flex:1"></div>
         <div class="d-model row" style="margin-top:6px"><span class="muted" style="width:110px">Model</span><input type="text" id="ai-dmodel" value="${esc(a.describe_model || '')}" style="flex:1"></div>
+        <div class="d-any" style="margin-top:6px"><span class="muted">Instructions for the model (optional)</span>
+          <textarea id="ai-dprompt" rows="3" style="width:100%;box-sizing:border-box;font:inherit;font-size:13px;margin-top:4px" placeholder="e.g. The white Tesla and the red Mazda are ours. People in orange vests are council workers. The Back Yard camera looks at the pool — mention anyone near it.">${esc(a.describe_prompt || '')}</textarea>
+          <div class="hint">Added to every request: who and what is normal here, what each camera looks at, what to point out. Try it on one alert first: open the alert and press ✨ Describe with the vision model.</div></div>
         <div class="d-any row" style="margin-top:6px"><span class="muted" style="width:110px">At most</span><input type="number" id="ai-dlimit" min="0" value="${a.describe_per_day ?? 200}" style="width:90px"><span class="muted">alerts a day (0 = no limit)</span></div>
+        <div class="d-any row" style="margin-top:6px"><span class="muted" style="width:110px">and at most</span><input type="number" id="ai-drpm" min="0" value="${a.describe_per_minute ?? 10}" style="width:90px"><span class="muted">requests a minute, spread out evenly (Gemini's free tier allows about 10–15; 0 = no limit)</span></div>
+        <div class="d-any hint">If the model is busy, over its limit or unreachable, GAZE waits the time it asks for and tries again; alerts it couldn't describe stay in a backlog (they keep the built-in description meanwhile) and are described later.</div>
         <div class="d-any row" style="margin-top:6px"><button type="button" id="ai-dtest">Describe the latest alert of the camera below</button></div>
         <div class="hint" id="ai-dtest-out"></div><div class="hint" id="ai-dstatus"></div></div>
       <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
@@ -4013,13 +4071,13 @@ function renderAi(body) {
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
     api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
     verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel'), summary_frames: +val('ai-sframes') || 4,
-    describe_with: val('ai-dw'), describe_url: val('ai-durl').trim(), describe_key: val('ai-dkey'), describe_model: val('ai-dmodel').trim(), describe_per_day: Math.max(0, Math.round(num('ai-dlimit')))});
+    describe_with: val('ai-dw'), describe_url: val('ai-durl').trim(), describe_key: val('ai-dkey'), describe_model: val('ai-dmodel').trim(), describe_per_day: Math.max(0, Math.round(num('ai-dlimit'))), describe_per_minute: Math.max(0, Math.round(num('ai-drpm'))), describe_prompt: val('ai-dprompt').trim()});
   const showStatus = () => {
     const ss = status && status.smart_search;
     if (ss && $('ai-smart-st')) $('ai-smart-st').innerHTML = !a.smart_search ? '' : ss.downloading ? `Downloading the smart-search model… ${Math.round(ss.download_percent || 0)}%`
       : ss.error ? `<span class="err">${esc(ss.error)}</span>` : `<span class="ok">On</span> — ${ss.indexed} alert${ss.indexed === 1 ? '' : 's'} described so far (newest first, last 60 days).`;
     const dd = status && status.describe;
-    if (dd && $('ai-dstatus')) $('ai-dstatus').innerHTML = (a.describe_with || 'builtin') === 'builtin' ? '' : `${dd.used_today} alert${dd.used_today === 1 ? '' : 's'} described by the model today.${dd.error ? ` <span class="err">Last problem: ${esc(dd.error)}</span> (the smart search model's description is used meanwhile)` : ''}`;
+    if (dd && $('ai-dstatus')) $('ai-dstatus').innerHTML = (a.describe_with || 'builtin') === 'builtin' ? '' : `${dd.used_today} alert${dd.used_today === 1 ? '' : 's'} described by the model today.${dd.error ? ` <span class="err">Last problem: ${esc(dd.error)}</span> — alerts it couldn't do stay in the backlog and are described again${dd.backlog_paused ? ' in a minute or two' : ' shortly'} (Settings → Tasks shows how many).` : ''}`;
     if ($('ai-device-st') && status) $('ai-device-st').innerHTML = `Running on: <b>${esc(status.ai_device || '')}</b>`;
     const s = status && status.ai; if (!s) return;
     $('ai-status').innerHTML = s.provider === 'none' ? '' : `Current: <b>${esc(s.provider)}</b> — ${s.downloading ? `downloading model ${Math.round(s.download_percent || 0)}%` : s.ready ? '<span class="ok">ready</span>' : 'loading'}` +

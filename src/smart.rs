@@ -525,7 +525,14 @@ pub async fn run(mgr: Arc<Manager>) {
                     // Finished alerts only (their picture won't change any more).
                     .filter(|e| (chrono::Local::now() - e.end).num_seconds() > 30)
                     .filter(|e| !mgr.camera(&e.camera).is_some_and(|c| c.in_progress(e)))
-                    .filter(|e| !mgr.smart.has(&store, &e.id) || e.summary.is_empty())
+                    // New ones, and the backlog the vision model couldn't do yet.
+                    .filter(|e| {
+                        !mgr.smart.has(&store, &e.id)
+                            || e.summary.is_empty()
+                            || (e.ai_pending
+                                && crate::describe::enabled(&mgr.config().ai)
+                                && crate::describe::available())
+                    })
                     // Faces / plates first, so names go into the description.
                     .filter(|e| {
                         let ai = mgr.config().ai;
@@ -578,7 +585,7 @@ pub async fn run(mgr: Arc<Manager>) {
                                 &mgr,
                                 &rt,
                                 &e,
-                                mgr.config().ai.summary_frames as usize - 1,
+                                mgr.config().ai.summary_frames.clamp(1, 12) as usize - 1,
                             )
                             .await
                         }
@@ -656,7 +663,8 @@ pub async fn run(mgr: Arc<Manager>) {
                     // set up; the built-in one stays if it can't.
                     let ai = mgr.config().ai;
                     let mut judged = None;
-                    let what = if crate::describe::enabled(&ai) {
+                    let mut pending = false;
+                    let what = if crate::describe::enabled(&ai) && crate::describe::available() {
                         let info = crate::describe::AlertInfo::of(&e, &cam, &mgr.config());
                         let pics: Vec<_> = timeline.into_iter().map(|(_, f)| f).collect();
                         match crate::describe::describe(&ai, &pics, &info).await {
@@ -665,11 +673,17 @@ pub async fn run(mgr: Arc<Manager>) {
                                 d.text.trim_end_matches('.').to_string()
                             }
                             Err(err) => {
-                                job.problem(format!("vision model: {err:#}"));
+                                // Kept in the backlog: described again later.
+                                job.problem(format!(
+                                    "vision model: {err:#} — will try again later"
+                                ));
+                                pending = true;
                                 what
                             }
                         }
                     } else {
+                        // Waiting after a problem: in the backlog for later.
+                        pending = crate::describe::enabled(&ai);
                         what
                     };
                     tracing::info!(target: "event", "[{cam}] alert described: {what} ({})", fmt_secs(secs));
@@ -684,6 +698,7 @@ pub async fn run(mgr: Arc<Manager>) {
                     if let Some(sus) = judged {
                         updated.suspicious = sus;
                     }
+                    updated.ai_pending = pending;
                     store.save(updated);
                     if !announced {
                         info!("smart search: describing alert pictures in the background");
@@ -800,6 +815,7 @@ mod parcel_tests {
                 checked: false,
             }],
             notified: 0,
+            ai_pending: false,
             suspicious: String::new(),
         };
         super::check_items(&clip, &store, &mut e).await;

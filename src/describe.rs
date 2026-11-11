@@ -35,6 +35,11 @@ pub struct AlertInfo {
     /// When it started, and whether that's at night (for judging).
     pub time: String,
     pub night: bool,
+    /// The homeowner's own instructions (Settings).
+    pub extra: String,
+    /// Someone is waiting for the answer (a test button): don't wait long
+    /// for a busy model.
+    pub interactive: bool,
 }
 
 impl AlertInfo {
@@ -53,6 +58,8 @@ impl AlertInfo {
             notes: e.notes.clone(),
             time: e.start.format("%H:%M").to_string(),
             night: crate::notify::is_night(&cfg.notify, e.start),
+            extra: cfg.ai.describe_prompt.trim().to_string(),
+            interactive: false,
         }
     }
 }
@@ -89,6 +96,7 @@ pub fn status() -> Value {
     json!({
         "used_today": if u.day == Some(today) { u.used } else { 0 },
         "error": u.last_error,
+        "backlog_paused": !available(),
     })
 }
 
@@ -142,12 +150,20 @@ fn prompt(n: usize, a: &AlertInfo) -> String {
          suspicious: true only for things like trying door handles, looking into cars or windows, lingering without reason \
          (especially at night), carrying things away from the property, climbing fences or hiding the face. \
          Deliveries, residents, visitors, passers-by and animals are normal.\n\
-         reason: a few words, only when suspicious.",
+         reason: a few words, only when suspicious.{extra}",
         cam = a.camera,
         time = a.time,
         light = if a.night { "night" } else { "day" },
         secs = a.seconds.max(1),
         known = known.join(" "),
+        extra = if a.extra.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nThe homeowner adds (follow this where it applies):\n{}",
+                a.extra
+            )
+        },
     )
 }
 
@@ -183,7 +199,93 @@ fn b64_jpeg(f: &Frame) -> Result<String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(f.fit(768).jpeg(80)?))
 }
 
-/// Describe an alert from its pictures (in time order).
+/// The model is busy or over its rate limit: try again after this long.
+#[derive(Debug)]
+pub struct Busy(pub Duration);
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the model is busy or over its rate limit (trying again in {} s)",
+            self.0.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for Busy {}
+
+fn retry_after_header(resp: &reqwest::Response) -> Option<Duration> {
+    resp.headers()
+        .get("retry-after")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
+/// Too many requests or overloaded: how long to wait (the server's own
+/// "retry after", Gemini's retryDelay, or 30 s).
+fn busy(status: reqwest::StatusCode, retry_after: Option<Duration>, v: &Value) -> Option<Duration> {
+    if !matches!(status.as_u16(), 429 | 503 | 529) {
+        return None;
+    }
+    let gemini = v["error"]["details"].as_array().and_then(|d| {
+        d.iter().find_map(|x| {
+            x["retryDelay"]
+                .as_str()?
+                .trim_end_matches('s')
+                .parse::<f64>()
+                .ok()
+                .map(|s| Duration::from_secs_f64(s.ceil()))
+        })
+    });
+    Some(
+        retry_after
+            .or(gemini)
+            .unwrap_or(Duration::from_secs(30))
+            .clamp(Duration::from_secs(2), Duration::from_secs(300)),
+    )
+}
+
+/// When the next request may go out (requests are spread out to stay
+/// within the per-minute limit).
+static NEXT_SLOT: tokio::sync::Mutex<Option<std::time::Instant>> =
+    tokio::sync::Mutex::const_new(None);
+
+async fn pace(per_minute: u32) {
+    if per_minute == 0 {
+        return;
+    }
+    let gap = Duration::from_secs_f64(60.0 / per_minute as f64);
+    let mut next = NEXT_SLOT.lock().await;
+    let now = std::time::Instant::now();
+    if let Some(t) = *next
+        && t > now
+    {
+        tokio::time::sleep(t - now).await;
+    }
+    *next = Some(std::time::Instant::now() + gap);
+}
+
+/// After a failure the background work waits before asking again (failed
+/// alerts stay in the backlog and are described later).
+static COOL_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// The background work may ask the model now (not cooling down after a
+/// problem).
+pub fn available() -> bool {
+    COOL_UNTIL
+        .lock()
+        .unwrap()
+        .is_none_or(|t| std::time::Instant::now() >= t)
+}
+
+/// Describe an alert from its pictures (in time order). Requests are spread
+/// out to stay within the per-minute limit; when the model says it's busy
+/// or over its limit, it's asked again after the time it gives.
 pub async fn describe(cfg: &AiConfig, frames: &[Frame], info: &AlertInfo) -> Result<Described> {
     if frames.is_empty() {
         bail!("no pictures");
@@ -200,21 +302,51 @@ pub async fn describe(cfg: &AiConfig, frames: &[Frame], info: &AlertInfo) -> Res
         .build()?;
     let text = prompt(frames.len(), info);
     let images: Vec<String> = frames.iter().map(b64_jpeg).collect::<Result<_>>()?;
-    let res = match cfg.describe_with.as_str() {
-        "claude" => claude(&client, cfg, &text, &images).await,
-        "gemini" => gemini(&client, cfg, &text, &images).await,
-        "openai" => openai(&client, cfg, &text, &images).await,
-        other => Err(anyhow::anyhow!("unknown description provider {other:?}")),
-    }
-    .map(|t| parse_reply(&t));
+    let mut attempt = 0;
+    let res = loop {
+        pace(cfg.describe_per_minute).await;
+        let r = match cfg.describe_with.as_str() {
+            "claude" => claude(&client, cfg, &text, &images).await,
+            "gemini" => gemini(&client, cfg, &text, &images).await,
+            "openai" => openai(&client, cfg, &text, &images).await,
+            other => Err(anyhow::anyhow!("unknown description provider {other:?}")),
+        };
+        match &r {
+            Err(e)
+                if attempt < 2
+                    && e.downcast_ref::<Busy>()
+                        .is_some_and(|b| !info.interactive || b.0 <= Duration::from_secs(15)) =>
+            {
+                let wait = e.downcast_ref::<Busy>().unwrap().0;
+                tracing::info!("vision model: {e}");
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+            }
+            _ => break r.map(|t| parse_reply(&t)),
+        }
+    };
+    let res = match res {
+        Ok(d) if d.text.is_empty() => Err(anyhow::anyhow!("the model answered with nothing")),
+        r => r,
+    };
     let mut u = USAGE.lock().unwrap();
     match &res {
-        Ok(d) if d.text.is_empty() => {
-            u.last_error = Some("the model answered with nothing".into());
-            bail!("the model answered with nothing")
+        Ok(_) => {
+            u.last_error = None;
+            *COOL_UNTIL.lock().unwrap() = None;
         }
-        Ok(_) => u.last_error = None,
-        Err(e) => u.last_error = Some(format!("{e:#}")),
+        Err(e) => {
+            u.last_error = Some(format!("{e:#}"));
+            // Not counted against today's allowance.
+            u.used = u.used.saturating_sub(1);
+            if !info.interactive {
+                let wait = e
+                    .downcast_ref::<Busy>()
+                    .map(|b| b.0)
+                    .unwrap_or(Duration::from_secs(120));
+                *COOL_UNTIL.lock().unwrap() = Some(std::time::Instant::now() + wait);
+            }
+        }
     }
     res
 }
@@ -271,7 +403,11 @@ async fn claude(
         .await
         .context("cannot reach the Anthropic API")?;
     let status = resp.status();
+    let retry_after = retry_after_header(&resp);
     let v: Value = resp.json().await.unwrap_or(Value::Null);
+    if let Some(wait) = busy(status, retry_after, &v) {
+        return Err(Busy(wait).into());
+    }
     if !status.is_success() {
         bail!(
             "Claude {status}: {}",
@@ -327,8 +463,10 @@ async fn gemini(
         .map(|d| json!({"inline_data": {"mime_type": "image/jpeg", "data": d}}))
         .collect();
     parts.push(json!({"text": text}));
-    let url =
-        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+    // GAZE_GEMINI_BASE: a stand-in server for tests.
+    let base = std::env::var("GAZE_GEMINI_BASE")
+        .unwrap_or_else(|_| "https://generativelanguage.googleapis.com".into());
+    let url = format!("{base}/v1beta/models/{model}:generateContent");
     let resp = client
         .post(&url)
         .header("x-goog-api-key", cfg.describe_key.trim())
@@ -337,7 +475,11 @@ async fn gemini(
         .await
         .context("cannot reach Gemini")?;
     let status = resp.status();
+    let retry_after = retry_after_header(&resp);
     let v: Value = resp.json().await.unwrap_or(Value::Null);
+    if let Some(wait) = busy(status, retry_after, &v) {
+        return Err(Busy(wait).into());
+    }
     if !status.is_success() {
         if status == reqwest::StatusCode::NOT_FOUND {
             USAGE.lock().unwrap().gemini_model = None;
@@ -382,7 +524,11 @@ async fn openai(
         .await
         .with_context(|| format!("cannot reach {url}"))?;
     let status = resp.status();
+    let retry_after = retry_after_header(&resp);
     let v: Value = resp.json().await.unwrap_or(Value::Null);
+    if let Some(wait) = busy(status, retry_after, &v) {
+        return Err(Busy(wait).into());
+    }
     if !status.is_success() {
         bail!(
             "{status}: {}",
@@ -426,6 +572,34 @@ mod tests {
             (d.text.as_str(), d.suspicious),
             ("A courier leaves a parcel.", None)
         );
+    }
+
+    #[test]
+    fn reads_rate_limits() {
+        use reqwest::StatusCode;
+        let gem = serde_json::json!({"error": {"details": [{"@type": "x.RetryInfo", "retryDelay": "17s"}]}});
+        assert_eq!(
+            super::busy(StatusCode::TOO_MANY_REQUESTS, None, &gem),
+            Some(std::time::Duration::from_secs(17))
+        );
+        assert_eq!(
+            super::busy(
+                StatusCode::TOO_MANY_REQUESTS,
+                Some(std::time::Duration::from_secs(5)),
+                &serde_json::Value::Null
+            ),
+            Some(std::time::Duration::from_secs(5))
+        );
+        assert_eq!(super::busy(StatusCode::BAD_REQUEST, None, &gem), None);
+    }
+
+    #[tokio::test]
+    async fn requests_are_spaced_out() {
+        let t = std::time::Instant::now();
+        super::pace(600).await; // one every 0.1 s
+        super::pace(600).await;
+        super::pace(600).await;
+        assert!(t.elapsed() >= std::time::Duration::from_millis(190));
     }
 
     #[test]

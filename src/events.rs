@@ -72,6 +72,10 @@ pub struct Event {
     /// Phone notifications sent: 1 = picture, 2 = picture and summary.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub notified: u8,
+    /// The vision model couldn't describe it yet (busy, limit reached, an
+    /// error): it's tried again later.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ai_pending: bool,
     /// Why this looks suspicious (empty = not suspicious).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub suspicious: String,
@@ -197,6 +201,7 @@ impl EventStore {
             }
             if e.summary.is_empty() {
                 e.summary = old.summary;
+                e.ai_pending |= old.ai_pending;
             }
             if e.faces.is_empty() {
                 e.faces = old.faces;
@@ -321,6 +326,7 @@ mod tests {
             identified: false,
             items: Vec::new(),
             notified: 0,
+            ai_pending: false,
             suspicious: String::new(),
         };
         s.save(e.clone());
