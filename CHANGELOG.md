@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.5.8 — November 2026
+- **On-screen display**: items you drag on the preview now stay exactly where you drop them (no snapping to a grid). The nine position buttons are still there for quick placement.
+- **Camera view timeline works like the Recordings timeline**: detailed time marks with a "now" line, zoom from 5 minutes to 7 days, **drag along it to run through the time-lapse on the camera's picture** (with the time shown), let go to play from there, a line that follows playback, and the strip showing which parts of the time-lapse are loaded — it keeps loading up to now while you watch.
+
 ## 0.5.7 — November 2026
 - **Update checks fixed**: "403 rate limit exceeded" from GitHub is gone. GAZE now reads the newest version from GitHub's release page instead of its API (which allows only 60 requests an hour per internet connection), and waits as long as GitHub asks if it's ever told to slow down.
 - **Video player controls on the video**: play, the timeline, ±10 s, speed, clip start/end, download, volume and full screen sit on the picture and fade while it plays. **Full screen keeps them**, together with the camera's on-screen display (name and the recording's date and time).
