@@ -203,7 +203,7 @@ pub struct Detector {
     /// Follows objects through the camera's zones.
     zones: Mutex<crate::zones::ZoneWatch>,
     /// The latest picture without any activity (for "item left or taken").
-    quiet: Mutex<Option<Frame>>,
+    quiet: Mutex<Option<(Frame, Instant)>>,
     /// Parked vehicles (no alerts until they move).
     parked: Mutex<crate::stationary::Stationary>,
 }
@@ -229,6 +229,41 @@ struct Active {
     /// "Item left or taken" areas: (zone index, how the area looked before).
     /// Watched areas before the activity: signature and picture.
     zone_before: Vec<(Watched, Vec<f32>, Frame)>,
+    /// For each of those areas: did the activity (something moving, or an
+    /// object the AI found) reach it? Only those are checked afterwards.
+    touched: Vec<bool>,
+}
+
+impl Active {
+    /// Something was seen at this box (normalized): mark the watched areas
+    /// it reaches (with a small margin, for an arm putting a parcel down).
+    fn touch(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        for (i, (z, ..)) in self.zone_before.iter().enumerate() {
+            if !self.touched[i] && box_reaches(&z.points, x, y, w, h) {
+                self.touched[i] = true;
+            }
+        }
+    }
+}
+
+/// Whether a box (normalized x, y, w, h), grown by a tenth on each side,
+/// reaches into an area.
+fn box_reaches(poly: &[[f32; 2]], x: f32, y: f32, w: f32, h: f32) -> bool {
+    let (mx, my) = (w * 0.1, h * 0.1);
+    let (x0, y0, x1, y1) = (x - mx, y - my, x + w + mx, y + h + my);
+    // A corner of the area inside the box…
+    if poly.iter().any(|p| p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1) {
+        return true;
+    }
+    // …or a point of the box inside the area.
+    (0..=6).any(|i| {
+        (0..=6).any(|j| {
+            crate::zones::inside(
+                poly,
+                [x0 + (x1 - x0) * i as f32 / 6.0, y0 + (y1 - y0) * j as f32 / 6.0],
+            )
+        })
+    })
 }
 
 impl Detector {
@@ -530,12 +565,18 @@ impl Detector {
                     }
                 }
                 if !moving && active.is_none() {
-                    *self.quiet.lock().unwrap() = Some(frame.clone());
+                    *self.quiet.lock().unwrap() = Some((frame.clone(), Instant::now()));
                 }
                 let now = Local::now();
                 if moving && let Some(o) = m.as_ref().and_then(|m| m.objects.first()) {
                     // Thumbnail around the biggest moving object.
                     self.on_motion(active, now, &frame, (o.x, o.y, o.w, o.h), o.size as f32);
+                    // Which package / item areas the movement reached.
+                    if let (Some(a), Some(m)) = (active.as_mut(), m.as_ref()) {
+                        for o in &m.objects {
+                            a.touch(o.x, o.y, o.w, o.h);
+                        }
+                    }
                 }
 
                 // Object recognition only while motion is happening: no motion,
@@ -591,7 +632,15 @@ impl Detector {
             b.hold(&id, now);
         }
         // How the "item left or taken" areas looked before the activity.
-        let quiet = self.quiet.lock().unwrap().clone();
+        // Only a recent quiet picture is a fair "before" (one from long ago
+        // differs anyway: light, shadows, day and night).
+        let quiet = self
+            .quiet
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|(_, at)| at.elapsed() < Duration::from_secs(120))
+            .map(|(f, _)| f);
         let zone_before: Vec<(Watched, Vec<f32>, Frame)> = quiet
             .map(|f| {
                 self.watched_areas()
@@ -635,6 +684,7 @@ impl Detector {
             thumb_at: Instant::now() - Duration::from_secs(10),
             motion_best: 0.0,
             seen: Vec::new(),
+            touched: vec![false; zone_before.len()],
             zone_before,
         }
     }
@@ -717,6 +767,9 @@ impl Detector {
             .collect();
         // For "ignore animals": what this look found.
         if let Some(a) = active.as_mut() {
+            for x in best.iter().filter(|x| x.score >= 0.4) {
+                a.touch(x.x, x.y, x.w, x.h);
+            }
             a.ai_looks += 1;
             let animal = best.iter().any(|x| {
                 x.score >= d.min_confidence.min(0.4)
@@ -941,6 +994,11 @@ impl Detector {
         {
             let person = a.event.labels.iter().any(|l| l.label == "person");
             for (zi, (z, before, before_pic)) in a.zone_before.iter().enumerate() {
+                // Activity elsewhere in the picture: this area isn't checked
+                // (shadows and light changing over it are no parcel).
+                if !a.touched.get(zi).copied().unwrap_or(false) {
+                    continue;
+                }
                 let change = crate::zones::area_change(
                     before,
                     &crate::zones::area_signature(&now, &z.points),
@@ -1430,6 +1488,16 @@ mod tests {
         }
         // Needs ≥1 s (frame 5) and ≥100 px travel (frame 4): first at frame 5.
         assert_eq!(first_trigger, Some(5));
+    }
+
+    #[test]
+    fn only_activity_at_the_package_spot_counts() {
+        // The doorstep: bottom-left corner of the picture.
+        let spot = [[0.05, 0.7], [0.3, 0.7], [0.3, 0.95], [0.05, 0.95]];
+        assert!(super::box_reaches(&spot, 0.1, 0.4, 0.15, 0.45)); // someone at the door
+        assert!(super::box_reaches(&spot, 0.0, 0.0, 1.0, 1.0)); // covers it all
+        assert!(!super::box_reaches(&spot, 0.6, 0.1, 0.2, 0.3)); // a tree, top right
+        assert!(!super::box_reaches(&spot, 0.32, 0.2, 0.1, 0.3)); // close, but above and beside
     }
 
     #[test]
