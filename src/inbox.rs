@@ -195,15 +195,15 @@ mod tests {
     #[test]
     fn groups_people_and_plates() {
         let a: Vec<f32> =
-            crate::clip::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
-        let a2: Vec<f32> = crate::clip::normalize(
+            crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
+        let a2: Vec<f32> = crate::recog::normalize(
             a.iter()
                 .enumerate()
                 .map(|(i, x)| x + 0.02 * (i as f32).cos())
                 .collect(),
         );
         let b: Vec<f32> =
-            crate::clip::normalize((0..128).map(|i| (i as f32 * 1.91).cos()).collect());
+            crate::recog::normalize((0..128).map(|i| (i as f32 * 1.91).cos()).collect());
         let events = vec![
             ev("e1", 30, vec![(&a, None), (&b, None)], &["ABC123"]),
             ev("e2", 10, vec![(&a2, None)], &["A8C123", "XYZ9"]),

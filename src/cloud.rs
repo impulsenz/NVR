@@ -292,9 +292,7 @@ mod tests {
             clip: Some(format!("{id}.mp4")),
             clip_start: None,
             focus: None,
-            desc: String::new(),
             boxes: Vec::new(),
-            summary: String::new(),
             notes: Vec::new(),
             thumb_at: None,
             faces: Vec::new(),
@@ -302,7 +300,6 @@ mod tests {
             identified: false,
             items: Vec::new(),
             notified: 0,
-            ai_pending: false,
             suspicious: String::new(),
         };
         store.save(ev(

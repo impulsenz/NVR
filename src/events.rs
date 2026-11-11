@@ -41,16 +41,10 @@ pub struct Event {
     /// the recognized object. The thumbnail itself is the whole picture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<[f32; 4]>,
-    /// Short description from a language-model AI (for search).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub desc: String,
     /// What was detected in the thumbnail, with boxes (0..1 of the
     /// picture), so the alert can be reviewed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boxes: Vec<SeenBox>,
-    /// What happened, written after the alert ends (smart search / AI).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub summary: String,
     /// Zone happenings ("Person in Porch", "Car crossed Gate (A→B)").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
@@ -72,10 +66,6 @@ pub struct Event {
     /// Phone notifications sent: 1 = picture, 2 = picture and summary.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub notified: u8,
-    /// The vision model couldn't describe it yet (busy, limit reached, an
-    /// error): it's tried again later.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub ai_pending: bool,
     /// Why this looks suspicious (empty = not suspicious).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub suspicious: String,
@@ -199,10 +189,6 @@ impl EventStore {
             if e.suspicious.is_empty() {
                 e.suspicious = old.suspicious;
             }
-            if e.summary.is_empty() {
-                e.summary = old.summary;
-                e.ai_pending |= old.ai_pending;
-            }
             if e.faces.is_empty() {
                 e.faces = old.faces;
             }
@@ -316,9 +302,7 @@ mod tests {
             clip: None,
             clip_start: None,
             focus: None,
-            desc: String::new(),
             boxes: Vec::new(),
-            summary: String::new(),
             notes: Vec::new(),
             thumb_at: None,
             faces: Vec::new(),
@@ -326,7 +310,6 @@ mod tests {
             identified: false,
             items: Vec::new(),
             notified: 0,
-            ai_pending: false,
             suspicious: String::new(),
         };
         s.save(e.clone());

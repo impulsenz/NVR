@@ -4,10 +4,8 @@
 
 mod ai;
 mod buffer;
-mod clip;
 mod cloud;
 mod config;
-mod describe;
 mod detect;
 mod discover;
 mod draw;
@@ -34,7 +32,6 @@ mod recog;
 mod recorder;
 mod relay;
 mod seen;
-mod smart;
 mod stationary;
 mod storage;
 mod sysmon;
@@ -287,11 +284,11 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         // The old login is now an account: take its password out of the file.
         mgr.config().save(&path)?;
     }
+    remove_smart_search_files(&mgr);
     tokio::spawn(mgr.clone().housekeeping());
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
     tokio::spawn(web::prebuild_timelapse(mgr.clone()));
-    tokio::spawn(smart::run(mgr.clone()));
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));
     tokio::spawn(identify::run(mgr.clone()));
@@ -365,4 +362,39 @@ async fn os_signal() {
     }
     #[cfg(not(unix))]
     let _ = ctrl_c.await;
+}
+
+/// Smart search (descriptions) was removed in 0.5.7: delete its models
+/// (600 MB to 1.7 GB) and search indexes.
+fn remove_smart_search_files(mgr: &manager::Manager) {
+    let mut freed = 0u64;
+    let mut remove = |p: std::path::PathBuf| {
+        let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        if std::fs::remove_file(&p).is_ok() {
+            freed += size;
+        }
+    };
+    if let Ok(rd) = std::fs::read_dir(mgr.data_dir.join("models")) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with("clip-") {
+                remove(e.path());
+            }
+        }
+    }
+    for c in mgr.cameras() {
+        if let Ok(rd) = std::fs::read_dir(c.events.dir()) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.starts_with("smart") && n.ends_with(".jsonl") {
+                    remove(e.path());
+                }
+            }
+        }
+    }
+    if freed > 0 {
+        tracing::info!(
+            "removed the old smart search files ({} MB freed)",
+            freed / 1_048_576
+        );
+    }
 }

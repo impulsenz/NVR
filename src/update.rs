@@ -7,7 +7,7 @@
 //! `nvr.old`) and restarts — as a Windows service too. With automatic
 //! updates on, this happens at night when no alert is going on.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local};
 use serde::Serialize;
 use serde_json::Value;

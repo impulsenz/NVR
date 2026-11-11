@@ -355,8 +355,6 @@ pub struct Manager {
     pub bound_listen: String,
     pub ai: Arc<AiHandle>,
     /// Smart search (CLIP) model and index.
-    pub clip: Arc<crate::clip::Clip>,
-    pub smart: Arc<crate::smart::SmartIndex>,
     /// Which alerts have been viewed.
     pub seen: crate::seen::Seen,
     /// User accounts and sign-in sessions.
@@ -380,7 +378,6 @@ impl Manager {
     pub fn reload_models(&self) {
         let cfg = self.config();
         self.ai.replace(cfg.ai.clone(), &self.data_dir);
-        self.clip.unload();
         self.recog.unload();
     }
 
@@ -389,7 +386,7 @@ impl Manager {
         crate::load::set_balance(config.hardware.balance);
         let _ = std::fs::create_dir_all(data_dir.join("tmp"));
         let ai = Arc::new(AiHandle::new(config.ai.clone(), &data_dir));
-        let data_dir_for_clip = data_dir.clone();
+        let data_dir_c = data_dir.clone();
         let m = Arc::new(Self {
             cfg_path,
             bound_listen: config.server.listen.clone(),
@@ -401,14 +398,12 @@ impl Manager {
             edit: tokio::sync::Mutex::new(()),
             started: Instant::now(),
             ai,
-            clip: crate::clip::Clip::new(&data_dir_for_clip),
-            smart: Arc::new(crate::smart::SmartIndex::default()),
-            seen: crate::seen::Seen::open(&data_dir_for_clip),
+            seen: crate::seen::Seen::open(&data_dir_c),
             new_cameras: Mutex::new(Vec::new()),
-            recog: crate::recog::Recog::new(&data_dir_for_clip),
-            known: crate::known::KnownStore::open(&data_dir_for_clip),
+            recog: crate::recog::Recog::new(&data_dir_c),
+            known: crate::known::KnownStore::open(&data_dir_c),
             users: {
-                let u = crate::users::Users::open(&data_dir_for_clip);
+                let u = crate::users::Users::open(&data_dir_c);
                 u.migrate_legacy(&config.server.username, &config.server.password);
                 u
             },
@@ -677,9 +672,6 @@ impl Manager {
             // The form never receives the stored key; empty means "keep".
             if a.api_key.is_empty() {
                 a.api_key = old.ai.api_key.clone();
-            }
-            if a.describe_key.is_empty() {
-                a.describe_key = old.ai.describe_key.clone();
             }
             // Saving the AI settings gives a model that stopped GAZE while
             // loading another chance.

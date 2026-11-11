@@ -263,33 +263,8 @@ pub struct AiConfig {
     pub verify_model: String,
     /// Brighten dark and infrared pictures before recognition.
     pub night_boost: bool,
-    /// Smart search: describe alert pictures with CLIP so they can be found
-    /// with words ("kid with a red backpack").
     /// Where the AI runs: "gpu" (the graphics card, via DirectML) or "cpu".
     pub device: String,
-    pub smart_search: bool,
-    /// CLIP model for smart search: ViT-B-32, ViT-B-16 or ViT-L-14.
-    pub smart_model: String,
-    /// Pictures of each alert's full-quality video described for its
-    /// summary (1 = only the best moment).
-    pub summary_frames: u32,
-    /// Who writes the alert descriptions: "builtin" (smart search model on
-    /// this computer), "claude", "gemini" or "openai" (any OpenAI-compatible
-    /// server, e.g. Ollama or LM Studio on this or another computer).
-    pub describe_with: String,
-    /// Server address for "openai" (e.g. http://localhost:11434/v1).
-    pub describe_url: String,
-    pub describe_key: String,
-    /// Model name ("" = the provider's default).
-    pub describe_model: String,
-    /// Most alerts a day sent to the vision model (keeps cloud costs known).
-    pub describe_per_day: u32,
-    /// Most requests a minute to the vision model (free tiers allow about
-    /// 10–15); requests are spread out evenly. 0 = no limit.
-    pub describe_per_minute: u32,
-    /// Your own instructions for the vision model ("The white Tesla is
-    /// ours; the Back Yard camera looks at the pool").
-    pub describe_prompt: String,
     /// Look for faces in alerts and name known people.
     pub faces: bool,
     /// Read number plates of vehicles in alerts.
@@ -309,16 +284,6 @@ impl Default for AiConfig {
             verify_model: String::new(),
             night_boost: true,
             device: "gpu".into(),
-            smart_search: false,
-            smart_model: "ViT-B-32".into(),
-            summary_frames: 4,
-            describe_with: "builtin".into(),
-            describe_url: String::new(),
-            describe_key: String::new(),
-            describe_model: String::new(),
-            describe_per_day: 200,
-            describe_per_minute: 10,
-            describe_prompt: String::new(),
             faces: true,
             plates: true,
         }
@@ -363,8 +328,6 @@ pub struct NotifyConfig {
     pub night_gap_minutes: u32,
     /// Send a summary after the alert (besides the picture right away).
     pub summary: bool,
-    /// Wait for the AI's description of the picture and send it with it.
-    pub describe_first: bool,
     /// Address that opens GAZE from the phone (e.g. your Tailscale name).
     pub link: String,
     /// Before 0.5.6 notifications had their own Gemini settings; they move
@@ -398,7 +361,6 @@ impl Default for NotifyConfig {
             night_to: "06:00".into(),
             night_gap_minutes: 1,
             summary: true,
-            describe_first: true,
             link: String::new(),
             gemini: false,
             gemini_key: String::new(),
@@ -1144,14 +1106,9 @@ impl Config {
 
     fn migrate(&mut self) -> bool {
         let mut changed = false;
-        // 0.5.6: the notifications' own Gemini settings become the vision
-        // model that writes descriptions (and judges what's suspicious).
+        // Before 0.5.6 notifications had their own Gemini settings: no longer used.
         let n = &mut self.notify;
         if n.gemini || !n.gemini_key.is_empty() {
-            if n.gemini && !n.gemini_key.trim().is_empty() && self.ai.describe_with == "builtin" {
-                self.ai.describe_with = "gemini".into();
-                self.ai.describe_key = n.gemini_key.trim().to_string();
-            }
             n.gemini = false;
             n.gemini_key.clear();
             changed = true;
@@ -1269,22 +1226,6 @@ impl Config {
             && ai.url.trim().is_empty()
         {
             bail!("enter the address of the AI server");
-        }
-        match ai.describe_with.as_str() {
-            "builtin" => {}
-            "claude" | "gemini" if ai.describe_key.trim().is_empty() => {
-                bail!("descriptions: enter the API key")
-            }
-            "openai"
-                if ai.describe_url.trim().is_empty() || ai.describe_model.trim().is_empty() =>
-            {
-                bail!("descriptions: enter the server address and the model name")
-            }
-            "claude" | "gemini" | "openai" => {}
-            other => bail!("descriptions: unknown provider {other:?}"),
-        }
-        if ai.describe_prompt.chars().count() > 2000 {
-            bail!("descriptions: the instructions are too long (2000 characters at most)");
         }
         if ["gemini"].contains(&ai.provider.as_str()) && ai.api_key.trim().is_empty() {
             bail!("an API key is required for Gemini");
@@ -1464,20 +1405,6 @@ mod tests {
         assert!(cfg.cameras[0].record_audio);
         assert_eq!(cfg.storage.segment_seconds, 60);
         assert_eq!(cfg.storage.dir, PathBuf::from("rec"));
-    }
-
-    #[test]
-    fn moves_notification_gemini_to_descriptions() {
-        let (c, changed) = super::Config::from_toml(
-            "[notify]\ngemini = true\ngemini_key = \"k123\"\ngemini_model = \"gemini-2.5-flash\"\n",
-        )
-        .unwrap();
-        assert!(changed);
-        assert_eq!(
-            (c.ai.describe_with.as_str(), c.ai.describe_key.as_str()),
-            ("gemini", "k123")
-        );
-        assert!(!c.to_toml().unwrap().contains("gemini_key"));
     }
 
     #[test]

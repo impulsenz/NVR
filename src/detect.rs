@@ -595,9 +595,7 @@ impl Detector {
                 clip: None,
                 clip_start: None,
                 focus: None,
-                desc: String::new(),
                 boxes: Vec::new(),
-                summary: String::new(),
                 notes: Vec::new(),
                 thumb_at: None,
                 faces: Vec::new(),
@@ -605,7 +603,6 @@ impl Detector {
                 identified: false,
                 items: Vec::new(),
                 notified: 0,
-                ai_pending: false,
                 suspicious: String::new(),
             },
             last_activity: now,
@@ -768,16 +765,6 @@ impl Detector {
             let color = crate::imgutil::color_word(&h.desc)
                 .map(str::to_string)
                 .or_else(|| frame.color_name(h.x, h.y, h.w, h.h).map(str::to_string));
-            if !h.desc.is_empty()
-                && !a.event.desc.to_lowercase().contains(&h.desc.to_lowercase())
-                && a.event.desc.len() < 300
-            {
-                if !a.event.desc.is_empty() {
-                    a.event.desc.push_str("; ");
-                }
-                a.event.desc.push_str(&h.desc);
-                changed = true;
-            }
             match a.event.labels.iter_mut().find(|l| l.label == h.label) {
                 Some(l) => {
                     if h.score > l.score + 0.05 {

@@ -479,10 +479,8 @@ async function refreshStatus() {
     chip.title = dls.map(x => x.title).join('\n') + '\nClick for details (Settings → Tasks)';
   }
   showUpdateBar(status.update);
-  const ss = status.smart_search, gb = $('g-banner');
-  if (ss && ss.error && status.smart_search_on && !ss.downloading) {
-    gb.hidden = false; gb.innerHTML = `<b>Smart search problem:</b> ${esc(ss.error)} <a href="#settings/ai">Settings</a>`;
-  } else if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
+  const gb = $('g-banner');
+  if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
     gb.hidden = false;
     gb.innerHTML = `<b>📷 New camera${status.new_cameras > 1 ? 's' : ''} found on your network</b> (${status.new_cameras}) — <a href="#settings/cameras">add ${status.new_cameras > 1 ? 'them' : 'it'}</a> · <a href="javascript:void 0" id="gb-x">dismiss</a>`;
     $('gb-x').onclick = () => { store.set('newcam-dismissed-' + status.new_cameras, true); gb.hidden = true; };
@@ -1756,7 +1754,11 @@ $('focus-back').onclick = () => location.hash = '#live';
 // ======================================================================
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const endOfDay = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
-const rec = {mode: 'list', cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '', types: new Set(), items: [], q: ''};
+// The Alerts filter starts on the usual things (remembered per browser).
+const DEFAULT_TYPES = ['person', 'car', 'truck', 'motorcycle', 'package', 'face', 'plate'];
+const rec = {mode: 'list', cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '',
+  types: new Set(store.get('alert-types', DEFAULT_TYPES)), items: [], who: ''};
+const saveTypes = () => store.set('alert-types', [...rec.types]);
 let recPlayer = null;
 
 function showRecordings(camId, mode) {
@@ -1776,6 +1778,19 @@ function setRecMode(mode) {
   else { closeAlert(); loadTimeline(); }
 }
 $('f-seen').onchange = () => { rec.seen = val('f-seen'); loadRecordings(); };
+// People and vehicles taught in People & vehicles: only their alerts.
+async function fillWhoFilter() {
+  const sel = $('f-who'); if (!sel) return;
+  let list = [];
+  try { list = await api('api/known'); } catch (_) { return; }
+  const people = list.filter(k => k.kind === 'person'), cars = list.filter(k => k.kind !== 'person');
+  const opt = (k) => `<option value="${esc(k.id)}" ${rec.who === k.id ? 'selected' : ''}>${k.kind === 'person' ? '🧑' : '🚗'} ${esc(k.name)}${k.plates && k.plates.length ? ' — ' + esc(k.plates.join(', ')) : ''}</option>`;
+  sel.innerHTML = `<option value="">Anyone</option>`
+    + (people.length ? `<optgroup label="People (faces)">${people.map(opt).join('')}</optgroup>` : '')
+    + (cars.length ? `<optgroup label="Vehicles (number plates)">${cars.map(opt).join('')}</optgroup>` : '');
+  sel.hidden = !list.length;
+}
+$('f-who').onchange = () => { rec.who = val('f-who'); loadRecordings(); };
 $('f-seen-all').onclick = async () => {
   await api('api/alerts/seen-all', {method: 'POST'}).catch(e => toast(e.message, true));
   rec.items.forEach(i => i.seen = true);
@@ -1785,18 +1800,12 @@ $('f-seen-all').onclick = async () => {
 // New alerts appear by themselves (no need to refresh the page).
 setInterval(async () => {
   if (page !== 'recordings' || rec.mode !== 'list' || document.hidden || rec.loading) return;
-  const before = rec.items.map(i => i.event ? i.event.id + i.event.end + (i.event.summary || '') + i.seen : i.name).join();
+  const before = rec.items.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen : i.name).join();
   const r = await fetchRecordings().catch(() => null);
   if (!r) return;
-  if (r.map(i => i.event ? i.event.id + i.event.end + (i.event.summary || '') + i.seen : i.name).join() !== before) { rec.items = r; renderRecordings(); }
+  if (r.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen : i.name).join() !== before) { rec.items = r; renderRecordings(); }
 }, 8000);
 // Search box: as you type (after a short pause) or on Enter.
-{
-  let t = null;
-  const go = () => { clearTimeout(t); const v = $('f-q').value.trim(); if (v === rec.q) return; rec.q = v; if (rec.mode !== 'list') location.hash = '#alerts'; else loadRecordings(); };
-  $('f-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 500); });
-  $('f-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-}
 $('f-refresh').onclick = () => rec.mode === 'list' ? loadRecordings() : loadTimeline();
 // Full screen for browsing recordings (timeline videos get the whole width).
 async function recFullscreen(on) {
@@ -1836,8 +1845,8 @@ function renderFilters() {
   $('f-types').innerHTML = '<span class="muted" style="padding:3px 4px">Show:</span>' + filterTypes().map(([k, v]) =>
     `<label><input type="checkbox" value="${k}" ${rec.types.has(k) ? 'checked' : ''}>${v}</label>`).join('') +
     (rec.types.size ? '<button class="small" id="f-types-clear">All alerts</button>' : '');
-  $('f-types').querySelectorAll('input').forEach(i => i.onchange = () => { i.checked ? rec.types.add(i.value) : rec.types.delete(i.value); renderFilters(); loadRecordings(); });
-  const clr = $('f-types-clear'); if (clr) clr.onclick = () => { rec.types.clear(); renderFilters(); loadRecordings(); };
+  $('f-types').querySelectorAll('input').forEach(i => i.onchange = () => { i.checked ? rec.types.add(i.value) : rec.types.delete(i.value); saveTypes(); renderFilters(); loadRecordings(); });
+  const clr = $('f-types-clear'); if (clr) clr.onclick = () => { rec.types.clear(); saveTypes(); renderFilters(); loadRecordings(); };
 }
 $('f-cams-btn').onclick = (e) => { e.stopPropagation(); $('f-cams-pop').hidden = !$('f-cams-pop').hidden; $('f-date-pop').hidden = true; };
 $('f-date-btn').onclick = (e) => { e.stopPropagation(); const p = $('f-date-pop'); p.hidden = !p.hidden; $('f-cams-pop').hidden = true; if (!p.hidden) Calendar.open(); };
@@ -1901,18 +1910,18 @@ function recQuery() {
   q.set('types', (rec.types.size ? [...rec.types] : allAlertTypes()).join(','));
   if (rec.todFrom) q.set('tod_from', rec.todFrom);
   if (rec.todTo) q.set('tod_to', rec.todTo);
-  if (rec.q) q.set('q', rec.q);
   if (rec.seen) q.set('seen', rec.seen);
+  if (rec.who) q.set('who', rec.who);
   return q;
 }
 async function loadRecordings() {
   $('rec-count').textContent = 'Loading…';
-  rec.smart = ''; rec.loading = true;
+  if (!(Date.now() - (loadRecordings.who || 0) < 60000)) { loadRecordings.who = Date.now(); fillWhoFilter(); }
+  rec.loading = true;
   try {
     const r = await fetch('api/recordings?' + recQuery());
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
     rec.items = await r.json();
-    rec.smart = r.headers.get('x-smart-search') || '';
   } catch (e) { rec.items = []; toast(e.message, true); }
   rec.loading = false;
   renderRecordings();
@@ -1927,13 +1936,13 @@ function renderRecordings() {
   const box = $('rec-cards'), items = rec.items;
   const ev = items.filter(i => i.kind === 'event').length;
   $('rec-count').textContent = (items.length ? `${ev} alert${ev === 1 ? '' : 's'}` : '')
-    + (rec.q && rec.smart === 'on' ? (items.length ? ' · smart search, best matches first' : '') : rec.q && rec.smart.startsWith('unavailable') ? ` · smart search ${rec.smart}` : items.length ? ' · recordings are on the Timeline tab' : '');
-  if (!items.length) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">${rec.q ? `No alerts match “${esc(rec.q)}” in this date range. Try a wider date range, fewer words, or another colour (cameras often see white as silver/grey).` : 'No alerts for these filters. Continuous recordings are on the Timeline tab.'}</div>`; return; }
+    + (items.length ? ' · recordings are on the Timeline tab' : '');
+  if (!items.length) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">No alerts for these filters. Continuous recordings are on the Timeline tab.</div>`; return; }
   box.innerHTML = '';
   let day = '';
   for (const it of items) {
     const d = fmtDay(it.start);
-    if (d !== day && it.score == null) { day = d; box.insertAdjacentHTML('beforeend', `<div class="dayhead">${esc(d)}</div>`); }
+    if (d !== day) { day = d; box.insertAdjacentHTML('beforeend', `<div class="dayhead">${esc(d)}</div>`); }
     const card = document.createElement('div');
     card.className = 'rc' + (it.kind === 'event' && !it.seen ? ' new' : '');
     card.dataset.eid = it.event ? it.event.id : '';
@@ -1944,8 +1953,8 @@ function renderRecordings() {
         <div class="tags">${it.kind === 'event' && !it.seen ? '<span class="tag newtag">NEW</span>' : ''}${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small op-only" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
-        <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${it.score != null ? fmtDate(it.start) : fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
-    card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && (it.event.summary || it.event.desc) ? '\n' + (it.event.summary || it.event.desc) : ''}`;
+        <div class="cap"><b>${esc(it.camera_name)}</b><span class="t">${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
+    card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && it.event.notes && it.event.notes.length ? '\n' + it.event.notes.join('\n') : ''}`;
     card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
       e.stopPropagation();
@@ -1981,15 +1990,9 @@ async function playItem(it, card) {
   const e = it.event;
   $('ad-title').textContent = `${it.camera_name} — ${fmtDate(it.start)}`;
   $('ad-prev').disabled = alertIdx <= 0; $('ad-next').disabled = alertIdx < 0 || alertIdx >= rec.items.length - 1;
-  const what = e && (e.summary || e.desc);
   $('rp-info').innerHTML = `
     ${e && e.suspicious ? `<div class="sus">⚠ ${esc(e.suspicious)}</div>` : ''}
-    ${e ? `<div class="what"><div class="muted small">What happened</div>${what ? esc(what) : `<span class="muted">${status && status.smart_search_on ? 'Being described… (a moment after the activity ends)' : 'Turn on Smart search (Settings → AI) to get a description of what happened.'}</span>`}</div>` : ''}
-    ${e && it.thumb ? `<div class="ai-try admin-only"><div class="row"><button type="button" class="small" id="ad-ai">✨ Describe with the vision model</button>
-        <select id="ad-ai-n" class="small" title="How many moments of the full-quality video it looks at">${[2, 4, 6, 8, 12].map(n => `<option value="${n}" ${n === aiTryFrames ? 'selected' : ''}>${n} moments</option>`).join('')}</select>
-        <a href="javascript:void 0" id="ad-ai-p">Instructions…</a></div>
-        <textarea id="ad-ai-prompt" rows="3" hidden placeholder="Optional, e.g. The white Tesla is ours. People in orange vests are council workers. The Front Door camera looks at the driveway."></textarea>
-        <div id="ad-ai-out"></div></div>` : ''}
+    ${e && e.notes && e.notes.length ? `<div class="what"><div class="muted small">Seen</div>${e.notes.map(n => esc(n)).join('<br>')}</div>` : ''}
     ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     ${e && e.faces && e.faces.length ? `<div class="faces"><div class="muted small">Faces</div>${e.faces.map((f, i) => `<div class="face"><img src="media/${enc(it.camera)}/events/${enc(f.file)}" alt="">
@@ -1997,11 +2000,10 @@ async function playItem(it, card) {
     ${e && e.items && e.items.length ? `<div class="items">${e.items.map(x => `<div class="item"><div class="muted small">${esc(x.zone)}: before → after</div><div class="row"><img src="media/${enc(it.camera)}/events/${enc(x.before)}" alt=""><span>→</span><img src="media/${enc(it.camera)}/events/${enc(x.after)}" alt=""></div></div>`).join('')}</div>` : ''}
     ${e && e.plates && e.plates.length ? `<div class="plates">${e.plates.map(p => `<span class="plate">${esc(p)}</span>`).join('')}</div>` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
-    ${e ? `<dt>Detected</dt><dd>${labelTags(e.labels, e.motion) || '–'}</dd>${e.desc && e.desc !== what ? `<dt>AI description</dt><dd>${esc(e.desc)}</dd>` : ''}<dt>Video</dt><dd>${e.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
+    ${e ? `<dt>Detected</dt><dd>${labelTags(e.labels, e.motion) || '–'}</dd><dt>Video</dt><dd>${e.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
     ${it.size ? `<dt>Size</dt><dd>${fmtBytes(it.size)}</dd>` : ''}</dl>
     <div class="hint" style="margin-top:10px">Drag along the bar under the video to preview any moment. Use <b>[ Start</b> and <b>End ]</b> (or drag the orange handles) to cut out a clip — downloads are always in the best quality available.</div>
     <div class="actions"><a class="btn small" href="#recordings/${enc(it.camera)}/timeline" onclick="tl.jump='${it.start}'">Open in timeline</a></div>`;
-  if ($('ad-ai')) wireAiTry(it);
   const t = $('rp-info').querySelector('.bx-toggle');
   if (t) t.onchange = () => { showBoxes = t.checked; store.set('show-boxes', showBoxes); document.body.classList.toggle('no-boxes', !showBoxes); };
   // "Who is this?": name a face; GAZE learns it.
@@ -2522,7 +2524,7 @@ async function loadJobs() {
   };
   const target = $('set-tasks') || $('sys-tasks');
   const w = $('tasks-waiting');
-  if (w && r.waiting) w.innerHTML = `<span class="wait-pill">${r.waiting.describe} alert${r.waiting.describe === 1 ? '' : 's'} waiting to be described</span> <span class="wait-pill">${r.waiting.identify} waiting for faces &amp; plates</span>`;
+  if (w && r.waiting) w.innerHTML = `<span class="wait-pill">${r.waiting.identify} waiting for faces &amp; plates</span>`;
   const pc = $('tasks-pause');
   if (pc && me && me.role === 'admin') {
     const p = r.paused || [], all = PAUSE_KINDS.every(([k]) => p.includes(k));
@@ -2535,53 +2537,6 @@ async function loadJobs() {
     (done.length ? `<details class="jobs-done" ${showDoneJobs ? 'open' : ''}><summary>Finished (${done.length})</summary>${done.map(row).join('')}</details>` : '');
   const d = target.querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
   [target, pc].forEach(el => el && el.querySelectorAll('button[data-kind]').forEach(b => b.onclick = () => setPaused(b.dataset.kind, b.dataset.p === '1')));
-}
-
-// ---------- vision model: describe one alert (admins) ----------
-// Ask the vision model about this alert now, see the moments it looked at,
-// try instructions, and keep the description if it's right.
-let aiTryFrames = 4;
-function wireAiTry(it) {
-  const out = $('ad-ai-out'), pr = $('ad-ai-prompt');
-  let saved = null; // the saved instructions, once read
-  const loadPrompt = async () => {
-    if (saved != null) return;
-    try { saved = ((await api('api/settings')).ai || {}).describe_prompt || ''; } catch (_) { saved = ''; }
-    if (!pr.value) pr.value = saved;
-  };
-  $('ad-ai-p').onclick = async () => { pr.hidden = !pr.hidden; if (!pr.hidden) { await loadPrompt(); pr.focus(); } };
-  $('ad-ai-n').onchange = () => { aiTryFrames = +val('ad-ai-n'); };
-  $('ad-ai').onclick = async () => {
-    const b = $('ad-ai'); b.disabled = true;
-    out.innerHTML = '<div class="muted small" style="margin-top:6px">Getting the moments from the recording and asking the model… (up to a minute)</div>';
-    const body = {camera: it.camera, id: it.event.id, frames: +val('ad-ai-n')};
-    if (!pr.hidden) body.prompt = pr.value;
-    try {
-      const r = await api('api/ai/describe-alert', {method: 'POST', json: body});
-      out.innerHTML = `<div class="ai-pics">${r.pictures.map((u, i) => `<img src="${u}" alt="" title="Moment ${i + 1} of ${r.pictures.length}">`).join('')}</div>
-        <div class="ai-answer">${r.suspicious ? `<div class="sus">⚠ ${esc(r.suspicious)}</div>` : ''}<b>${esc(r.description)}</b>
-          <div class="muted small">${esc(r.model)} · ${r.pictures.length} moments · ${(r.ms / 1000).toFixed(1)} s</div></div>
-        <div class="row" style="margin-top:6px"><button type="button" class="small primary" id="ad-ai-use">Use this description</button>
-          ${!pr.hidden ? '<button type="button" class="small" id="ad-ai-keep">Save these instructions for all alerts</button>' : ''}</div>`;
-      $('ad-ai-use').onclick = async () => {
-        try {
-          const s2 = await api('api/ai/describe-alert', {method: 'POST', json: {camera: it.camera, id: it.event.id, save: {text: r.description, suspicious: r.suspicious}}});
-          it.event.summary = s2.summary; it.event.suspicious = r.suspicious || '';
-          toast('Description saved');
-          const w = $('rp-info').querySelector('.what'); if (w) w.innerHTML = `<div class="muted small">What happened</div>${esc(s2.summary)}`;
-          $('ad-ai-use').disabled = true; renderRecordings();
-        } catch (e) { toast(e.message, true); }
-      };
-      const keep = $('ad-ai-keep');
-      if (keep) keep.onclick = async () => {
-        try {
-          const cur = await api('api/settings');
-          if (await saveSettings({ai: {...cur.ai, describe_prompt: pr.value.trim()}}, 'Instructions saved — used for every alert from now on')) saved = pr.value.trim();
-        } catch (e) { toast(e.message, true); }
-      };
-    } catch (e) { out.innerHTML = `<div class="err small" style="margin-top:6px">${esc(e.message)}</div>`; }
-    b.disabled = false;
-  };
 }
 
 // ---------- update notice ----------
@@ -2681,14 +2636,12 @@ const TASK_ACTIONS = [
   ['previews', '🖼️ Rebuild previews', 'Throws away the scrub and time-lapse previews and makes the last 24 hours again. Use it if previews look wrong or black.', null,
     'Throw away all scrub and time-lapse previews and make them again? Older days are remade when you look at them.'],
   ['alert-pictures', '📸 Refresh alert pictures', 'Replaces the pictures of the last 7 days of alerts with full-quality frames from the recordings (sharper thumbnails).', {days: 7}, null],
-  ['redescribe', '🧠 Describe alerts again', 'Smart search describes the last 7 days of alerts again — after changing the model or how many moments it looks at.', {days: 7},
-    'Describe the alerts of the last 7 days again? This runs in the background and can take a while.'],
   ['reidentify', '🧑 Look for faces & plates again', 'Checks the last 7 days of alerts for faces and number plates again — after teaching GAZE new people or vehicles.', {days: 7},
     'Look for faces and number plates in the last 7 days of alerts again?'],
 ];
 function renderTasks(body) {
   body.innerHTML = `<div class="card"><h2>What the AI is doing</h2>
-    <p class="muted" style="margin-top:0">Besides recording, GAZE works on alerts in the background: describing them (smart search), finding faces and number plates, preparing previews, downloading AI models and copying to the cloud. It waits for spare processor time, so it never slows down recording or live view.</p>
+    <p class="muted" style="margin-top:0">Besides recording, GAZE works on alerts in the background: finding faces and number plates, preparing previews, downloading AI models and copying to the cloud. It waits for spare processor time, so it never slows down recording or live view.</p>
     <div id="tasks-pause" class="tasks-pause"></div>
     <div id="tasks-waiting" style="margin-bottom:8px"></div>
     <div id="set-tasks"></div></div>
@@ -3175,7 +3128,7 @@ async function openCameraDialog(id, clone) {
             <svg id="d-pkg-svg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
           <div class="row" style="margin-top:6px"><button type="button" class="small" id="d-pkg-clear">Clear</button>
             <span class="hint" style="margin:0" id="d-pkg-hint">Drag a box on the picture around where parcels are left (doorstep, porch).</span></div>
-          <div class="hint">GAZE compares this spot before and after each visit. With smart search on (Settings → Object recognition) it tells “Package delivered” from “Package picked up”, with before/after pictures in the alert.</div></div>
+          <div class="hint">GAZE compares this spot before and after each visit and notes when something was left or taken, with before/after pictures in the alert.</div></div>
       </div>
       <div data-tab="osd" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="o-custom" ${c.osd.custom ? 'checked' : ''}> Use settings just for this camera</label>
@@ -3916,7 +3869,6 @@ function renderAi(body) {
         trained on the COCO set of 80 everyday objects) running on this computer's processor — nothing leaves your home. Five sizes from <i>Nano</i> (fast, for small PCs) to <i>Large</i> (most accurate, for powerful PCs).</li>
       <li><b>Double-check</b> (optional): a bigger YOLOX model looks again at pictures that would raise an alert, to cut false alarms.</li>
       <li><b>Night boost</b>: dark and infrared pictures are brightened before recognition.</li>
-      <li><b>Smart search</b> (optional): a <b>CLIP</b> model (by OpenAI, open source) describes each alert picture — clothing colour, what someone carries, vehicle type — so you can search in your own words.</li>
     </ol>
     <p class="muted" style="margin:0">Instead of the built-in model you can use an AI server on your network (CodeProject.AI / DeepStack, can use another computer's graphics card), a vision model in Ollama, or a cloud service (Google Gemini, OpenAI-compatible) — those also write a short description of what they see.</p></div>
     <form class="card" id="f-ai"><h2>Object recognition (AI)</h2>
@@ -3926,7 +3878,7 @@ function renderAi(body) {
       <label for="ai-device">Run AI on</label><div><select id="ai-device">
         <option value="gpu" ${a.device !== 'cpu' ? 'selected' : ''}>Graphics card (GPU) — recommended</option>
         <option value="cpu" ${a.device === 'cpu' ? 'selected' : ''}>Processor (CPU)</option></select>
-        <div class="hint">For the built-in object recognition, smart search and faces &amp; plates. The graphics card is much faster and leaves the processor free for video; it works with any recent NVIDIA, AMD or Intel graphics on Windows (DirectX 12). The GPU runtime (about 25 MB) downloads by itself the first time; until then, or if the graphics card can't be used, the processor takes over.</div>
+        <div class="hint">For the built-in object recognition and faces &amp; plates. The graphics card is much faster and leaves the processor free for video; it works with any recent NVIDIA, AMD or Intel graphics on Windows (DirectX 12). The GPU runtime (about 25 MB) downloads by itself the first time; until then, or if the graphics card can't be used, the processor takes over.</div>
         <div class="hint" id="ai-device-st"></div></div>
       <label class="p-builtin" for="ai-model">Model</label><div class="p-builtin"><select id="ai-model">
         <option value="yolox_nano" ${a.builtin_model === 'yolox_nano' ? 'selected' : ''}>Nano — fastest (≈30 ms), good for small PCs</option>
@@ -3941,29 +3893,6 @@ function renderAi(body) {
         <div class="hint">When the model above thinks it sees something that would raise an alert, a bigger model looks at the same picture and has the final say: fewer false alerts and fewer mix-ups (a cat called a person). It only runs on those few pictures, so it suits normal PCs too.</div></div>
       <span class="p-builtin"></span><div class="p-builtin"><label class="check"><input type="checkbox" id="ai-night" ${a.night_boost !== false ? 'checked' : ''}> Night boost</label>
         <div class="hint">Dark and infrared (black &amp; white) pictures are brightened and their contrast stretched before the AI looks at them, so people and animals are recognized better at night.</div></div>
-      <span class="p-any"></span><div class="p-any"><label class="check"><input type="checkbox" id="ai-smart" ${a.smart_search ? 'checked' : ''}> Smart search</label>
-        <div class="hint">Lets you search alerts by description — “kid wearing a red backpack”, “white van”, “man with a ladder”. Each alert picture (and each person, vehicle or animal in it) is described by a CLIP model on this computer, in the background (≈0.1 s per alert, 600 MB download once, loaded only while in use). Works with any AI choice above.</div>
-        <div class="hint" id="ai-smart-st"></div>
-        <select id="ai-smodel" style="margin-top:6px">${[['ViT-B-32', 'Standard (CLIP ViT-B/32) — about 0.1 s per alert, 600 MB'], ['ViT-B-16', 'Detailed (CLIP ViT-B/16) — about 0.4 s per alert, 600 MB'], ['ViT-L-14', 'Most accurate (CLIP ViT-L/14) — about 2 s per alert, 1.7 GB, powerful PCs']]
-          .map(([k, t]) => `<option value="${k}" ${(a.smart_model || 'ViT-B-32') === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
-        <div class="hint">Changing the model describes the alerts again with it (in the background).</div>
-        <div class="row" style="margin-top:6px"><span class="muted">Look at</span><select id="ai-sframes">${[[1, 'only the best moment'], [2, '2 moments'], [4, '4 moments'], [6, '6 moments'], [8, '8 moments'], [12, '12 moments']].map(([k, t]) => `<option value="${k}" ${(a.summary_frames || 4) === k ? 'selected' : ''}>${t}</option>`).join('')}</select><span class="muted">of each alert's full-quality video</span></div>
-        <div class="hint">More moments give fuller descriptions (someone who turns around, a second person who arrives later) and better search, at a little more work per alert. Needs recordings and the built-in AI or an AI server.</div></div>
-      <span class="p-any"></span><div class="p-any"><b>Descriptions written by</b>
-        <select id="ai-dw" style="margin-top:6px">${[['builtin', 'Smart search model (on this computer, short phrases)'], ['openai', 'Vision model on my own computer — Ollama, LM Studio (free, private)'], ['claude', 'Claude (Anthropic, cloud, paid per alert)'], ['gemini', 'Gemini (Google, cloud, free tier)']]
-          .map(([k, t]) => `<option value="${k}" ${(a.describe_with || 'builtin') === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
-        <div class="hint" id="ai-dw-hint"></div>
-        <div class="d-url row" style="margin-top:6px"><span class="muted" style="width:110px">Server</span><input type="text" id="ai-durl" value="${esc(a.describe_url || '')}" placeholder="http://localhost:11434/v1" style="flex:1"></div>
-        <div class="d-key row" style="margin-top:6px"><span class="muted" style="width:110px">API key</span><input type="password" id="ai-dkey" autocomplete="new-password" placeholder="${a.has_describe_key ? 'Saved – leave empty to keep' : ''}" style="flex:1"></div>
-        <div class="d-model row" style="margin-top:6px"><span class="muted" style="width:110px">Model</span><input type="text" id="ai-dmodel" value="${esc(a.describe_model || '')}" style="flex:1"></div>
-        <div class="d-any" style="margin-top:6px"><span class="muted">Instructions for the model (optional)</span>
-          <textarea id="ai-dprompt" rows="3" style="width:100%;box-sizing:border-box;font:inherit;font-size:13px;margin-top:4px" placeholder="e.g. The white Tesla and the red Mazda are ours. People in orange vests are council workers. The Back Yard camera looks at the pool — mention anyone near it.">${esc(a.describe_prompt || '')}</textarea>
-          <div class="hint">Added to every request: who and what is normal here, what each camera looks at, what to point out. Try it on one alert first: open the alert and press ✨ Describe with the vision model.</div></div>
-        <div class="d-any row" style="margin-top:6px"><span class="muted" style="width:110px">At most</span><input type="number" id="ai-dlimit" min="0" value="${a.describe_per_day ?? 200}" style="width:90px"><span class="muted">alerts a day (0 = no limit)</span></div>
-        <div class="d-any row" style="margin-top:6px"><span class="muted" style="width:110px">and at most</span><input type="number" id="ai-drpm" min="0" value="${a.describe_per_minute ?? 10}" style="width:90px"><span class="muted">requests a minute, spread out evenly (Gemini's free tier allows about 10–15; 0 = no limit)</span></div>
-        <div class="d-any hint">If the model is busy, over its limit or unreachable, GAZE waits the time it asks for and tries again; alerts it couldn't describe stay in a backlog (they keep the built-in description meanwhile) and are described later.</div>
-        <div class="d-any row" style="margin-top:6px"><button type="button" id="ai-dtest">Describe the latest alert of the camera below</button></div>
-        <div class="hint" id="ai-dtest-out"></div><div class="hint" id="ai-dstatus"></div></div>
       <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
       <label class="p-key" for="ai-key">API key</label><div class="p-key"><input type="password" id="ai-key" autocomplete="new-password" placeholder="${a.has_key ? 'Saved – leave empty to keep' : ''}"><div class="hint" id="ai-key-hint"></div></div>
       <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><div class="row"><input type="text" id="ai-mname" value="${esc(a.model)}" list="ai-models" style="flex:1"><button type="button" id="ai-list">List models</button></div>
@@ -3994,36 +3923,10 @@ function renderAi(body) {
     $('ai-test').disabled = p === 'none' || !$('ai-cam').value;
   };
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
-  const DW = {
-    builtin: ['', '', 'The smart search model picks from set phrases: “Adult in a black top; White car”. Free and private, but basic.'],
-    openai: ['', 'qwen2.5vl:7b', 'A vision-language model looks at all the moments together and writes what happened. With <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> on this PC: install it, run “ollama pull qwen2.5vl:7b” (needs a graphics card with about 8 GB), and use the server http://localhost:11434/v1. Pictures stay in your home. Any OpenAI-compatible server works (LM Studio: http://localhost:1234/v1).'],
-    claude: ['claude-opus-5-5', 'claude-opus-5-5', 'The best descriptions. The moments of each alert are sent to Anthropic. Costs roughly 1–2 US cents an alert with Claude Opus 5.5 (the default); Claude Haiku 5.5 (claude-haiku-5-5) costs a small fraction of that. Get a key at <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>.'],
-    gemini: ['', 'automatic (newest Flash model)', 'Good descriptions, with a free daily allowance. The moments of each alert are sent to Google. Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.'],
-  };
-  const dsync = () => {
-    const d = val('ai-dw'), h = DW[d] || DW.builtin;
-    const show = (cls, on) => document.querySelectorAll('.' + cls).forEach(e => e.hidden = !on);
-    show('d-url', d === 'openai'); show('d-key', d !== 'builtin'); show('d-model', d !== 'builtin'); show('d-any', d !== 'builtin');
-    $('ai-dmodel').placeholder = h[1]; $('ai-dw-hint').innerHTML = h[2];
-  };
-  $('ai-dw').onchange = dsync; dsync();
-  $('ai-dtest').onclick = async () => {
-    const out = $('ai-dtest-out'), b = $('ai-dtest'); b.disabled = true;
-    out.textContent = 'Sending the latest alert to the model… (this can take up to a minute)';
-    try { const r = await api('api/ai/describe-test', {method: 'POST', json: {camera: val('ai-cam'), ai: form()}}); out.innerHTML = `<b>${esc(r.description)}</b><br><span class="muted">Alert of ${esc(fmtTime(r.start))}, ${r.pictures} moments, ${r.ms} ms</span>`; }
-    catch (e) { out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
-    b.disabled = false;
-  };
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
     api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
-    verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel'), summary_frames: +val('ai-sframes') || 4,
-    describe_with: val('ai-dw'), describe_url: val('ai-durl').trim(), describe_key: val('ai-dkey'), describe_model: val('ai-dmodel').trim(), describe_per_day: Math.max(0, Math.round(num('ai-dlimit'))), describe_per_minute: Math.max(0, Math.round(num('ai-drpm'))), describe_prompt: val('ai-dprompt').trim()});
+    verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device')});
   const showStatus = () => {
-    const ss = status && status.smart_search;
-    if (ss && $('ai-smart-st')) $('ai-smart-st').innerHTML = !a.smart_search ? '' : ss.downloading ? `Downloading the smart-search model… ${Math.round(ss.download_percent || 0)}%`
-      : ss.error ? `<span class="err">${esc(ss.error)}</span>` : `<span class="ok">On</span> — ${ss.indexed} alert${ss.indexed === 1 ? '' : 's'} described so far (newest first, last 60 days).`;
-    const dd = status && status.describe;
-    if (dd && $('ai-dstatus')) $('ai-dstatus').innerHTML = (a.describe_with || 'builtin') === 'builtin' ? '' : `${dd.used_today} alert${dd.used_today === 1 ? '' : 's'} described by the model today.${dd.error ? ` <span class="err">Last problem: ${esc(dd.error)}</span> — alerts it couldn't do stay in the backlog and are described again${dd.backlog_paused ? ' in a minute or two' : ' shortly'} (Settings → Tasks shows how many).` : ''}`;
     if ($('ai-device-st') && status) $('ai-device-st').innerHTML = `Running on: <b>${esc(status.ai_device || '')}</b>`;
     const s = status && status.ai; if (!s) return;
     $('ai-status').innerHTML = s.provider === 'none' ? '' : `Current: <b>${esc(s.provider)}</b> — ${s.downloading ? `downloading model ${Math.round(s.download_percent || 0)}%` : s.ready ? '<span class="ok">ready</span>' : 'loading'}` +
@@ -4413,7 +4316,7 @@ async function renderKnown(body) {
         <div class="k-photos">${k.photos.map(p => `<img src="api/known/${enc(k.id)}/photo/${enc(p)}" alt="">`).join('')}
           <label class="k-add btn small">＋ Photo<input type="file" accept="image/*" multiple hidden></label></div>
         <div class="hint">${k.kind === 'person' ? `${k.faces} face${k.faces === 1 ? '' : 's'} learned${k.faces < 3 ? ' — 3 or more clear photos work best' : ''}`
-          : `Add photos of the vehicle: GAZE reads its plate and (with smart search) learns how it looks, so it's recognised by either.<br>Plates: <input type="text" class="k-plates" value="${esc(k.plates.join(', '))}" placeholder="ABC123, …" style="width:180px"> <button type="button" class="small k-psave">Save</button>${k.looks ? ` · ${k.looks} look${k.looks === 1 ? '' : 's'} learned` : ''}`}</div>
+          : `Add photos of the vehicle: GAZE reads its plate from them.<br>Plates: <input type="text" class="k-plates" value="${esc(k.plates.join(', '))}" placeholder="ABC123, …" style="width:180px"> <button type="button" class="small k-psave">Save</button>${k.looks ? ` · ${k.looks} look${k.looks === 1 ? '' : 's'} learned` : ''}`}</div>
       </div>`).join('')}</div></div>`;
   $('k-save-ai').onclick = async () => { await saveSettings({ai: {...settings.ai, api_key: '', faces: chk('k-faces'), plates: chk('k-plates')}}, 'Saved'); };
   const add = async (kind) => {
@@ -4490,11 +4393,9 @@ async function renderNotify(body) {
       <label for="n-gap">How often</label><div class="row"><span class="muted">at most one every</span><input type="number" id="n-gap" min="0" max="240" value="${n.gap_minutes}" style="width:80px"><span class="muted">minutes per camera</span></div>
       <label for="n-nfrom">At night</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sus" ${n.only_suspicious ? 'checked' : ''}> Only suspicious activity</label>
-        <div class="hint">Suspicious: lines crossed, someone lingering, a parcel picked up, a person at night, or what the vision model judges suspicious (Settings → Object recognition → Descriptions written by). Suspicious activity is always sent, even within the time between notifications, with high priority.</div></div>
-      <span></span><div><label class="check"><input type="checkbox" id="n-desc" ${n.describe_first !== false ? 'checked' : ''}> Wait for the AI's description and send it with the picture</label>
-        <div class="hint">The picture arrives a few seconds later, saying what's in it (“Adult in a black top”, or the vision model's description when one is chosen in Settings → Object recognition). Needs smart search or a vision model; otherwise the picture is sent straight away.</div></div>
+        <div class="hint">Suspicious: lines crossed, someone lingering, a parcel picked up, a person at night. Suspicious activity is always sent, even within the time between notifications, with high priority.</div></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
-        <div class="hint">What happened, who was recognised, number plates, parcels — from smart search (or its vision model) and faces &amp; plates.</div></div>
+        <div class="hint">What was seen and for how long, who was recognised, number plates, zones and parcels.</div></div>
       <label for="n-link">Open GAZE at</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
         <div class="hint">Tapping a notification opens that alert in GAZE. Left empty, this computer's address on your home network is used (works on your Wi-Fi); for away from home use e.g. your computer's Tailscale name.</div></div>
     </div></div>
@@ -4509,7 +4410,7 @@ async function renderNotify(body) {
     return {enabled: chk('n-on'), server: val('n-server').trim() || 'https://ntfy.sh', topic: val('n-topic').trim(), token: val('n-token'),
       objects: [...body.querySelectorAll('.n-obj:checked')].map(c => c.value), cameras: picked.length === cams.length ? [] : picked,
       only_suspicious: chk('n-sus'), gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
-      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), describe_first: chk('n-desc'), link: val('n-link').trim()};
+      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), link: val('n-link').trim()};
   };
   $('n-save').onclick = async () => {
     const f = form();

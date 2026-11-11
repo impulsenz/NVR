@@ -181,7 +181,7 @@ impl Recog {
                 .into_iter()
                 .next()
                 .ok_or_else(|| anyhow!("no model output"))?;
-            Ok(crate::clip::normalize(v))
+            Ok(normalize(v))
         })
         .await?
     }
@@ -537,4 +537,13 @@ mod tests {
         assert!(cos(&a, &b) < FACE_MATCH);
         std::fs::remove_dir_all(&data).ok();
     }
+}
+
+/// Scale a vector to length 1.
+pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+    for x in &mut v {
+        *x /= n;
+    }
+    v
 }

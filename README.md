@@ -58,7 +58,7 @@ viewing, finding footage, and managing everything, all from the browser.
   **object must travel**, and **areas to ignore** painted on the picture. A live readout shows how big
   the moving objects are, and *Show motion* draws boxes around them. Lighting changes are ignored.
 - AI checks run **only while there is motion**: no motion, nothing is sent to the AI.
-- **AI on the graphics card**: the built-in object recognition, smart search and faces & plates run on the
+- **AI on the graphics card**: the built-in object recognition and faces & plates run on the
   GPU (ONNX Runtime with DirectML — any recent NVIDIA, AMD or Intel graphics on Windows; the 25 MB runtime
   downloads itself the first time), or on the processor if you choose (Settings → Object recognition →
   Run AI on). If the graphics card can't be used, the processor takes over and the settings say why.
@@ -73,10 +73,6 @@ viewing, finding footage, and managing everything, all from the browser.
   bigger model looks at the same picture and has the final say — fewer false alerts and mix-ups, at little
   cost because it only runs on those pictures.
 - **Night boost**: dark and infrared pictures are brightened and contrast-stretched before recognition.
-- **Smart search** (optional): a CLIP model on this computer describes each alert picture and each person,
-  vehicle or animal in it, so you can search by description: "kid wearing a red backpack", "white van",
-  "man with a ladder". About 0.1 s per alert in the background, a one-time 600 MB download, and the model
-  is only loaded while in use.
 - Choose which objects alert (person, car, dog, …), the minimum confidence, and whether *any motion*
   or *only recognized objects* make an alert.
 - Each alert gets a **thumbnail of the whole picture** that zooms in on the recognized object.
@@ -86,7 +82,7 @@ viewing, finding footage, and managing everything, all from the browser.
   cause false alerts or broken thumbnails.
 - If the same object is recognized as two things (a cat also seen as a person), only the more
   confident answer is kept.
-- Each recognized object gets a **colour**; language-model AIs also add a short description.
+- Each recognized object gets a **colour**.
 - "Test on this camera" shows the camera's picture with detection boxes.
 - **Zones** (camera settings → Zones), like Frigate and Blue Iris: draw areas and lines on the picture.
   Alert only for objects inside an area, when something **crosses a line** (in either or one direction),
@@ -95,37 +91,24 @@ viewing, finding footage, and managing everything, all from the browser.
   then stays quiet while it stands still (60 s by default; choose which kinds of objects) and alerts
   again as soon as it moves; remembered across restarts and quiet nights.
 - **Package delivery** (camera settings → AI): drag a box on the camera picture around where parcels are
-  left. GAZE compares that spot before and after each visit and (with smart search) says "Package
-  delivered" or "Package picked up", with before/after pictures in the alert. Zones can watch for
-  items left or taken too.
-- **Descriptions from the whole alert**: smart search describes several moments of each alert's
-  full-quality video (4 by default), not only the alert picture, so a person who turns around or a
-  second visitor is included.
-- **Written descriptions by a vision model** (optional, Settings → Object recognition → Descriptions
-  written by): instead of set phrases ("Adult in a black top"), a vision-language model looks at those
-  moments together and writes what happened ("A courier in a hi-vis vest leaves a parcel at the door and
-  walks back to a white van"). Use Ollama or LM Studio on your own computer (free, nothing leaves the
-  house), Claude or Gemini (cloud). A daily limit keeps cloud costs known; "Describe the latest alert"
-  tries it before saving.
+  left. GAZE compares that spot before and after each visit and notes items left or taken, with
+  before/after pictures in the alert. Zones can watch for items left or taken too.
 - **Faces & number plates** (Settings → People & vehicles, optional): GAZE finds faces and reads number
   plates in alerts, using the full-quality recording. Teach it people (upload a few photos, or answer
   "Who is this?" on a face in an alert) and vehicles (number plate and photos). Alerts then say
-  "Recognized Mum" or "Plate ABC123 — Dad's car", and you can search for them. If the alert picture shows
+  "Recognized Mum" or "Plate ABC123 — Dad's car", and the Alerts page can show only theirs. If the alert picture shows
   no face (or nobody known), up to six more moments of the HD recording are searched. Runs on this computer
   (OpenCV YuNet/SFace and fast-alpr models, about 50 MB, downloaded once).
   **New faces & number plates** appear in Settings → People & vehicles, grouped (the same person across
   many alerts is shown once): choose who it is or whose car, and GAZE names all those alerts and learns
-  them; hide passers-by. Vehicle photos teach both the plate and (with smart search) how it looks.
+  them; hide passers-by. Vehicle photos teach the plate.
 
 **Phone notifications**
-- Through the free **ntfy** app (Android/iPhone), Settings → Notifications: the alert picture a few
-  seconds after a person or vehicle is seen, **with the AI's description of it** ("Adult in a black
-  top", or Gemini's), then a **summary** when it's over ("Adult in a black top — 40 s.
-  Recognized Mum; Package delivered at Porch").
-- Optional **Google Gemini** summaries: Gemini looks at the alert picture and 3 moments of the HD video,
-  writes what happened and judges whether it's **suspicious** (lingering, trying doors, taking things…).
-  Lines crossed, lingering, parcels picked up and people at night also count as suspicious; those are
-  sent with high priority, even within the quiet time.
+- Through the free **ntfy** app (Android/iPhone), Settings → Notifications: the alert picture as soon
+  as a person or vehicle is seen, then a **summary** when it's over ("Person — 40 s. Recognized Mum;
+  Item left or taken in Porch").
+- **Suspicious** activity — lines crossed, lingering, items taken, people at night — is sent with high
+  priority, even within the quiet time.
 - At most one notification per camera every 5 minutes (1 minute at night, 22:00–06:00), per object type
   and camera; or only suspicious activity. Tapping a notification opens the alert (set the address,
   e.g. your Tailscale name).
@@ -158,10 +141,10 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Smart load balancing** (on by default): when the GPU is busy (a game, another program) and the
   processor has room, new live views, conversions and exports run on the CPU, and motion detection moves
   its decoding to whichever has capacity — and back. The System page shows how often work was moved.
-- **Tasks** (Settings → Tasks): what the AI is doing in the background (describing alerts, faces and
-  plates, model downloads, previews, cloud backup) with progress and how many alerts are waiting, and
-  buttons to rebuild previews, refresh alert pictures from the HD recordings, describe alerts again or
-  look for faces & plates again.
+- **Tasks** (Settings → Tasks): what the AI is doing in the background (faces and plates, model
+  downloads, previews, cloud backup) with progress and how many alerts are waiting, and
+  buttons to rebuild previews, refresh alert pictures from the HD recordings or look for faces &
+  plates again; pause background work.
 - On Windows GAZE runs **without a console window**: an icon by the clock opens it (click) and has a
   menu (right-click) for the recordings folder, the log, start when you sign in, restart and quit.
 - **Run as a Windows service** (tray menu): one click (Windows asks for permission once) and GAZE starts

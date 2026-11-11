@@ -2,10 +2,10 @@
 //!
 //! 1. As soon as an alert recognizes a person or vehicle (the kinds chosen),
 //!    its picture goes to the phone: "Front Door: Person".
-//! 2. When the alert is over and GAZE has described it (smart search, faces
-//!    and plates, and optionally Google Gemini looking at several moments of
-//!    the HD video), a summary follows: "A delivery driver leaves a parcel at
-//!    the door". Suspicious activity is sent with high priority.
+//! 2. When the alert is over and faces and plates have been looked for, a
+//!    summary follows: what was seen, for how long, who was recognised,
+//!    plates, zones. Suspicious activity (lines crossed, lingering, items
+//!    taken, people at night) is sent with high priority.
 //!
 //! At most one notification per camera per `gap_minutes` (a shorter gap at
 //! night); the summary of an alert whose picture was sent always follows.
@@ -266,7 +266,6 @@ struct Notifier {
     last_error: String,
     /// Descriptions made for alerts whose picture isn't sent yet (so a
     /// failed send doesn't ask the AI again).
-    described: HashMap<String, (Option<String>, Option<String>)>,
     /// After a failed send: wait before trying again.
     retry_after: Option<std::time::Instant>,
 }
@@ -329,46 +328,13 @@ impl Notifier {
                     let Some(pic) = picture(&rt, &e) else {
                         continue;
                     };
-                    let mut sus = suspicious(n, &e);
+                    let sus = suspicious(n, &e);
                     if sus.is_none() && !self.may_send(n, &rt.cfg.id, now) {
                         // Within the quiet time: maybe later, if it turns
                         // out to be suspicious.
                         e.notified = HELD;
                         rt.events.save(e);
                         continue;
-                    }
-                    // What the AI sees in the picture, sent along with it.
-                    let judge = crate::describe::enabled(&cfg.ai);
-                    let mut desc = None;
-                    if let Some((d, s)) = self.described.get(&e.id).cloned() {
-                        desc = d;
-                        if let Some(s) = s {
-                            sus.get_or_insert(s);
-                        }
-                    } else if n.describe_first || (n.only_suspicious && judge) {
-                        if judge && let Ok(f) = crate::imgutil::decode_jpeg(&pic) {
-                            let info = crate::describe::AlertInfo::of(&e, &rt.cfg.name, &cfg);
-                            match crate::describe::describe(&cfg.ai, &[f], &info).await {
-                                Ok(d) => {
-                                    desc = Some(d.text.trim_end_matches('.').to_string());
-                                    if let Some(s) = d.suspicious {
-                                        e.suspicious = s.clone();
-                                        sus.get_or_insert(s);
-                                    }
-                                }
-                                Err(err) => {
-                                    self.report(Err(err));
-                                }
-                            }
-                        }
-                        if desc.is_none() && n.describe_first {
-                            desc = crate::smart::describe_now(mgr, &e).await;
-                        }
-                        if self.described.len() > 200 {
-                            self.described.clear();
-                        }
-                        self.described
-                            .insert(e.id.clone(), (desc.clone(), sus.clone()));
                     }
                     if sus.is_none() && n.only_suspicious {
                         e.notified = HELD;
@@ -378,11 +344,9 @@ impl Notifier {
                     let time = e.start.format("%H:%M:%S");
                     let msg = Message {
                         title: format!("{}: {}", rt.cfg.name, what(&e)),
-                        body: match (&sus, &desc) {
-                            (Some(r), Some(d)) => format!("⚠ {r}\n{d} — {time}"),
-                            (Some(r), None) => format!("⚠ {r} — {time}"),
-                            (None, Some(d)) => format!("{d} — {time}"),
-                            (None, None) => format!("{} at {time}", what(&e)),
+                        body: match &sus {
+                            Some(r) => format!("⚠ {r} — {time}"),
+                            None => format!("{} at {time}", what(&e)),
                         },
                         tags: tags(&e, sus.is_some()),
                         priority: if sus.is_some() { 4 } else { 3 },
@@ -397,45 +361,15 @@ impl Notifier {
                     }
                     continue;
                 }
-                // 2. The summary, once the alert is over and described.
+                // 2. The summary, once the alert is over (and faces and
+                // plates have been looked for).
                 if rt.in_progress(&e) {
                     continue;
                 }
                 let waited = (now - e.end).num_seconds();
-                let described = (!cfg.ai.smart_search || !e.summary.is_empty())
-                    && (!(cfg.ai.faces || cfg.ai.plates) || e.identified);
-                if !described && waited < 150 {
+                let identified = !(cfg.ai.faces || cfg.ai.plates) || e.identified;
+                if !identified && waited < 150 {
                     continue;
-                }
-                let judge = crate::describe::enabled(&cfg.ai);
-                if e.notified == HELD && !judge && suspicious(n, &e).is_none() {
-                    e.notified = DONE;
-                    rt.events.save(e);
-                    continue;
-                }
-                // Without smart search nothing else describes it: ask the
-                // vision model here, with a few moments of the alert.
-                if judge && !cfg.ai.smart_search && e.summary.is_empty() {
-                    let mut pics: Vec<_> = picture(&rt, &e)
-                        .and_then(|p| crate::imgutil::decode_jpeg(&p).ok())
-                        .into_iter()
-                        .collect();
-                    for (f, _) in crate::identify::moments(mgr, &rt, &e, 3).await {
-                        pics.push(f);
-                    }
-                    let info = crate::describe::AlertInfo::of(&e, &rt.cfg.name, &cfg);
-                    let secs = (e.end - e.start).num_seconds().max(1);
-                    match crate::describe::describe(&cfg.ai, &pics, &info).await {
-                        Ok(d) => {
-                            e.summary = format!("{} — {secs} s", d.text.trim_end_matches('.'));
-                            e.suspicious = d.suspicious.unwrap_or_default();
-                        }
-                        Err(err) => {
-                            self.report(Err(err));
-                            e.summary = format!("{} — {secs} s", what(&e));
-                        }
-                    }
-                    rt.events.save(e.clone());
                 }
                 let sus = suspicious(n, &e);
                 // Held back and nothing suspicious after all: stay quiet.
@@ -450,15 +384,11 @@ impl Notifier {
                     rt.events.save(e);
                     continue;
                 }
-                let story = if !e.summary.is_empty() {
-                    e.summary.clone()
-                } else {
-                    format!(
-                        "{} — {} s",
-                        what(&e),
-                        (e.end - e.start).num_seconds().max(1)
-                    )
-                };
+                let story = format!(
+                    "{} — {} s",
+                    what(&e),
+                    (e.end - e.start).num_seconds().max(1)
+                );
                 let mut body = story;
                 let extra: Vec<&String> = e
                     .notes
@@ -522,7 +452,6 @@ pub async fn run(mgr: Arc<Manager>) {
     let mut n = Notifier {
         last: HashMap::new(),
         last_error: String::new(),
-        described: HashMap::new(),
         retry_after: None,
     };
     loop {

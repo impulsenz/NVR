@@ -1,9 +1,8 @@
 //! Known people and vehicles: what GAZE has been taught to recognise.
 //!
 //! A **person** has faceprints (from photos you upload, or faces you name
-//! in alerts). A **vehicle** has number plates and, with smart search on,
-//! "looks" (CLIP vectors of photos of it). Kept in `nvr-data/known.json`,
-//! photos in `nvr-data/known/<id>/`.
+//! in alerts). A **vehicle** has number plates and photos. Kept in
+//! `nvr-data/known.json`, photos in `nvr-data/known/<id>/`.
 
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -21,9 +20,6 @@ pub struct Known {
     /// Faceprints, packed.
     #[serde(default)]
     pub faces: Vec<String>,
-    /// CLIP vectors of photos (vehicles), packed.
-    #[serde(default)]
-    pub looks: Vec<String>,
     /// Photo file names.
     #[serde(default)]
     pub photos: Vec<String>,
@@ -37,7 +33,6 @@ pub struct KnownInfo {
     pub name: String,
     pub plates: Vec<String>,
     pub faces: usize,
-    pub looks: usize,
     pub photos: Vec<String>,
 }
 
@@ -111,7 +106,6 @@ impl KnownStore {
                 name: k.name.clone(),
                 plates: k.plates.clone(),
                 faces: k.faces.len(),
-                looks: k.looks.len(),
                 photos: k.photos.clone(),
             })
             .collect()
@@ -186,12 +180,11 @@ impl KnownStore {
         self.save()
     }
 
-    /// Teach: add a faceprint / look / plate / photo.
+    /// Teach: add a faceprint / plate / photo.
     pub fn add(
         &self,
         id: &str,
         face: Option<&[f32]>,
-        look: Option<&[f32]>,
         plate: Option<&str>,
         photo: Option<&[u8]>,
     ) -> Result<()> {
@@ -203,9 +196,6 @@ impl KnownStore {
                 .ok_or_else(|| anyhow!("not found"))?;
             if let Some(f) = face {
                 k.faces.push(pack(f));
-            }
-            if let Some(l) = look {
-                k.looks.push(pack(l));
             }
             if let Some(p) = plate {
                 let p = clean_plates(vec![p.into()]);
@@ -268,24 +258,6 @@ impl KnownStore {
             .map(|k| k.name.clone())
     }
 
-    /// The known vehicle that looks like this (CLIP vector), if very similar.
-    pub fn match_look(&self, v: &[f32]) -> Option<(String, f32)> {
-        self.items
-            .read()
-            .unwrap()
-            .iter()
-            .filter(|k| k.kind == "vehicle")
-            .filter_map(|k| {
-                let best = k
-                    .looks
-                    .iter()
-                    .map(|l| cosine(&unpack(l), v))
-                    .fold(f32::MIN, f32::max);
-                (best >= 0.88).then(|| (k.name.clone(), best))
-            })
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-    }
-
     pub fn photo_path(&self, id: &str, name: &str) -> Option<PathBuf> {
         let k = self.get(id)?;
         k.photos
@@ -321,11 +293,11 @@ mod tests {
             .create("vehicle", "Dad's car", vec!["abc 123".into()])
             .unwrap();
         let face: Vec<f32> =
-            crate::clip::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
-        s.add(&mum, Some(&face), None, None, Some(b"jpg")).unwrap();
+            crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
+        s.add(&mum, Some(&face), None, Some(b"jpg")).unwrap();
         assert_eq!(s.match_face(&face).unwrap().0, "Mum");
         let other: Vec<f32> =
-            crate::clip::normalize((0..128).map(|i| (i as f32 * 1.91).cos()).collect());
+            crate::recog::normalize((0..128).map(|i| (i as f32 * 1.91).cos()).collect());
         assert!(s.match_face(&other).is_none());
         assert_eq!(s.match_plate("ABC123").as_deref(), Some("Dad's car"));
         assert_eq!(s.match_plate("A8C123").as_deref(), Some("Dad's car"));

@@ -53,9 +53,6 @@ pub struct Item {
     pub pending: bool,
     /// Alert already viewed.
     pub seen: bool,
-    /// Smart search: how well the alert matches the words (0..1).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<f32>,
 }
 
 pub struct Query {
@@ -66,160 +63,32 @@ pub struct Query {
     pub tod: Option<(NaiveTime, NaiveTime)>,
     /// "recording", "motion", "other" and object labels. Empty = everything.
     pub types: HashSet<String>,
-    /// Words searched for (see `parse_text`). Empty = no text search.
-    pub text: Vec<Term>,
+    /// Only alerts with this known person or vehicle (by name, or one of
+    /// its plates).
+    pub who: Option<Who>,
     /// Only viewed (Some(true)) or only new (Some(false)) alerts.
     pub seen: Option<bool>,
-    /// Smart search: the index and the search words as a CLIP vector.
-    pub smart: Option<(Arc<crate::smart::SmartIndex>, crate::smart::Query)>,
     pub limit: usize,
 }
 
-/// One part of a text search.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Term {
-    /// An object, optionally with a colour: "red van" → colours [red],
-    /// labels [car, truck], word "van".
-    Object {
-        colors: Vec<&'static str>,
-        labels: Vec<&'static str>,
-        word: String,
-    },
-    /// A colour on its own ("red"): any object of that colour.
-    Color(Vec<&'static str>),
-    /// Anything else: matched against descriptions, labels, camera name.
-    Word(String),
+/// A known person or vehicle to look for.
+#[derive(Debug, Clone)]
+pub struct Who {
+    pub name: String,
+    pub plates: Vec<String>,
 }
 
-/// Colours a searched colour also accepts (pictures of a white car often
-/// measure as silver, etc.).
-fn color_matches(c: &str) -> Option<Vec<&'static str>> {
-    Some(match c {
-        "red" | "maroon" => vec!["red", "pink"],
-        "pink" => vec!["pink", "red"],
-        "orange" => vec!["orange", "brown", "red"],
-        "yellow" | "gold" => vec!["yellow", "orange"],
-        "green" => vec!["green"],
-        "blue" | "navy" => vec!["blue"],
-        "purple" | "violet" => vec!["purple", "pink", "blue"],
-        "brown" | "tan" | "beige" => vec!["brown", "beige", "orange"],
-        "black" | "dark" => vec!["black", "grey"],
-        "white" => vec!["white", "silver"],
-        "grey" | "gray" => vec!["grey", "silver"],
-        "silver" => vec!["silver", "grey", "white"],
-        _ => return None,
-    })
-}
-
-/// Object words people search for, and the detector labels they mean.
-fn object_labels(w: &str) -> Option<Vec<&'static str>> {
-    let w = w
-        .strip_suffix("es")
-        .filter(|x| x.ends_with("bus"))
-        .unwrap_or(w);
-    let w = if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") && w != "bus" {
-        &w[..w.len() - 1]
-    } else {
-        w
-    };
-    Some(match w {
-        "person" | "people" | "man" | "men" | "woman" | "women" | "kid" | "child" | "children"
-        | "human" | "someone" | "guy" | "lady" | "courier" | "postman" | "visitor"
-        | "pedestrian" => vec!["person"],
-        "car" | "sedan" | "hatchback" | "suv" | "wagon" | "taxi" | "auto" | "automobile" => {
-            vec!["car"]
-        }
-        "van" | "ute" | "pickup" | "4x4" => vec!["car", "truck"],
-        "truck" | "lorry" => vec!["truck"],
-        "bus" | "coach" => vec!["bus"],
-        "vehicle" => vec!["car", "truck", "bus", "motorcycle"],
-        "motorcycle" | "motorbike" | "scooter" => vec!["motorcycle"],
-        "bike" => vec!["bicycle", "motorcycle"],
-        "bicycle" | "cyclist" => vec!["bicycle"],
-        "dog" | "puppy" | "pup" => vec!["dog"],
-        "cat" | "kitten" | "kitty" => vec!["cat"],
-        "bird" => vec!["bird"],
-        "animal" | "pet" => vec!["dog", "cat", "bird", "horse", "sheep", "cow", "bear"],
-        "horse" => vec!["horse"],
-        "cow" => vec!["cow"],
-        "sheep" => vec!["sheep"],
-        "bag" => vec!["backpack", "handbag", "suitcase"],
-        "backpack" => vec!["backpack"],
-        "suitcase" => vec!["suitcase"],
-        "umbrella" => vec!["umbrella"],
-        _ => return None,
-    })
-}
-
-/// Understand a search like "red van", "white car person", "black cat".
-pub fn parse_text(q: &str) -> Vec<Term> {
-    const SKIP: &[&str] = &[
-        "a", "an", "the", "with", "of", "in", "on", "and", "or", "at", "coloured", "colored",
-    ];
-    let mut out = Vec::new();
-    let mut colors: Vec<&'static str> = Vec::new();
-    for w in q
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty() && !SKIP.contains(w))
-    {
-        if let Some(c) = color_matches(w) {
-            colors.extend(c);
-        } else if let Some(labels) = object_labels(w) {
-            out.push(Term::Object {
-                colors: std::mem::take(&mut colors),
-                labels,
-                word: w.to_string(),
-            });
-        } else {
-            out.push(Term::Word(w.to_string()));
-        }
-    }
-    if !colors.is_empty() {
-        out.push(Term::Color(colors));
-    }
-    out
-}
-
-/// Does an event match every part of a text search?
-pub fn text_matches(e: &Event, camera_name: &str, terms: &[Term]) -> bool {
-    // The AI description, the smart-search summary and zone notes.
-    let desc = format!("{}; {}; {}", e.desc, e.summary, e.notes.join("; ")).to_lowercase();
-    // Description parts ("white delivery van; man in red jacket").
-    let parts: Vec<&str> = desc.split(';').map(str::trim).collect();
-    let has_word = |text: &str, w: &str| {
-        text.split(|c: char| !c.is_alphanumeric())
-            .any(|x| x == w || x.strip_suffix('s') == Some(w))
-    };
-    terms.iter().all(|t| match t {
-        Term::Object {
-            colors,
-            labels,
-            word,
-        } => {
-            let by_label = e.labels.iter().any(|l| {
-                labels.contains(&l.label.as_str())
-                    && (colors.is_empty()
-                        || l.color.as_deref().is_some_and(|c| colors.contains(&c)))
-            });
-            let by_desc = parts.iter().any(|p| {
-                (has_word(p, word) || labels.iter().any(|l| has_word(p, l)))
-                    && (colors.is_empty() || colors.iter().any(|c| has_word(p, c)))
-            });
-            by_label || by_desc
-        }
-        Term::Color(colors) => {
-            e.labels
-                .iter()
-                .any(|l| l.color.as_deref().is_some_and(|c| colors.contains(&c)))
-                || colors.iter().any(|c| has_word(&desc, c))
-        }
-        Term::Word(w) => {
-            has_word(&desc, w)
-                || e.labels.iter().any(|l| l.label.contains(w.as_str()))
-                || camera_name.to_lowercase().contains(w.as_str())
-        }
-    })
+/// Was this known person or vehicle in the alert?
+fn has_who(e: &Event, w: &Who) -> bool {
+    e.faces
+        .iter()
+        .any(|f| f.name.as_deref() == Some(w.name.as_str()))
+        || e.plates
+            .iter()
+            .any(|p| w.plates.iter().any(|k| crate::recog::plate_matches(k, p)))
+        || e.notes.iter().any(|n| {
+            n == &format!("Recognized {}", w.name) || n.ends_with(&format!(" — {}", w.name))
+        })
 }
 
 fn enc(s: &str) -> String {
@@ -338,8 +207,8 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
         }
         let id = &rt.cfg.id;
         let recs = recordings(&rt);
-        // A text search only finds alerts.
-        if q.text.is_empty() && (q.types.is_empty() || q.types.contains("recording")) {
+        // Looking for someone only finds alerts.
+        if q.who.is_none() && (q.types.is_empty() || q.types.contains("recording")) {
             for r in recs
                 .iter()
                 .filter(|r| r.end >= q.from && r.start <= q.to && in_tod(r.start, q.tod))
@@ -364,15 +233,9 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                     download: Some(format!("{}?download=1", rec_url(id, &r.name))),
                     pending: false,
                     seen: true,
-                    score: None,
                 });
             }
         }
-        let scores = q
-            .smart
-            .as_ref()
-            .map(|(ix, v)| ix.scores(&rt.events, v))
-            .unwrap_or_default();
         for e in rt.events.between(q.from, q.to) {
             if !in_tod(e.start, q.tod) || !event_matches(&e, &q.types) {
                 continue;
@@ -382,19 +245,11 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             {
                 continue;
             }
-            let keyword = !q.text.is_empty() && text_matches(&e, &rt.cfg.name, &q.text);
-            let score = scores.get(&e.id).copied();
-            // Smart search: keyword matches, plus pictures that look like the
-            // description (thresholded below, once all scores are known).
-            if !q.text.is_empty() && !keyword && score.is_none() {
+            if let Some(w) = &q.who
+                && !has_who(&e, w)
+            {
                 continue;
             }
-            let score = q.smart.as_ref().map(|_| match (score, keyword) {
-                (Some(s), true) => s.max(0.0) + KEYWORD_BONUS,
-                (Some(s), false) => s,
-                (None, true) => KEYWORD_BONUS,
-                (None, false) => f32::MIN,
-            });
             let play = play_at(&rt, &recs, Some(&e), e.start);
             let pending = play.is_none()
                 && e.clip.is_none()
@@ -431,35 +286,14 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                 play,
                 pending,
                 seen: mgr.seen.is_seen(&e.id, e.start),
-                score,
                 event: Some(e),
             });
         }
     }
-    if q.smart.is_some() {
-        // Keep the alerts close to the best match, best first.
-        let best = items
-            .iter()
-            .filter_map(|i| i.score)
-            .fold(f32::MIN, f32::max);
-        let cut = (best - SMART_SPREAD).max(SMART_MIN);
-        items.retain(|i| i.score.is_some_and(|s| s >= cut));
-        items.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-    } else {
-        items.sort_by(|a, b| b.start.cmp(&a.start));
-    }
+    items.sort_by(|a, b| b.start.cmp(&a.start));
     items.truncate(q.limit);
     items
 }
-
-/// Smart search: a keyword match (e.g. the AI's own "dog" label) counts
-/// this much extra.
-const KEYWORD_BONUS: f32 = 0.05;
-/// Smart search: results within this of the best match are shown...
-const SMART_SPREAD: f32 = 0.06;
-/// ...and only if the words fit better than "nothing of interest" does
-/// (true matches are typically +0.03 to +0.08).
-const SMART_MIN: f32 = 0.015;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Segment {
@@ -601,72 +435,6 @@ pub fn export_parts(
         rec_parts.into_iter().filter(|p| p.2 > p.1).collect()
     } else {
         clip_parts
-    }
-}
-
-#[cfg(test)]
-mod text_tests {
-    use super::*;
-    use crate::events::Label;
-
-    fn ev(labels: &[(&str, Option<&str>)], desc: &str) -> Event {
-        Event {
-            id: "e".into(),
-            camera: "c".into(),
-            start: Local::now(),
-            end: Local::now(),
-            labels: labels
-                .iter()
-                .map(|(l, c)| Label {
-                    label: l.to_string(),
-                    score: 0.9,
-                    color: c.map(str::to_string),
-                })
-                .collect(),
-            motion: true,
-            thumb: None,
-            clip: None,
-            clip_start: None,
-            focus: None,
-            desc: desc.into(),
-            boxes: Vec::new(),
-            summary: String::new(),
-            notes: Vec::new(),
-            thumb_at: None,
-            faces: Vec::new(),
-            plates: Vec::new(),
-            identified: false,
-            items: Vec::new(),
-            notified: 0,
-            ai_pending: false,
-            suspicious: String::new(),
-        }
-    }
-
-    #[test]
-    fn searches() {
-        let m = |e: &Event, q: &str| text_matches(e, "Front Door", &parse_text(q));
-        let white_car = ev(&[("car", Some("white"))], "");
-        assert!(m(&white_car, "white van"));
-        assert!(m(&white_car, "silver car"));
-        assert!(!m(&white_car, "red van"));
-        assert!(!m(&white_car, "black cat"));
-        let cat = ev(&[("cat", Some("black"))], "");
-        assert!(m(&cat, "black cat"));
-        assert!(m(&cat, "Black Cats"));
-        assert!(m(&cat, "kitten"));
-        assert!(!m(&cat, "white cat"));
-        // From a language model's description.
-        let van = ev(
-            &[("car", Some("grey"))],
-            "red delivery van; man in blue jacket",
-        );
-        assert!(m(&van, "red van"));
-        assert!(m(&van, "delivery"));
-        assert!(m(&van, "front door van"));
-        assert!(!m(&van, "ladder"));
-        assert!(m(&ev(&[("person", None)], ""), "people"));
-        assert!(m(&ev(&[("bus", None)], ""), "buses"));
     }
 }
 

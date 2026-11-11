@@ -277,18 +277,6 @@ async fn identify(
     }
     for b in e.boxes.clone().iter() {
         let (x, y, w, h) = (b.x * fw, b.y * fh, b.w * fw, b.h * fh);
-        if VEHICLES.contains(&b.label.as_str())
-            && cfg.ai.smart_search
-            && mgr.known.list().iter().any(|k| k.looks > 0)
-        {
-            // A taught vehicle that looks the same (CLIP).
-            let c = crate::recog::crop(&frame, x, y, w, h);
-            if let Ok(v) = mgr.clip.embed_image(&c).await
-                && let Some((n, _)) = mgr.known.match_look(&v)
-            {
-                notes.push(format!("Looks like {n}"));
-            }
-        }
         if want_plates && VEHICLES.contains(&b.label.as_str()) {
             let c = crate::recog::crop(&frame, x, y, w, h);
             for p in mgr.recog.plates(&c).await? {

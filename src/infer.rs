@@ -87,7 +87,6 @@ pub struct Input {
 
 pub enum Data {
     F32(Vec<f32>),
-    I64(Vec<i64>),
     U8(Vec<u8>),
 }
 
@@ -96,12 +95,6 @@ impl Input {
         Self {
             shape: shape.to_vec(),
             data: Data::F32(data),
-        }
-    }
-    pub fn i64(shape: &[usize], data: Vec<i64>) -> Self {
-        Self {
-            shape: shape.to_vec(),
-            data: Data::I64(data),
         }
     }
     pub fn u8(shape: &[usize], data: Vec<u8>) -> Self {
@@ -137,7 +130,6 @@ fn run_tract(plan: &Plan, input: Input) -> Result<Vec<Vec<f32>>> {
     use tract_onnx::prelude::*;
     let t: Tensor = match input.data {
         Data::F32(d) => Tensor::from_shape(&input.shape, &d),
-        Data::I64(d) => Tensor::from_shape(&input.shape, &d),
         Data::U8(d) => Tensor::from_shape(&input.shape, &d),
     }
     .map_err(|e| anyhow!("{e}"))?;
@@ -160,7 +152,6 @@ fn run_ort(s: &mut ort::session::Session, input: Input) -> Result<Vec<Vec<f32>>>
     let shape: Vec<i64> = input.shape.iter().map(|&x| x as i64).collect();
     let value: ort::session::SessionInputValue = match input.data {
         Data::F32(d) => Tensor::from_array((shape, d))?.into(),
-        Data::I64(d) => Tensor::from_array((shape, d))?.into(),
         Data::U8(d) => Tensor::from_array((shape, d))?.into(),
     };
     let outputs = s.run([value])?;
@@ -457,55 +448,6 @@ mod tests {
             &g.run(Input::f32(&[1, 3, 416, 416], pic.clone())).unwrap(),
             &c.run(Input::f32(&[1, 3, 416, 416], pic)).unwrap(),
             "object detection",
-        );
-        let img: Vec<f32> = (0..3 * 224 * 224)
-            .map(|i| ((i % 97) as f32 / 97.0) - 0.5)
-            .collect();
-        let (g, c) = both(
-            &dir.join("clip-vit-b32-visual.onnx"),
-            Some((&[1, 3, 224, 224], false)),
-        );
-        close(
-            &g.run(Input::f32(&[1, 3, 224, 224], img.clone())).unwrap(),
-            &c.run(Input::f32(&[1, 3, 224, 224], img)).unwrap(),
-            "smart search pictures",
-        );
-        let ids: Vec<i64> = (0..77)
-            .map(|i| {
-                if i == 0 {
-                    49406
-                } else if i < 6 {
-                    320 + i
-                } else if i == 6 {
-                    49407
-                } else {
-                    0
-                }
-            })
-            .collect();
-        set_use_gpu(true);
-        let g = load(
-            &dir.join("clip-vit-b32-textual.onnx"),
-            "test",
-            || unreachable!(),
-        )
-        .unwrap();
-        let c = Net::Cpu({
-            use tract_onnx::prelude::*;
-            tract_onnx::onnx()
-                .model_for_path(dir.join("clip-vit-b32-textual.onnx"))
-                .unwrap()
-                .with_input_fact(0, i64::fact([1, 77]).into())
-                .unwrap()
-                .into_optimized()
-                .unwrap()
-                .into_runnable()
-                .unwrap()
-        });
-        close(
-            &g.run(Input::i64(&[1, 77], ids.clone())).unwrap(),
-            &c.run(Input::i64(&[1, 77], ids)).unwrap(),
-            "smart search words",
         );
         let face: Vec<f32> = (0..3 * 640 * 640)
             .map(|i| ((i * 13) % 255) as f32)

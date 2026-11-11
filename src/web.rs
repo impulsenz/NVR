@@ -155,7 +155,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/notify/test", post(notify_test))
         .route("/api/notify/status", get(notify_status))
         .route("/api/maintenance/previews", post(rebuild_previews))
-        .route("/api/maintenance/redescribe", post(redescribe))
         .route("/api/maintenance/reidentify", post(reidentify))
         .route(
             "/api/maintenance/alert-pictures",
@@ -189,8 +188,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/hw-test", post(hw_test))
         .route("/api/ai/test", post(ai_test))
         .route("/api/ai/models", post(ai_models))
-        .route("/api/ai/describe-test", post(describe_test))
-        .route("/api/ai/describe-alert", post(describe_alert))
         .route("/api/cameras/{id}/motion", get(camera_motion))
         .route("/api/cloud/test", post(cloud_test))
         .route("/api/live/ws", get(live_ws))
@@ -305,9 +302,6 @@ async fn status(
         "me": user.as_ref().map(|u| crate::users::Me { username: u.0.0.username.clone(), role: u.0.0.role, cameras: u.0.0.cameras.clone() }),
         "cameras": cameras,
         "ai": m.ai.get().status(),
-        "smart_search": m.clip.status(),
-        // Vision-model descriptions: used today, last problem.
-        "describe": crate::describe::status(),
         // Where the AI models run (GPU or processor, and why).
         "ai_device": crate::infer::status(),
         // A newer GAZE (for the notice at the top; admins only use it).
@@ -319,7 +313,6 @@ async fn status(
             .map(|j| json!({"title": j.title, "done": j.done, "total": j.total}))
             .collect::<Vec<_>>(),
         "alerts_unseen": library::unseen_count(&m),
-        "smart_search_on": cfg.ai.smart_search,
         "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.lock().unwrap().len() } else { 0 },
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
@@ -400,15 +393,12 @@ async fn download_logs(req: Request) -> Response {
 async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_key = !cfg.ai.api_key.is_empty();
-    let has_describe_key = !cfg.ai.describe_key.is_empty();
     let has_token = !cfg.notify.token.is_empty();
     cfg.server.password.clear();
     cfg.ai.api_key.clear();
-    cfg.ai.describe_key.clear();
     cfg.notify.token.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["ai"]["has_key"] = json!(has_key);
-    v["ai"]["has_describe_key"] = json!(has_describe_key);
     v["notify"]["has_token"] = json!(has_token);
     v.as_object_mut().unwrap().remove("cameras");
     Json(v).into_response()
@@ -508,32 +498,46 @@ async fn known_delete(State(m): App, Path(id): Path<String>) -> Response {
 /// vehicle's plate and look.
 async fn known_photo(State(m): App, Path(id): Path<String>, body: Bytes) -> Response {
     let res = async {
-        let k = m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?;
-        let img = crate::imgutil::decode_jpeg(&body).map_err(|_| anyhow::anyhow!("send the photo as a JPEG picture"))?;
+        let k = m
+            .known
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("not found"))?;
+        let img = crate::imgutil::decode_jpeg(&body)
+            .map_err(|_| anyhow::anyhow!("send the photo as a JPEG picture"))?;
         if k.kind == "person" {
-            let mut faces: Vec<_> = m.recog.faces(&img).await?.into_iter().filter(|f| f.score >= 0.7).collect();
+            let mut faces: Vec<_> = m
+                .recog
+                .faces(&img)
+                .await?
+                .into_iter()
+                .filter(|f| f.score >= 0.7)
+                .collect();
             faces.sort_by(|a, b| (b.w * b.h).total_cmp(&(a.w * a.h)));
-            let face = faces.first().ok_or_else(|| anyhow::anyhow!("no face found in this photo — use a clear photo of the face"))?;
+            let face = faces.first().ok_or_else(|| {
+                anyhow::anyhow!("no face found in this photo — use a clear photo of the face")
+            })?;
             // Several people of similar size: we can't tell which one is meant.
             if let Some(second) = faces.get(1)
                 && second.w * second.h > face.w * face.h * 0.5
             {
-                anyhow::bail!("this photo has {} faces — use a photo of {} alone (or crop it)", faces.len(), k.name);
+                anyhow::bail!(
+                    "this photo has {} faces — use a photo of {} alone (or crop it)",
+                    faces.len(),
+                    k.name
+                );
             }
             let print = m.recog.faceprint(&img, face).await?;
-            m.known.add(&id, Some(&print), None, None, Some(&body))?;
+            m.known.add(&id, Some(&print), None, Some(&body))?;
             anyhow::Ok(json!({ "ok": true, "message": format!("Learned {}'s face", k.name) }))
         } else {
             let plates = m.recog.plates(&img).await.unwrap_or_default();
-            let look = if m.config().ai.smart_search { m.clip.embed_image(&img).await.ok() } else { None };
             for p in &plates {
-                m.known.add(&id, None, None, Some(&p.text), None)?;
+                m.known.add(&id, None, Some(&p.text), None)?;
             }
-            m.known.add(&id, None, look.as_deref(), None, Some(&body))?;
-            let what = match (plates.first(), look.is_some()) {
-                (Some(p), _) => format!("Read the plate {} and saved the photo", p.text),
-                (None, true) => "Saved how it looks (no plate could be read — type it in)".to_string(),
-                (None, false) => "Photo saved (no plate could be read — type it in; turn on smart search to also match how it looks)".to_string(),
+            m.known.add(&id, None, None, Some(&body))?;
+            let what = match plates.first() {
+                Some(p) => format!("Read the plate {} and saved the photo", p.text),
+                None => "Photo saved (no plate could be read — type it in)".to_string(),
             };
             anyhow::Ok(json!({ "ok": true, "message": what }))
         }
@@ -583,15 +587,13 @@ async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnR
             .ok_or_else(|| anyhow::anyhow!("face not found"))?;
         let print = crate::known::unpack(&f.print);
         let photo = std::fs::read(c.events.dir().join(&f.file)).ok();
-        m.known
-            .add(&id, Some(&print), None, None, photo.as_deref())?;
+        m.known.add(&id, Some(&print), None, photo.as_deref())?;
         f.name = Some(k.name.clone());
         e.notes.retain(|n| n != "Unknown face");
         let note = format!("Recognized {}", k.name);
         if !e.notes.contains(&note) {
             e.notes.push(note);
         }
-        e.summary.clear(); // described again, with the name
         c.events.save(e);
         anyhow::Ok(k.name)
     })();
@@ -644,7 +646,7 @@ async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
             if k.kind != "vehicle" {
                 anyhow::bail!("a number plate belongs to a vehicle");
             }
-            m.known.add(&k.id, None, None, Some(&r.plate), None)?;
+            m.known.add(&k.id, None, Some(&r.plate), None)?;
             // Alerts with this plate now say whose it is.
             let mut n = 0;
             for c in m.cameras() {
@@ -665,7 +667,6 @@ async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
                     if !e.notes.contains(&note) {
                         e.notes.push(note);
                     }
-                    e.summary.clear();
                     c.events.save(e);
                     n += 1;
                 }
@@ -702,7 +703,6 @@ async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
             if !e.notes.contains(&note) {
                 e.notes.push(note);
             }
-            e.summary.clear(); // described again, with the name
             c.events.save(e);
         }
         anyhow::ensure!(!prints.is_empty(), "those alerts are gone");
@@ -710,7 +710,6 @@ async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
             m.known.add(
                 &k.id,
                 Some(p),
-                None,
                 None,
                 if i == 0 { photo.as_deref() } else { None },
             )?;
@@ -790,7 +789,6 @@ async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Respon
         cfg.server.username.clear();
         // Every stored secret: API keys, notification tokens, camera logins.
         cfg.ai.api_key.clear();
-        cfg.ai.describe_key.clear();
         cfg.notify.token.clear();
         for c in &mut cfg.cameras {
             c.url = mask_url(&c.url).replace(":****@", ":PASSWORD@");
@@ -1276,189 +1274,6 @@ struct AiTestReq {
     ai: Option<crate::config::AiConfig>,
 }
 
-#[derive(Deserialize)]
-struct DescribeTest {
-    camera: String,
-    ai: crate::config::AiConfig,
-}
-
-/// Describe a camera's latest alert with the vision model in the form, to
-/// try it before saving.
-async fn describe_test(State(m): App, Json(mut r): Json<DescribeTest>) -> Response {
-    let saved = m.config().ai;
-    // The saved key only goes to the saved provider and server.
-    if r.ai.describe_key.is_empty()
-        && r.ai.describe_with == saved.describe_with
-        && r.ai.describe_url.trim() == saved.describe_url.trim()
-    {
-        r.ai.describe_key = saved.describe_key;
-    }
-    if !crate::describe::enabled(&r.ai) {
-        return err(StatusCode::BAD_REQUEST, "choose a vision model first");
-    }
-    let c = camera!(m, r.camera);
-    let Some(e) = c
-        .events
-        .all()
-        .into_iter()
-        .filter(|e| e.thumb.is_some() && !c.in_progress(e))
-        .max_by_key(|e| e.start)
-    else {
-        return err(StatusCode::NOT_FOUND, "this camera has no alerts yet");
-    };
-    let n = r.ai.summary_frames as usize;
-    let frames = match alert_frames(&m, &c, &e, n).await {
-        Ok(f) => f,
-        Err(e) => return bad(e),
-    };
-    let mut info = crate::describe::AlertInfo::of(&e, &c.cfg.name, &m.config());
-    // The instructions in the form, saved or not.
-    info.extra = r.ai.describe_prompt.trim().chars().take(2000).collect();
-    info.interactive = true;
-    let t0 = std::time::Instant::now();
-    match crate::describe::describe(&r.ai, &frames, &info).await {
-        Ok(d) => Json(json!({
-            "description": d.text,
-            "suspicious": d.suspicious,
-            "start": e.start,
-            "pictures": frames.len(),
-            "ms": t0.elapsed().as_millis() as u64,
-        }))
-        .into_response(),
-        Err(e) => bad(e),
-    }
-}
-
-/// The pictures a vision model sees of an alert, in time order: the alert
-/// picture and `n - 1` more moments from the full-quality recording.
-async fn alert_frames(
-    m: &Manager,
-    c: &crate::manager::CameraRuntime,
-    e: &crate::events::Event,
-    n: usize,
-) -> anyhow::Result<Vec<crate::imgutil::Frame>> {
-    let thumb = std::fs::read(
-        c.events.dir().join(
-            e.thumb
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("this alert has no picture"))?,
-        ),
-    )
-    .map_err(anyhow::Error::from)
-    .and_then(|b| crate::imgutil::decode_jpeg(&b))?;
-    let mut pics: Vec<_> = crate::identify::timed_moments(m, c, e, n.clamp(1, 12) - 1)
-        .await
-        .into_iter()
-        .map(|(t, f, _)| (t, f))
-        .collect();
-    pics.push((e.thumb_at.unwrap_or(e.start), thumb));
-    pics.sort_by_key(|(t, _)| *t);
-    Ok(pics.into_iter().map(|(_, f)| f).collect())
-}
-
-#[derive(Deserialize)]
-struct DescribeAlert {
-    camera: String,
-    id: String,
-    /// How many pictures to look at (default: the setting).
-    #[serde(default)]
-    frames: Option<usize>,
-    /// Instructions to try instead of the saved ones.
-    #[serde(default)]
-    prompt: Option<String>,
-    /// Save this description (from a try) to the alert, without asking the
-    /// model again.
-    #[serde(default)]
-    save: Option<SavedDescription>,
-}
-
-#[derive(Deserialize)]
-struct SavedDescription {
-    text: String,
-    #[serde(default)]
-    suspicious: Option<String>,
-}
-
-/// Describe one alert with the vision model, to check what it says (and
-/// keep it if it's right). Shows the pictures it looked at.
-async fn describe_alert(State(m): App, Json(r): Json<DescribeAlert>) -> Response {
-    let c = camera!(m, r.camera);
-    let Some(mut e) = c.events.get(&r.id) else {
-        return err(StatusCode::NOT_FOUND, "alert not found");
-    };
-    if let Some(sv) = r.save {
-        let text = sv
-            .text
-            .trim()
-            .trim_end_matches('.')
-            .chars()
-            .take(400)
-            .collect::<String>();
-        if text.is_empty() {
-            return err(StatusCode::BAD_REQUEST, "nothing to save");
-        }
-        let secs = (e.end - e.start).num_seconds().max(1);
-        let notes = if e.notes.is_empty() {
-            String::new()
-        } else {
-            format!(". {}", e.notes.join("; "))
-        };
-        let dur = if secs < 60 {
-            format!("{secs} s")
-        } else {
-            format!("{} min {} s", secs / 60, secs % 60)
-        };
-        e.summary = format!("{text} — {dur}{notes}");
-        e.suspicious = sv.suspicious.unwrap_or_default();
-        e.ai_pending = false;
-        c.events.save(e.clone());
-        tracing::info!(target: "event", "[{}] alert description replaced: {text}", c.cfg.name);
-        return Json(json!({"ok": true, "summary": e.summary})).into_response();
-    }
-    let mut cfg = m.config();
-    if !crate::describe::enabled(&cfg.ai) {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "choose a vision model first (Settings → Object recognition → Descriptions written by)",
-        );
-    }
-    if let Some(p) = r.prompt {
-        cfg.ai.describe_prompt = p.chars().take(2000).collect();
-    }
-    let n = r.frames.unwrap_or(cfg.ai.summary_frames as usize);
-    let frames = match alert_frames(&m, &c, &e, n).await {
-        Ok(f) => f,
-        Err(e) => return bad(e),
-    };
-    let mut info = crate::describe::AlertInfo::of(&e, &c.cfg.name, &cfg);
-    info.interactive = true;
-    let t0 = std::time::Instant::now();
-    let res = crate::describe::describe(&cfg.ai, &frames, &info).await;
-    // Small copies of the pictures, to see what it looked at.
-    use base64::Engine;
-    let pictures: Vec<String> = frames
-        .iter()
-        .filter_map(|f| f.fit(320).jpeg(70).ok())
-        .map(|j| {
-            format!(
-                "data:image/jpeg;base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(j)
-            )
-        })
-        .collect();
-    match res {
-        Ok(d) => Json(json!({
-            "description": d.text,
-            "suspicious": d.suspicious,
-            "pictures": pictures,
-            "ms": t0.elapsed().as_millis() as u64,
-            "model": if cfg.ai.describe_model.trim().is_empty() { cfg.ai.describe_with.clone() } else { cfg.ai.describe_model.clone() },
-        }))
-        .into_response(),
-        Err(e) => bad(e),
-    }
-}
-
 /// Models available from the chosen AI provider (key from the form or the saved one).
 async fn ai_models(State(m): App, Json(mut cfg): Json<crate::config::AiConfig>) -> Response {
     // The saved key only goes to the saved provider and server.
@@ -1588,9 +1403,9 @@ struct SearchQuery {
     tod_to: Option<String>,
     #[serde(default)]
     types: String,
-    /// Words to search for ("red van", "black cat").
+    /// Only alerts with this known person or vehicle (its id).
     #[serde(default)]
-    q: String,
+    who: String,
     /// "new" or "viewed" alerts only.
     #[serde(default)]
     seen: String,
@@ -1650,38 +1465,21 @@ async fn search(
         (None, Some(b)) => Some((NaiveTime::MIN, b)),
         _ => None,
     };
-    // Smart search: the words as a CLIP vector (the model loads on first use).
-    let mut smart_note = "off".to_string();
-    let smart = if m.config().ai.smart_search && !q.q.trim().is_empty() {
-        m.clip.set_model(&m.config().ai.smart_model);
-        m.smart.set_file(&m.clip.index_file());
-        let words = async {
-            anyhow::Ok(crate::smart::Query {
-                text: m.clip.embed_text(q.q.trim()).await?,
-                neutral: m.clip.neutral().await?,
-            })
-        };
-        match words.await {
-            Ok(v) => {
-                smart_note = "on".into();
-                Some((m.smart.clone(), v))
-            }
-            Err(e) => {
-                smart_note = format!("unavailable: {e:#}");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // A known person or vehicle (People & vehicles).
+    let who = (!q.who.is_empty())
+        .then(|| m.known.get(&q.who))
+        .flatten()
+        .map(|k| library::Who {
+            name: k.name,
+            plates: k.plates,
+        });
     let lq = LibQuery {
         cameras: allowed_cameras(split_list(&q.cameras), visible(&user)),
         from,
         to,
         tod,
         types: split_list(&q.types).into_iter().collect(),
-        text: library::parse_text(&q.q),
-        smart,
+        who,
         seen: match q.seen.as_str() {
             "new" => Some(false),
             "viewed" => Some(true),
@@ -1692,18 +1490,7 @@ async fn search(
     let items = tokio::task::spawn_blocking(move || library::search(&m, &lq))
         .await
         .unwrap_or_default();
-    let mut res = Json(items).into_response();
-    if let Ok(v) = HeaderValue::from_str(
-        &smart_note
-            .replace(['\r', '\n'], " ")
-            .chars()
-            .filter(|c| c.is_ascii())
-            .take(300)
-            .collect::<String>(),
-    ) {
-        res.headers_mut().insert("x-smart-search", v);
-    }
-    res
+    Json(items).into_response()
 }
 
 async fn timeline(
@@ -2300,12 +2087,9 @@ async fn jobs_list(State(m): App) -> Response {
     // Alerts still waiting for the background AI.
     let cfg = m.config();
     let now = Local::now();
-    let (mut describe, mut identify) = (0, 0);
+    let mut identify = 0;
     for c in m.cameras() {
-        for e in c.events.between(now - chrono::Duration::days(60), now) {
-            if cfg.ai.smart_search && e.thumb.is_some() && (e.summary.is_empty() || e.ai_pending) {
-                describe += 1;
-            }
+        for e in c.events.between(now - chrono::Duration::days(7), now) {
             if (cfg.ai.faces || cfg.ai.plates)
                 && !e.identified
                 && e.start > now - chrono::Duration::days(7)
@@ -2319,7 +2103,7 @@ async fn jobs_list(State(m): App) -> Response {
     }
     Json(json!({
         "jobs": crate::jobs::list(),
-        "waiting": {"describe": describe, "identify": identify},
+        "waiting": {"identify": identify},
         "paused": crate::jobs::paused(),
     }))
     .into_response()
@@ -2347,29 +2131,6 @@ async fn jobs_pause(Json(r): Json<PauseReq>) -> Response {
         if r.paused { "paused" } else { "resumed" }
     );
     Json(json!({ "paused": crate::jobs::paused() })).into_response()
-}
-
-/// Describe the alerts of the last `days` again (smart search), e.g. after
-/// changing the model or the number of moments looked at.
-async fn redescribe(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
-    if !m.config().ai.smart_search {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "Smart search is off (Settings → Object recognition)",
-        );
-    }
-    let since = Local::now() - chrono::Duration::days(r.days.clamp(1, 60));
-    let mut n = 0;
-    for c in m.cameras() {
-        for mut e in c.events.between(since, Local::now()) {
-            if !e.summary.is_empty() {
-                e.summary.clear();
-                c.events.save(e);
-                n += 1;
-            }
-        }
-    }
-    Json(json!({"ok": true, "message": format!("{n} alert(s) will be described again (see the list below)")})).into_response()
 }
 
 /// Look for faces and number plates in the alerts of the last `days` again,
@@ -2401,7 +2162,6 @@ async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
             });
             e.plates.clear();
             e.identified = false;
-            e.summary.clear(); // so names go into the description
             c.events.save(e);
             n += 1;
         }
