@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.5.9 — November 2026
+- **Made for phones**: a tab bar at the bottom (Live, Alerts, Recordings, Settings and your account menu, which now holds System, Logs and the update check), bigger buttons, toolbars and filter chips in one row that scrolls sideways, alerts one per row, one camera filling the width, a compact video player in the alert view, the timeline right under the pictures, and the settings sections as tabs.
+- **Alert pictures from the recording**: a few seconds after the moment is saved, each alert's picture is taken from the recorded file (full quality when there is some) instead of the live stream — also while the alert is still going on.
+- **Object recognition is Off or Built-in**: the AI server, Ollama, Gemini and OpenAI-compatible options are gone; a setup using one switches to Built-in.
+
 ## 0.5.8 — November 2026
 - **On-screen display**: items you drag on the preview now stay exactly where you drop them (no snapping to a grid). The nine position buttons are still there for quick placement.
 - **Camera view timeline works like the Recordings timeline**: detailed time marks with a "now" line, zoom from 5 minutes to 7 days, **drag along it to run through the time-lapse on the camera's picture** (with the time shown), let go to play from there, a line that follows playback, and the strip showing which parts of the time-lapse are loaded — it keeps loading up to now while you watch.
