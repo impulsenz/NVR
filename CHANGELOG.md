@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.5 — November 2026
+- **Fix a wrongly named face**: on an alert, a recognised face now has **✎ Wrong?**. Choose who it really is, make a **new person** from it, or say it's **not anyone you know**. GAZE learns from the correction: the person it was wrongly taken for stops matching that face (and faces very like it), so the same mistake isn't made again. The alert's "Recognized …" notes are updated too.
+
 ## 0.6.4 — November 2026
 - **Package detection stays in the package spot**: the spot you drew (and zones watching for items) is only checked when something actually reached it during the alert: movement there, or a person or object the AI found there. Activity elsewhere in the picture, with shadows or light changing over the spot, no longer makes "item left or taken" / package alerts.
 - The "before" picture of the spot must be recent (from the last two minutes before the alert); an old one is not compared.
