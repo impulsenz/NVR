@@ -1,5 +1,16 @@
 # What's new in GAZE
 
+## 0.6.0 — November 2026
+- **Back up to a NAS**: Settings → Backup now offers **a NAS over FTP** (Synology, QNAP, a router's USB drive … — built in, nothing to install) and a login for a NAS's **shared folder** (`\\NAS\cameras`).
+- **Time-lapse for all your footage**: previews are now made for every recording, also the times without a light timeline copy (e.g. after GAZE was off or the copy reconnected), and the background task keeps the newest footage ready. Settings → Tasks shows which camera, file and time it's on, and how many are left.
+- **Alerts calendar fixed**: one click shows that day (and it stays), a second click makes a range, the quick choices apply at once, and there's a new **All time**.
+- **Full screen** from the header, on any page (phones too, where the browser allows it).
+- **Logs** are now under Settings.
+- **Live pictures fill their box** (stretched by default, as set in Settings → Live view & display), so 4:3 sub-streams show no black bars.
+- Camera view: the stream and frame-rate choices moved to the camera's settings (General → Live view). Timeline legends only list what's on them and the objects that camera looks for.
+- On-screen display: **frame rate** and **resolution** are separate items.
+- Camera quick setup: **Amcrest**, Lorex, Imou, Milesight, Bosch, Vivotek, Panasonic / i-PRO, INSTAR, D-Link and older Hikvision formats added (25 in all).
+
 ## 0.5.9 — November 2026
 - **Made for phones**: a tab bar at the bottom (Live, Alerts, Recordings, Settings and your account menu, which now holds System, Logs and the update check), bigger buttons, toolbars and filter chips in one row that scrolls sideways, alerts one per row, one camera filling the width, a compact video player in the alert view, the timeline right under the pictures, and the settings sections as tabs.
 - **Alert pictures from the recording**: a few seconds after the moment is saved, each alert's picture is taken from the recorded file (full quality when there is some) instead of the live stream — also while the alert is still going on.
