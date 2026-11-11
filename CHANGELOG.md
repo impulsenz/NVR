@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.6 — November 2026
+- **Package spot picture fixed**: the camera's picture under "Notice parcels delivered or picked up" now shows the live sub-stream (like the motion mask), so it appears straight away and keeps updating. Before, it asked the camera for a full-size snapshot, which could fail or time out (blank box) on big or H.265 streams.
+- The camera editor's pictures (motion mask, package spot, zones) now always get the sub-stream while the editor is open, even if the Live grid is set to the main stream.
+
 ## 0.6.5 — November 2026
 - **Fix a wrongly named face**: on an alert, a recognised face now has **✎ Wrong?**. Choose who it really is, make a **new person** from it, or say it's **not anyone you know**. GAZE learns from the correction: the person it was wrongly taken for stops matching that face (and faces very like it), so the same mistake isn't made again. The alert's "Recognized …" notes are updated too.
 
