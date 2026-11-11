@@ -348,11 +348,40 @@ pub async fn refresh_pictures(mgr: Arc<Manager>, days: i64) {
     info!("alert pictures: {done} made sharper from recordings, {skipped} without a recording");
 }
 
-/// Replace an alert's picture with the same moment from the full-quality
-/// recording. False when there's no HD footage of it.
+/// A saved file with the moment `t` in it: the full-quality footage if
+/// there is some, otherwise any recording of the camera (stream 2 or the
+/// timeline copy).
+fn saved_source(
+    rt: &CameraRuntime,
+    e: &Event,
+    t: chrono::DateTime<chrono::Local>,
+) -> Option<(PathBuf, f64)> {
+    if let Some(s) = hd_source(rt, e, t) {
+        return Some(s);
+    }
+    for (dir, recs) in [
+        (rt.dir.clone(), crate::library::recordings(rt)),
+        (
+            crate::storage::timeline_dir(&rt.dir),
+            crate::library::timeline_recordings(rt),
+        ),
+    ] {
+        if let Some(r) = recs.iter().find(|r| r.start <= t && t <= r.end) {
+            return Some((
+                dir.join(&r.name),
+                ((t - r.start).num_milliseconds() as f64 / 1000.0).max(0.0),
+            ));
+        }
+    }
+    None
+}
+
+/// Replace an alert's picture with the same moment from the saved
+/// recording (full quality when there is one). False when that moment
+/// isn't in a saved file (yet).
 pub async fn sharpen(ffmpeg: &str, rt: &CameraRuntime, e: &mut Event) -> bool {
     let t = e.thumb_at.unwrap_or(e.start + chrono::Duration::seconds(1));
-    let Some((file, off)) = hd_source(rt, e, t) else {
+    let Some((file, off)) = saved_source(rt, e, t) else {
         return false;
     };
     let Ok(frame) = grab(ffmpeg, &file, off).await else {
@@ -373,9 +402,13 @@ pub async fn sharpen(ffmpeg: &str, rt: &CameraRuntime, e: &mut Event) -> bool {
     true
 }
 
-/// Every alert's picture is remade from the full-quality footage once the
-/// alert is over (the live picture comes from the small stream 2).
-async fn sharpen_new(mgr: &Manager, tried: &mut std::collections::HashSet<String>) {
+/// Every alert's picture is made from the saved recording as soon as that
+/// moment has been written (the live picture is only a stand-in until
+/// then). Tried a few times, in case the file wasn't ready.
+async fn sharpen_new(
+    mgr: &Manager,
+    tries: &mut std::collections::HashMap<String, (u8, chrono::DateTime<chrono::Local>)>,
+) {
     let ffmpeg = mgr.config().server.ffmpeg_path;
     let now = chrono::Local::now();
     for rt in mgr.cameras() {
@@ -384,17 +417,25 @@ async fn sharpen_new(mgr: &Manager, tried: &mut std::collections::HashSet<String
             .between(now - chrono::Duration::hours(24), now)
             .into_iter()
             .filter(|e| e.thumb.as_deref().is_some_and(|t| !t.ends_with("-hd.jpg")))
-            // Over for a minute, so its HD clip has been written.
+            // The moment of the picture has been written to the file.
+            .filter(|e| (now - e.thumb_at.unwrap_or(e.start)).num_seconds() > 12)
+            // Each picture (it can change while the alert goes on) at most
+            // five times, a minute apart.
             .filter(|e| {
-                (now - e.end).num_seconds() > 60 && !rt.in_progress(e) && !tried.contains(&e.id)
+                let key = format!("{}:{}", e.id, e.thumb.as_deref().unwrap_or(""));
+                tries
+                    .get(&key)
+                    .is_none_or(|(n, last)| *n < 5 && (now - *last).num_seconds() >= 60)
             })
             .take(10)
             .collect();
         for mut e in todo {
-            tried.insert(e.id.clone());
-            crate::load::wait_for_cpu(85, Duration::from_secs(120)).await;
+            let key = format!("{}:{}", e.id, e.thumb.as_deref().unwrap_or(""));
+            let n = tries.get(&key).map(|x| x.0).unwrap_or(0);
+            tries.insert(key, (n + 1, chrono::Local::now()));
+            crate::load::wait_for_cpu(90, Duration::from_secs(30)).await;
             if sharpen(&ffmpeg, &rt, &mut e).await {
-                // Keep what was added meanwhile (descriptions, faces).
+                // Keep what was added meanwhile (faces, notes).
                 if let Some(mut cur) = rt.events.get(&e.id) {
                     cur.thumb = e.thumb;
                     rt.events.save(cur);
@@ -402,18 +443,27 @@ async fn sharpen_new(mgr: &Manager, tried: &mut std::collections::HashSet<String
             }
         }
     }
-    if tried.len() > 5000 {
-        tried.clear();
+    if tries.len() > 5000 {
+        tries.clear();
+    }
+}
+
+/// Background job: alert pictures from the saved recordings.
+async fn pictures_from_recordings(mgr: Arc<Manager>) {
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let mut tries = std::collections::HashMap::new();
+    loop {
+        sharpen_new(&mgr, &mut tries).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
 /// Background job: alerts with people or vehicles, newest first.
 pub async fn run(mgr: Arc<Manager>) {
+    tokio::spawn(pictures_from_recordings(mgr.clone()));
     tokio::time::sleep(Duration::from_secs(40)).await;
     let mut last_err = String::new();
-    let mut tried = std::collections::HashSet::new();
     loop {
-        sharpen_new(&mgr, &mut tried).await;
         let cfg = mgr.config();
         if cfg.ai.faces || cfg.ai.plates {
             let cutoff = chrono::Local::now() - chrono::Duration::days(7);

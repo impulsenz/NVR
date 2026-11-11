@@ -201,8 +201,12 @@ impl EventStore {
                     e.notes.push(n);
                 }
             }
-            // Pictures replaced by "Refresh alert pictures".
-            if old.thumb.as_deref().is_some_and(|t| t.ends_with("-hd.jpg")) && e.thumb != old.thumb
+            // A picture already made from the saved recording stays, unless
+            // detection has since chosen a better moment (that one is then
+            // made from the recording again).
+            if old.thumb.as_deref().is_some_and(|t| t.ends_with("-hd.jpg"))
+                && e.thumb != old.thumb
+                && e.thumb_at == old.thumb_at
             {
                 e.thumb = old.thumb;
             }
