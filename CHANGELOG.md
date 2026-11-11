@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## 0.5.5 — November 2026
+- **Live sound explains itself**: when a camera's sound can't be played, GAZE now says why instead of "no supported source" — most often the camera stream is set to video only (on Hikvision: Video/Audio → Video → Stream Type "Video&Audio"). G.711 µ-law/A-law, AAC and other camera audio is converted for the browser, and the sub-stream's sound is used when only it has sound. The log says which sound each camera stream sends.
+- **A nicer update bar**: the version change (0.5.4 → 0.5.5), when it was released, a progress bar while downloading, and **Try again** if an update fails. **Later** hides it until the next version.
+- **⟳ Updates** shows a green ✓ after checking when GAZE is up to date.
+- **Alerts filter**: new **Faces** and **Number plates** chips show alerts where a face was found or a plate read. Bicycle, bus and "Other objects" are gone from the chips (those alerts still show under "All alerts").
+- **Dismiss all new** on the Alerts page clears every new alert at once and shows how many there are.
+- **Pause background work** (Settings → Tasks): pause AI on alerts, previews, cloud backup or maintenance — or all of them — to lighten the load, and resume when you like. Recording, live view and new alerts carry on as normal.
+
 ## 0.5.4 — November 2026
 - **Video on the graphics card**: GAZE now tests your GPU's video decoder and encoder at start-up and uses them by itself (Settings → GPU acceleration → Choose automatically), for every stream — so live view, motion detection and previews no longer load the processor.
 - **What runs where** (Settings → Tasks): every AI model and video job, with GPU or CPU — and why, when it's the CPU.
