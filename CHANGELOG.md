@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## 0.6.2 — November 2026
+- **Missing time-lapse is filled in**: besides the last 24 hours, GAZE now goes back over all older footage every ten minutes and makes any time-lapse preview that's missing (a batch at a time, while the computer is quiet). A file that fails is tried again later. Settings → Tasks shows how many are left.
+- **Choose what scrubbing shows** (Recordings, next to the clip buttons): the **time-lapse**, the **sub-stream** or the **main stream** video, with how long each picture takes to appear, so you can compare.
+- **Time-lapse in alert pop-ups**: drag along the bar and the time-lapse picture fills the video; let go and the full-quality footage loads at that moment.
+- Time-lapse pictures that came out as one flat colour (often green, from a frame that couldn't be decoded) are replaced with the picture next to them.
+- Calendar: **Whole day** is now **All time**, showing every alert there is.
+- The data rate at the top right counts only what's streaming from GAZE to the device you're on.
+
 ## 0.6.1 — November 2026
 - **Fewer missed objects**: when the AI sees nothing in the whole picture, it takes a second, zoomed-in look where the motion is, so small or far-away people, cars and animals are found.
 - **Alert pictures show the right moment**: the picture taken from the recording is matched against what detection saw live (the recording and the live view run a second or two apart), so the box no longer lands on an empty spot.
