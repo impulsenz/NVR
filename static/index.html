@@ -72,6 +72,7 @@
             <img id="focus-img" alt="">
             <video id="focus-video" playsinline hidden></video>
             <div class="msg" id="focus-msg"></div>
+            <div class="sprite" id="focus-sprite" hidden><span class="ovtext scrub-t"></span></div>
             <div class="loading" id="focus-loading" hidden><div class="spinner"></div><span>Loading full quality…</span></div>
             <svg id="focus-boxes" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute;pointer-events:none;z-index:1" hidden></svg>
             <div id="focus-motion-info" class="ovtext" style="position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:2" hidden></div>
@@ -108,13 +109,14 @@
           <div class="card camtl" id="cam-tl">
             <div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Timeline</h2>
               <button type="button" class="small" id="ctl-left" title="Earlier">◀</button>
-              <select id="ctl-zoom"><option value="3600">1 h</option><option value="21600" selected>6 h</option><option value="86400">24 h</option><option value="604800">7 days</option></select>
+              <select id="ctl-zoom"><option value="300">5 min</option><option value="900">15 min</option><option value="3600">1 h</option><option value="21600" selected>6 h</option><option value="86400">24 h</option><option value="604800">7 days</option></select>
               <button type="button" class="small" id="ctl-right" title="Later">▶</button>
               <button type="button" class="small" id="ctl-now">Now</button></div>
             <div class="ctl-axis" id="ctl-axis"></div>
             <div class="ctl-lane" id="ctl-lane"><div class="preview" hidden><div class="img"></div><div class="t"></div></div></div>
+            <div class="tlp ctl-tlp" id="ctl-tlp" title="Time-lapse previews — blue: ready to scrub · striped: loading · grey: not loaded yet · red: couldn't be made"></div>
             <div class="legend" data-legend="cam"></div>
-            <div class="hint">Click anywhere to play from that moment, or click a symbol to watch that alert.</div>
+            <div class="hint">Drag along the timeline to run through the time-lapse on the picture; let go to play from there. Click a symbol to watch that alert.</div>
           </div>
         </div>
         <div>

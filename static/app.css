@@ -311,14 +311,21 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
 /* PTZ pad */
 /* per-camera timeline */
 .camtl { margin-top: 10px; }
-.ctl-axis { position: relative; height: 16px; font-size: 11px; color: var(--muted); }
+.ctl-axis { position: relative; height: 26px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.ctl-axis i { position: absolute; bottom: 0; width: 1px; background: var(--muted); }
+.ctl-axis i.mj { height: 8px; opacity: .9; }
+.ctl-axis i.mn { height: 4px; opacity: .45; }
+.ctl-axis span { top: 2px; }
+.ctl-tlp { border-radius: 0 0 6px 6px; }
+#focus-sprite { position: absolute; inset: 0; background-repeat: no-repeat; background-color: #000; z-index: 2; pointer-events: none; }
+#focus-sprite .scrub-t { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); font-size: 15px; font-weight: 600; padding: 3px 10px; }
 .ctl-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
-.ctl-lane { position: relative; height: 46px; background: var(--panel2); border-radius: 6px; cursor: pointer; touch-action: none; }
-.ctl-lane .seg { position: absolute; top: 26px; height: 12px; background: #2d5a3a; border-radius: 2px; }
+.ctl-lane { position: relative; height: 60px; background: var(--panel); border-radius: 6px 6px 0 0; cursor: crosshair; touch-action: none; }
+.ctl-lane .seg { position: absolute; top: 34px; height: 14px; background: #2d5a3a; border-radius: 2px; }
 .ctl-lane .seg.clip { background: #5b3f8f; }
-.ctl-lane .mo { position: absolute; top: 24px; width: 2px; height: 16px; background: var(--amber); opacity: .8; }
+.ctl-lane .mo { position: absolute; top: 32px; width: 2px; height: 18px; background: var(--amber); opacity: .8; }
 .ctl-lane .ic { position: absolute; top: 2px; transform: translateX(-50%); font-size: 16px; line-height: 20px; cursor: pointer; }
-.ctl-lane .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; pointer-events: none; }
+.ctl-lane .head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; pointer-events: none; z-index: 3; box-shadow: 0 0 4px rgba(0,0,0,.6); }
 .ctl-lane .preview { bottom: 52px; }
 .tl-row .ev { cursor: pointer; }
 .tl-row .ev .ic { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); font-size: 15px; cursor: pointer; padding: 2px; }
@@ -513,7 +520,7 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 @media (max-width: 760px) { .corner-pick { grid-template-columns: 26px 26px 26px; grid-template-rows: 18px 18px 18px; } .corner-pick button { width: 26px; height: 18px; } }
 /* OSD preview: items can be dragged to a corner */
 #o-prev .osd-drag, #go-prev .osd-drag { cursor: grab; outline: 1px dashed rgba(255,255,255,.35); outline-offset: 2px; touch-action: none; }
-.osd-ghost { position: fixed; z-index: 1000; pointer-events: none; transform: translate(-50%, -50%); opacity: .85; }
+.osd-ghost { position: fixed; z-index: 1000; pointer-events: none; opacity: .85; }
 
 /* Pan / tilt / zoom on the picture */
 .ptz-ov { position: absolute; right: 12px; bottom: 44px; z-index: 4; display: flex; align-items: flex-end; gap: 10px; opacity: 0; transition: opacity .2s; }
@@ -735,4 +742,4 @@ table.where td:first-child { width: 44px; }
 @media (max-width: 680px) { .surface.has-pov .pov .controls .p-back, .surface.has-pov .pov .controls .p-fwd { display: none; } }
 
 /* On-screen display placed anywhere ("p:X,Y") */
-.ov.free { position: absolute; }
+.ov.free { position: absolute; padding: 0; }

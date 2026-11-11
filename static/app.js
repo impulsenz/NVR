@@ -386,8 +386,7 @@ const OSD_ITEMS = [['name', 'Camera name'], ['clock', 'Date &amp; time'], ['stat
 function osdItemsHtml(px, o) {
   return OSD_ITEMS.map(([k, t]) => `<span></span><div class="row osd-row"><label class="check" style="padding:0;min-width:300px"><input type="checkbox" id="${px}-${k}" ${o['show_' + k] ? 'checked' : ''}> ${t}</label>${cornerSel(`${px}-${k}-c`, o[k + '_corner'])}</div>`).join('')
     + `<label for="${px}-text">Extra text</label><div class="row"><input type="text" id="${px}-text" value="${esc(o.text || '')}" maxlength="200" placeholder="e.g. Driveway – north" style="flex:1">${cornerSel(px + '-text-c', o.text_corner)}</div>
-    <span></span><div><label class="check"><input type="checkbox" id="${px}-snap" ${store.get('osd-snap', true) ? 'checked' : ''}> Snap to the nine positions when dragging</label>
-      <div class="hint">Drag any item on the preview to move it. With snapping off it stays exactly where you drop it.</div></div>`;
+    <span></span><div class="hint">Drag any item on the preview and drop it where you want it, or pick one of the nine places.</div>`;
 }
 function readOsdItems(px) {
   const o = {};
@@ -397,15 +396,16 @@ function readOsdItems(px) {
 }
 // Drag the items on a preview to place them (`enabled()`: may they move now).
 function wireOsdDrag(prev, px, enabled, redraw) {
-  const snap = $(px + '-snap'); if (snap) snap.onchange = () => store.set('osd-snap', snap.checked);
   prev.onpointerdown = (e) => {
     const item = e.target.closest('[data-osd]');
     if (!item) return;
     if (!enabled()) { toast('Tick “Use settings just for this camera” to move items.'); return; }
     e.preventDefault();
-    const k = item.dataset.osd, ghost = item.cloneNode(true);
-    ghost.classList.add('osd-ghost'); document.body.appendChild(ghost);
-    const move = (ev) => { ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px'; };
+    const k = item.dataset.osd, ghost = item.cloneNode(true), ir = item.getBoundingClientRect();
+    // Where in the item it was picked up, so it lands exactly where it's let go.
+    const gx = e.clientX - ir.left, gy = e.clientY - ir.top;
+    ghost.classList.add('osd-ghost'); ghost.style.width = ir.width + 'px'; document.body.appendChild(ghost);
+    const move = (ev) => { ghost.style.left = (ev.clientX - gx) + 'px'; ghost.style.top = (ev.clientY - gy) + 'px'; };
     move(e);
     item.style.opacity = .3;
     const up = (ev) => {
@@ -413,10 +413,13 @@ function wireOsdDrag(prev, px, enabled, redraw) {
       ghost.remove(); item.style.opacity = '';
       const r = prev.getBoundingClientRect();
       if (ev.clientX < r.left - 40 || ev.clientX > r.right + 40 || ev.clientY < r.top - 40 || ev.clientY > r.bottom + 40) return;
-      const fx = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), fy = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
-      const spot = !snap || snap.checked
-        ? (fy < 1 / 3 ? 't' : fy < 2 / 3 ? 'm' : 'b') + (fx < 1 / 3 ? 'l' : fx < 2 / 3 ? 'c' : 'r')
-        : `p:${(fx * 100).toFixed(1)},${(fy * 100).toFixed(1)}`;
+      // The item's top-left corner where it was dropped, kept inside the
+      // picture; stored so the box sits the same way on any picture size
+      // (left = L·(W − w), as the box is shifted by L of its own width).
+      const left = ev.clientX - gx - r.left, top = ev.clientY - gy - r.top;
+      const fx = r.width > ir.width ? Math.min(1, Math.max(0, left / (r.width - ir.width))) : 0;
+      const fy = r.height > ir.height ? Math.min(1, Math.max(0, top / (r.height - ir.height))) : 0;
+      const spot = `p:${(fx * 100).toFixed(1)},${(fy * 100).toFixed(1)}`;
       const inp = $(`${px}-${k}-c`);
       if (inp) { inp.value = spot; paintCorners(); redraw(); }
     };
@@ -1444,10 +1447,30 @@ let ptzMove = null, ptzStop = null;
 })();
 
 // ---------- per-camera timeline (camera view) ----------
+// Works like the Recordings timeline: drag to run through the time-lapse on
+// the camera's picture, let go to play from there; a strip shows which
+// parts of the time-lapse are loaded.
+// Time marks for a window: labels, small ticks between, and grid lines.
+function timeMarks(a, span, pct) {
+  const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map(x => x * 1000);
+  const step = steps.find(x => span / x <= 12) || 86400000;
+  const minor = step / ([120000, 600000, 1800000, 7200000].includes(step) ? 4 : [10800000, 43200000].includes(step) ? 3 : step === 86400000 ? 4 : 5);
+  let axis = '', grid = '';
+  for (let t = Math.ceil(a / minor) * minor; t <= a + span; t += minor) {
+    const major = Math.abs(t % step) < 1 || (step >= 86400000 && new Date(t).getHours() === 0 && new Date(t).getMinutes() === 0);
+    if (!major) { axis += `<i class="mn" style="left:${pct(t)}%"></i>`; continue; }
+    const d = new Date(t), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    axis += `<i class="mj" style="left:${pct(t)}%"></i><span style="left:${pct(t)}%">${step >= 86400000 ? fmtDay(d) : hm + (hm === '00:00' ? ' ' + fmtDay(d) : '')}</span>`;
+    grid += `<i style="left:${pct(t)}%"></i>`;
+  }
+  const nowP = pct(Date.now());
+  if (nowP >= 0 && nowP <= 100) grid += `<i class="now" style="left:${nowP}%" title="Now"></i>`;
+  return {axis, grid};
+}
 const camTl = {
-  id: null, data: null, zoom: 21600, end: null, loadedAt: 0,
+  id: null, data: null, zoom: 21600, end: null, loadedAt: 0, pv: new Map(), pfGen: 0,
   open(id) {
-    this.id = id; this.zoom = +$('ctl-zoom').value; this.end = null;
+    this.id = id; this.zoom = +$('ctl-zoom').value; this.end = null; this.pv = new Map();
     this.load();
   },
   win() { const end = this.end || Date.now(); return [end - this.zoom * 1000, end]; },
@@ -1458,21 +1481,20 @@ const camTl = {
       const [t] = await api(`api/timeline?cameras=${enc(id)}&from=${enc(new Date(a).toISOString())}&to=${enc(new Date(b).toISOString())}`);
       if (id !== this.id) return;
       this.data = t || {segments: [], events: []}; this.loadedAt = Date.now();
-      this.draw();
+      this.draw(); this.prefetch();
     } catch (e) {}
   },
+  // The files the time-lapse comes from (the light stream 2 copies when kept).
+  sources() {
+    const segs = (this.data && this.data.segments) || [], sub = segs.some(x => x.kind === 'sub');
+    return segs.filter(x => x.kind !== 'clip' && !(sub && x.kind === 'recording'));
+  },
   draw() {
-    if (!this.data) return;
+    if (!this.data || this.dragging) return;
     const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
-    const steps = [600, 1800, 3600, 10800, 21600, 43200, 86400].map(x => x * 1000);
-    const step = steps.find(x => span / x <= 7) || 86400000;
-    let axis = '';
-    for (let t = Math.ceil(a / step) * step; t <= b; t += step) {
-      const d = new Date(t);
-      axis += `<span style="left:${pct(t)}%">${span > 86400000 * 1.5 ? fmtDay(d) : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')}</span>`;
-    }
+    const {axis, grid} = timeMarks(a, span, pct);
     $('ctl-axis').innerHTML = axis;
-    let lane = '';
+    let lane = `<div class="tl-grid">${grid}</div>`;
     for (const sg of this.data.segments) {
       const x0 = Math.max(0, pct(new Date(sg.start).getTime())), x1 = Math.min(100, pct(new Date(sg.end).getTime()));
       if (x1 > 0 && x0 < 100 && x1 > x0) lane += `<div class="seg ${sg.kind === 'clip' ? 'clip' : ''}" style="left:${x0}%;width:${Math.max(0.15, x1 - x0)}%"></div>`;
@@ -1491,15 +1513,76 @@ const camTl = {
     const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
     lb.innerHTML = lane + '<div class="head" hidden></div>';
     lb.appendChild(pv);
+    this.paintStrip(); this.paintHead();
+  },
+  // Which parts of the time-lapse are ready to scrub.
+  paintStrip() {
+    const el = $('ctl-tlp'); if (!el || !this.data) return;
+    const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
+    let h = '';
+    for (const sg of this.sources()) {
+      const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
+      const st = this.pv.get(sg.url) || {state: 'wait'};
+      const end = st.state === 'ready' && st.secs ? Math.min(Math.max(s1, isGrowing(sg) ? Date.now() : s1), s0 + st.secs * 1000) : s1;
+      const x0 = Math.max(0, pct(s0)), x1 = Math.min(100, pct(end));
+      if (x1 > 0 && x0 < 100 && x1 > x0) h += `<i class="${st.state}" style="left:${x0}%;width:${Math.max(x1 - x0, 0.15)}%"></i>`;
+    }
+    el.innerHTML = h;
+  },
+  // Load the time-lapse of everything in view, newest first (up to now).
+  async prefetch() {
+    const gen = ++this.pfGen, id = this.id;
+    const todo = this.sources().slice().sort((x, y) => new Date(y.start) - new Date(x.start)).slice(0, 300);
+    let i = 0;
+    const worker = async () => {
+      while (i < todo.length && gen === this.pfGen && id === this.id) {
+        const sg = todo[i++], had = this.pv.get(sg.url);
+        if (had && had.state === 'ready' && !(isGrowing(sg) && Date.now() - had.at > 30000)) continue;
+        if (!had || had.state !== 'ready') { this.pv.set(sg.url, {state: 'loading'}); this.paintStrip(); }
+        const sp = await spriteFor(id, sg);
+        if (sp) await Promise.all([...Array(sp.info.pages).keys()].map(p => new Promise(r => {
+          const im = spritePage(sp.url + p); if (im.complete) r(); else { im.addEventListener('load', r, {once: true}); im.addEventListener('error', r, {once: true}); }
+        })));
+        this.pv.set(sg.url, sp ? {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval} : {state: isGrowing(sg) ? 'wait' : 'none'});
+        this.paintStrip();
+      }
+    };
+    worker(); worker();
+  },
+  // The white line: where the drag is, or what's playing.
+  paintHead(T) {
+    const h = $('ctl-lane').querySelector('.head'); if (!h) return;
+    if (T == null && focusPlayback && focusPlayer && focusPlayer.item) T = focusPlayer.wallAt(focusPlayer.cur()).getTime();
+    const [a, b] = this.win(), p = T == null ? -1 : (T - a) / (b - a);
+    h.hidden = p < 0 || p > 1;
+    if (!h.hidden) h.style.left = (p * 100) + '%';
+  },
+  segAt(T) {
+    const segs = (this.data && this.data.segments) || [];
+    const hit = (sg) => new Date(sg.start).getTime() <= T && T < (isGrowing(sg) ? Date.now() + 5000 : new Date(sg.end).getTime() + 1000);
+    return segs.find(x => x.kind === 'sub' && hit(x)) || segs.find(x => x.kind === 'recording' && hit(x)) || segs.find(hit);
+  },
+  // The time-lapse picture at T on the camera's picture.
+  async scrubTo(T) {
+    const el = $('focus-sprite'), surf = $('focus-surface');
+    el.querySelector('.scrub-t').textContent = fmtDate(new Date(T));
+    const sg = this.sources().find(s => new Date(s.start).getTime() <= T && T < (isGrowing(s) ? Date.now() + 5000 : new Date(s.end).getTime() + 1000));
+    if (Date.now() - T < 15000) { liveStill(el, this.id); el.hidden = false; return; }
+    if (!sg) return;
+    const sp = await spriteFor(this.id, sg);
+    if (!sp || this.scrubT !== T) return;
+    if (spriteStyle(el, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), surf.clientWidth, surf.clientHeight)) el.hidden = false;
   },
   // Play the camera's footage at time T in the camera view.
   playAt(T) {
-    const segs = (this.data && this.data.segments) || [];
-    const hit = (sg) => new Date(sg.start).getTime() <= T && T < new Date(sg.end).getTime() + 1000;
-    // The light stream 2 copy opens fastest; otherwise the recording.
-    const sg = segs.find(x => x.kind === 'sub' && hit(x)) || segs.find(x => x.kind === 'recording' && hit(x)) || segs.find(hit);
-    if (!sg) { toast('No recorded footage at that time (camera offline or not recording).'); return; }
+    const sg = this.segAt(T);
+    if (!sg) { toast('No recorded footage at that time (camera offline or not recording).'); $('focus-sprite').hidden = true; return; }
     playInFocus({camera: this.id, play: {url: sg.url, name: sg.name, kind: sg.kind, file_start: sg.start, offset: (T - new Date(sg.start).getTime()) / 1000}});
+    // Keep the time-lapse picture up until the video shows the new time.
+    const v = $('focus-video'), el = $('focus-sprite'), gen = this.hideGen = (this.hideGen || 0) + 1;
+    const done = () => { if (this.hideGen === gen) el.hidden = true; };
+    const check = () => { if (this.hideGen !== gen) return; if (v.readyState >= 2 && !v.seeking && v.currentTime > 0) done(); else setTimeout(check, 100); };
+    setTimeout(check, 100); setTimeout(done, 5000);
   },
 };
 $('ctl-zoom').onchange = () => { camTl.zoom = +$('ctl-zoom').value; camTl.load(); };
@@ -1507,28 +1590,48 @@ $('ctl-left').onclick = () => { camTl.end = camTl.win()[1] - camTl.zoom * 500; c
 $('ctl-right').onclick = () => { const e = camTl.win()[1] + camTl.zoom * 500; camTl.end = e >= Date.now() ? null : e; camTl.load(); };
 $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
 (function wireCamTl() {
-  const lane = $('ctl-lane');
-  const tAt = (e) => { const r = lane.getBoundingClientRect(), [a, b] = camTl.win(); return [Math.min(Date.now(), a + (e.clientX - r.left) / r.width * (b - a)), e.clientX - r.left]; };
-  lane.addEventListener('pointermove', async (e) => {
-    if (!camTl.data) return;
+  const lane = $('ctl-lane'), strip = $('ctl-tlp');
+  const tAt = (e) => { const r = lane.getBoundingClientRect(), [a, b] = camTl.win(); return [Math.min(Date.now(), a + Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1) * (b - a)), e.clientX - r.left]; };
+  const preview = async (e) => {
     const [T, x] = tAt(e), pv = lane.querySelector('.preview');
     pv.hidden = false;
     pv.style.left = Math.min(Math.max(x, 100), lane.clientWidth - 100) + 'px';
     pv.querySelector('.t').textContent = fmtDate(new Date(T));
-    const hitT = (s) => new Date(s.start).getTime() <= T && T < new Date(s.end).getTime() + 1000;
-    const sg = camTl.data.segments.find(s => s.kind === 'sub' && hitT(s)) || camTl.data.segments.find(hitT);
-    const im = pv.querySelector('.img');
+    const sg = camTl.segAt(T), im = pv.querySelector('.img');
     if (!sg) { im.style.backgroundImage = ''; return; }
     const sp = await spriteFor(camTl.id, sg);
     if (sp) spriteStyle(im, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), 192, 108);
+  };
+  const down = (e) => {
+    if (!camTl.data || e.target.closest('.ic, .mo')) return;
+    e.preventDefault();
+    camTl.dragging = true; lane.setPointerCapture(e.pointerId);
+    lane.querySelector('.preview').hidden = true;
+    const [T] = tAt(e); camTl.scrubT = T; camTl.paintHead(T); camTl.scrubTo(T);
+  };
+  lane.addEventListener('pointerdown', down);
+  strip.addEventListener('pointerdown', (e) => { lane.dispatchEvent(new PointerEvent('pointerdown', e)); });
+  lane.addEventListener('pointermove', (e) => {
+    if (!camTl.data) return;
+    if (!camTl.dragging) return preview(e);
+    const [T] = tAt(e); camTl.scrubT = T; camTl.paintHead(T); camTl.scrubTo(T);
   });
+  const up = (e) => {
+    if (!camTl.dragging) return;
+    camTl.dragging = false;
+    const [T] = tAt(e); camTl.playAt(T); camTl.draw();
+  };
+  lane.addEventListener('pointerup', up); lane.addEventListener('pointercancel', up);
   lane.addEventListener('pointerleave', () => { lane.querySelector('.preview').hidden = true; });
   lane.addEventListener('click', (e) => {
     const icon = e.target.closest('.ic, .mo');
-    camTl.playAt(icon ? +icon.dataset.t - 3000 : tAt(e)[0]);
+    if (icon) camTl.playAt(+icon.dataset.t - 3000);
   });
 })();
-setInterval(() => { if (page === 'live' && focusId && !camTl.end) camTl.load(); }, 30000);
+// While open: new footage and its time-lapse keep coming in (up to now),
+// and the line follows what's playing.
+setInterval(() => { if (page === 'live' && focusId && !camTl.end && !camTl.dragging) camTl.load(); }, 30000);
+setInterval(() => { if (page === 'live' && focusId && !camTl.dragging) camTl.paintHead(); }, 500);
 function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); stopTalk(); }
 
 // ---------- live sound ----------
