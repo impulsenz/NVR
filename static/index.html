@@ -156,7 +156,9 @@
 
 
     <div id="rec-list">
-      <div class="muted" id="rec-count" style="margin-bottom:8px"></div>
+      <div class="row rec-grouping" style="margin-bottom:8px"><span class="muted" id="rec-count"></span><span class="spacer"></span>
+        <label class="muted small" style="margin:0">Group by <select id="rec-group" class="small"><option value="day">Day</option><option value="part">Time of day</option><option value="hour">Hour</option></select></label>
+        <button type="button" class="small" id="rec-collapse" title="Fold every group away (−) or open them all (+)">− All</button></div>
       <div class="cards" id="rec-cards"></div>
     </div>
 
@@ -170,6 +172,7 @@
         <button id="tl-prev-ev" title="Previous alert">⏮ Alert</button>
         <button id="tl-next-ev" title="Next alert">Alert ⏭</button>
         <select id="tl-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>
+        <select id="tl-quality" title="Which recording to play: the light sub-stream copy opens instantly; the main stream is full quality. Alerts you click always play in full quality."><option value="sub">Sub-stream</option><option value="main">Main stream</option></select>
         <span class="timecode" id="tl-time"></span>
         <span class="spacer"></span>
         <span class="muted">Zoom</span>

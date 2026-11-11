@@ -1802,24 +1802,55 @@ async fn ensure_sprite(
         return Ok((prefix, i));
     }
     let _p = THUMB_JOBS.acquire().await;
-    if fresh(&first, &src)
+    // Made while waiting (another request for the same file), or a growing
+    // file's preview refreshed in the last few seconds: use that.
+    let just_made = std::fs::metadata(&meta)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20));
+    if (fresh(&first, &src) || (growing && just_made))
         && let Some(i) = load()
     {
         return Ok((prefix, i));
     }
     std::fs::create_dir_all(&dir)?;
-    // Remove pages of an older (shorter or longer) version.
+    // Made under a temporary name and then moved into place page by page,
+    // so the older preview keeps working while this one is made (a page
+    // holds the same moments in the same places, only more of them).
+    let before = load();
+    let staging = dir.join(format!("{name}.sprite-new"));
+    let page = |p: &std::path::Path, n: u32| PathBuf::from(format!("{}-{n:03}.jpg", p.display()));
+    let made = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &staging, kind == "tl").await;
+    let info = match (made, before) {
+        // Fewer pictures than before (the end of a file being written
+        // couldn't be read this time), or none at all: keep the older one.
+        (Ok(i), Some(b)) if b.count > i.count => {
+            for n in 0..i.pages {
+                let _ = std::fs::remove_file(page(&staging, n));
+            }
+            return Ok((prefix, b));
+        }
+        (Err(_), Some(b)) => return Ok((prefix, b)),
+        (Err(e), None) => return Err(e),
+        (Ok(i), _) => i,
+    };
+    for n in 0..info.pages {
+        std::fs::rename(page(&staging, n), page(&prefix, n))?;
+    }
+    // Pages beyond the new end (from an older, longer version).
     if let Ok(rd) = std::fs::read_dir(&dir) {
-        let start = format!("{name}.sprite");
+        let start = format!("{name}.sprite-");
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with(&start) {
+            let f = e.file_name().to_string_lossy().to_string();
+            if let Some(n) = f
+                .strip_prefix(&start)
+                .and_then(|r| r.strip_suffix(".jpg"))
+                .and_then(|n| n.parse::<u32>().ok())
+                && n >= info.pages
+            {
                 let _ = std::fs::remove_file(e.path());
             }
         }
     }
-    // The light timeline copies get one picture per second.
-    let info = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &prefix, kind == "tl").await?;
-    std::fs::write(&meta, serde_json::to_vec(&info)?)?;
     Ok((prefix, info))
 }
 
@@ -2226,6 +2257,23 @@ async fn sprite_image(
     req: Request,
 ) -> Response {
     let c = camera!(m, id);
+    // A page already made is served as it is (pages are only ever written
+    // over with more pictures); making previews is for the info request.
+    if let Ok(src) = media_path(&c, &kind, &name) {
+        let file = src
+            .parent()
+            .unwrap()
+            .join(".thumbs")
+            .join(format!("{name}.sprite-{:03}.jpg", q.page));
+        if file.is_file() {
+            let mut res = serve_file(file, req, None, false).await;
+            res.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("max-age=86400"),
+            );
+            return res;
+        }
+    }
     match ensure_sprite(&m, &c, &kind, &name).await {
         Ok((prefix, info)) if q.page < info.pages => {
             let file = PathBuf::from(format!("{}-{:03}.jpg", prefix.display(), q.page));

@@ -446,23 +446,35 @@ pub async fn install() -> Result<()> {
     }
 }
 
-/// Background: check every minute; with automatic updates on, install as
-/// soon as one is found and no alert is going on.
+/// Background: check for a new version once a day (soon after starting,
+/// then every 24 hours; an hour later if a check failed). "Check for
+/// updates" asks straight away. With automatic updates on, a version found
+/// is installed as soon as no alert is going on.
 pub async fn run(mgr: Arc<crate::manager::Manager>) {
+    const DAY: Duration = Duration::from_secs(24 * 3600);
     clean_old();
     tokio::time::sleep(Duration::from_secs(20)).await;
     let mut announced: Option<String> = None;
+    let mut next_check = tokio::time::Instant::now();
     loop {
-        match check(&repo(&mgr.config().update)).await {
-            Ok(s) if s.available && announced != s.latest => {
-                info!(
-                    "update available: GAZE {}",
-                    s.latest.clone().unwrap_or_default()
-                );
-                announced = s.latest;
-            }
-            Ok(_) => {}
-            Err(e) => tracing::debug!("update check: {e:#}"),
+        if tokio::time::Instant::now() >= next_check {
+            next_check = tokio::time::Instant::now()
+                + match check(&repo(&mgr.config().update)).await {
+                    Ok(s) => {
+                        if s.available && announced != s.latest {
+                            info!(
+                                "update available: GAZE {}",
+                                s.latest.clone().unwrap_or_default()
+                            );
+                            announced = s.latest;
+                        }
+                        DAY
+                    }
+                    Err(e) => {
+                        tracing::debug!("update check: {e:#}");
+                        Duration::from_secs(3600)
+                    }
+                };
         }
         let st = status();
         let busy = mgr

@@ -93,6 +93,11 @@ pub const COCO: [&str; 80] = [
     "toothbrush",
 ];
 
+/// Animals the built-in model knows ("ignore motion set off by animals").
+pub const ANIMALS: &[&str] = &[
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+];
+
 /// Objects most useful for home security, offered as alert choices.
 /// Shown on every camera's AI tab (and the Alerts filter).
 pub const MAIN_OBJECTS: &[&str] = &[

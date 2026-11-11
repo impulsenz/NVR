@@ -124,7 +124,7 @@ viewing, finding footage, and managing everything, all from the browser.
   open the timeline (older days are prepared when you open them).
 
 **Updates**
-- GAZE checks GitHub for a new version every minute; when there is one, a bar under the header offers
+- GAZE checks GitHub for a new version once a day; when there is one, a bar under the header offers
   **Update now** (⟳ Updates next to your name checks right away). With *Install updates automatically*
   (Settings → About, off by default) it installs as soon as one is found, when no alert is going on. The new
   program is downloaded, its checksum verified, swapped in, and GAZE restarts in seconds — also when it

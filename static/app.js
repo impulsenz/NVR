@@ -574,7 +574,12 @@ async function refreshStatus() {
 const spritePages = new Map();
 function spritePage(url) {
   let im = spritePages.get(url);
-  if (!im) { im = new Image(); im.src = url; spritePages.set(url, im); }
+  if (!im) {
+    im = new Image();
+    // A page that failed to download is fetched afresh next time.
+    im.addEventListener('error', () => { if (spritePages.get(url) === im) spritePages.delete(url); }, {once: true});
+    im.src = url; spritePages.set(url, im);
+  }
   return im;
 }
 function spriteStyle(el, sp, n, W, H, fill) {
@@ -1528,21 +1533,23 @@ const camTl = {
   async prefetch() {
     const gen = ++this.pfGen, id = this.id;
     const todo = this.sources().slice().sort((x, y) => new Date(y.start) - new Date(x.start)).slice(0, 300);
-    let i = 0;
+    let i = 0, missing = 0;
     const worker = async () => {
       while (i < todo.length && gen === this.pfGen && id === this.id) {
         const sg = todo[i++], had = this.pv.get(sg.url);
         if (had && had.state === 'ready' && !(isGrowing(sg) && Date.now() - had.at > 30000)) continue;
+        if (spriteBackoff(sg.url)) { missing++; continue; }
         if (!had || had.state !== 'ready') { this.pv.set(sg.url, {state: 'loading'}); this.paintStrip(); }
-        const sp = await spriteFor(id, sg);
-        if (sp) await Promise.all([...Array(sp.info.pages).keys()].map(p => new Promise(r => {
-          const im = spritePage(sp.url + p); if (im.complete) r(); else { im.addEventListener('load', r, {once: true}); im.addEventListener('error', r, {once: true}); }
-        })));
-        this.pv.set(sg.url, sp ? {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval} : {state: isGrowing(sg) ? 'wait' : 'none'});
+        const sp = await previewReady(id, sg);
+        if (sp) this.pv.set(sg.url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval});
+        else { missing++; if (!had || had.state !== 'ready') this.pv.set(sg.url, {state: isGrowing(sg) || (tl.sprites.get(sg.url) || {}).tries < 3 ? 'wait' : 'none'}); }
         this.paintStrip();
       }
     };
-    worker(); worker();
+    await Promise.all([worker(), worker()]);
+    // Not ready yet: tried again shortly while this camera is still shown.
+    clearTimeout(this.pfRetry);
+    if (missing && gen === this.pfGen) this.pfRetry = setTimeout(() => { if (gen === this.pfGen && id === this.id && page === 'live' && !document.hidden) this.prefetch(); }, 6000);
   },
   // The white line: where the drag is, or what's playing.
   paintHead(T) {
@@ -2104,10 +2111,23 @@ function renderRecordings() {
     + (items.length ? ' · recordings are on the Timeline tab' : '');
   if (!items.length) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">No alerts for these filters. Continuous recordings are on the Timeline tab.</div>`; return; }
   box.innerHTML = '';
-  let day = '';
-  for (const it of items) {
-    const d = fmtDay(it.start);
-    if (d !== day) { day = d; box.insertAdjacentHTML('beforeend', `<div class="dayhead">${esc(d)}</div>`); }
+  // Groups (by day, part of the day or hour), each folded away with − and
+  // opened again with +.
+  const by = recGroup, counts = new Map(), keys = items.map(it => groupOf(it.start, by));
+  keys.forEach(k => counts.set(k.key, (counts.get(k.key) || 0) + 1));
+  let cur = null;
+  items.forEach((it, idx) => {
+    const g = keys[idx];
+    if (g.key !== cur) {
+      cur = g.key;
+      const shut = recFolded.has(g.key), n = counts.get(g.key);
+      const head = document.createElement('button');
+      head.type = 'button'; head.className = 'dayhead fold' + (shut ? ' shut' : ''); head.dataset.g = g.key;
+      head.innerHTML = `<span class="pm">${shut ? '+' : '−'}</span>${esc(g.label)} <span class="muted">· ${n} alert${n === 1 ? '' : 's'}</span>`;
+      head.onclick = () => { recFolded.has(g.key) ? recFolded.delete(g.key) : recFolded.add(g.key); saveFolded(); renderRecordings(); };
+      box.appendChild(head);
+    }
+    if (recFolded.has(g.key)) return;
     const card = document.createElement('div');
     card.className = 'rc' + (it.kind === 'event' && !it.seen ? ' new' : '');
     card.dataset.eid = it.event ? it.event.id : '';
@@ -2132,8 +2152,28 @@ function renderRecordings() {
       } catch (err) { toast(err.message, true); }
     };
     box.appendChild(card);
-  }
+  });
+  $('rec-collapse').textContent = keys.some(k => !recFolded.has(k.key)) ? '− All' : '+ All';
 }
+// Alert groups: the day, the part of the day, or the hour.
+let recGroup = store.get('rec-group', 'day');
+const recFolded = new Set(store.get('rec-folded', []));
+function saveFolded() { store.set('rec-folded', [...recFolded].slice(-300)); }
+const DAY_PARTS = [[0, 6, 'Night'], [6, 12, 'Morning'], [12, 18, 'Afternoon'], [18, 24, 'Evening']];
+function groupOf(t, by) {
+  const d = new Date(t), day = fmtDay(t), ymd = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`, h = d.getHours();
+  const hh = (x) => String(x % 24).padStart(2, '0') + ':00';
+  if (by === 'hour') return {key: `h:${ymd}:${h}`, label: `${day} · ${hh(h)}–${hh(h + 1)}`};
+  if (by === 'part') { const [a, b, name] = DAY_PARTS.find(([a, b]) => h >= a && h < b); return {key: `p:${ymd}:${a}`, label: `${day} · ${name} (${hh(a)}–${hh(b)})`}; }
+  return {key: `d:${ymd}`, label: day};
+}
+$('rec-group').value = recGroup;
+$('rec-group').onchange = (e) => { recGroup = e.target.value; store.set('rec-group', recGroup); renderRecordings(); };
+$('rec-collapse').onclick = () => {
+  const keys = [...new Set(rec.items.map(it => groupOf(it.start, recGroup).key))];
+  if (keys.some(k => !recFolded.has(k))) keys.forEach(k => recFolded.add(k)); else keys.forEach(k => recFolded.delete(k));
+  saveFolded(); renderRecordings();
+};
 
 // Known people, for "Who is this?".
 let knownPeople = [];
@@ -2167,7 +2207,6 @@ async function playItem(it, card) {
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
     ${e ? `<dt>Detected</dt><dd>${labelTags(e.labels, e.motion) || '–'}</dd><dt>Video</dt><dd>${e.clip ? 'Full-quality clip' : 'From continuous recording'}</dd>` : ''}
     ${it.size ? `<dt>Size</dt><dd>${fmtBytes(it.size)}</dd>` : ''}</dl>
-    <div class="hint" style="margin-top:10px">Drag along the bar under the video to preview any moment. Use <b>[ Start</b> and <b>End ]</b> (or drag the orange handles) to cut out a clip — downloads are always in the best quality available.</div>
     <div class="actions"><a class="btn small" href="#recordings/${enc(it.camera)}/timeline" onclick="tl.jump='${it.start}'">Open in timeline</a></div>`;
   const t = $('rp-info').querySelector('.bx-toggle');
   if (t) t.onchange = () => { showBoxes = t.checked; store.set('show-boxes', showBoxes); document.body.classList.toggle('no-boxes', !showBoxes); };
@@ -2220,7 +2259,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
@@ -2286,7 +2325,8 @@ function segAt(c, T) {
   // Normally the light stream 2 copy (opens instantly); after clicking an
   // alert, its full-quality footage until the alert is over.
   const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
-  for (const k of hd ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip']) {
+  const order = hd || tl.quality === 'main' ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip'];
+  for (const k of order) {
     const s = c.segments.find(x => x.kind === k && hit(x));
     if (s) return s;
   }
@@ -2390,6 +2430,8 @@ function tlPlay(on) {
 function tlStop() { if (tl.playing) tlPlay(false); document.querySelectorAll('#tl-videos video').forEach(v => v.pause()); }
 $('tl-play').onclick = () => tlPlay(!tl.playing);
 $('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); };
+$('tl-quality').value = tl.quality;
+$('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-quality', tl.quality); tlSync(true); };
 $('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
 $('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 $('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
@@ -2416,6 +2458,15 @@ async function tlShowEvent(camId, T) {
   tl.jump = T;
   await loadTimeline();
   tlPlay(true);
+}
+// Click a camera's name on the timeline: show just that camera, at the same
+// moment ("← All cameras" goes back).
+function tlOnlyCamera(camId) {
+  if (rec.cameras.size === 1 && rec.cameras.has(camId)) return;
+  if (!rec.prevCameras) rec.prevCameras = new Set(rec.cameras);
+  rec.cameras = new Set([camId]);
+  if (tl.T != null) tl.jump = tl.T + 3000;
+  renderFilters(); loadTimeline();
 }
 function tlBackToAll() {
   rec.cameras = rec.prevCameras || new Set();
@@ -2471,12 +2522,16 @@ function drawTimeline() {
       const tip = e.labels.length ? e.labels.map(l => l.label).join(', ') : 'motion';
       lane += `<div class="ev ${e.labels.length ? '' : 'motion'}" style="left:${Math.max(0, a)}%;width:${Math.max(0.3, b - a)}%" title="${esc(tip)} ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" data-cam="${esc(c.camera)}">${e.labels.length ? `<span class="ic">${labelIcon(e.labels[0].label)}</span>` : ''}</div>`;
     }
-    rows += `<div class="tl-row"><div class="label" title="${esc(c.name)}">${esc(c.name)}</div><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
+    rows += `<div class="tl-row"><button type="button" class="label" data-cam="${esc(c.camera)}" title="${esc(c.name)} — show just this camera">${esc(c.name)}</button><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
       <div class="tlp" data-cam="${esc(c.camera)}" title="Time-lapse previews — blue: ready to scrub · striped: loading · grey: not loaded yet · red: couldn't be made"></div></div></div>`;
   }
   const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="${selStyle(pct)}"><div class="tl-h in" title="Drag to change the clip start"></div><div class="tl-h out" title="Drag to change the clip end"></div></div>` : '';
   box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"></div>`;
   box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
+  box.querySelectorAll('.tl-row .label').forEach(b => {
+    b.onpointerdown = (e) => e.stopPropagation();
+    b.onclick = (e) => { e.stopPropagation(); tlOnlyCamera(b.dataset.cam); };
+  });
   document.querySelector('#rec-timeline .legend').innerHTML = legendHtml('tl', tl.data);
   paintPreviewStrips();
   // Clip export
@@ -2541,16 +2596,48 @@ function drawHead() {
 // The file still being recorded keeps growing: ask for its newer preview
 // every half minute (the old one stays in use meanwhile).
 const isGrowing = (seg) => Date.now() - new Date(seg.end).getTime() < 120000;
+// A file's preview (info + page addresses), or null. A failed try is asked
+// again after a pause that grows with each failure (5 s … 5 min); a file
+// still being recorded is refreshed every 30 s. While asking again, the
+// previous good preview keeps being used.
 async function spriteFor(cam, seg) {
-  const key = seg.url, have = tl.sprites.get(key);
-  if (!have || (isGrowing(seg) && Date.now() - have.at > 30000)) {
+  const key = seg.url, have = tl.sprites.get(key), now = Date.now();
+  const again = !have || (have.done && ((isGrowing(seg) && now - have.at > 30000) || (have.failed && now >= have.retryAt)));
+  if (again) {
+    const tries = have && have.failed ? have.tries + 1 : 0;
     const kind = {clip: 'clip', sub: 'tl'}[seg.kind] || 'rec';
-    const p = api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`).then(preloadSprite).catch(() => null);
-    const entry = {at: Date.now(), p: have ? p.then(sp => sp || have.p) : p};
+    const entry = {at: now, tries, ok: have && have.ok};
+    entry.p = Promise.race([api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`), new Promise((_, no) => setTimeout(() => no(new Error('timed out')), 120000))])
+      .then(preloadSprite).catch(() => null)
+      .then(sp => { entry.done = true; if (sp) { entry.ok = sp; entry.failed = false; } else spriteFailed(entry); return entry.ok || null; });
     tl.sprites.set(key, entry);
-    if (have) return have.p;
   }
-  return tl.sprites.get(key).p;
+  const e = tl.sprites.get(key);
+  return e.ok || e.p;
+}
+// A file's preview with every page downloaded, or null (then asked again
+// later; a page that couldn't be downloaded is fetched afresh).
+const pagesDone = new Set();
+async function previewReady(cam, sg) {
+  const sp = await spriteFor(cam, sg);
+  if (!sp) return null;
+  const ok = await Promise.all([...Array(sp.info.pages).keys()].map(p => pagesDone.has(sp.url + p) ? true :
+    new Promise(r => { const im = spritePage(sp.url + p);
+      const done = () => { if (im.naturalWidth) { pagesDone.add(sp.url + p); r(true); } else { spritePages.delete(sp.url + p); r(false); } };
+      if (im.complete) done(); else { im.addEventListener('load', done, {once: true}); im.addEventListener('error', done, {once: true}); } })));
+  if (ok.every(Boolean)) return sp;
+  const e = tl.sprites.get(sg.url);
+  if (e) { e.ok = null; e.done = true; spriteFailed(e); }
+  return null;
+}
+function spriteFailed(entry) {
+  entry.failed = true;
+  entry.retryAt = Date.now() + Math.min(300000, 5000 * 2 ** Math.min(entry.tries || 0, 6));
+}
+// Waiting to ask again after a failure (and nothing loaded before).
+function spriteBackoff(key) {
+  const e = tl.sprites.get(key);
+  return !!(e && e.done && e.failed && !e.ok && Date.now() < e.retryAt);
 }
 // Prepare previews for every file in view (nearest to the playhead first),
 // showing progress, so scrubbing is instant.
@@ -2594,24 +2681,28 @@ function prefetchSprites() {
   list.sort((x, y) => x.d - y.d);
   const todo = list.slice(0, 300);
   tl.pv = tl.pv || new Map();
-  tl.pagesDone = tl.pagesDone || new Set();
-  const loadPages = (sp) => Promise.all([...Array(sp.info.pages).keys()].map(p => tl.pagesDone.has(sp.url + p) ? null :
-    new Promise(r => { const im = spritePage(sp.url + p), ok = () => { tl.pagesDone.add(sp.url + p); r(); };
-      if (im.complete) ok(); else { im.addEventListener('load', ok, {once: true}); im.addEventListener('error', ok, {once: true}); } })));
-  let i = 0;
+  let i = 0, missing = 0;
   const worker = async () => {
     while (i < todo.length && gen === tl.pfGen) {
       const job = todo[i++], key = job.sg.url, had = tl.pv.get(key);
       // Already loaded (and not still growing): nothing to do.
       if (had && had.state === 'ready' && !(isGrowing(job.sg) && Date.now() - had.at > 30000)) continue;
+      // Failed a moment ago: asked again later.
+      if (spriteBackoff(key)) { missing++; continue; }
       if (!had || had.state !== 'ready') { tl.pv.set(key, {state: 'loading'}); paintPreviewStrips(); }
-      const sp = await spriteFor(job.cam, job.sg);
-      if (sp) await loadPages(sp);
-      tl.pv.set(key, sp ? {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval} : {state: isGrowing(job.sg) ? 'wait' : 'none'});
+      const sp = await previewReady(job.cam, job.sg), ok = !!sp;
+      if (ok) tl.pv.set(key, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval});
+      else if (!had || had.state !== 'ready') { missing++; tl.pv.set(key, {state: isGrowing(job.sg) || (tl.sprites.get(key) || {}).tries < 3 ? 'wait' : 'none'}); }
+      else missing++;
       paintPreviewStrips();
     }
   };
-  worker(); worker();
+  // Anything not ready yet is tried again shortly (as long as this view is
+  // still the one shown), so gaps fill in by themselves.
+  Promise.all([worker(), worker()]).then(() => {
+    clearTimeout(tl.pfRetry);
+    if (missing && gen === tl.pfGen) tl.pfRetry = setTimeout(() => { if (gen === tl.pfGen && page === 'recordings' && !document.hidden) prefetchSprites(); }, 6000);
+  });
 }
 // A camera's current picture as the preview (scrubbing up to now).
 function liveStill(sp, cam) {
@@ -3170,7 +3261,7 @@ async function openCameraDialog(id, clone) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, parked_seconds: 60}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   const q = parseUrl(c.url) || {};
   // The usual objects, plus any this camera already watches for.
@@ -3275,10 +3366,13 @@ async function openCameraDialog(id, clone) {
         <label>Ignore areas</label>
         <div><div class="surface" id="d-mask" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair">
             <img alt="" id="d-mask-img" style="object-fit:fill"><div class="msg" id="d-mask-msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div>
-            <div id="d-mask-grid" style="position:absolute;inset:0;display:grid;grid-template-columns:repeat(32,1fr);grid-template-rows:repeat(18,1fr)"></div>
+            <canvas id="d-mask-grid" width="160" height="90" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated"></canvas>
             <svg id="d-mask-boxes" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
-          <div class="row" style="margin-top:6px"><button type="button" class="small" id="d-mask-clear">Clear</button><button type="button" class="small" id="d-mask-invert">Invert</button>
-            <span class="hint" style="margin:0">Drag over the picture to mark areas to ignore (red). Drag again to unmark.</span></div>
+          <div class="row mask-tools" style="margin-top:6px">
+            <div class="seg" id="d-mask-tool"><button type="button" class="small on" data-v="paint">🖌 Paint</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
+            <label class="muted small" style="margin:0">Brush <select id="d-mask-brush" class="small"><option value="1">Fine</option><option value="3" selected>Small</option><option value="7">Medium</option><option value="15">Large</option></select></label>
+            <button type="button" class="small" id="d-mask-clear">Clear</button><button type="button" class="small" id="d-mask-invert">Invert</button></div>
+          <div class="hint" style="margin:4px 0 0">Paint over the picture to mark areas to ignore (red); switch to Erase to unmark. Right-click (or hold Shift) erases too.</div>
           <div id="d-meter" class="hint" style="margin-top:8px"></div></div>
         <label for="d-pre">Record before alert</label>
         <div class="row"><input type="number" id="d-pre" min="0" max="120" value="${c.detect.pre_seconds}" style="width:110px"><span class="muted">seconds (pre-event buffer, in alert recording modes)</span></div>
@@ -3310,7 +3404,9 @@ async function openCameraDialog(id, clone) {
         <label for="d-conf">Minimum confidence</label>
         <div class="row"><input type="range" id="d-conf" min="5" max="95" value="${Math.round(c.detect.min_confidence * 100)}" style="flex:1"><span id="d-conf-v" class="muted" style="width:40px">${Math.round(c.detect.min_confidence * 100)}%</span></div>
         <label for="d-trig">What makes an alert</label>
-        <div><select id="d-trig"><option value="motion">Any motion</option><option value="objects">Only recognized objects (ignores trees, shadows, rain)</option></select></div>
+        <div><select id="d-trig"><option value="motion">Any motion</option><option value="objects">Only recognized objects (ignores trees, shadows, rain)</option></select>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="d-animals" ${c.detect.ignore_animals !== false ? 'checked' : ''}> Ignore motion set off by animals you don't watch for (cats, dogs, birds…)</label>
+          <div class="hint">With “Any motion”, the AI has a look first: if all it sees is an animal that isn't ticked above, no alert. Tick “cat” above to get alerts for cats.</div></div>
         <label for="d-int">AI check interval</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks during motion (raise this for cloud AI)</span></div>
         <label>Stationary objects</label>
@@ -3454,29 +3550,71 @@ $('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMete
 
 // ---------- motion mask editor & live motion readout ----------
 let maskCells = [], maskUnbind = null, meterTimer = null;
-const MASK_W = 32, MASK_H = 18;
-function maskValue() { return maskCells.some(x => x) ? maskCells.map(x => x ? '1' : '0').join('') : ''; }
+// One cell per pixel motion detection looks at (a 640×360 picture shrunk 4×).
+const MASK_W = 160, MASK_H = 90;
+// Stored as "160x90:" + run lengths (unmasked, masked, unmasked, …).
+function maskValue() {
+  if (!maskCells.some(x => x)) return '';
+  const runs = []; let cur = false, n = 0;
+  for (const v of maskCells) { if (v === cur) n++; else { runs.push(n); cur = v; n = 1; } }
+  runs.push(n);
+  return `${MASK_W}x${MASK_H}:` + runs.join(',');
+}
+function decodeMask(m) {
+  const out = new Array(MASK_W * MASK_H).fill(false);
+  m = (m || '').trim();
+  if (m.length === 576 && /^[01]+$/.test(m)) { // the old 32×18 grid
+    for (let i = 0; i < out.length; i++) { const x = i % MASK_W, y = Math.floor(i / MASK_W); out[i] = m[Math.floor(y * 18 / MASK_H) * 32 + Math.floor(x * 32 / MASK_W)] === '1'; }
+  } else if (m.startsWith(`${MASK_W}x${MASK_H}:`)) {
+    let i = 0, on = false;
+    for (const r of m.slice(m.indexOf(':') + 1).split(',')) { const n = +r || 0; out.fill(on, i, Math.min(out.length, i + n)); i += n; on = !on; }
+  }
+  return out;
+}
+let maskTool = 'paint';
 function setupMaskEditor(mask, camId) {
-  maskCells = mask && mask.length === MASK_W * MASK_H ? [...mask].map(c => c === '1') : new Array(MASK_W * MASK_H).fill(false);
-  const grid = $('d-mask-grid');
-  grid.innerHTML = maskCells.map((on, i) => `<div data-i="${i}" style="${on ? 'background:rgba(239,68,68,.45)' : ''};border:1px solid rgba(255,255,255,.06)"></div>`).join('');
-  const paint = () => grid.querySelectorAll('[data-i]').forEach(d => d.style.background = maskCells[+d.dataset.i] ? 'rgba(239,68,68,.45)' : '');
-  let mode = null;
-  const cellAt = (e) => { const r = grid.getBoundingClientRect(); const x = Math.floor((e.clientX - r.left) / r.width * MASK_W), y = Math.floor((e.clientY - r.top) / r.height * MASK_H);
-    return x >= 0 && x < MASK_W && y >= 0 && y < MASK_H ? y * MASK_W + x : -1; };
-  // 3×3-cell brush.
-  const set = (e) => {
-    const i = cellAt(e); if (i < 0) return;
-    const cx = i % MASK_W, cy = Math.floor(i / MASK_W);
+  maskCells = decodeMask(mask);
+  const cv = $('d-mask-grid'), ctx = cv.getContext('2d');
+  const paint = () => {
+    const img = ctx.createImageData(MASK_W, MASK_H), d = img.data;
+    for (let i = 0; i < maskCells.length; i++) if (maskCells[i]) { d[i * 4] = 239; d[i * 4 + 1] = 68; d[i * 4 + 2] = 68; d[i * 4 + 3] = 115; }
+    ctx.putImageData(img, 0, 0);
+  };
+  paint();
+  $('d-mask-tool').querySelectorAll('button').forEach(b => {
+    b.classList.toggle('on', b.dataset.v === maskTool);
+    b.onclick = () => { maskTool = b.dataset.v; $('d-mask-tool').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); cv.style.cursor = maskTool === 'erase' ? 'cell' : 'crosshair'; };
+  });
+  const brush = $('d-mask-brush');
+  brush.value = store.get('maskBrush', '3'); brush.onchange = () => store.set('maskBrush', brush.value);
+  const at = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * MASK_W, (e.clientY - r.top) / r.height * MASK_H]; };
+  // A round brush, `size` cells across, at (x, y) in cells.
+  const dab = (x, y, val) => {
+    const size = +brush.value || 3, rad = size / 2;
     let changed = false;
-    for (let y = Math.max(0, cy - 1); y <= Math.min(MASK_H - 1, cy + 1); y++)
-      for (let x = Math.max(0, cx - 1); x <= Math.min(MASK_W - 1, cx + 1); x++)
-        if (maskCells[y * MASK_W + x] !== mode) { maskCells[y * MASK_W + x] = mode; changed = true; }
+    for (let cy = Math.floor(y - rad); cy <= Math.ceil(y + rad); cy++) for (let cx = Math.floor(x - rad); cx <= Math.ceil(x + rad); cx++) {
+      if (cx < 0 || cy < 0 || cx >= MASK_W || cy >= MASK_H) continue;
+      if (size > 1 && (cx + 0.5 - x) ** 2 + (cy + 0.5 - y) ** 2 > rad * rad) continue;
+      if (size === 1 && (cx !== Math.floor(x) || cy !== Math.floor(y))) continue;
+      const i = cy * MASK_W + cx;
+      if (maskCells[i] !== val) { maskCells[i] = val; changed = true; }
+    }
+    return changed;
+  };
+  let val = null, last = null;
+  // Fill along the line from the last point so fast strokes leave no gaps.
+  const stroke = (e) => {
+    const p = at(e), from = last || p;
+    const steps = Math.max(1, Math.ceil(Math.hypot(p[0] - from[0], p[1] - from[1]) / 0.5));
+    let changed = false;
+    for (let k = 1; k <= steps; k++) changed = dab(from[0] + (p[0] - from[0]) * k / steps, from[1] + (p[1] - from[1]) * k / steps, val) || changed;
+    last = p;
     if (changed) paint();
   };
-  grid.onpointerdown = (e) => { const i = cellAt(e); if (i < 0) return; mode = !maskCells[i]; grid.setPointerCapture(e.pointerId); set(e); };
-  grid.onpointermove = (e) => { if (mode !== null) set(e); };
-  grid.onpointerup = grid.onpointercancel = () => { mode = null; };
+  cv.oncontextmenu = (e) => e.preventDefault();
+  cv.onpointerdown = (e) => { e.preventDefault(); val = !(maskTool === 'erase' || e.button === 2 || e.shiftKey); last = null; cv.setPointerCapture(e.pointerId); stroke(e); };
+  cv.onpointermove = (e) => { if (val !== null) stroke(e); };
+  cv.onpointerup = cv.onpointercancel = () => { val = null; last = null; };
   $('d-mask-clear').onclick = () => { maskCells.fill(false); paint(); };
   $('d-mask-invert').onclick = () => { maskCells = maskCells.map(x => !x); paint(); };
   if (maskUnbind) maskUnbind();
@@ -3672,7 +3810,7 @@ function collectCamera() {
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
-      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
+      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
       parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgArea.length >= 3, package_area: pkgArea},
   };
 }
@@ -3861,7 +3999,7 @@ function applyProfile(p) {
   set('d-travel', d.min_travel_px); set('d-ai', d.ai); set('d-conf', Math.round(d.min_confidence * 100));
   if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
-  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-parked-s', d.parked_seconds || 60);
+  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-parked-s', d.parked_seconds || 60);
   if (d.parked_objects) document.querySelectorAll('#d-parked-objs input').forEach(i => i.checked = d.parked_objects.includes(i.value));
   // Let the form update anything that depends on these (hidden sections, hints).
   for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select, [data-tab=ai] input, [data-tab=ai] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
@@ -4327,7 +4465,7 @@ async function renderInfo(body) {
     <dt>Log file</dt><dd>${esc(sysinfo.log_file || '–')}</dd><dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd></dl></div>
     <div class="card admin-only"><h2>Updates</h2><div id="upd"></div>
       <div class="form" style="margin-top:8px"><span></span><div><label class="check"><input type="checkbox" id="upd-auto" ${settings.update && settings.update.auto ? 'checked' : ''}> Install updates automatically</label>
-        <div class="hint">GAZE checks for a new version every minute. Off: a bar at the top tells you, and you choose when (⟳ Updates next to your name checks right away). On: it installs as soon as it's found, when no alert is going on — downloads, checks it, swaps it in and restarts in a few seconds (also as a Windows service).</div></div>
+        <div class="hint">GAZE checks for a new version once a day. Off: a bar at the top tells you, and you choose when (⟳ Updates next to your name checks right away). On: it installs as soon as it's found, when no alert is going on — downloads, checks it, swaps it in and restarts in a few seconds (also as a Windows service).</div></div>
         <label for="upd-repo">Update from</label><div><div class="row"><span class="muted">github.com/</span><input type="text" id="upd-repo" value="${esc((settings.update && settings.update.repo) || '')}" placeholder="owner/repository" style="flex:1"><button type="button" id="upd-repo-save">Save</button></div>
           <div class="hint">Empty: the GitHub repository this copy of GAZE was built from. Enter your own (e.g. <code>you/NVR</code>) to get updates from your fork's releases — see UPDATES.md.</div></div></div></div>
     <div class="card changelog"><h2>What's new</h2><div id="chlog" class="muted">Loading…</div></div>`;

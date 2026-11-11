@@ -183,6 +183,10 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 .rc .thumb .kind { position: absolute; left: 6px; top: 6px; }
 .rc .body { padding: 8px 10px; font-size: 13px; flex: 1; }
 .dayhead { grid-column: 1 / -1; color: var(--muted); font-weight: 600; margin: 8px 0 0; font-size: 13px; }
+button.dayhead.fold { display: flex; align-items: center; gap: 8px; text-align: left; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; color: var(--text); cursor: pointer; }
+button.dayhead.fold .pm { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; background: var(--panel); border: 1px solid var(--border); font-weight: 700; color: var(--accent); }
+button.dayhead.fold.shut { opacity: .85; }
+.rec-grouping { gap: 8px; flex-wrap: wrap; }
 
 /* timeline */
 .tl-videos { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
@@ -330,6 +334,8 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
 .tl-row .ev { cursor: pointer; }
 .tl-row .ev .ic { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); font-size: 15px; cursor: pointer; padding: 2px; }
 .tl-row .ev:hover { outline: 2px solid #fff; z-index: 2; }
+button.label { background: none; border: 0; border-radius: 4px; color: inherit; text-align: left; cursor: pointer; padding: 4px 8px 4px 2px; min-height: 0; }
+.tl-row button.label:hover { color: var(--accent); text-decoration: underline; }
 .tl-row.solo .label { color: var(--accent); font-weight: 600; }
 .tl-videos.solo { grid-template-columns: 1fr; }
 .tl-videos.solo .surface:not(.solo) { display: none; }

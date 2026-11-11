@@ -28,9 +28,46 @@ pub const ENCODERS: &[&str] = &[
 ];
 pub const AI_PROVIDERS: &[&str] = &["none", "builtin"];
 pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s", "yolox_m", "yolox_l"];
-/// Motion mask grid size.
-pub const MASK_W: usize = 32;
-pub const MASK_H: usize = 18;
+/// Motion mask grid size: one cell per pixel motion detection looks at
+/// (a 640×360 picture shrunk 4×).
+pub const MASK_W: usize = 160;
+pub const MASK_H: usize = 90;
+/// The first, coarser mask grid (stored as 576 '0'/'1' characters).
+const OLD_MASK_W: usize = 32;
+const OLD_MASK_H: usize = 18;
+
+/// Read a motion mask (true = ignore): "160x90:" followed by run lengths
+/// (unmasked, masked, unmasked, …), or the old 32×18 '0'/'1' form, which is
+/// scaled up. None when empty or invalid.
+pub fn decode_mask(s: &str) -> Option<Vec<bool>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if s.len() == OLD_MASK_W * OLD_MASK_H && s.chars().all(|c| c == '0' || c == '1') {
+        let old: Vec<bool> = s.chars().map(|c| c == '1').collect();
+        return Some(
+            (0..MASK_W * MASK_H)
+                .map(|i| {
+                    let (x, y) = (i % MASK_W, i / MASK_W);
+                    old[(y * OLD_MASK_H / MASK_H) * OLD_MASK_W + x * OLD_MASK_W / MASK_W]
+                })
+                .collect(),
+        );
+    }
+    let runs = s.strip_prefix(&format!("{MASK_W}x{MASK_H}:"))?;
+    let mut out = Vec::with_capacity(MASK_W * MASK_H);
+    let mut on = false;
+    for r in runs.split(',').filter(|r| !r.is_empty()) {
+        let n: usize = r.trim().parse().ok()?;
+        if out.len() + n > MASK_W * MASK_H {
+            return None;
+        }
+        out.extend(std::iter::repeat_n(on, n));
+        on = !on;
+    }
+    (out.len() == MASK_W * MASK_H).then_some(out)
+}
 /// Places on the picture: top/middle/bottom × left/centre/right.
 pub const CORNERS: &[&str] = &["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
 
@@ -594,6 +631,9 @@ pub struct DetectConfig {
     pub ai_interval: f64,
     /// Vehicles that stay in one place stop alerting until they move.
     pub ignore_parked: bool,
+    /// Motion set off by an animal that isn't in `objects` (a cat, a
+    /// dog, a bird …) doesn't make an alert. Needs object detection on.
+    pub ignore_animals: bool,
     /// Seconds without moving before something counts as parked.
     pub parked_seconds: u32,
     /// Kinds of objects that stop alerting while they stand still.
@@ -628,6 +668,7 @@ impl Default for DetectConfig {
             fps: 5,
             ai_interval: 1.0,
             ignore_parked: true,
+            ignore_animals: true,
             parked_seconds: 60,
             parked_objects: crate::stationary::PARKING
                 .iter()
@@ -978,9 +1019,7 @@ impl CameraConfig {
         if d.min_object_px > 230_400 || d.make_time_ms > 30_000 || d.min_travel_px > 640 {
             bail!("motion object size, make time or travel distance is out of range");
         }
-        if !d.mask.is_empty()
-            && (d.mask.len() != MASK_W * MASK_H || d.mask.chars().any(|c| c != '0' && c != '1'))
-        {
+        if !d.mask.trim().is_empty() && decode_mask(&d.mask).is_none() {
             bail!("invalid motion mask");
         }
         if !(0.05..=1.0).contains(&d.min_confidence) {
@@ -1403,6 +1442,20 @@ mod tests {
             .unwrap()
             .and_hms_opt(h, m, 0)
             .unwrap()
+    }
+
+    #[test]
+    fn motion_masks() {
+        assert!(decode_mask("").is_none());
+        let old: String = (0..576).map(|i| if i % 32 < 16 { '1' } else { '0' }).collect();
+        let m = decode_mask(&old).unwrap();
+        assert_eq!(m.len(), MASK_W * MASK_H);
+        assert!(m[0] && m[79] && !m[80] && m[MASK_W * 89]);
+        let m = decode_mask("160x90:10,5,14385").unwrap();
+        assert!(!m[9] && m[10] && m[14] && !m[15]);
+        assert!(decode_mask("160x90:10,5").is_none());
+        assert!(decode_mask("160x90:99999").is_none());
+        assert!(decode_mask("hello").is_none());
     }
 
     #[test]

@@ -376,6 +376,93 @@ fn saved_source(
     None
 }
 
+/// Small grey pictures (ALIGN_W × ALIGN_H) of `file` from `from` seconds,
+/// 4 a second for `secs` seconds.
+const ALIGN_W: usize = 96;
+const ALIGN_H: usize = 54;
+async fn strip(ffmpeg: &str, file: &std::path::Path, from: f64, secs: f64) -> Vec<Vec<u8>> {
+    let out = crate::load::background(&mut crate::load::cmd(ffmpeg))
+        .args(["-hide_banner", "-loglevel", "error", "-ss", &format!("{from:.2}"), "-i"])
+        .arg(file)
+        .args([
+            "-t",
+            &format!("{secs:.2}"),
+            "-an",
+            "-vf",
+            &format!("fps=4,scale={ALIGN_W}:{ALIGN_H},format=gray"),
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await;
+    out.map(|o| o.stdout.chunks_exact(ALIGN_W * ALIGN_H).map(<[u8]>::to_vec).collect())
+        .unwrap_or_default()
+}
+
+fn grey_small(f: &Frame) -> Vec<u8> {
+    let s = f.resize(ALIGN_W as u32, ALIGN_H as u32);
+    s.rgb
+        .chunks_exact(3)
+        .map(|p| ((p[0] as u32 * 299 + p[1] as u32 * 587 + p[2] as u32 * 114) / 1000) as u8)
+        .collect()
+}
+
+/// How different two small grey pictures are (0 = the same), with the
+/// part where the object was counting four times as much.
+fn difference(a: &[u8], b: &[u8], focus: Option<[f32; 4]>) -> f64 {
+    let inside = |i: usize| {
+        focus.is_some_and(|[x, y, w, h]| {
+            let (px, py) = ((i % ALIGN_W) as f32 / ALIGN_W as f32, (i / ALIGN_W) as f32 / ALIGN_H as f32);
+            px >= x && px <= x + w && py >= y && py <= y + h
+        })
+    };
+    let (mut sum, mut n) = (0.0, 0.0);
+    for (i, (p, q)) in a.iter().zip(b).enumerate() {
+        let wgt = if inside(i) { 4.0 } else { 1.0 };
+        sum += wgt * (*p as f64 - *q as f64).abs();
+        n += wgt;
+    }
+    sum / n.max(1.0)
+}
+
+/// The moment in a saved file that matches the live picture of an alert.
+/// The time of the live picture is only roughly known (the live stream
+/// and the recording run a second or two apart, and the AI takes a
+/// moment), so the few seconds around it are compared with the live
+/// picture and the closest one is used. None when nothing there looks like
+/// it (that moment isn't in the file properly).
+async fn matching_moment(
+    ffmpeg: &str,
+    file: &std::path::Path,
+    off: f64,
+    live: &Frame,
+    focus: Option<[f32; 4]>,
+) -> Option<f64> {
+    const BEFORE: f64 = 3.0;
+    const AFTER: f64 = 2.0;
+    let from = (off - BEFORE).max(0.0);
+    let pics = strip(ffmpeg, file, from, off + AFTER - from).await;
+    if pics.is_empty() {
+        return None;
+    }
+    let want = grey_small(live);
+    let (best, diff) = pics
+        .iter()
+        .enumerate()
+        // When pictures look alike (nothing moving), the one nearest the
+        // expected time.
+        .map(|(k, p)| {
+            let t = from + k as f64 * 0.25;
+            (k, difference(p, &want, focus) + (t - off).abs() * 0.05)
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    // Grey levels apart on average: a different scene altogether.
+    (diff < 40.0).then_some(from + best as f64 * 0.25)
+}
+
 /// Replace an alert's picture with the same moment from the saved
 /// recording (full quality when there is one). False when that moment
 /// isn't in a saved file (yet).
@@ -383,6 +470,20 @@ pub async fn sharpen(ffmpeg: &str, rt: &CameraRuntime, e: &mut Event) -> bool {
     let t = e.thumb_at.unwrap_or(e.start + chrono::Duration::seconds(1));
     let Some((file, off)) = saved_source(rt, e, t) else {
         return false;
+    };
+    let live = e
+        .thumb
+        .as_deref()
+        .and_then(|n| std::fs::read(rt.events.dir().join(n)).ok())
+        .and_then(|j| crate::imgutil::decode_jpeg(&j).ok());
+    let off = match &live {
+        Some(l) => match matching_moment(ffmpeg, &file, off, l, e.focus.or_else(|| e.boxes.first().map(|b| [b.x, b.y, b.w, b.h]))).await {
+            Some(o) => o,
+            // Nothing in the recording looks like what was seen live: keep
+            // the live picture rather than show the wrong moment.
+            None => return false,
+        },
+        None => off,
     };
     let Ok(frame) = grab(ffmpeg, &file, off).await else {
         return false;
@@ -518,3 +619,4 @@ pub async fn run(mgr: Arc<Manager>) {
         tokio::time::sleep(Duration::from_secs(15)).await;
     }
 }
+

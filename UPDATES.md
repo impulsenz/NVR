@@ -26,7 +26,7 @@ This guide covers:
 5. Start the program and open <http://localhost:8080>. The first visit asks
    you to create the admin account.
 
-**Updating:** GAZE checks for a new version **every minute**. When there
+**Updating:** GAZE checks for a new version **once a day**. When there
 is one, a bar slides down under the header for admins, showing the change
 of version (e.g. `0.5.4 → 0.5.5`) and when it was released:
 - **Update now** installs it straight away. The bar shows the download's
@@ -134,7 +134,7 @@ installation over, because GAZE only updates to higher versions.
 
 ## 4. How it works
 
-**Checking:** every minute, and when you press **⟳ Updates**, GAZE opens
+**Checking:** once a day (soon after GAZE starts, then every 24 hours), and when you press **⟳ Updates**, GAZE opens
 `github.com/<owner>/<repo>/releases/latest` and reads which version it leads
 to. That's GitHub's normal web page, not its API, which allows only 60
 requests an hour per internet connection when not signed in (and answers

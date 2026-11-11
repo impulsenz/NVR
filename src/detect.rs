@@ -212,6 +212,13 @@ struct Active {
     event: Event,
     last_activity: DateTime<Local>,
     qualified: bool,
+    /// When the motion of this event began, and how many times the AI has
+    /// looked since (for "ignore animals": motion only alerts once the AI
+    /// has had a look).
+    began: Instant,
+    ai_looks: u32,
+    /// The AI's latest look found only an animal that isn't watched for.
+    animal_only: bool,
     /// Score of the AI detection in the thumbnail (0 = motion picture, -1 = none).
     thumb_score: f32,
     thumb_at: Instant,
@@ -544,8 +551,28 @@ impl Detector {
                     last_ai = Instant::now();
                     let tx = ai_tx.clone();
                     let f = frame.clone();
+                    // Where the motion is, for a closer look if the whole
+                    // picture shows nothing (small or far-away objects).
+                    let near = m
+                        .as_ref()
+                        .and_then(|m| m.objects.first())
+                        .map(|o| (o.x, o.y, o.w, o.h));
+                    let (want, min_conf) = (d.objects.clone(), d.min_confidence);
                     tokio::spawn(async move {
-                        let res = ai.detect(&f).await;
+                        let mut res = ai.detect(&f).await;
+                        if let Ok(dets) = &mut res
+                            && !dets.iter().any(|x| x.score >= min_conf && want.contains(&x.label))
+                            && let Some((crop, [ox, oy, sw, sh])) = near.and_then(|n| zoom_on(&f, n))
+                            && let Ok(more) = ai.detect(&crop).await
+                        {
+                            dets.extend(more.into_iter().map(|x| Detection {
+                                x: ox + x.x * sw,
+                                y: oy + x.y * sh,
+                                w: x.w * sw,
+                                h: x.h * sh,
+                                ..x
+                            }));
+                        }
                         let _ = tx.send((f, res)).await;
                     });
                 }
@@ -601,6 +628,9 @@ impl Detector {
             },
             last_activity: now,
             qualified: false,
+            began: Instant::now(),
+            ai_looks: 0,
+            animal_only: false,
             thumb_score: -1.0,
             thumb_at: Instant::now() - Duration::from_secs(10),
             motion_best: 0.0,
@@ -639,7 +669,14 @@ impl Detector {
             }];
             self.save_thumb(a, frame, bbox, 0.0, boxes);
         }
-        if self.cam.detect.trigger == "motion" && !a.qualified {
+        // "Ignore animals": wait for the AI's look (up to 4 s, in case it's
+        // busy) and don't alert for motion that is only an animal.
+        let d = &self.cam.detect;
+        let wait_for_ai = d.ignore_animals
+            && d.ai
+            && self.ai.get().enabled()
+            && (a.animal_only || (a.ai_looks == 0 && a.began.elapsed() < Duration::from_secs(4)));
+        if d.trigger == "motion" && !a.qualified && !wait_for_ai {
             a.qualified = true;
             info!(target: "event", "[{}] motion detected", self.cam.name);
             self.store.save_detected(a.event.clone());
@@ -672,10 +709,25 @@ impl Detector {
         // The same object recognized as two things: keep the more confident
         // one (before choosing which objects alert, so a cat that also
         // looks a bit like a person counts as a cat).
-        let mut hits: Vec<Detection> = crate::ai::best_per_object(dets)
-            .into_iter()
+        let best = crate::ai::best_per_object(dets);
+        let mut hits: Vec<Detection> = best
+            .iter()
             .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
+            .cloned()
             .collect();
+        // For "ignore animals": what this look found.
+        if let Some(a) = active.as_mut() {
+            a.ai_looks += 1;
+            let animal = best.iter().any(|x| {
+                x.score >= d.min_confidence.min(0.4)
+                    && crate::ai::ANIMALS.contains(&x.label.as_str())
+                    && !d.objects.contains(&x.label)
+            });
+            a.animal_only = animal && hits.is_empty();
+            if a.animal_only && !a.qualified {
+                tracing::debug!("[{}] motion from an animal that isn't watched for: ignored", self.cam.name);
+            }
+        }
         // Parked vehicles don't alert until they move.
         if d.ignore_parked && !d.parked_objects.is_empty() {
             let (keep, notes) = self.parked.lock().unwrap().filter(
@@ -974,6 +1026,29 @@ impl Detector {
 
 /// The part of the picture around a zone (with a margin), for checking
 /// what's there.
+/// A closer view around a small moving area (normalized box), as a
+/// square about three times its size, and where that view sits in the
+/// picture (normalized x, y, width, height). None when the moving area is
+/// already big enough for the AI to see well.
+fn zoom_on(f: &Frame, (x, y, w, h): (f32, f32, f32, f32)) -> Option<(Frame, [f32; 4])> {
+    let (fw, fh) = (f.width as f32, f.height as f32);
+    let (bw, bh) = (w * fw, h * fh);
+    let short = fw.min(fh);
+    if bw.max(bh) > short * 0.45 {
+        return None;
+    }
+    let side = (bw.max(bh) * 3.0).clamp(short * 0.35, short);
+    let cx = (x + w / 2.0) * fw;
+    let cy = (y + h / 2.0) * fh;
+    let x0 = (cx - side / 2.0).clamp(0.0, fw - side);
+    let y0 = (cy - side / 2.0).clamp(0.0, fh - side);
+    let crop = crate::recog::crop(f, x0, y0, side, side);
+    Some((
+        crop.clone(),
+        [x0 / fw, y0 / fh, crop.width as f32 / fw, crop.height as f32 / fh],
+    ))
+}
+
 fn zone_picture(f: &Frame, poly: &[[f32; 2]]) -> Frame {
     let (mut x0, mut y0, mut x1, mut y1) = (1f32, 1f32, 0f32, 0f32);
     for p in poly {
@@ -1029,9 +1104,7 @@ pub struct MotionSettings {
 
 impl MotionSettings {
     pub fn from(d: &crate::config::DetectConfig) -> Self {
-        let mask = (d.mask.len() == crate::config::MASK_W * crate::config::MASK_H)
-            .then(|| d.mask.chars().map(|c| c == '1').collect::<Vec<bool>>())
-            .filter(|m| m.iter().any(|x| *x));
+        let mask = crate::config::decode_mask(&d.mask).filter(|m| m.iter().any(|x| *x));
         Self {
             min_contrast: d.min_contrast as f32,
             min_object_px: d.min_object_px,
@@ -1357,6 +1430,19 @@ mod tests {
         }
         // Needs ≥1 s (frame 5) and ≥100 px travel (frame 4): first at frame 5.
         assert_eq!(first_trigger, Some(5));
+    }
+
+    #[test]
+    fn zooms_on_small_motion_only() {
+        let f = Frame {
+            width: 640,
+            height: 360,
+            rgb: std::sync::Arc::new(vec![0; 640 * 360 * 3]),
+        };
+        let (c, [x, y, w, h]) = super::zoom_on(&f, (0.9, 0.9, 0.05, 0.08)).unwrap();
+        assert!(c.width >= 126 && c.width == c.height);
+        assert!(x + w <= 1.0001 && y + h <= 1.0001 && x > 0.5 && y > 0.3);
+        assert!(super::zoom_on(&f, (0.1, 0.1, 0.6, 0.6)).is_none());
     }
 
     #[test]
