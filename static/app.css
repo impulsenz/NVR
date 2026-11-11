@@ -743,3 +743,83 @@ table.where td:first-child { width: 44px; }
 
 /* On-screen display placed anywhere ("p:X,Y") */
 .ov.free { position: absolute; padding: 0; }
+
+/* ===================== Phones: touch first ===================== */
+.phone-only { display: none; }
+@media (max-width: 760px) {
+  .phone-only { display: block; }
+  /* Tab bar: Live, Alerts, Recordings, Settings and the account menu (with
+     System, Logs and updates); nothing else squeezed in. */
+  header .brand, header #bw, header #dl-chip, header #upd-btn { display: none !important; }
+  nav a[data-page=system], nav a[data-page=logs] { display: none; }
+  nav { flex: 1; min-width: 0; }
+  nav a { min-height: 56px; font-size: 11.5px; }
+  nav .ni { font-size: 22px; }
+  .user-menu { flex: none; display: flex; align-items: stretch; height: 100%; }
+  .user-menu[hidden] { display: none; }
+  #um-btn { min-height: 56px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    border: 0; border-radius: 0; background: none; padding: 0 12px; font-size: 11.5px; max-width: 84px; overflow: hidden; }
+  #um-btn .ni { font-style: normal; font-size: 22px; line-height: 1; }
+  #um-btn #um-name { max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The account menu opens as a sheet above the tab bar. */
+  #um-pop { position: fixed; left: 8px; right: 8px; bottom: calc(66px + env(safe-area-inset-bottom)); top: auto; width: auto;
+    padding: 12px; border-radius: 14px; box-shadow: 0 -8px 30px rgba(0,0,0,.5); z-index: 60; }
+  #um-pop button, #um-pop .btn, #um-pop select { width: 100%; margin-top: 6px; min-height: 48px; justify-content: flex-start; }
+  .um-links { display: grid; gap: 0; margin: 4px 0 6px; }
+  .um-links .btn { display: flex; align-items: center; }
+
+  /* Toolbars: one row that scrolls sideways instead of filling the screen. */
+  .dash-bar, .filters, #f-types, #rec-timeline .controls, .side {
+    flex-wrap: nowrap !important; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .dash-bar::-webkit-scrollbar, .filters::-webkit-scrollbar, #f-types::-webkit-scrollbar, #rec-timeline .controls::-webkit-scrollbar, .side::-webkit-scrollbar { display: none; }
+  .dash-bar > *, .filters > *, #f-types > *, #rec-timeline .controls > *, .side > * { flex: none; }
+  .dash-bar .spacer, .filters .spacer, #rec-timeline .controls .spacer { display: none; }
+  .filters { gap: 6px; padding-bottom: 2px; margin-bottom: 4px; }
+  .filters .page-title { font-size: 20px; margin-right: 4px; }
+  #dash-info { display: none; }
+  /* Filter chips: big enough to tap, in one sideways row. */
+  #f-types { display: flex; gap: 6px; padding: 2px 0 6px; }
+  #f-types label { min-height: 40px; display: inline-flex; align-items: center; padding: 0 14px; font-size: 14px; }
+  #f-types label input { display: none; }
+  /* Alert cards: one per row, big pictures. */
+  #rec-cards { grid-template-columns: minmax(0, 1fr) !important; gap: 10px; }
+  .rc .thumb .tools .btn, .rc .thumb .tools button { min-height: 40px; min-width: 40px; }
+
+  /* Alert pop-up: full screen; the player's controls stay small on the
+     picture (clip editing and the speed are on bigger screens). */
+  dialog.alert-dlg > .head { padding: 6px 8px; gap: 4px; position: sticky; top: 0; z-index: 5; background: var(--panel); }
+  dialog.alert-dlg #ad-title { font-size: 14px; line-height: 1.25; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; }
+  dialog.alert-dlg > .head .spacer { display: none; }
+  dialog.alert-dlg > .head button { min-height: 44px; min-width: 44px; padding: 0 10px; }
+  .surface.has-pov:not(:fullscreen) .pov { padding: 18px 6px 4px; }
+  .surface.has-pov:not(:fullscreen) .pov .controls { flex-wrap: nowrap; gap: 4px; }
+  .surface.has-pov:not(:fullscreen) .pov .p-speed, .surface.has-pov:not(:fullscreen) .pov .p-in,
+  .surface.has-pov:not(:fullscreen) .pov .p-out, .surface.has-pov:not(:fullscreen) .pov .p-vol { display: none; }
+  .surface.has-pov .pov button, .surface.has-pov .pov .btn { min-height: 40px; min-width: 40px; padding: 4px 10px; font-size: 14px; }
+  .surface.has-pov .pov .timecode { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .surface.has-pov .pov .scrub { height: 30px; }
+  .surface.has-pov .pov .scrub .handle { width: 18px; margin-left: -9px; }
+  .surface.has-pov:not(.pov-idle) .pov-osdbox .ov.bl, .surface.has-pov:not(.pov-idle) .pov-osdbox .ov.br,
+  .surface.has-pov:not(.pov-idle) .pov-osdbox .ov.bc { bottom: 70px; }
+
+  /* Timeline page: the pictures, then the timeline to scrub with a thumb,
+     then the buttons. */
+  #rec-timeline { display: flex; flex-direction: column; }
+  #rec-timeline .tl-videos { order: 1; grid-template-columns: minmax(0, 1fr); }
+  #rec-timeline .tl { order: 2; margin-top: 8px; }
+  #rec-timeline .controls { order: 3; margin-top: 8px; gap: 6px; }
+  #rec-timeline .legend { order: 4; }
+  #rec-timeline .hint { order: 5; }
+  .tl-axis span { font-size: 10.5px; }
+
+  /* Settings: the sections as a sideways row of tabs. */
+  .side { display: flex; gap: 6px; padding-bottom: 6px; position: sticky; top: 0; z-index: 5; background: var(--bg); }
+  .side a { white-space: nowrap; min-height: 40px; display: inline-flex; align-items: center; padding: 0 14px;
+    border: 1px solid var(--border); border-radius: 20px; background: var(--panel); }
+  .side a.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* Camera view timeline: room to drag with a thumb. */
+  .ctl-lane { height: 72px; }
+  .ctl-tlp { height: 16px; }
+  .camtl .row .small, .camtl select { min-height: 40px; }
+}

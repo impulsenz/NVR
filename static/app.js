@@ -1109,7 +1109,7 @@ function placeTiles() {
     if (!t) continue;
     if (m.narrow && !editing) {
       // One or two columns (chosen in the phone layout editor).
-      const cols = layout.length && layout.every(x => x.w <= 6) ? 2 : 1;
+      const cols = layout.length > 1 && layout.every(x => x.w <= 6) ? 2 : 1;
       const i = [...dash.querySelectorAll('.tile')].indexOf(el), cw = (m.W - 4) / cols, h = (cw - 8) * 9 / 16;
       const top = Math.floor(i / cols) * (h + 8) + 4;
       Object.assign(el.style, {left: (i % cols) * cw + 4 + 'px', top: top + 'px', width: cw - 8 + 'px', height: h + 'px'});
@@ -2739,6 +2739,9 @@ function waitForGazeRestart() {
     try { const r = await fetch('api/update'); if (r.ok && (await r.json()).state !== 'restarting') { clearInterval(restartWait); location.reload(); } } catch (_) {}
   }, 2000);
 }
+// Phones: the account menu has System, Logs and the update check.
+if ($('um-upd')) $('um-upd').onclick = () => { $('um-pop').hidden = true; $('upd-btn').click(); };
+document.querySelectorAll('.um-links a').forEach(a => a.addEventListener('click', () => { $('um-pop').hidden = true; }));
 $('upd-btn').onclick = async () => {
   const b = $('upd-btn'); b.disabled = true;
   b.classList.remove('ok'); b.classList.add('checking');

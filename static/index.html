@@ -26,9 +26,14 @@
   <span id="clock"></span>
   <button type="button" id="upd-btn" class="small admin-only" title="Check for updates">⟳ <span class="hide-sm">Updates</span></button>
   <div class="dropdown user-menu" id="user-menu" hidden>
-    <button type="button" id="um-btn" class="small" title="Your account">👤 <span id="um-name"></span> ▾</button>
+    <button type="button" id="um-btn" class="small" title="Your account"><i class="ni">👤</i> <span id="um-name"></span><span class="hide-sm"> ▾</span></button>
     <div class="popover" id="um-pop" hidden>
       <div class="muted small" id="um-role"></div>
+      <div class="phone-only um-links">
+        <a href="#system" class="btn">📊 System</a>
+        <a href="#logs" class="btn admin-only">📜 Logs</a>
+        <button type="button" class="admin-only" id="um-upd">⟳ Check for updates</button>
+      </div>
       <label class="small muted" style="display:block;margin:6px 0 2px">Data saver on this device</label>
       <select id="um-ds"><option value="auto">Automatic (on for phones)</option><option value="on">Always on</option><option value="off">Off</option></select>
       <button type="button" id="um-pass">Change password</button>
