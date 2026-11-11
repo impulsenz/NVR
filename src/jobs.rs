@@ -55,7 +55,7 @@ pub fn paused() -> Vec<&'static str> {
 }
 
 pub fn is_paused(kind: &str) -> bool {
-    PAUSED.lock().unwrap().iter().any(|k| *k == kind)
+    PAUSED.lock().unwrap().contains(&kind)
 }
 static NEXT: AtomicU64 = AtomicU64::new(1);
 /// How many finished jobs to keep.

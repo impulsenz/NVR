@@ -302,7 +302,6 @@ mod tests {
             identified: false,
             items: Vec::new(),
             notified: 0,
-            story: String::new(),
             suspicious: String::new(),
         };
         store.save(ev(

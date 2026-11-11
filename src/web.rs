@@ -114,7 +114,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/dashboard", put(put_dashboard))
         .route("/api/profiles", get(get_profiles).put(put_profiles))
-        .route("/api/client", get(client_info))
         .route("/api/discover", post(discover_now))
         .route("/api/known", get(known_list).post(known_create))
         .route("/api/known/{id}", put(known_update).delete(known_delete))
@@ -405,20 +404,15 @@ async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_key = !cfg.ai.api_key.is_empty();
     let has_describe_key = !cfg.ai.describe_key.is_empty();
-    let (has_token, has_gemini) = (
-        !cfg.notify.token.is_empty(),
-        !cfg.notify.gemini_key.is_empty(),
-    );
+    let has_token = !cfg.notify.token.is_empty();
     cfg.server.password.clear();
     cfg.ai.api_key.clear();
     cfg.ai.describe_key.clear();
     cfg.notify.token.clear();
-    cfg.notify.gemini_key.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["ai"]["has_key"] = json!(has_key);
     v["ai"]["has_describe_key"] = json!(has_describe_key);
     v["notify"]["has_token"] = json!(has_token);
-    v["notify"]["has_gemini_key"] = json!(has_gemini);
     v.as_object_mut().unwrap().remove("cameras");
     Json(v).into_response()
 }
@@ -427,59 +421,6 @@ async fn put_settings(State(m): App, Json(up): Json<SettingsUpdate>) -> Response
     match m.update_settings(up).await {
         Ok(restart) => Json(json!({ "ok": true, "restart_required": restart })).into_response(),
         Err(e) => bad(e),
-    }
-}
-
-/// Where this browser connects from, so it can use the data saver
-/// automatically away from home (Tailscale, the internet).
-async fn client_info(
-    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    let mut ip = addr.ip();
-    // Behind a proxy on this computer (e.g. `tailscale serve`): the real client.
-    if ip.is_loopback()
-        && let Some(f) = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .and_then(|v| v.trim().parse().ok())
-    {
-        ip = f;
-    }
-    Json(json!({ "ip": ip.to_string(), "remote": is_remote(ip) })).into_response()
-}
-
-/// Not on the home network: Tailscale addresses and anything public.
-pub fn is_remote(ip: std::net::IpAddr) -> bool {
-    use std::net::IpAddr;
-    let ip = match ip {
-        IpAddr::V6(v6) => v6
-            .to_ipv4_mapped()
-            .map(IpAddr::V4)
-            .unwrap_or(IpAddr::V6(v6)),
-        v4 => v4,
-    };
-    match ip {
-        IpAddr::V4(v) => {
-            let o = v.octets();
-            // Tailscale (100.64.0.0/10) counts as remote.
-            if o[0] == 100 && (64..128).contains(&o[1]) {
-                return true;
-            }
-            !(v.is_loopback() || v.is_private() || v.is_link_local() || v.is_unspecified())
-        }
-        IpAddr::V6(v) => {
-            let s = v.segments();
-            // Tailscale fd7a:115c:a1e0::/48 counts as remote.
-            if s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0 {
-                return true;
-            }
-            !(v.is_loopback()
-                || (s[0] & 0xfe00) == 0xfc00
-                || (s[0] & 0xffc0) == 0xfe80
-                || v.is_unspecified())
-        }
     }
 }
 
@@ -503,7 +444,14 @@ async fn alerts_seen_all(State(m): App) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 
-async fn alerts_unseen(State(m): App, Json(r): Json<SeenReq>) -> Response {
+async fn alerts_unseen(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Json(r): Json<SeenReq>,
+) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
     let Some(c) = m.camera(&r.camera) else {
         return err(StatusCode::NOT_FOUND, "camera not found");
     };
@@ -843,10 +791,15 @@ async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Respon
     if !q.passwords {
         cfg.server.password.clear();
         cfg.server.username.clear();
+        // Every stored secret: API keys, notification tokens, camera logins.
         cfg.ai.api_key.clear();
+        cfg.ai.describe_key.clear();
+        cfg.notify.token.clear();
         for c in &mut cfg.cameras {
             c.url = mask_url(&c.url).replace(":****@", ":PASSWORD@");
             c.live_url = mask_url(&c.live_url).replace(":****@", ":PASSWORD@");
+            c.talk_url = mask_url(&c.talk_url).replace(":****@", ":PASSWORD@");
+            c.ptz.password.clear();
         }
     }
     match cfg.to_toml() {
@@ -1465,19 +1418,13 @@ async fn describe_test(State(m): App, Json(mut r): Json<DescribeTest>) -> Respon
         .collect();
     pics.push((e.thumb_at.unwrap_or(e.start), thumb));
     pics.sort_by_key(|(t, _)| *t);
-    let info = crate::describe::AlertInfo {
-        camera: c.cfg.name.clone(),
-        seconds: (e.end - e.start).num_seconds(),
-        objects: e.labels.iter().map(|l| l.label.clone()).collect(),
-        names: e.faces.iter().filter_map(|f| f.name.clone()).collect(),
-        plates: e.plates.clone(),
-        notes: e.notes.clone(),
-    };
+    let info = crate::describe::AlertInfo::of(&e, &c.cfg.name, &m.config());
     let frames: Vec<_> = pics.into_iter().map(|(_, f)| f).collect();
     let t0 = std::time::Instant::now();
     match crate::describe::describe(&r.ai, &frames, &info).await {
         Ok(d) => Json(json!({
-            "description": d,
+            "description": d.text,
+            "suspicious": d.suspicious,
             "start": e.start,
             "pictures": frames.len(),
             "ms": t0.elapsed().as_millis() as u64,
@@ -1755,7 +1702,17 @@ struct ExportQuery {
 }
 
 /// Cut a time range out of the recordings and download it as one MP4.
-async fn export_clip(State(m): App, Query(q): Query<ExportQuery>, req: Request) -> Response {
+async fn export_clip(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Query(q): Query<ExportQuery>,
+    req: Request,
+) -> Response {
+    // The camera is in the query here, not the path: check it's one this
+    // account may see.
+    if visible(&user).is_some_and(|v| !v.contains(&q.camera)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
     let c = camera!(m, q.camera);
     let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
     if to <= from {
@@ -3397,25 +3354,5 @@ async fn users_delete(
     match m.users.delete(&name) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
-    }
-}
-
-#[cfg(test)]
-mod remote_tests {
-    use super::is_remote;
-
-    #[test]
-    fn home_or_away() {
-        let r = |s: &str| is_remote(s.parse().unwrap());
-        assert!(!r("192.168.1.20"));
-        assert!(!r("10.0.0.5"));
-        assert!(!r("127.0.0.1"));
-        assert!(!r("::1"));
-        assert!(!r("fe80::1"));
-        assert!(!r("::ffff:192.168.1.9"));
-        assert!(r("100.101.102.103")); // Tailscale
-        assert!(r("fd7a:115c:a1e0::1")); // Tailscale IPv6
-        assert!(r("203.0.113.7"));
-        assert!(r("2001:db8::1"));
     }
 }

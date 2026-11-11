@@ -320,21 +320,13 @@ impl Default for AiConfig {
 /// Updates from GitHub (Settings → About).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[derive(Default)]
 pub struct UpdateConfig {
     /// Install new versions as soon as they're found (off: ask first).
     pub auto: bool,
     /// GitHub repository to update from ("owner/name"); empty = the one
     /// this program was built from.
     pub repo: String,
-}
-
-impl Default for UpdateConfig {
-    fn default() -> Self {
-        Self {
-            auto: false,
-            repo: String::new(),
-        }
-    }
 }
 
 /// Phone notifications through ntfy (https://ntfy.sh, or your own server).
@@ -367,10 +359,12 @@ pub struct NotifyConfig {
     pub describe_first: bool,
     /// Address that opens GAZE from the phone (e.g. your Tailscale name).
     pub link: String,
-    /// Google Gemini writes the summary and judges what's suspicious.
+    /// Before 0.5.6 notifications had their own Gemini settings; they move
+    /// to the vision model for descriptions (AI settings) when loaded.
+    #[serde(default, skip_serializing)]
     pub gemini: bool,
+    #[serde(default, skip_serializing)]
     pub gemini_key: String,
-    pub gemini_model: String,
 }
 
 impl Default for NotifyConfig {
@@ -400,7 +394,6 @@ impl Default for NotifyConfig {
             link: String::new(),
             gemini: false,
             gemini_key: String::new(),
-            gemini_model: "gemini-2.5-flash".into(),
         }
     }
 }
@@ -1143,6 +1136,18 @@ impl Config {
 
     fn migrate(&mut self) -> bool {
         let mut changed = false;
+        // 0.5.6: the notifications' own Gemini settings become the vision
+        // model that writes descriptions (and judges what's suspicious).
+        let n = &mut self.notify;
+        if n.gemini || !n.gemini_key.is_empty() {
+            if n.gemini && !n.gemini_key.trim().is_empty() && self.ai.describe_with == "builtin" {
+                self.ai.describe_with = "gemini".into();
+                self.ai.describe_key = n.gemini_key.trim().to_string();
+            }
+            n.gemini = false;
+            n.gemini_key.clear();
+            changed = true;
+        }
         let rec = self.recording.take();
         if let Some(rec) = &rec {
             if let Some(d) = &rec.dir {
@@ -1448,6 +1453,20 @@ mod tests {
         assert!(cfg.cameras[0].record_audio);
         assert_eq!(cfg.storage.segment_seconds, 60);
         assert_eq!(cfg.storage.dir, PathBuf::from("rec"));
+    }
+
+    #[test]
+    fn moves_notification_gemini_to_descriptions() {
+        let (c, changed) = super::Config::from_toml(
+            "[notify]\ngemini = true\ngemini_key = \"k123\"\ngemini_model = \"gemini-2.5-flash\"\n",
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(
+            (c.ai.describe_with.as_str(), c.ai.describe_key.as_str()),
+            ("gemini", "k123")
+        );
+        assert!(!c.to_toml().unwrap().contains("gemini_key"));
     }
 
     #[test]

@@ -655,18 +655,15 @@ pub async fn run(mgr: Arc<Manager>) {
                     // A vision model writes a proper description when one is
                     // set up; the built-in one stays if it can't.
                     let ai = mgr.config().ai;
+                    let mut judged = None;
                     let what = if crate::describe::enabled(&ai) {
-                        let info = crate::describe::AlertInfo {
-                            camera: cam.clone(),
-                            seconds: secs,
-                            objects: e.labels.iter().map(|l| l.label.clone()).collect(),
-                            names: e.faces.iter().filter_map(|f| f.name.clone()).collect(),
-                            plates: e.plates.clone(),
-                            notes: e.notes.clone(),
-                        };
+                        let info = crate::describe::AlertInfo::of(&e, &cam, &mgr.config());
                         let pics: Vec<_> = timeline.into_iter().map(|(_, f)| f).collect();
                         match crate::describe::describe(&ai, &pics, &info).await {
-                            Ok(d) => d.trim_end_matches('.').to_string(),
+                            Ok(d) => {
+                                judged = Some(d.suspicious.unwrap_or_default());
+                                d.text.trim_end_matches('.').to_string()
+                            }
                             Err(err) => {
                                 job.problem(format!("vision model: {err:#}"));
                                 what
@@ -683,6 +680,10 @@ pub async fn run(mgr: Arc<Manager>) {
                         format!(". {}", e.notes.join("; "))
                     };
                     updated.summary = format!("{what} — {}{notes}", fmt_secs(secs));
+                    // The vision model's judgement, for notifications.
+                    if let Some(sus) = judged {
+                        updated.suspicious = sus;
+                    }
                     store.save(updated);
                     if !announced {
                         info!("smart search: describing alert pictures in the background");
@@ -799,7 +800,6 @@ mod parcel_tests {
                 checked: false,
             }],
             notified: 0,
-            story: String::new(),
             suspicious: String::new(),
         };
         super::check_items(&clip, &store, &mut e).await;

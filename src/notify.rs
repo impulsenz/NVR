@@ -13,9 +13,9 @@
 use crate::config::NotifyConfig;
 use crate::events::Event;
 use crate::manager::{CameraRuntime, Manager};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, NaiveTime};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -210,89 +210,6 @@ pub fn lan_ip() -> Option<std::net::IpAddr> {
     (!ip.is_unspecified() && !ip.is_loopback()).then_some(ip)
 }
 
-/// Google Gemini looks at a few moments of the alert: what happened, and
-/// does it look suspicious?
-async fn ask_gemini(
-    cfg: &NotifyConfig,
-    cam: &str,
-    e: &Event,
-    pictures: &[Vec<u8>],
-    night: bool,
-) -> Result<(String, Option<String>)> {
-    use base64::Engine;
-    let prompt = format!(
-        "You watch a home security camera called \"{cam}\". These {} pictures are moments, in order, of one alert at {} ({}). \
-         Detected: {}. {}\n\
-         Reply with JSON only: {{\"summary\": \"one or two short sentences saying what happens, e.g. 'A delivery driver leaves a parcel at the front door and walks back to the van.'\", \
-         \"suspicious\": true or false, \"reason\": \"a few words, only if suspicious\"}}. \
-         Suspicious means things like trying door handles, looking into cars or windows, lingering without reason (especially at night), \
-         carrying things away from the property, climbing fences, hiding the face. Deliveries, residents, visitors, passers-by and animals are normal.",
-        pictures.len(),
-        e.start.format("%H:%M"),
-        if night { "night" } else { "day" },
-        what(e),
-        if e.notes.is_empty() {
-            String::new()
-        } else {
-            format!("Notes: {}.", e.notes.join("; "))
-        },
-    );
-    let mut parts: Vec<Value> = pictures
-        .iter()
-        .map(|p| json!({"inline_data": {"mime_type": "image/jpeg", "data": base64::engine::general_purpose::STANDARD.encode(p)}}))
-        .collect();
-    parts.push(json!({"text": prompt}));
-    let body = json!({
-        "contents": [{"parts": parts}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-    });
-    let model = if cfg.gemini_model.trim().is_empty() {
-        "gemini-2.5-flash"
-    } else {
-        cfg.gemini_model.trim()
-    };
-    let base = std::env::var("GAZE_GEMINI_BASE")
-        .unwrap_or_else(|_| "https://generativelanguage.googleapis.com".into());
-    let resp = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()?
-        .post(format!("{base}/v1beta/models/{model}:generateContent"))
-        .header("x-goog-api-key", cfg.gemini_key.trim())
-        .json(&body)
-        .send()
-        .await
-        .context("cannot reach Gemini")?;
-    let status = resp.status();
-    let v: Value = resp.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
-        bail!(
-            "Gemini {status}: {}",
-            v["error"]["message"].as_str().unwrap_or("request failed")
-        );
-    }
-    let text: String = v["candidates"][0]["content"]["parts"]
-        .as_array()
-        .map(|p| p.iter().filter_map(|x| x["text"].as_str()).collect())
-        .unwrap_or_default();
-    let start = text
-        .find('{')
-        .ok_or_else(|| anyhow!("Gemini gave no answer"))?;
-    let end = text
-        .rfind('}')
-        .ok_or_else(|| anyhow!("Gemini gave no answer"))?;
-    let r: Value = serde_json::from_str(&text[start..=end]).context("Gemini's answer")?;
-    let summary = r["summary"].as_str().unwrap_or("").trim().to_string();
-    let sus = r["suspicious"].as_bool().unwrap_or(false).then(|| {
-        let reason = r["reason"].as_str().unwrap_or("").trim();
-        if reason.is_empty() {
-            "Looks suspicious".to_string()
-        } else {
-            cap(reason)
-        }
-    });
-    Ok((summary, sus))
-}
-
 /// The best picture of an alert, as a JPEG.
 fn picture(rt: &CameraRuntime, e: &Event) -> Option<Vec<u8>> {
     std::fs::read(rt.events.dir().join(e.thumb.as_ref()?)).ok()
@@ -421,27 +338,20 @@ impl Notifier {
                         continue;
                     }
                     // What the AI sees in the picture, sent along with it.
-                    let gemini = n.gemini && !n.gemini_key.trim().is_empty();
+                    let judge = crate::describe::enabled(&cfg.ai);
                     let mut desc = None;
                     if let Some((d, s)) = self.described.get(&e.id).cloned() {
                         desc = d;
                         if let Some(s) = s {
                             sus.get_or_insert(s);
                         }
-                    } else if n.describe_first || (n.only_suspicious && gemini) {
-                        if gemini {
-                            match ask_gemini(
-                                n,
-                                &rt.cfg.name,
-                                &e,
-                                std::slice::from_ref(&pic),
-                                is_night(n, e.start),
-                            )
-                            .await
-                            {
-                                Ok((story, s)) => {
-                                    desc = (!story.is_empty()).then_some(story);
-                                    if let Some(s) = s {
+                    } else if n.describe_first || (n.only_suspicious && judge) {
+                        if judge && let Ok(f) = crate::imgutil::decode_jpeg(&pic) {
+                            let info = crate::describe::AlertInfo::of(&e, &rt.cfg.name, &cfg);
+                            match crate::describe::describe(&cfg.ai, &[f], &info).await {
+                                Ok(d) => {
+                                    desc = Some(d.text.trim_end_matches('.').to_string());
+                                    if let Some(s) = d.suspicious {
                                         e.suspicious = s.clone();
                                         sus.get_or_insert(s);
                                     }
@@ -497,31 +407,32 @@ impl Notifier {
                 if !described && waited < 150 {
                     continue;
                 }
-                if e.notified == HELD && !n.gemini && suspicious(n, &e).is_none() {
+                let judge = crate::describe::enabled(&cfg.ai);
+                if e.notified == HELD && !judge && suspicious(n, &e).is_none() {
                     e.notified = DONE;
                     rt.events.save(e);
                     continue;
                 }
-                let night = is_night(n, e.start);
-                if n.gemini && !n.gemini_key.trim().is_empty() && e.story.is_empty() {
-                    let mut pics: Vec<Vec<u8>> = picture(&rt, &e).into_iter().collect();
+                // Without smart search nothing else describes it: ask the
+                // vision model here, with a few moments of the alert.
+                if judge && !cfg.ai.smart_search && e.summary.is_empty() {
+                    let mut pics: Vec<_> = picture(&rt, &e)
+                        .and_then(|p| crate::imgutil::decode_jpeg(&p).ok())
+                        .into_iter()
+                        .collect();
                     for (f, _) in crate::identify::moments(mgr, &rt, &e, 3).await {
-                        if let Ok(j) = f.fit(960).jpeg(80) {
-                            pics.push(j);
-                        }
+                        pics.push(f);
                     }
-                    match ask_gemini(n, &rt.cfg.name, &e, &pics, night).await {
-                        Ok((story, sus)) => {
-                            e.story = story;
-                            e.suspicious = sus.unwrap_or_default();
-                            if !e.story.is_empty() {
-                                info!(target: "event", "[{}] Gemini: {}{}", rt.cfg.name, e.story,
-                                    if e.suspicious.is_empty() { String::new() } else { format!(" (suspicious: {})", e.suspicious) });
-                            }
+                    let info = crate::describe::AlertInfo::of(&e, &rt.cfg.name, &cfg);
+                    let secs = (e.end - e.start).num_seconds().max(1);
+                    match crate::describe::describe(&cfg.ai, &pics, &info).await {
+                        Ok(d) => {
+                            e.summary = format!("{} — {secs} s", d.text.trim_end_matches('.'));
+                            e.suspicious = d.suspicious.unwrap_or_default();
                         }
                         Err(err) => {
                             self.report(Err(err));
-                            e.story = "-".into(); // don't ask again
+                            e.summary = format!("{} — {secs} s", what(&e));
                         }
                     }
                     rt.events.save(e.clone());
@@ -539,9 +450,7 @@ impl Notifier {
                     rt.events.save(e);
                     continue;
                 }
-                let story = if !e.story.is_empty() && e.story != "-" {
-                    e.story.clone()
-                } else if !e.summary.is_empty() {
+                let story = if !e.summary.is_empty() {
                     e.summary.clone()
                 } else {
                     format!(

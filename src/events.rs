@@ -72,9 +72,6 @@ pub struct Event {
     /// Phone notifications sent: 1 = picture, 2 = picture and summary.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub notified: u8,
-    /// What happened, in words, from Gemini (notifications).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub story: String,
     /// Why this looks suspicious (empty = not suspicious).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub suspicious: String,
@@ -195,9 +192,6 @@ impl EventStore {
     pub fn save_detected(&self, mut e: Event) {
         if let Some(old) = self.get(&e.id) {
             e.notified = e.notified.max(old.notified);
-            if e.story.is_empty() {
-                e.story = old.story;
-            }
             if e.suspicious.is_empty() {
                 e.suspicious = old.suspicious;
             }
@@ -327,7 +321,6 @@ mod tests {
             identified: false,
             items: Vec::new(),
             notified: 0,
-            story: String::new(),
             suspicious: String::new(),
         };
         s.save(e.clone());

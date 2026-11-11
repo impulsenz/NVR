@@ -101,6 +101,12 @@ viewing, finding footage, and managing everything, all from the browser.
 - **Descriptions from the whole alert**: smart search describes several moments of each alert's
   full-quality video (4 by default), not only the alert picture, so a person who turns around or a
   second visitor is included.
+- **Written descriptions by a vision model** (optional, Settings → Object recognition → Descriptions
+  written by): instead of set phrases ("Adult in a black top"), a vision-language model looks at those
+  moments together and writes what happened ("A courier in a hi-vis vest leaves a parcel at the door and
+  walks back to a white van"). Use Ollama or LM Studio on your own computer (free, nothing leaves the
+  house), Claude or Gemini (cloud). A daily limit keeps cloud costs known; "Describe the latest alert"
+  tries it before saving.
 - **Faces & number plates** (Settings → People & vehicles, optional): GAZE finds faces and reads number
   plates in alerts, using the full-quality recording. Teach it people (upload a few photos, or answer
   "Who is this?" on a face in an alert) and vehicles (number plate and photos). Alerts then say

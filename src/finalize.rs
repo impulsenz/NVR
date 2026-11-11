@@ -131,10 +131,22 @@ fn file_lock(path: &Path) -> Arc<tokio::sync::Mutex<()>> {
         .clone()
 }
 
+/// Files that couldn't be made quick to open, and when.
+static FAILED: std::sync::Mutex<
+    Option<std::collections::HashMap<std::path::PathBuf, std::time::Instant>>,
+> = std::sync::Mutex::new(None);
+
+fn failed_recently(path: &Path) -> bool {
+    let mut g = FAILED.lock().unwrap();
+    let m = g.get_or_insert_with(Default::default);
+    m.retain(|_, t| t.elapsed() < Duration::from_secs(600));
+    m.contains_key(path)
+}
+
 /// Someone is opening this recording: make it quick to open first, waiting
 /// at most `wait` (it carries on in the background after that).
 pub async fn prepare_for_viewing(ffmpeg: &str, path: &Path, wait: Duration) {
-    if !is_fragmented(path) || !finished(path) {
+    if !is_fragmented(path) || failed_recently(path) || !finished(path) {
         return;
     }
     let lock = file_lock(path);
@@ -144,7 +156,16 @@ pub async fn prepare_for_viewing(ffmpeg: &str, path: &Path, wait: Duration) {
         if is_fragmented(&path) {
             match finalize(&ffmpeg, &path, true).await {
                 Ok(()) => info!("made {} quick to open", path.display()),
-                Err(e) => warn!("could not finalize {}: {e:#}", path.display()),
+                Err(e) => {
+                    // On Windows a file being played can't be swapped: don't
+                    // copy it again for every request while it's open.
+                    FAILED
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(Default::default)
+                        .insert(path.clone(), std::time::Instant::now());
+                    warn!("could not finalize {}: {e:#}", path.display())
+                }
             }
         }
     });
@@ -161,15 +182,19 @@ pub async fn run(mgr: Arc<Manager>) {
         let mut done = 0;
         let mut job: Option<crate::jobs::Job> = None;
         for c in mgr.cameras() {
-            // Only footage with an alert in it (the rest is done when opened).
-            let alerts: Vec<_> = c
-                .events
-                .all()
-                .into_iter()
-                .map(|e| (e.start, e.end))
-                .collect();
             for dir in [c.dir.clone(), crate::storage::timeline_dir(&c.dir)] {
                 let recs = crate::storage::list(&dir);
+                // Only footage with an alert in it (the rest is done when
+                // opened): the alerts of the time these files cover.
+                let alerts: Vec<_> = match recs.iter().take(501).next_back() {
+                    Some(oldest) => c
+                        .events
+                        .between(oldest.start, chrono::Local::now())
+                        .into_iter()
+                        .map(|e| (e.start, e.end))
+                        .collect(),
+                    None => Vec::new(),
+                };
                 // The newest file may still be written: never touch it.
                 for r in recs.iter().skip(1).take(500) {
                     let p = dir.join(&r.name);

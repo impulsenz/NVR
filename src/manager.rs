@@ -729,9 +729,6 @@ impl Manager {
             if n.token.is_empty() {
                 n.token = old.notify.token.clone();
             }
-            if n.gemini_key.is_empty() {
-                n.gemini_key = old.notify.gemini_key.clone();
-            }
             cfg.notify = n;
         }
         if let Some(c) = up.cloud {

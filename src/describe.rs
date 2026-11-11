@@ -5,6 +5,9 @@
 //! phrases ("Adult in a black top"); a vision model can say "A courier in a
 //! hi-vis vest leaves a parcel at the door and walks back to a white van".
 //!
+//! The same model judges whether the activity looks suspicious, for
+//! notifications (Settings → Notifications).
+//!
 //! Providers: Claude (Anthropic API), Gemini, or any OpenAI-compatible
 //! server, which includes Ollama and LM Studio running on your own computer
 //! (nothing leaves the house).
@@ -29,6 +32,38 @@ pub struct AlertInfo {
     pub plates: Vec<String>,
     /// Zone happenings ("Person in Porch").
     pub notes: Vec<String>,
+    /// When it started, and whether that's at night (for judging).
+    pub time: String,
+    pub night: bool,
+}
+
+impl AlertInfo {
+    pub fn of(e: &crate::events::Event, camera: &str, cfg: &crate::config::Config) -> Self {
+        Self {
+            camera: camera.to_string(),
+            seconds: (e.end - e.start).num_seconds(),
+            objects: e
+                .labels
+                .iter()
+                .filter(|l| l.label != "motion")
+                .map(|l| l.label.clone())
+                .collect(),
+            names: e.faces.iter().filter_map(|f| f.name.clone()).collect(),
+            plates: e.plates.clone(),
+            notes: e.notes.clone(),
+            time: e.start.format("%H:%M").to_string(),
+            night: crate::notify::is_night(&cfg.notify, e.start),
+        }
+    }
+}
+
+/// The model's answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Described {
+    /// What happened, in a sentence or two.
+    pub text: String,
+    /// Why it looks suspicious (None: it doesn't).
+    pub suspicious: Option<String>,
 }
 
 #[derive(Default)]
@@ -95,19 +130,53 @@ fn prompt(n: usize, a: &AlertInfo) -> String {
         known.push(format!("Zones: {}.", a.notes.join("; ")));
     }
     format!(
-        "These {n} pictures come from one home security camera (\"{cam}\") during an alert that lasted {secs} seconds, \
-         in time order. {known}\n\n\
-         Describe what happens across the pictures in one or two plain sentences, at most 40 words, \
+        "These {n} pictures come from one home security camera (\"{cam}\") during an alert that started at {time} ({light}) \
+         and lasted {secs} seconds, in time order. {known}\n\n\
+         Reply with JSON only: {{\"summary\": \"...\", \"suspicious\": true or false, \"reason\": \"...\"}}.\n\
+         summary: what happens across the pictures in one or two plain sentences, at most 40 words, \
          so the homeowner can find it later by searching. Mention people (clothing colours, what they carry, \
          what they do: arriving, leaving, delivering, looking around), vehicles (colour, type, make if clearly visible) \
          and animals. Say where things happen (driveway, front door, gate) when that's clear. \
          Don't guess who someone is unless a name is given above, don't describe the timestamp overlay, \
-         and don't start with \"The pictures show\". If nothing notable happens, say what moved (for example \"Trees moving in the wind\"). \
-         Reply with the description only.",
+         and don't start with \"The pictures show\". If nothing notable happens, say what moved (for example \"Trees moving in the wind\").\n\
+         suspicious: true only for things like trying door handles, looking into cars or windows, lingering without reason \
+         (especially at night), carrying things away from the property, climbing fences or hiding the face. \
+         Deliveries, residents, visitors, passers-by and animals are normal.\n\
+         reason: a few words, only when suspicious.",
         cam = a.camera,
+        time = a.time,
+        light = if a.night { "night" } else { "day" },
         secs = a.seconds.max(1),
         known = known.join(" "),
     )
+}
+
+/// Read the model's reply: JSON as asked, or plain text from a model that
+/// didn't follow the format.
+fn parse_reply(reply: &str) -> Described {
+    let json = reply
+        .find('{')
+        .zip(reply.rfind('}'))
+        .filter(|(a, b)| a < b)
+        .and_then(|(a, b)| serde_json::from_str::<Value>(&reply[a..=b]).ok());
+    match json {
+        Some(v) if v["summary"].is_string() => Described {
+            text: tidy(v["summary"].as_str().unwrap_or("")),
+            suspicious: (v["suspicious"] == true || v["suspicious"] == "true").then(|| {
+                let r = tidy(v["reason"].as_str().unwrap_or(""));
+                let r = r.trim_end_matches('.');
+                let mut c = r.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().chain(c).collect(),
+                    None => "Looks suspicious".into(),
+                }
+            }),
+        },
+        _ => Described {
+            text: tidy(reply),
+            suspicious: None,
+        },
+    }
 }
 
 fn b64_jpeg(f: &Frame) -> Result<String> {
@@ -115,7 +184,7 @@ fn b64_jpeg(f: &Frame) -> Result<String> {
 }
 
 /// Describe an alert from its pictures (in time order).
-pub async fn describe(cfg: &AiConfig, frames: &[Frame], info: &AlertInfo) -> Result<String> {
+pub async fn describe(cfg: &AiConfig, frames: &[Frame], info: &AlertInfo) -> Result<Described> {
     if frames.is_empty() {
         bail!("no pictures");
     }
@@ -137,10 +206,10 @@ pub async fn describe(cfg: &AiConfig, frames: &[Frame], info: &AlertInfo) -> Res
         "openai" => openai(&client, cfg, &text, &images).await,
         other => Err(anyhow::anyhow!("unknown description provider {other:?}")),
     }
-    .map(|t| tidy(&t));
+    .map(|t| parse_reply(&t));
     let mut u = USAGE.lock().unwrap();
     match &res {
-        Ok(t) if t.is_empty() => {
+        Ok(d) if d.text.is_empty() => {
             u.last_error = Some("the model answered with nothing".into());
             bail!("the model answered with nothing")
         }
@@ -339,6 +408,24 @@ mod tests {
         );
         assert_eq!(super::tidy("**Cat on wall.**"), "Cat on wall.");
         assert_eq!(super::tidy("  "), "");
+    }
+
+    #[test]
+    fn reads_replies() {
+        let d = super::parse_reply(
+            "```json\n{\"summary\": \"A man tries the car door handle\", \"suspicious\": true, \"reason\": \"trying car doors\"}\n```",
+        );
+        assert_eq!(d.text, "A man tries the car door handle.");
+        assert_eq!(d.suspicious.as_deref(), Some("Trying car doors"));
+        let d = super::parse_reply(
+            "{\"summary\": \"A cat walks past.\", \"suspicious\": false, \"reason\": \"\"}",
+        );
+        assert_eq!((d.text.as_str(), d.suspicious), ("A cat walks past.", None));
+        let d = super::parse_reply("A courier leaves a parcel");
+        assert_eq!(
+            (d.text.as_str(), d.suspicious),
+            ("A courier leaves a parcel.", None)
+        );
     }
 
     #[test]

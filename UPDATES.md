@@ -84,8 +84,8 @@ Other pushes don't start a release (a change to `Cargo.toml` in a commit
 with another title builds nothing).
 
 To test a build without publishing it, start the *Release* workflow by hand
-(**Actions → Release → Run workflow**). It builds both programs and attaches
-them to the run as downloads, without making a release.
+(**Actions → Release → Run workflow**). It builds the program and attaches
+it to the run as a download, without making a release.
 
 To take a bad release back, delete it (or mark it as a pre-release) on
 GitHub. Copies that already installed it stay on it until a newer version

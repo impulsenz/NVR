@@ -13,9 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// GPU runtime versions, for the log and the download.
-#[allow(dead_code)]
-const _VERSIONS: (&str, &str) = (ORT_VERSION, DML_VERSION);
 use tracing::{info, warn};
 
 pub type Plan = Arc<tract_onnx::prelude::TypedSimplePlan>;

@@ -232,9 +232,7 @@ const Live = {
   },
   onFrame(buf) {
     const b = new Uint8Array(buf);
-    dsStats.bytes += b.length; dsStats.taken = (dsStats.taken || 0) + b.length;
-    const now = performance.now();
-    if (now - dsStats.since > 5000) { dsStats.rate = dsStats.bytes * 1000 / (now - dsStats.since); dsStats.bytes = 0; dsStats.since = now; }
+    liveBytes += b.length;
     const q = b[0] ? 'main' : 'sub';
     const n = b[1];
     const id = new TextDecoder().decode(b.subarray(2, 2 + n));
@@ -554,15 +552,14 @@ function convertedUrl(url) {
 // URL of the converted stream starting at `t` seconds (small and light with the data saver).
 function convertedAt(url, t) { return convertedUrl(url) + '?t=' + t.toFixed(2) + (dataSaver ? '&lite=true' : ''); }
 
-// ---------- data saver (remote viewing) ----------
-// Auto: on when this browser connects from outside the home network
-// (Tailscale, the internet). Smaller live pictures, fewer frames per second,
-// and recordings streamed as small low-bitrate video.
-// Data saver (Settings → Live view & display, per browser): "auto" is on
-// for phone browsers (mobile data), off on computers.
+// ---------- data saver ----------
+// Smaller live pictures, fewer frames per second, and recordings streamed
+// as small low-bitrate video. Settings → Live view & display, per browser:
+// "auto" is on for phone browsers (mobile data), off on computers.
 let dataSaver = false, dsMode = store_get('data-saver', 'auto');
 const isPhone = () => matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820;
-const dsStats = {bytes: 0, since: performance.now(), rate: 0};
+// Live picture bytes received (for the bandwidth shown in the header).
+let liveBytes = 0;
 function applyDataSaver() {
   const was = dataSaver;
   dataSaver = dsMode === 'on' || (dsMode === 'auto' && isPhone());
@@ -581,8 +578,8 @@ try {
 } catch (e) {}
 setInterval(() => {
   const now = performance.now(), secs = (now - bw.since) / 1000;
-  const rate = (bw.bytes + dsStats.taken) / Math.max(1, secs);
-  bw.bytes = 0; dsStats.taken = 0; bw.since = now;
+  const rate = (bw.bytes + liveBytes) / Math.max(1, secs);
+  bw.bytes = 0; liveBytes = 0; bw.since = now;
   const el = $('bw');
   if (el) {
     el.textContent = '⇣ ' + fmtRate(rate);
@@ -1953,7 +1950,6 @@ async function playItem(it, card) {
   const what = e && (e.summary || e.desc);
   $('rp-info').innerHTML = `
     ${e && e.suspicious ? `<div class="sus">⚠ ${esc(e.suspicious)}</div>` : ''}
-    ${e && e.story && e.story !== '-' ? `<div class="what"><div class="muted small">Gemini</div>${esc(e.story)}</div>` : ''}
     ${e ? `<div class="what"><div class="muted small">What happened</div>${what ? esc(what) : `<span class="muted">${status && status.smart_search_on ? 'Being described… (a moment after the activity ends)' : 'Turn on Smart search (Settings → AI) to get a description of what happened.'}</span>`}</div>` : ''}
     ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
@@ -4490,21 +4486,14 @@ async function renderNotify(body) {
       <label for="n-gap">How often</label><div class="row"><span class="muted">at most one every</span><input type="number" id="n-gap" min="0" max="240" value="${n.gap_minutes}" style="width:80px"><span class="muted">minutes per camera</span></div>
       <label for="n-nfrom">At night</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sus" ${n.only_suspicious ? 'checked' : ''}> Only suspicious activity</label>
-        <div class="hint">Suspicious: lines crossed, someone lingering, a parcel picked up, a person at night, or what Gemini judges suspicious (below). Suspicious activity is always sent, even within the time between notifications, with high priority.</div></div>
+        <div class="hint">Suspicious: lines crossed, someone lingering, a parcel picked up, a person at night, or what the vision model judges suspicious (Settings → Object recognition → Descriptions written by). Suspicious activity is always sent, even within the time between notifications, with high priority.</div></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-desc" ${n.describe_first !== false ? 'checked' : ''}> Wait for the AI's description and send it with the picture</label>
-        <div class="hint">The picture arrives a few seconds later, saying what's in it (“Adult in a black top”, or Gemini's description when Gemini is on below). Needs smart search or Gemini; otherwise the picture is sent straight away.</div></div>
+        <div class="hint">The picture arrives a few seconds later, saying what's in it (“Adult in a black top”, or the vision model's description when one is chosen in Settings → Object recognition). Needs smart search or a vision model; otherwise the picture is sent straight away.</div></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
-        <div class="hint">What happened, who was recognised, number plates, parcels — from smart search and faces &amp; plates, or from Gemini.</div></div>
+        <div class="hint">What happened, who was recognised, number plates, parcels — from smart search (or its vision model) and faces &amp; plates.</div></div>
       <label for="n-link">Open GAZE at</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
         <div class="hint">Tapping a notification opens that alert in GAZE. Left empty, this computer's address on your home network is used (works on your Wi-Fi); for away from home use e.g. your computer's Tailscale name.</div></div>
     </div></div>
-    <div class="card"><h2>Gemini summaries <span class="muted small">(optional)</span></h2>
-      <div class="form">
-        <span></span><div><label class="check"><input type="checkbox" id="n-gem" ${n.gemini ? 'checked' : ''}> Let Google Gemini describe each alert and judge whether it's suspicious</label>
-          <div class="hint">Gemini looks at the alert picture and 3 moments of the HD video and writes e.g. “A delivery driver leaves a parcel at the front door and walks back to the van.” The pictures are sent to Google. Gemini has a free tier: get a key at aistudio.google.com.</div></div>
-        <label for="n-gkey">Gemini API key</label><div><input type="password" id="n-gkey" autocomplete="new-password" placeholder="${n.has_gemini_key ? 'Saved – leave empty to keep' : ''}"></div>
-        <label for="n-gmodel">Model</label><div><input type="text" id="n-gmodel" value="${esc(n.gemini_model)}" placeholder="gemini-2.5-flash"></div>
-      </div></div>
     <div class="card"><div class="actions" style="margin:0"><button type="button" class="primary" id="n-save">Save</button><button type="button" id="n-test">Send a test</button>
       <span class="muted" style="margin-left:auto">${st.sent ? `${st.sent} sent since GAZE started${st.last_sent ? ', last ' + fmtDate(st.last_sent) : ''}` : ''}${st.last_error ? ` <span class="errc">· ${esc(st.last_error)}</span>` : ''}</span></div></div>`;
   const upd = () => { $('n-sub').textContent = sub(); };
@@ -4516,13 +4505,11 @@ async function renderNotify(body) {
     return {enabled: chk('n-on'), server: val('n-server').trim() || 'https://ntfy.sh', topic: val('n-topic').trim(), token: val('n-token'),
       objects: [...body.querySelectorAll('.n-obj:checked')].map(c => c.value), cameras: picked.length === cams.length ? [] : picked,
       only_suspicious: chk('n-sus'), gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
-      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), describe_first: chk('n-desc'), link: val('n-link').trim(),
-      gemini: chk('n-gem'), gemini_key: val('n-gkey'), gemini_model: val('n-gmodel').trim() || 'gemini-2.5-flash'};
+      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), describe_first: chk('n-desc'), link: val('n-link').trim()};
   };
   $('n-save').onclick = async () => {
     const f = form();
     if (f.enabled && !f.topic) return toast('Choose a topic first', true);
-    if (f.gemini && !f.gemini_key && !settings.notify.has_gemini_key) return toast('Enter a Gemini API key, or switch Gemini off', true);
     if (await saveSettings({notify: f}, 'Notifications saved')) renderNotify(body);
   };
   $('n-test').onclick = async () => {
