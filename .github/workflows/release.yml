@@ -1,4 +1,4 @@
-# Builds GAZE for Windows and Linux and publishes a GitHub release.
+# Builds GAZE for Windows and publishes a GitHub release.
 #
 # A release is made when:
 # - the version in Cargo.toml is raised on the default branch and there is
@@ -60,9 +60,6 @@ jobs:
           - os: windows-latest
             exe: target/release/nvr.exe
             asset: nvr-windows-x64.exe
-          - os: ubuntu-22.04
-            exe: target/release/nvr
-            asset: nvr-linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

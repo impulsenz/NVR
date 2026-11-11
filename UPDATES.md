@@ -17,14 +17,12 @@ This guide covers:
 ## 1. For users: download and update
 
 1. Open the latest release: <https://github.com/impulsenz/NVR/releases/latest>
-2. Download the program for your computer:
-   - Windows: `nvr-windows-x64.exe` (rename it to `nvr.exe` if you like)
-   - Linux (64-bit PC): `nvr-linux-x64` (then `chmod +x nvr-linux-x64`)
+2. Download `nvr-windows-x64.exe` (rename it to `nvr.exe` if you like).
 3. Put it in a folder of its own, e.g. `C:\GAZE`. Settings, logs and AI
    models are kept next to it; recordings go in a `recordings` folder there
    unless you choose another.
 4. Install ffmpeg if you don't have it. On Windows, open Command Prompt and
-   run `winget install ffmpeg`. On Linux, `sudo apt install ffmpeg`.
+   run `winget install ffmpeg`.
 5. Start the program and open <http://localhost:8080>. The first visit asks
    you to create the admin account.
 
@@ -74,7 +72,6 @@ The workflow that does it is `.github/workflows/release.yml`.
    about 10–15 minutes. When it's done, **Releases** has *GAZE v0.6.0* with
    these files:
    - `nvr-windows-x64.exe` and `nvr-windows-x64.exe.sha256`
-   - `nvr-linux-x64` and `nvr-linux-x64.sha256`
 5. Installed copies see the new version within a minute.
 
 Pushes that don't change the version build nothing.
@@ -140,14 +137,10 @@ hour per internet connection.
 1. GAZE downloads the program for this system from the release.
 2. It checks the download against the published SHA-256 checksum, and stops
    without changing anything if they differ.
-3. It renames the running program to `nvr.old.exe` (Windows) or `nvr.old`
-   (Linux), which is allowed while it runs, and puts the new one in its
-   place.
-4. It restarts:
-   - Windows: as a new process. If GAZE runs as a Windows service, it
-     restarts the service.
-   - Linux: in place, as the same process, so systemd and similar keep
-     tracking it.
+3. It renames the running program to `nvr.old.exe`, which Windows allows
+   while it runs, and puts the new one in its place.
+4. It restarts as a new process. If GAZE runs as a Windows service, it
+   restarts the service.
 5. The old program is deleted at the next start.
 
 **What's not touched:** settings (`nvr.toml`), the data folder
@@ -166,8 +159,8 @@ No version has been published in that repository. See
 [section 2](#2-publishing-a-new-version).
 
 **"no ready-made updates for this kind of computer"**
-Releases are built for 64-bit Windows and 64-bit Linux PCs. On other
-systems (e.g. a Raspberry Pi), build GAZE yourself; see the README.
+Releases are built for 64-bit Windows. On other systems, build GAZE
+yourself; see the README.
 
 **The workflow fails with "Resource not accessible by integration"**
 The workflow isn't allowed to create releases. Allow *Read and write

@@ -50,8 +50,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn asset_name() -> Option<&'static str> {
     if cfg!(all(windows, target_arch = "x86_64")) {
         Some("nvr-windows-x64.exe")
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some("nvr-linux-x64")
     } else {
         None
     }

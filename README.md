@@ -190,7 +190,7 @@ viewing, finding footage, and managing everything, all from the browser.
 
 ## Install
 
-**Easiest — download it:** get `nvr-windows-x64.exe` (Windows) or `nvr-linux-x64` (Linux) from the
+**Easiest — download it:** get `nvr-windows-x64.exe` from the
 [latest release](https://github.com/impulsenz/NVR/releases/latest), put it in a folder of its own and
 start it. You also need [ffmpeg](https://ffmpeg.org) (with ffprobe) — on Windows:
 `winget install ffmpeg`. From then on GAZE **updates itself** (Settings → About): one click, or
