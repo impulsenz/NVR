@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.5.3 — November 2026
+- **AI on the graphics card**: object recognition, smart search and faces & plates now run on the GPU (any recent NVIDIA, AMD or Intel graphics on Windows, through DirectML). The GPU runtime (about 25 MB) downloads by itself the first time. Choose the processor instead in Settings → Object recognition → Run AI on; if the graphics card can't be used, the processor takes over and the settings say why.
+- Fixed: Windows could report the GPU as fully busy when it wasn't (engines of the same kind were added together), which made load balancing move video work to the processor.
+
 ## 0.5.2 — November 2026
 - **Live sound**: the camera view has a 🔊 Sound button (volume on hover) to hear the camera — together with Hold to talk, a two-way conversation.
 - **Alert pictures in HD**: every alert's picture is remade from the full-quality footage once it's over. Faces and number plates are only read from full-quality video.
