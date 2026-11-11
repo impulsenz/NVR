@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.4 — November 2026
+- **Package detection stays in the package spot**: the spot you drew (and zones watching for items) is only checked when something actually reached it during the alert: movement there, or a person or object the AI found there. Activity elsewhere in the picture, with shadows or light changing over the spot, no longer makes "item left or taken" / package alerts.
+- The "before" picture of the spot must be recent (from the last two minutes before the alert); an old one is not compared.
+
 ## 0.6.3 — November 2026
 - **Phones: one camera across the whole screen**: on a phone's Live page each camera now fills the full width of the screen, edge to edge, with the others stacked below it. Computers are unchanged. (Two side by side is still possible: Edit layout on the phone → 2 columns.)
 - The bar above the cameras wraps on phones instead of being cut off.
