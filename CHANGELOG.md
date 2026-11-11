@@ -1,5 +1,16 @@
 # What's new in GAZE
 
+## 0.6.1 — November 2026
+- **Fewer missed objects**: when the AI sees nothing in the whole picture, it takes a second, zoomed-in look where the motion is, so small or far-away people, cars and animals are found.
+- **Alert pictures show the right moment**: the picture taken from the recording is matched against what detection saw live (the recording and the live view run a second or two apart), so the box no longer lands on an empty spot.
+- **Ignore motion set off by animals** (camera → Motion, on by default): with "Any motion", the AI looks first; if all it sees is a cat, dog or bird you don't watch for, no alert. Tick "cat" in the AI tab to get alerts for cats.
+- **Alerts grouped by day, time of day or hour**, each group folded away with − and opened with + (or all at once).
+- **Ignore areas painted in fine detail**: the grid is 5× finer, with Paint and Erase tools and brush sizes (right-click or Shift erases too). Masks you already have are kept.
+- **Recordings**: click a camera's name on the timeline to see just that camera; choose whether to play the **sub-stream** (default, opens instantly) or the **main stream**.
+- **Time-lapse previews load reliably**: a preview that failed is tried again by itself, a broken page download is fetched again, and remaking a preview no longer breaks the one being shown.
+- Updates are checked **once a day** (⟳ Updates still checks straight away).
+- The clip-cutting hint under alert videos is gone.
+
 ## 0.6.0 — November 2026
 - **Back up to a NAS**: Settings → Backup now offers **a NAS over FTP** (Synology, QNAP, a router's USB drive … — built in, nothing to install) and a login for a NAS's **shared folder** (`\\NAS\cameras`).
 - **Time-lapse for all your footage**: previews are now made for every recording, also the times without a light timeline copy (e.g. after GAZE was off or the copy reconnected), and the background task keeps the newest footage ready. Settings → Tasks shows which camera, file and time it's on, and how many are left.
