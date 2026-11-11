@@ -7,6 +7,7 @@ mod buffer;
 mod clip;
 mod cloud;
 mod config;
+mod describe;
 mod detect;
 mod discover;
 mod draw;

@@ -95,6 +95,20 @@ pub async fn moments(
     e: &Event,
     n: usize,
 ) -> Vec<(Frame, Vec<SeenBox>)> {
+    timed_moments(mgr, rt, e, n)
+        .await
+        .into_iter()
+        .map(|(_, f, b)| (f, b))
+        .collect()
+}
+
+/// [`moments`], with the time of each picture.
+pub async fn timed_moments(
+    mgr: &Manager,
+    rt: &CameraRuntime,
+    e: &Event,
+    n: usize,
+) -> Vec<(chrono::DateTime<chrono::Local>, Frame, Vec<SeenBox>)> {
     let cfg = mgr.config();
     let ai = mgr.ai.get();
     let local = rt.cfg.detect.ai && matches!(ai.cfg.provider.as_str(), "builtin" | "deepstack");
@@ -134,7 +148,7 @@ pub async fn moments(
         } else {
             Vec::new()
         };
-        out.push((frame, boxes));
+        out.push((t, frame, boxes));
     }
     out
 }

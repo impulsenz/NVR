@@ -707,6 +707,9 @@ impl Manager {
             if a.api_key.is_empty() {
                 a.api_key = old.ai.api_key.clone();
             }
+            if a.describe_key.is_empty() {
+                a.describe_key = old.ai.describe_key.clone();
+            }
             // Saving the AI settings gives a model that stopped GAZE while
             // loading another chance.
             if let Ok(rd) = std::fs::read_dir(self.data_dir.join("models")) {

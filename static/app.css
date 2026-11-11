@@ -188,7 +188,7 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 /* timeline */
 .tl-videos { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .tl-videos .surface { aspect-ratio: 16/9; }
-.tl-videos .sprite { position: absolute; inset: 0; background-repeat: no-repeat; background-color: #000; z-index: 1; }
+.tl-videos .sprite { position: absolute; inset: 0; background-repeat: no-repeat; z-index: 1; }
 .tl { --tl-label: 120px; position: relative; margin-top: 12px; user-select: none; touch-action: none; }
 .tl-axis { position: relative; height: 22px; margin-left: var(--tl-label); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
 .tl-axis span { position: absolute; top: 3px; transform: translateX(-50%); white-space: nowrap; }

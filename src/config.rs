@@ -273,6 +273,17 @@ pub struct AiConfig {
     /// Pictures of each alert's full-quality video described for its
     /// summary (1 = only the best moment).
     pub summary_frames: u32,
+    /// Who writes the alert descriptions: "builtin" (smart search model on
+    /// this computer), "claude", "gemini" or "openai" (any OpenAI-compatible
+    /// server, e.g. Ollama or LM Studio on this or another computer).
+    pub describe_with: String,
+    /// Server address for "openai" (e.g. http://localhost:11434/v1).
+    pub describe_url: String,
+    pub describe_key: String,
+    /// Model name ("" = the provider's default).
+    pub describe_model: String,
+    /// Most alerts a day sent to the vision model (keeps cloud costs known).
+    pub describe_per_day: u32,
     /// Look for faces in alerts and name known people.
     pub faces: bool,
     /// Read number plates of vehicles in alerts.
@@ -295,6 +306,11 @@ impl Default for AiConfig {
             smart_search: false,
             smart_model: "ViT-B-32".into(),
             summary_frames: 4,
+            describe_with: "builtin".into(),
+            describe_url: String::new(),
+            describe_key: String::new(),
+            describe_model: String::new(),
+            describe_per_day: 200,
             faces: true,
             plates: true,
         }
@@ -1240,6 +1256,19 @@ impl Config {
             && ai.url.trim().is_empty()
         {
             bail!("enter the address of the AI server");
+        }
+        match ai.describe_with.as_str() {
+            "builtin" => {}
+            "claude" | "gemini" if ai.describe_key.trim().is_empty() => {
+                bail!("descriptions: enter the API key")
+            }
+            "openai"
+                if ai.describe_url.trim().is_empty() || ai.describe_model.trim().is_empty() =>
+            {
+                bail!("descriptions: enter the server address and the model name")
+            }
+            "claude" | "gemini" | "openai" => {}
+            other => bail!("descriptions: unknown provider {other:?}"),
         }
         if ["gemini"].contains(&ai.provider.as_str()) && ai.api_key.trim().is_empty() {
             bail!("an API key is required for Gemini");

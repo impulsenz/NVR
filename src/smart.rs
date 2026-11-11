@@ -574,7 +574,7 @@ pub async fn run(mgr: Arc<Manager>) {
                     let mut per_picture: Vec<Vec<(String, String)>> = Vec::new();
                     let extra = match mgr.camera(&e.camera) {
                         Some(rt) if mgr.config().ai.summary_frames > 1 => {
-                            crate::identify::moments(
+                            crate::identify::timed_moments(
                                 &mgr,
                                 &rt,
                                 &e,
@@ -584,8 +584,15 @@ pub async fn run(mgr: Arc<Manager>) {
                         }
                         _ => Vec::new(),
                     };
+                    // Every picture in time order, for a vision model.
+                    let mut timeline: Vec<(
+                        chrono::DateTime<chrono::Local>,
+                        crate::imgutil::Frame,
+                    )> = extra.iter().map(|(t, f, _)| (*t, f.clone())).collect();
+                    timeline.push((e.thumb_at.unwrap_or(e.start), f.clone()));
+                    timeline.sort_by_key(|(t, _)| *t);
                     let mut frames = vec![(f, e.clone())];
-                    for (xf, boxes) in extra {
+                    for (_, xf, boxes) in extra {
                         // Without boxes there's nothing new to describe.
                         if boxes.is_empty() {
                             continue;
@@ -645,6 +652,29 @@ pub async fn run(mgr: Arc<Manager>) {
                         .camera(&e.camera)
                         .map(|c| c.cfg.name.clone())
                         .unwrap_or_default();
+                    // A vision model writes a proper description when one is
+                    // set up; the built-in one stays if it can't.
+                    let ai = mgr.config().ai;
+                    let what = if crate::describe::enabled(&ai) {
+                        let info = crate::describe::AlertInfo {
+                            camera: cam.clone(),
+                            seconds: secs,
+                            objects: e.labels.iter().map(|l| l.label.clone()).collect(),
+                            names: e.faces.iter().filter_map(|f| f.name.clone()).collect(),
+                            plates: e.plates.clone(),
+                            notes: e.notes.clone(),
+                        };
+                        let pics: Vec<_> = timeline.into_iter().map(|(_, f)| f).collect();
+                        match crate::describe::describe(&ai, &pics, &info).await {
+                            Ok(d) => d.trim_end_matches('.').to_string(),
+                            Err(err) => {
+                                job.problem(format!("vision model: {err:#}"));
+                                what
+                            }
+                        }
+                    } else {
+                        what
+                    };
                     tracing::info!(target: "event", "[{cam}] alert described: {what} ({})", fmt_secs(secs));
                     let mut updated = e.clone();
                     let notes = if e.notes.is_empty() {

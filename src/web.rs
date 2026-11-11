@@ -194,6 +194,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/hw-test", post(hw_test))
         .route("/api/ai/test", post(ai_test))
         .route("/api/ai/models", post(ai_models))
+        .route("/api/ai/describe-test", post(describe_test))
         .route("/api/cameras/{id}/motion", get(camera_motion))
         .route("/api/cloud/test", post(cloud_test))
         .route("/api/live/ws", get(live_ws))
@@ -309,6 +310,8 @@ async fn status(
         "cameras": cameras,
         "ai": m.ai.get().status(),
         "smart_search": m.clip.status(),
+        // Vision-model descriptions: used today, last problem.
+        "describe": crate::describe::status(),
         // Where the AI models run (GPU or processor, and why).
         "ai_device": crate::infer::status(),
         // A newer GAZE (for the notice at the top; admins only use it).
@@ -401,16 +404,19 @@ async fn download_logs(req: Request) -> Response {
 async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_key = !cfg.ai.api_key.is_empty();
+    let has_describe_key = !cfg.ai.describe_key.is_empty();
     let (has_token, has_gemini) = (
         !cfg.notify.token.is_empty(),
         !cfg.notify.gemini_key.is_empty(),
     );
     cfg.server.password.clear();
     cfg.ai.api_key.clear();
+    cfg.ai.describe_key.clear();
     cfg.notify.token.clear();
     cfg.notify.gemini_key.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["ai"]["has_key"] = json!(has_key);
+    v["ai"]["has_describe_key"] = json!(has_describe_key);
     v["notify"]["has_token"] = json!(has_token);
     v["notify"]["has_gemini_key"] = json!(has_gemini);
     v.as_object_mut().unwrap().remove("cameras");
@@ -1414,10 +1420,82 @@ struct AiTestReq {
     ai: Option<crate::config::AiConfig>,
 }
 
+#[derive(Deserialize)]
+struct DescribeTest {
+    camera: String,
+    ai: crate::config::AiConfig,
+}
+
+/// Describe a camera's latest alert with the vision model in the form, to
+/// try it before saving.
+async fn describe_test(State(m): App, Json(mut r): Json<DescribeTest>) -> Response {
+    let saved = m.config().ai;
+    // The saved key only goes to the saved provider and server.
+    if r.ai.describe_key.is_empty()
+        && r.ai.describe_with == saved.describe_with
+        && r.ai.describe_url.trim() == saved.describe_url.trim()
+    {
+        r.ai.describe_key = saved.describe_key;
+    }
+    if !crate::describe::enabled(&r.ai) {
+        return err(StatusCode::BAD_REQUEST, "choose a vision model first");
+    }
+    let c = camera!(m, r.camera);
+    let Some(e) = c
+        .events
+        .all()
+        .into_iter()
+        .filter(|e| e.thumb.is_some() && !c.in_progress(e))
+        .max_by_key(|e| e.start)
+    else {
+        return err(StatusCode::NOT_FOUND, "this camera has no alerts yet");
+    };
+    let thumb = match std::fs::read(c.events.dir().join(e.thumb.as_ref().unwrap()))
+        .map_err(anyhow::Error::from)
+        .and_then(|b| crate::imgutil::decode_jpeg(&b))
+    {
+        Ok(f) => f,
+        Err(e) => return bad(e),
+    };
+    let n = r.ai.summary_frames.clamp(1, 8) as usize - 1;
+    let mut pics: Vec<_> = crate::identify::timed_moments(&m, &c, &e, n)
+        .await
+        .into_iter()
+        .map(|(t, f, _)| (t, f))
+        .collect();
+    pics.push((e.thumb_at.unwrap_or(e.start), thumb));
+    pics.sort_by_key(|(t, _)| *t);
+    let info = crate::describe::AlertInfo {
+        camera: c.cfg.name.clone(),
+        seconds: (e.end - e.start).num_seconds(),
+        objects: e.labels.iter().map(|l| l.label.clone()).collect(),
+        names: e.faces.iter().filter_map(|f| f.name.clone()).collect(),
+        plates: e.plates.clone(),
+        notes: e.notes.clone(),
+    };
+    let frames: Vec<_> = pics.into_iter().map(|(_, f)| f).collect();
+    let t0 = std::time::Instant::now();
+    match crate::describe::describe(&r.ai, &frames, &info).await {
+        Ok(d) => Json(json!({
+            "description": d,
+            "start": e.start,
+            "pictures": frames.len(),
+            "ms": t0.elapsed().as_millis() as u64,
+        }))
+        .into_response(),
+        Err(e) => bad(e),
+    }
+}
+
 /// Models available from the chosen AI provider (key from the form or the saved one).
 async fn ai_models(State(m): App, Json(mut cfg): Json<crate::config::AiConfig>) -> Response {
-    if cfg.api_key.is_empty() {
-        cfg.api_key = m.config().ai.api_key;
+    // The saved key only goes to the saved provider and server.
+    let saved = m.config().ai;
+    if cfg.api_key.is_empty()
+        && cfg.provider == saved.provider
+        && cfg.url.trim() == saved.url.trim()
+    {
+        cfg.api_key = saved.api_key;
     }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -1753,7 +1831,16 @@ async fn serve_recording(
 ) -> Response {
     let c = camera!(m, id);
     match storage::resolve(&c.dir, &name) {
-        Ok(p) => serve_file(p, req, Some(name), false).await,
+        Ok(p) => {
+            // First time this recording is opened: make it quick to seek.
+            crate::finalize::prepare_for_viewing(
+                &m.config().server.ffmpeg_path,
+                &p,
+                std::time::Duration::from_secs(20),
+            )
+            .await;
+            serve_file(p, req, Some(name), false).await
+        }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
 }
@@ -1765,7 +1852,16 @@ async fn serve_timeline_file(
 ) -> Response {
     let c = camera!(m, id);
     match storage::resolve(&storage::timeline_dir(&c.dir), &name) {
-        Ok(p) => serve_file(p, req, Some(name), false).await,
+        Ok(p) => {
+            // First time this recording is opened: make it quick to seek.
+            crate::finalize::prepare_for_viewing(
+                &m.config().server.ffmpeg_path,
+                &p,
+                std::time::Duration::from_secs(20),
+            )
+            .await;
+            serve_file(p, req, Some(name), false).await
+        }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
 }
@@ -1898,6 +1994,15 @@ fn media_path(
 /// Only a couple of preview jobs at a time.
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
+/// The preview's description is of the current kind (pictures stored in
+/// their own shape).
+fn sprite_meta_current(meta: &std::path::Path) -> bool {
+    std::fs::read(meta)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<ffmpeg::SpriteInfo>(&b).ok())
+        .is_some_and(|i| i.aspect > 0.0)
+}
+
 fn fresh(cache: &std::path::Path, src: &std::path::Path) -> bool {
     let (Ok(c), Ok(s)) = (std::fs::metadata(cache), std::fs::metadata(src)) else {
         return false;
@@ -1942,8 +2047,11 @@ async fn ensure_sprite(
     let prefix = dir.join(format!("{name}.sprite"));
     let first = dir.join(format!("{name}.sprite-000.jpg"));
     let meta = dir.join(format!("{name}.sprite.json"));
+    // Previews from before pictures were stored in their own shape are made again.
     let load = || -> Option<ffmpeg::SpriteInfo> {
-        serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()
+        sprite_meta_current(&meta)
+            .then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok())
+            .flatten()
     };
     if fresh(&first, &src)
         && let Some(i) = load()
@@ -2047,7 +2155,8 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                     .unwrap()
                     .join(".thumbs")
                     .join(format!("{name}.sprite-000.jpg"));
-                if fresh(&first, &src) {
+                let meta = first.with_file_name(format!("{name}.sprite.json"));
+                if fresh(&first, &src) && sprite_meta_current(&meta) {
                     continue;
                 }
                 let j = job.get_or_insert_with(|| {

@@ -625,6 +625,43 @@ pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
     String::from_utf8_lossy(&o.stdout).trim().parse().ok()
 }
 
+/// Width ÷ height of a recording's picture as shown (pixel shape included).
+pub async fn display_aspect(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
+    let o = run(
+        crate::load::cmd(ffprobe_path(ffmpeg))
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,sample_aspect_ratio",
+                "-of",
+                "default=nw=1",
+            ])
+            .arg(file),
+        30,
+    )
+    .await
+    .ok()?;
+    let text = String::from_utf8_lossy(&o.stdout).to_string();
+    let get = |k: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(&format!("{k}=")))
+            .map(str::trim)
+            .map(String::from)
+    };
+    let (w, h): (f64, f64) = (get("width")?.parse().ok()?, get("height")?.parse().ok()?);
+    let sar = get("sample_aspect_ratio")
+        .and_then(|s| {
+            let (a, b) = s.split_once(':')?;
+            let (a, b): (f64, f64) = (a.parse().ok()?, b.parse().ok()?);
+            (a > 0.0 && b > 0.0).then_some(a / b)
+        })
+        .unwrap_or(1.0);
+    (w > 0.0 && h > 0.0).then_some(w * sar / h)
+}
+
 /// A small preview image of a recording.
 pub async fn thumbnail(ffmpeg: &str, file: &std::path::Path, out: &std::path::Path) -> Result<()> {
     let o = run(
@@ -663,6 +700,11 @@ pub struct SpriteInfo {
     pub pages: u32,
     pub tile_width: u32,
     pub tile_height: u32,
+    /// The recording's own picture shape (width ÷ height). Pictures are
+    /// stretched to fill their tile; the page shows them in this shape, or
+    /// stretched like the video where the video is stretched too.
+    #[serde(default)]
+    pub aspect: f64,
     pub duration: f64,
     /// Changes whenever the pictures are regenerated (cache busting).
     pub version: u64,
@@ -688,9 +730,8 @@ pub async fn sprite(
     let (tw, th) = (256u32, 144u32);
     let duration = duration(ffmpeg, file).await.unwrap_or(0.0);
     let interval = if dense { 1.0 } else { 2.0 };
-    let vf = format!(
-        "fps=1/{interval},scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:-1:-1"
-    );
+    let aspect = display_aspect(ffmpeg, file).await.unwrap_or(16.0 / 9.0);
+    let vf = format!("fps=1/{interval},scale={tw}:{th}");
     let mut command = crate::load::cmd(ffmpeg);
     let cmd = crate::load::background(&mut command);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
@@ -786,6 +827,7 @@ pub async fn sprite(
         pages,
         tile_width: tw,
         tile_height: th,
+        aspect,
         duration: if duration > 0.0 {
             duration
         } else {

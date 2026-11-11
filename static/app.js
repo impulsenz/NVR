@@ -504,22 +504,40 @@ async function refreshStatus() {
 }
 
 // Show sprite picture `n` (scrubbing preview) as the background of `el`
-// (W×H px), centered and letterboxed. Sprites come in pages of pictures.
-function spriteStyle(el, sp, n, W, H) {
+// (W×H px). Sprites come in pages of pictures, each stretched to fill its
+// tile; `fill` stretches the picture over the whole box like the timeline's
+// videos, otherwise it's shown in its own shape (info.aspect), centred.
+// A page that hasn't loaded yet isn't shown (that blinked black): the
+// previous picture stays until it's ready. Returns the picture's offsets
+// in the box, or null while waiting.
+const spritePages = new Map();
+function spritePage(url) {
+  let im = spritePages.get(url);
+  if (!im) { im = new Image(); im.src = url; spritePages.set(url, im); }
+  return im;
+}
+function spriteStyle(el, sp, n, W, H, fill) {
   const i = sp.info;
   n = Math.min(i.count - 1, Math.max(0, n));
   const page = Math.floor(n / i.per_page), k = n % i.per_page;
-  const col = k % i.columns, row = Math.floor(k / i.columns), rows = i.per_page / i.columns;
-  const z = Math.min(W / i.tile_width, H / i.tile_height);
-  const ox = (W - i.tile_width * z) / 2, oy = (H - i.tile_height * z) / 2;
-  el.style.backgroundImage = `url("${sp.url}${page}")`;
-  el.style.backgroundSize = `${i.columns * i.tile_width * z}px ${rows * i.tile_height * z}px`;
-  el.style.backgroundPosition = `${ox - col * i.tile_width * z}px ${oy - row * i.tile_height * z}px`;
+  const col = k % i.columns, row = Math.floor(k / i.columns), rows = Math.ceil(Math.min(i.per_page, i.count - page * i.per_page) / i.columns);
+  const url = sp.url + page, im = spritePage(url);
+  el._want = [sp, n, W, H, fill];
+  if (!(im.complete && im.naturalWidth)) {
+    im.addEventListener('load', () => { const w = el._want; if (w && w[0] === sp && w[1] === n) spriteStyle(el, ...w); }, {once: true});
+    return null;
+  }
+  const a = i.aspect || i.tile_width / i.tile_height;
+  const dw = fill ? W : Math.min(W, H * a), dh = fill ? H : Math.min(H, W / a);
+  const ox = (W - dw) / 2, oy = (H - dh) / 2;
+  el.style.backgroundImage = `url("${url}")`;
+  el.style.backgroundSize = `${i.columns * dw}px ${rows * dh}px`;
+  el.style.backgroundPosition = `${ox - col * dw}px ${oy - row * dh}px`;
   return {ox, oy};
 }
 function preloadSprite(sp) {
   if (!sp) return sp;
-  for (let p = 0; p < sp.info.pages; p++) new Image().src = sp.url + p;
+  for (let p = 0; p < sp.info.pages; p++) spritePage(sp.url + p);
   return sp;
 }
 
@@ -2060,7 +2078,7 @@ function segAt(c, T) {
   // The newest file of a camera that was recording when the timeline
   // loaded is still growing: treat it as running up to now.
   const lasts = new Set(['recording', 'sub'].map(k => c.segments.filter(s => s.kind === k).slice(-1)[0]));
-  const end = (s) => lasts.has(s) && tl.loadedAt - new Date(s.end).getTime() < 90000 ? Date.now() : new Date(s.end).getTime() + 1000;
+  const end = (s) => lasts.has(s) && tl.loadedAt - new Date(s.end).getTime() < 90000 ? Date.now() + 5000 : new Date(s.end).getTime() + 1000;
   const hit = (s) => new Date(s.start).getTime() <= T && T < end(s);
   // Normally the light stream 2 copy (opens instantly); after clicking an
   // alert, its full-quality footage until the alert is over.
@@ -2120,6 +2138,14 @@ function tlSync(force) {
       }
     }
     showVideo(el, el._active);
+    // The file still being recorded has grown since it was loaded: load it
+    // again to reach the newest part.
+    if (isGrowing(s) && isFinite(v.duration) && want > v.duration + 1 && !(v._reloadAt && Date.now() - v._reloadAt < 5000)) {
+      v._reloadAt = Date.now();
+      v.src = s.url + (s.url.includes('?') ? '&' : '?') + 'n=' + Date.now();
+      v.addEventListener('loadedmetadata', () => { v.currentTime = Math.min(want, v.duration); v.playbackRate = tl.speed; if (tl.playing) v.play().catch(() => {}); }, {once: true});
+      continue;
+    }
     if (force || Math.abs(v.currentTime - want) > Math.max(0.8, tl.speed * 0.5)) v.currentTime = want;
     v.playbackRate = tl.speed;
     if (tl.playing && v.paused) v.play().catch(() => {});
@@ -2290,21 +2316,26 @@ function drawHead() {
     if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewAll();
   });
   const end = () => {
-    if (handle) { handle = null; document.querySelectorAll('#tl-videos .sprite').forEach(s => s.hidden = true); drawTimeline(); tlSync(true); return; }
+    if (handle) { handle = null; drawTimeline(); tlSync(true); hideSpritesWhenReady(); return; }
     if (!drag) return; drag = false;
-    document.querySelectorAll('#tl-videos .sprite').forEach(s => s.hidden = true);
-    tlSync(true); if (was) tlPlay(true);
+    tlSync(true); hideSpritesWhenReady(); if (was) tlPlay(true);
   };
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
 })();
 
+// The file still being recorded keeps growing: ask for its newer preview
+// every half minute (the old one stays in use meanwhile).
+const isGrowing = (seg) => Date.now() - new Date(seg.end).getTime() < 120000;
 async function spriteFor(cam, seg) {
-  const key = seg.url;
-  if (!tl.sprites.has(key)) {
+  const key = seg.url, have = tl.sprites.get(key);
+  if (!have || (isGrowing(seg) && Date.now() - have.at > 30000)) {
     const kind = {clip: 'clip', sub: 'tl'}[seg.kind] || 'rec';
-    tl.sprites.set(key, api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`).then(preloadSprite).catch(() => null));
+    const p = api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`).then(preloadSprite).catch(() => null);
+    const entry = {at: Date.now(), p: have ? p.then(sp => sp || have.p) : p};
+    tl.sprites.set(key, entry);
+    if (have) return have.p;
   }
-  return tl.sprites.get(key);
+  return tl.sprites.get(key).p;
 }
 // Prepare previews for every file in view (nearest to the playhead first),
 // showing progress, so scrubbing is instant.
@@ -2328,7 +2359,8 @@ function prefetchSprites() {
   show();
   tl.pagesDone = tl.pagesDone || new Set();
   const loadPages = (sp) => Promise.all([...Array(sp.info.pages).keys()].map(p => tl.pagesDone.has(sp.url + p) ? null :
-    new Promise(r => { const im = new Image(); im.onload = im.onerror = () => { tl.pagesDone.add(sp.url + p); r(); }; im.src = sp.url + p; })));
+    new Promise(r => { const im = spritePage(sp.url + p), ok = () => { tl.pagesDone.add(sp.url + p); r(); };
+      if (im.complete) ok(); else { im.addEventListener('load', ok, {once: true}); im.addEventListener('error', ok, {once: true}); } })));
   let i = 0;
   const worker = async () => {
     while (i < todo.length && gen === tl.pfGen) {
@@ -2340,6 +2372,28 @@ function prefetchSprites() {
   };
   worker(); worker();
 }
+// A camera's current picture as the preview (scrubbing up to now).
+function liveStill(sp, cam) {
+  const now = Date.now();
+  if (sp._liveAt && now - sp._liveAt < 2000 && sp._liveCam === cam) return;
+  sp._liveAt = now; sp._liveCam = cam; sp._want = null;
+  const url = `live/${enc(cam)}/frame.jpg?t=${now}`, im = new Image();
+  im.onload = () => { if (!sp._want) { sp.style.backgroundImage = `url("${url}")`; sp.style.backgroundSize = '100% 100%'; sp.style.backgroundPosition = '0 0'; } };
+  im.src = url;
+}
+// After scrubbing: keep the preview up until the video shows the new time
+// (hiding it at once showed black while the video loaded).
+function hideSpritesWhenReady() {
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    const sp = el.querySelector('.sprite'), v = activeVideo(el);
+    if (sp.hidden) continue;
+    const gen = sp._gen = (sp._gen || 0) + 1;
+    const done = () => { if (sp._gen === gen) sp.hidden = true; };
+    const check = () => { if (v.readyState >= 2 && !v.seeking) done(); else setTimeout(check, 100); };
+    setTimeout(check, 50);
+    setTimeout(done, 4000);
+  }
+}
 function previewAll() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
@@ -2349,12 +2403,12 @@ function previewAll() {
     if (!s) el._vids.forEach(x => x.style.visibility = 'hidden');
     if (!s) { sp.hidden = true; continue; }
     const T = tl.T;
+    // The last moments (newer than the preview): the live picture.
+    if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; continue; }
     spriteFor(c.camera, s).then(info => {
       if (!info || tl.T !== T) return;
       const off = (T - new Date(s.start).getTime()) / 1000;
-      sp.hidden = false;
-      const {ox, oy} = spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight);
-      sp.style.clipPath = `inset(${oy}px ${ox}px)`;
+      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) sp.hidden = false;
     });
   }
 }
@@ -3900,6 +3954,16 @@ function renderAi(body) {
         <div class="hint">Changing the model describes the alerts again with it (in the background).</div>
         <div class="row" style="margin-top:6px"><span class="muted">Look at</span><select id="ai-sframes">${[[1, 'only the best moment'], [2, '2 moments'], [4, '4 moments'], [6, '6 moments'], [8, '8 moments']].map(([k, t]) => `<option value="${k}" ${(a.summary_frames || 4) === k ? 'selected' : ''}>${t}</option>`).join('')}</select><span class="muted">of each alert's full-quality video</span></div>
         <div class="hint">More moments give fuller descriptions (someone who turns around, a second person who arrives later) and better search, at a little more work per alert. Needs recordings and the built-in AI or an AI server.</div></div>
+      <span class="p-any"></span><div class="p-any"><b>Descriptions written by</b>
+        <select id="ai-dw" style="margin-top:6px">${[['builtin', 'Smart search model (on this computer, short phrases)'], ['openai', 'Vision model on my own computer — Ollama, LM Studio (free, private)'], ['claude', 'Claude (Anthropic, cloud, paid per alert)'], ['gemini', 'Gemini (Google, cloud, free tier)']]
+          .map(([k, t]) => `<option value="${k}" ${(a.describe_with || 'builtin') === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <div class="hint" id="ai-dw-hint"></div>
+        <div class="d-url row" style="margin-top:6px"><span class="muted" style="width:110px">Server</span><input type="text" id="ai-durl" value="${esc(a.describe_url || '')}" placeholder="http://localhost:11434/v1" style="flex:1"></div>
+        <div class="d-key row" style="margin-top:6px"><span class="muted" style="width:110px">API key</span><input type="password" id="ai-dkey" autocomplete="new-password" placeholder="${a.has_describe_key ? 'Saved – leave empty to keep' : ''}" style="flex:1"></div>
+        <div class="d-model row" style="margin-top:6px"><span class="muted" style="width:110px">Model</span><input type="text" id="ai-dmodel" value="${esc(a.describe_model || '')}" style="flex:1"></div>
+        <div class="d-any row" style="margin-top:6px"><span class="muted" style="width:110px">At most</span><input type="number" id="ai-dlimit" min="0" value="${a.describe_per_day ?? 200}" style="width:90px"><span class="muted">alerts a day (0 = no limit)</span></div>
+        <div class="d-any row" style="margin-top:6px"><button type="button" id="ai-dtest">Describe the latest alert of the camera below</button></div>
+        <div class="hint" id="ai-dtest-out"></div><div class="hint" id="ai-dstatus"></div></div>
       <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
       <label class="p-key" for="ai-key">API key</label><div class="p-key"><input type="password" id="ai-key" autocomplete="new-password" placeholder="${a.has_key ? 'Saved – leave empty to keep' : ''}"><div class="hint" id="ai-key-hint"></div></div>
       <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><div class="row"><input type="text" id="ai-mname" value="${esc(a.model)}" list="ai-models" style="flex:1"><button type="button" id="ai-list">List models</button></div>
@@ -3930,13 +3994,36 @@ function renderAi(body) {
     $('ai-test').disabled = p === 'none' || !$('ai-cam').value;
   };
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
+  const DW = {
+    builtin: ['', '', 'The smart search model picks from set phrases: “Adult in a black top; White car”. Free and private, but basic.'],
+    openai: ['', 'qwen2.5vl:7b', 'A vision-language model looks at all the moments together and writes what happened. With <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> on this PC: install it, run “ollama pull qwen2.5vl:7b” (needs a graphics card with about 8 GB), and use the server http://localhost:11434/v1. Pictures stay in your home. Any OpenAI-compatible server works (LM Studio: http://localhost:1234/v1).'],
+    claude: ['claude-opus-5-5', 'claude-opus-5-5', 'The best descriptions. The moments of each alert are sent to Anthropic. Costs roughly 1–2 US cents an alert with Claude Opus 5.5 (the default); Claude Haiku 5.5 (claude-haiku-5-5) costs a small fraction of that. Get a key at <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>.'],
+    gemini: ['', 'automatic (newest Flash model)', 'Good descriptions, with a free daily allowance. The moments of each alert are sent to Google. Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.'],
+  };
+  const dsync = () => {
+    const d = val('ai-dw'), h = DW[d] || DW.builtin;
+    const show = (cls, on) => document.querySelectorAll('.' + cls).forEach(e => e.hidden = !on);
+    show('d-url', d === 'openai'); show('d-key', d !== 'builtin'); show('d-model', d !== 'builtin'); show('d-any', d !== 'builtin');
+    $('ai-dmodel').placeholder = h[1]; $('ai-dw-hint').innerHTML = h[2];
+  };
+  $('ai-dw').onchange = dsync; dsync();
+  $('ai-dtest').onclick = async () => {
+    const out = $('ai-dtest-out'), b = $('ai-dtest'); b.disabled = true;
+    out.textContent = 'Sending the latest alert to the model… (this can take up to a minute)';
+    try { const r = await api('api/ai/describe-test', {method: 'POST', json: {camera: val('ai-cam'), ai: form()}}); out.innerHTML = `<b>${esc(r.description)}</b><br><span class="muted">Alert of ${esc(fmtTime(r.start))}, ${r.pictures} moments, ${r.ms} ms</span>`; }
+    catch (e) { out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    b.disabled = false;
+  };
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
     api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
-    verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel'), summary_frames: +val('ai-sframes') || 4});
+    verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel'), summary_frames: +val('ai-sframes') || 4,
+    describe_with: val('ai-dw'), describe_url: val('ai-durl').trim(), describe_key: val('ai-dkey'), describe_model: val('ai-dmodel').trim(), describe_per_day: Math.max(0, Math.round(num('ai-dlimit')))});
   const showStatus = () => {
     const ss = status && status.smart_search;
     if (ss && $('ai-smart-st')) $('ai-smart-st').innerHTML = !a.smart_search ? '' : ss.downloading ? `Downloading the smart-search model… ${Math.round(ss.download_percent || 0)}%`
       : ss.error ? `<span class="err">${esc(ss.error)}</span>` : `<span class="ok">On</span> — ${ss.indexed} alert${ss.indexed === 1 ? '' : 's'} described so far (newest first, last 60 days).`;
+    const dd = status && status.describe;
+    if (dd && $('ai-dstatus')) $('ai-dstatus').innerHTML = (a.describe_with || 'builtin') === 'builtin' ? '' : `${dd.used_today} alert${dd.used_today === 1 ? '' : 's'} described by the model today.${dd.error ? ` <span class="err">Last problem: ${esc(dd.error)}</span> (the smart search model's description is used meanwhile)` : ''}`;
     if ($('ai-device-st') && status) $('ai-device-st').innerHTML = `Running on: <b>${esc(status.ai_device || '')}</b>`;
     const s = status && status.ai; if (!s) return;
     $('ai-status').innerHTML = s.provider === 'none' ? '' : `Current: <b>${esc(s.provider)}</b> — ${s.downloading ? `downloading model ${Math.round(s.download_percent || 0)}%` : s.ready ? '<span class="ok">ready</span>' : 'loading'}` +
