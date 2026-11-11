@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 0.5.4 — November 2026
+- **Video on the graphics card**: GAZE now tests your GPU's video decoder and encoder at start-up and uses them by itself (Settings → GPU acceleration → Choose automatically), for every stream — so live view, motion detection and previews no longer load the processor.
+- **What runs where** (Settings → Tasks): every AI model and video job, with GPU or CPU — and why, when it's the CPU.
+- **Sound on every live picture**: a 🔇 speaker on each camera (grid, camera view, full screen) to hear it, with a volume slider when you hover it.
+- Camera settings have an **Audio** tab: record audio, live sound and two-way audio together.
+- Release builds use current GitHub Actions versions.
+
 ## 0.5.3 — November 2026
 - **AI on the graphics card**: object recognition, smart search and faces & plates now run on the GPU (any recent NVIDIA, AMD or Intel graphics on Windows, through DirectML). The GPU runtime (about 25 MB) downloads by itself the first time. Choose the processor instead in Settings → Object recognition → Run AI on; if the graphics card can't be used, the processor takes over and the settings say why.
 - Fixed: Windows could report the GPU as fully busy when it wasn't (engines of the same kind were added together), which made load balancing move video work to the processor.
