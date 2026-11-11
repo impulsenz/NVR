@@ -170,39 +170,6 @@ mod tests {
     }
 }
 
-const COLOR_WORDS: &[&str] = &[
-    "black", "white", "grey", "gray", "silver", "red", "orange", "yellow", "green", "blue",
-    "purple", "pink", "brown", "beige", "gold", "tan", "maroon", "navy",
-];
-
-/// The first colour word in a description, normalized ("gray" → "grey").
-pub fn color_word(text: &str) -> Option<&'static str> {
-    text.split(|c: char| !c.is_alphabetic())
-        .map(|w| w.to_lowercase())
-        .find_map(|w| {
-            COLOR_WORDS
-                .iter()
-                .find(|c| **c == w)
-                .map(|c| normalize_color(c))
-        })
-}
-
-pub fn normalize_color(c: &str) -> &'static str {
-    match c {
-        "gray" | "grey" => "grey",
-        "silver" => "silver",
-        "tan" | "beige" => "beige",
-        "maroon" => "red",
-        "navy" => "blue",
-        "gold" => "yellow",
-        other => COLOR_WORDS
-            .iter()
-            .find(|w| **w == other)
-            .copied()
-            .unwrap_or("grey"),
-    }
-}
-
 /// Name a pixel's colour (HSV buckets).
 fn pixel_color(r: u8, g: u8, b: u8) -> &'static str {
     let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
@@ -311,8 +278,6 @@ mod color_tests {
         assert_eq!(pixel_color(20, 20, 25), "black");
         assert_eq!(pixel_color(30, 60, 200), "blue");
         assert_eq!(pixel_color(140, 140, 140), "silver");
-        assert_eq!(color_word("A White delivery van"), Some("white"));
-        assert_eq!(color_word("gray cat"), Some("grey"));
         let f = Frame {
             width: 4,
             height: 4,

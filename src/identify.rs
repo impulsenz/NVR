@@ -111,7 +111,7 @@ pub async fn timed_moments(
 ) -> Vec<(chrono::DateTime<chrono::Local>, Frame, Vec<SeenBox>)> {
     let cfg = mgr.config();
     let ai = mgr.ai.get();
-    let local = rt.cfg.detect.ai && matches!(ai.cfg.provider.as_str(), "builtin" | "deepstack");
+    let local = rt.cfg.detect.ai && ai.cfg.provider == "builtin";
     let span = (e.end - e.start).num_milliseconds().max(1000);
     let mut out = Vec::new();
     for i in 1..=n {

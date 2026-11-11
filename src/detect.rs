@@ -538,13 +538,7 @@ impl Detector {
                     && ai.enabled()
                     && !ai_busy
                     && moving
-                    && last_ai.elapsed().as_secs_f64()
-                        >= d.ai_interval
-                            * if ai.is_local() {
-                                crate::load::ai_slowdown()
-                            } else {
-                                1.0
-                            }
+                    && last_ai.elapsed().as_secs_f64() >= d.ai_interval * crate::load::ai_slowdown()
                 {
                     ai_busy = true;
                     last_ai = Instant::now();
@@ -665,7 +659,6 @@ impl Detector {
                 self.status.lock().unwrap().ai_error = None;
                 d
             }
-            Err(AiError::RateLimited) => return,
             Err(e) => {
                 let msg = e.to_string();
                 let mut s = self.status.lock().unwrap();
@@ -760,11 +753,8 @@ impl Detector {
         let mut new_labels = Vec::new();
         let mut changed = !a.qualified;
         for h in &hits {
-            // The object's colour: from the language model's description if
-            // it gave one, otherwise measured from the pixels in its box.
-            let color = crate::imgutil::color_word(&h.desc)
-                .map(str::to_string)
-                .or_else(|| frame.color_name(h.x, h.y, h.w, h.h).map(str::to_string));
+            // The object's colour, measured from the pixels in its box.
+            let color = frame.color_name(h.x, h.y, h.w, h.h).map(str::to_string);
             match a.event.labels.iter_mut().find(|l| l.label == h.label) {
                 Some(l) => {
                     if h.score > l.score + 0.05 {

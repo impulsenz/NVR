@@ -26,7 +26,7 @@ pub const ENCODERS: &[&str] = &[
     "h264_amf",
     "h264_mf",
 ];
-pub const AI_PROVIDERS: &[&str] = &["none", "builtin", "deepstack", "ollama", "gemini", "openai"];
+pub const AI_PROVIDERS: &[&str] = &["none", "builtin"];
 pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s", "yolox_m", "yolox_l"];
 /// Motion mask grid size.
 pub const MASK_W: usize = 32;
@@ -265,20 +265,10 @@ impl HardwareConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AiConfig {
-    /// none, builtin (on this computer), deepstack (CodeProject.AI / DeepStack
-    /// server), ollama (vision model on a local computer), gemini, openai
-    /// (any OpenAI-compatible API).
+    /// Object detection: "none" (off) or "builtin" (on this computer).
     pub provider: String,
     pub builtin_model: String,
-    /// Server address for deepstack/ollama/openai.
-    pub url: String,
-    pub api_key: String,
-    /// Model name for ollama/gemini/openai.
-    pub model: String,
-    /// Upper limit on requests per minute across all cameras (cloud free tiers).
-    pub max_per_minute: u32,
-    pub timeout_seconds: u64,
-    /// Built-in AI only: a bigger model that double-checks what the main
+    /// A bigger model that double-checks what the main
     /// model found before an alert is raised ("" = off).
     pub verify_model: String,
     /// Brighten dark and infrared pictures before recognition.
@@ -296,11 +286,6 @@ impl Default for AiConfig {
         Self {
             provider: "none".into(),
             builtin_model: "yolox_tiny".into(),
-            url: String::new(),
-            api_key: String::new(),
-            model: String::new(),
-            max_per_minute: 0,
-            timeout_seconds: 20,
             verify_model: String::new(),
             night_boost: true,
             device: "gpu".into(),
@@ -1126,6 +1111,12 @@ impl Config {
 
     fn migrate(&mut self) -> bool {
         let mut changed = false;
+        // 0.5.9: object detection is off or built in (the AI servers and
+        // cloud services are gone).
+        if !AI_PROVIDERS.contains(&self.ai.provider.as_str()) {
+            self.ai.provider = "builtin".into();
+            changed = true;
+        }
         // 0.5.7: the global on-screen display became a full layout.
         let d = &mut self.display;
         if d.show_clock.is_some()
@@ -1277,17 +1268,6 @@ impl Config {
         }
         if !BUILTIN_MODELS.contains(&ai.builtin_model.as_str()) {
             bail!("unknown built-in AI model \"{}\"", ai.builtin_model);
-        }
-        if ["deepstack", "ollama", "openai"].contains(&ai.provider.as_str())
-            && ai.url.trim().is_empty()
-        {
-            bail!("enter the address of the AI server");
-        }
-        if ["gemini"].contains(&ai.provider.as_str()) && ai.api_key.trim().is_empty() {
-            bail!("an API key is required for Gemini");
-        }
-        if ai.timeout_seconds == 0 || ai.timeout_seconds > 300 {
-            bail!("AI timeout must be 1 to 300 seconds");
         }
         if self.cloud.enabled && self.cloud.remote.trim().is_empty() {
             bail!("enter an rclone destination such as gdrive:NVR");
@@ -1461,6 +1441,14 @@ mod tests {
         assert!(cfg.cameras[0].record_audio);
         assert_eq!(cfg.storage.segment_seconds, 60);
         assert_eq!(cfg.storage.dir, PathBuf::from("rec"));
+    }
+
+    #[test]
+    fn other_ai_providers_become_builtin() {
+        let (c, changed) =
+            super::Config::from_toml("[ai]\nprovider = \"gemini\"\napi_key = \"x\"\n").unwrap();
+        assert!(changed);
+        assert_eq!(c.ai.provider, "builtin");
     }
 
     #[test]

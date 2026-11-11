@@ -3997,11 +3997,7 @@ function renderDisplay(body) {
 // ---------- AI ----------
 const PROVIDERS = [
   ['none', 'Off', 'No object recognition (motion detection still works).'],
-  ['builtin', 'Built-in (this computer)', 'Free and private. Runs a YOLOX model on this computer\'s CPU. The model (4 MB for the fastest, up to 220 MB for the most accurate) downloads automatically the first time.'],
-  ['deepstack', 'AI server on your network', 'CodeProject.AI Server or DeepStack on this or another computer — can use that computer\'s GPU. Free.'],
-  ['ollama', 'Ollama (local vision model)', 'A vision model such as qwen2.5vl or llava running in Ollama on your network. Free, slower.'],
-  ['gemini', 'Google Gemini (cloud)', 'Free tier with an API key from aistudio.google.com. Pictures are sent to Google.'],
-  ['openai', 'OpenAI-compatible (cloud or local)', 'OpenAI, OpenRouter, Groq, LM Studio, vLLM… anything with the OpenAI chat API and vision.'],
+  ['builtin', 'Built-in (this computer)', 'Free and private. Runs a YOLOX model on this computer\'s graphics card or processor. The model (4 MB for the fastest, up to 220 MB for the most accurate) downloads automatically the first time.'],
 ];
 function renderAi(body) {
   const a = settings.ai, st = status && status.ai;
@@ -4009,11 +4005,10 @@ function renderAi(body) {
     <ol>
       <li><b>Motion detection</b> (always local, very light) notices that something changed in the picture.</li>
       <li><b>Object recognition</b> then checks that picture for people, vehicles and animals. With the <b>built-in</b> choice this is a <b>YOLOX</b> model (by Megvii, open source,
-        trained on the COCO set of 80 everyday objects) running on this computer's processor — nothing leaves your home. Five sizes from <i>Nano</i> (fast, for small PCs) to <i>Large</i> (most accurate, for powerful PCs).</li>
+        trained on the COCO set of 80 everyday objects) running on this computer's graphics card or processor — nothing leaves your home. Five sizes from <i>Nano</i> (fast, for small PCs) to <i>Large</i> (most accurate, for powerful PCs).</li>
       <li><b>Double-check</b> (optional): a bigger YOLOX model looks again at pictures that would raise an alert, to cut false alarms.</li>
       <li><b>Night boost</b>: dark and infrared pictures are brightened before recognition.</li>
     </ol>
-    <p class="muted" style="margin:0">Instead of the built-in model you can use an AI server on your network (CodeProject.AI / DeepStack, can use another computer's graphics card), a vision model in Ollama, or a cloud service (Google Gemini, OpenAI-compatible) — those also write a short description of what they see.</p></div>
     <form class="card" id="f-ai"><h2>Object recognition (AI)</h2>
     <p class="muted" style="margin-top:0">When a camera sees motion, a picture is checked for people, vehicles and animals. Turn it on per camera under <i>Motion &amp; AI</i>.</p>
     <div class="radio-cards">${PROVIDERS.map(([k, t, dsc]) => `<label><input type="radio" name="ai-p" value="${k}" ${a.provider === k ? 'checked' : ''}><b>${t}</b><small>${dsc}</small></label>`).join('')}</div>
@@ -4036,38 +4031,19 @@ function renderAi(body) {
         <div class="hint">When the model above thinks it sees something that would raise an alert, a bigger model looks at the same picture and has the final say: fewer false alerts and fewer mix-ups (a cat called a person). It only runs on those few pictures, so it suits normal PCs too.</div></div>
       <span class="p-builtin"></span><div class="p-builtin"><label class="check"><input type="checkbox" id="ai-night" ${a.night_boost !== false ? 'checked' : ''}> Night boost</label>
         <div class="hint">Dark and infrared (black &amp; white) pictures are brightened and their contrast stretched before the AI looks at them, so people and animals are recognized better at night.</div></div>
-      <label class="p-url" for="ai-url">Server address</label><div class="p-url"><input type="text" id="ai-url" value="${esc(a.url)}"><div class="hint" id="ai-url-hint"></div></div>
-      <label class="p-key" for="ai-key">API key</label><div class="p-key"><input type="password" id="ai-key" autocomplete="new-password" placeholder="${a.has_key ? 'Saved – leave empty to keep' : ''}"><div class="hint" id="ai-key-hint"></div></div>
-      <label class="p-model" for="ai-mname">Model name</label><div class="p-model"><div class="row"><input type="text" id="ai-mname" value="${esc(a.model)}" list="ai-models" style="flex:1"><button type="button" id="ai-list">List models</button></div>
-        <datalist id="ai-models"></datalist><div class="hint" id="ai-model-hint"></div><div class="hint" id="ai-list-out"></div></div>
-      <label class="p-any" for="ai-rate">Limit</label><div class="p-any row"><input type="number" id="ai-rate" min="0" value="${a.max_per_minute}" style="width:110px"><span class="muted">requests per minute, all cameras together (0 = no limit). Keeps free cloud tiers within quota.</span></div>
-      <label class="p-any" for="ai-timeout">Timeout</label><div class="p-any row"><input type="number" id="ai-timeout" min="1" max="300" value="${a.timeout_seconds}" style="width:110px"><span class="muted">seconds</span></div>
     </div>
     <div class="hint" id="ai-status" style="margin-top:10px"></div>
     <div class="actions"><button class="primary">Save</button>
       <select id="ai-cam">${(status ? status.cameras : []).map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>
       <button type="button" id="ai-test">Test on this camera</button></div>
     <div id="ai-result" style="margin-top:12px"></div></form>`;
-  const hints = {
-    deepstack: ['http://192.168.1.20:32168', 'CodeProject.AI uses port 32168, DeepStack usually 80 or 5000.', '', ''],
-    ollama: ['http://192.168.1.20:11434', 'Ollama listens on port 11434. Start it with OLLAMA_HOST=0.0.0.0 to allow other computers.', 'qwen2.5vl', 'Run “ollama pull qwen2.5vl” (or llava, llama3.2-vision) on that computer first.'],
-    gemini: ['', '', 'automatic (newest Flash model)', 'Leave empty to use the newest Flash model automatically (it switches by itself when Google retires one).'],
-    openai: ['https://api.openai.com/v1', 'Base URL ending in /v1, e.g. https://openrouter.ai/api/v1 or http://192.168.1.20:1234/v1 (LM Studio).', 'gpt-4o-mini', 'A model that accepts images.'],
-  };
   const sync = () => {
-    const p = document.querySelector('input[name=ai-p]:checked').value, h = hints[p] || ['', '', '', ''];
-    const show = (cls, on) => document.querySelectorAll('.' + cls).forEach(e => e.hidden = !on);
-    show('p-builtin', p === 'builtin'); show('p-url', ['deepstack', 'ollama', 'openai'].includes(p));
-    show('p-key', ['gemini', 'openai', 'deepstack'].includes(p)); show('p-model', ['ollama', 'gemini', 'openai'].includes(p));
-    show('p-any', p !== 'none');
-    $('ai-url').placeholder = h[0]; $('ai-url-hint').textContent = h[1]; $('ai-mname').placeholder = h[2]; $('ai-model-hint').textContent = h[3];
-    $('ai-key-hint').innerHTML = p === 'gemini' ? 'Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.' : p === 'deepstack' ? 'Only if your server requires one.' : '';
-    if (p === 'gemini' && !num('ai-rate')) $('ai-rate').value = 10;
+    const p = document.querySelector('input[name=ai-p]:checked').value;
+    document.querySelectorAll('.p-builtin').forEach(e => e.hidden = p !== 'builtin');
     $('ai-test').disabled = p === 'none' || !$('ai-cam').value;
   };
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
-  const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
-    api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
+  const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'),
     verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device')});
   const showStatus = () => {
     if ($('ai-device-st') && status) $('ai-device-st').innerHTML = `Running on: <b>${esc(status.ai_device || '')}</b>`;
@@ -4076,15 +4052,6 @@ function renderAi(body) {
       ` · ${s.requests} checks${s.failures ? `, ${s.failures} failed` : ''}${s.last_ms != null ? ` · last took ${s.last_ms} ms` : ''}${s.error ? `<br><span class="err">${esc(s.error)}</span>` : ''}`;
   };
   showStatus();
-  $('ai-list').onclick = async () => {
-    const out = $('ai-list-out');
-    out.textContent = 'Asking the provider…';
-    try {
-      const r = await api('api/ai/models', {method: 'POST', json: form()});
-      $('ai-models').innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join('');
-      out.innerHTML = r.models.length ? `${r.models.length} models available${r.suggested ? ` — automatic choice: <b>${esc(r.suggested)}</b>` : ''}. Click the model box to pick one.` : 'No models found.';
-    } catch (e) { out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
-  };
   $('f-ai').onsubmit = async (e) => { e.preventDefault(); await saveSettings({ai: form()}, 'AI settings saved'); showStatus(); };
   $('ai-test').onclick = async () => {
     const btn = $('ai-test'), out = $('ai-result');

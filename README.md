@@ -62,13 +62,8 @@ viewing, finding footage, and managing everything, all from the browser.
   GPU (ONNX Runtime with DirectML — any recent NVIDIA, AMD or Intel graphics on Windows; the 25 MB runtime
   downloads itself the first time), or on the processor if you choose (Settings → Object recognition →
   Run AI on). If the graphics card can't be used, the processor takes over and the settings say why.
-- Object recognition, with a choice of AI:
-  - **Built-in**: a YOLOX model runs on this computer's CPU. It's free and private, and the model downloads automatically.
-    Five sizes, from Nano (≈30 ms per picture) to Large (≈2 s, for powerful PCs).
-  - **AI server on your network**: CodeProject.AI Server or DeepStack, which can use another computer's GPU.
-  - **Ollama**: a local vision model such as qwen2.5vl or llava.
-  - **Google Gemini**: has a free tier; needs an API key.
-  - **Any OpenAI-compatible API**: OpenAI, OpenRouter, Groq, LM Studio, …
+- **Object recognition** (or off): a built-in YOLOX model runs on this computer — free and private; the
+  model downloads automatically. Five sizes, from Nano (≈30 ms per picture) to Large (≈2 s, for powerful PCs).
 - **Double-check alerts** (built-in AI): when the fast model thinks it sees something worth an alert, a
   bigger model looks at the same picture and has the final say — fewer false alerts and mix-ups, at little
   cost because it only runs on those pictures.
@@ -255,7 +250,6 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15 -t 30 -c:v libx264 -pix_fmt yu
 - **GPU/CPU use:** each camera's sub-stream is decoded once (for motion detection, and reused for the
   live grid); a full-quality stream is decoded only while you watch that camera. Background HD preloading
   is off by default (Settings → Live view).
-- **Gemini:** leave the model empty to use the newest Flash model automatically, or use *List models*.
 
 - **One connection per camera stream:** the NVR connects to each stream once and shares it between
   recording, the alert buffer, motion detection, AI and the live view. Many cameras (TP-Link Tapo, many
@@ -265,8 +259,8 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15 -t 30 -c:v libx264 -pix_fmt yu
 
 - **H.265 cameras:** recording works, but not every browser plays H.265. Turn on *Convert recordings to
   H.264* for the camera, or download the file and use VLC. Previews and thumbnails work either way.
-- **Cloud AI** (Gemini, OpenAI…) sends camera pictures to that service. Set a requests-per-minute limit for
-  free tiers. The built-in AI and local servers keep everything at home.
+- **Privacy:** object recognition, faces and number plates all run on this computer; no pictures are sent
+  anywhere (except phone notifications, if you turn them on).
 - **Security:** camera passwords are visible in camera settings. Turn on the login if others use your
   network, and use HTTPS (e.g. a reverse proxy) before exposing it to the internet.
 - **Upgrading:** older `nvr.toml` files are converted automatically.
@@ -287,7 +281,7 @@ camera ─ main stream ─► relay (1 connection) ─┬► 24/7 files
 | `src/recorder.rs` | Recording processes: schedule, reconnect, stall detection, GPU fallback |
 | `src/buffer.rs` | Pre-event buffer and alert clips |
 | `src/detect.rs` | Motion detection and event lifecycle |
-| `src/ai.rs` | AI providers (built-in YOLOX, CodeProject.AI/DeepStack, Ollama, Gemini, OpenAI-compatible) |
+| `src/ai.rs` | Object recognition (built-in YOLOX, double-check model) |
 | `src/events.rs` | Alert storage |
 | `src/relay.rs` | One shared connection per camera stream, fanned out to all users |
 | `src/live.rs` | Live JPEG streams |

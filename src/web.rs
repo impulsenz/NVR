@@ -187,7 +187,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/preview/{token}", get(preview_stream))
         .route("/api/hw-test", post(hw_test))
         .route("/api/ai/test", post(ai_test))
-        .route("/api/ai/models", post(ai_models))
         .route("/api/cameras/{id}/motion", get(camera_motion))
         .route("/api/cloud/test", post(cloud_test))
         .route("/api/live/ws", get(live_ws))
@@ -392,13 +391,10 @@ async fn download_logs(req: Request) -> Response {
 
 async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
-    let has_key = !cfg.ai.api_key.is_empty();
     let has_token = !cfg.notify.token.is_empty();
     cfg.server.password.clear();
-    cfg.ai.api_key.clear();
     cfg.notify.token.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
-    v["ai"]["has_key"] = json!(has_key);
     v["notify"]["has_token"] = json!(has_token);
     v.as_object_mut().unwrap().remove("cameras");
     Json(v).into_response()
@@ -788,7 +784,6 @@ async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Respon
         cfg.server.password.clear();
         cfg.server.username.clear();
         // Every stored secret: API keys, notification tokens, camera logins.
-        cfg.ai.api_key.clear();
         cfg.notify.token.clear();
         for c in &mut cfg.cameras {
             c.url = mask_url(&c.url).replace(":****@", ":PASSWORD@");
@@ -1274,32 +1269,6 @@ struct AiTestReq {
     ai: Option<crate::config::AiConfig>,
 }
 
-/// Models available from the chosen AI provider (key from the form or the saved one).
-async fn ai_models(State(m): App, Json(mut cfg): Json<crate::config::AiConfig>) -> Response {
-    // The saved key only goes to the saved provider and server.
-    let saved = m.config().ai;
-    if cfg.api_key.is_empty()
-        && cfg.provider == saved.provider
-        && cfg.url.trim() == saved.url.trim()
-    {
-        cfg.api_key = saved.api_key;
-    }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap_or_default();
-    match crate::ai::list_models(&client, &cfg).await {
-        Ok(mut list) => {
-            list.sort();
-            let suggested = (cfg.provider == "gemini")
-                .then(|| crate::ai::pick_gemini(&list))
-                .flatten();
-            Json(json!({ "models": list, "suggested": suggested })).into_response()
-        }
-        Err(e) => bad(e),
-    }
-}
-
 /// Live motion readout for one camera (polled while tuning or showing boxes).
 async fn camera_motion(State(m): App, Path(id): Path<String>) -> Response {
     let c = camera!(m, id);
@@ -1327,10 +1296,7 @@ async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
         },
     };
     let ai = match req.ai {
-        Some(mut cfg) => {
-            if cfg.api_key.is_empty() {
-                cfg.api_key = m.config().ai.api_key;
-            }
+        Some(cfg) => {
             let h = crate::ai::AiHandle::new(cfg, &m.data_dir);
             h.get()
         }

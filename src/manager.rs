@@ -668,11 +668,8 @@ impl Manager {
             crate::load::set_balance(h.balance);
             cfg.hardware = h;
         }
-        if let Some(mut a) = up.ai {
+        if let Some(a) = up.ai {
             // The form never receives the stored key; empty means "keep".
-            if a.api_key.is_empty() {
-                a.api_key = old.ai.api_key.clone();
-            }
             // Saving the AI settings gives a model that stopped GAZE while
             // loading another chance.
             if let Ok(rd) = std::fs::read_dir(self.data_dir.join("models")) {

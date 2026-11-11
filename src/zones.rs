@@ -249,7 +249,6 @@ mod tests {
             y: foot_y - 0.2,
             w: 0.1,
             h: 0.2,
-            desc: String::new(),
         }
     }
 
