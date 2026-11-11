@@ -323,6 +323,8 @@ function updateSubscriptions() {
     const gridQ = feedQ(c, 'grid'), focusQ = feedQ(c, 'focus');
     // The grid keeps running in the background so switching back is instant.
     if (!dataSaver || shown) add(gridQ, focused && gridQ === focusQ ? hdFps : gridFps);
+    // The camera editor's pictures (motion mask, package spot, zones) use stream 2.
+    if ($('cam-dialog').open && editingId === c.id) add('sub', gridFps);
     if (focused) {
       add(focusQ, hdFps);
       // The sub-stream stands in while the full-quality picture loads.
@@ -3655,7 +3657,7 @@ async function openCameraDialog(id, clone) {
   if (!$('cam-dialog').open) $('cam-dialog').showModal();
 }
 function closeCameraDialog() { stopPreviews(); $('cam-dialog').close(); }
-$('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });
+$('cam-dialog').addEventListener('close', () => { if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; } stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });
 
 // ---------- motion mask editor & live motion readout ----------
 let maskCells = [], maskUnbind = null, meterTimer = null;
@@ -3737,7 +3739,7 @@ function setupMaskEditor(mask, camId) {
   }
 }
 // Package delivery spot (camera → AI): drag a box on the camera picture.
-let pkgArea = [];
+let pkgArea = [], pkgUnbind = null;
 function setupPackageArea(c, camId) {
   pkgArea = (c.detect.package_area || []).map(p => [...p]);
   const surf = $('d-pkg-area'), svg = $('d-pkg-svg');
@@ -3745,7 +3747,15 @@ function setupPackageArea(c, camId) {
     svg.innerHTML = pkgArea.length >= 3 ? `<polygon points="${pkgArea.map(p => p.join(',')).join(' ')}" fill="rgba(255,176,32,.25)" stroke="#ffb020" stroke-width="0.006" vector-effect="non-scaling-stroke"/>` : '';
     $('d-pkg-hint').textContent = pkgArea.length >= 3 ? 'Package spot set. Drag again to redraw it.' : 'Drag a box on the picture around where parcels are left (doorstep, porch).';
   };
-  if (camId) { const img = $('d-pkg-img'); img.onload = () => { const m = surf.querySelector('.msg'); if (m) m.hidden = true; }; img.src = 'snapshot/' + enc(camId) + '?t=' + Date.now(); }
+  // The camera's live picture (light stream 2, as for the motion mask): a
+  // full-size snapshot can take long or fail on big / H.265 streams.
+  if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; }
+  if (camId) {
+    const img = $('d-pkg-img'), m = surf.querySelector('.msg');
+    if (m) { m.textContent = 'Connecting…'; m.hidden = false; }
+    img.onload = () => { if (m) m.hidden = true; };
+    pkgUnbind = Live.bind(img, camId, 'sub');
+  }
   let start = null;
   const at = (e) => { const r = surf.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
   surf.onpointerdown = (e) => { start = at(e); surf.setPointerCapture(e.pointerId); e.preventDefault(); };
