@@ -622,6 +622,9 @@ table.users .chips { margin: 0; }
 .ad-side .faces .small { flex-basis: 100%; text-transform: uppercase; font-size: 11px; letter-spacing: .5px; }
 .ad-side .face { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 96px; }
 .ad-side .face img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; }
+.ad-side .face .face-fix { min-height: 0; padding: 2px 8px; font-size: 12px; background: none; color: var(--muted); }
+.ad-side .face .face-fix:hover { color: var(--text); }
+.ad-side .face select.who { width: 100%; font-size: 12px; }
 .ad-side .face select { max-width: 96px; font-size: 12px; padding: 2px; }
 .plates { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .plate { font-family: ui-monospace, monospace; font-weight: 700; letter-spacing: 1px; background: #f4f4f0; color: #111; border: 2px solid #111; border-radius: 4px; padding: 1px 8px; }

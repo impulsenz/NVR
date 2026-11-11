@@ -2256,7 +2256,8 @@ async function playItem(it, card) {
     ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     ${e && e.faces && e.faces.length ? `<div class="faces"><div class="muted small">Faces</div>${e.faces.map((f, i) => `<div class="face"><img src="media/${enc(it.camera)}/events/${enc(f.file)}" alt="">
-      ${f.name ? `<b>${esc(f.name)}</b>` : `<select class="who op-only" data-face="${i}"><option value="">Who is this?</option>${knownPeople.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">New person…</option></select>`}</div>`).join('')}</div>` : ''}
+      ${f.name ? `<b>${esc(f.name)}</b><button type="button" class="op-only face-fix" data-face="${i}" title="Wrong person? Choose who it really is, or make a new person">✎ Wrong?</button>` : ''}
+      <select class="who op-only" data-face="${i}" ${f.name ? 'hidden' : ''}><option value="">${f.name ? `Not ${esc(f.name)}? Who is it?` : 'Who is this?'}</option>${knownPeople.filter(k => k.name !== f.name).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">New person…</option>${f.name ? '<option value="none">Not anyone I know</option>' : ''}</select></div>`).join('')}</div>` : ''}
     ${e && e.items && e.items.length ? `<div class="items">${e.items.map(x => `<div class="item"><div class="muted small">${esc(x.zone)}: before → after</div><div class="row"><img src="media/${enc(it.camera)}/events/${enc(x.before)}" alt=""><span>→</span><img src="media/${enc(it.camera)}/events/${enc(x.after)}" alt=""></div></div>`).join('')}</div>` : ''}
     ${e && e.plates && e.plates.length ? `<div class="plates">${e.plates.map(p => `<span class="plate">${esc(p)}</span>`).join('')}</div>` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
@@ -2266,6 +2267,11 @@ async function playItem(it, card) {
   const t = $('rp-info').querySelector('.bx-toggle');
   if (t) t.onchange = () => { showBoxes = t.checked; store.set('show-boxes', showBoxes); document.body.classList.toggle('no-boxes', !showBoxes); };
   // "Who is this?": name a face; GAZE learns it.
+  // A face named wrongly: show the choice of who it really is.
+  $('rp-info').querySelectorAll('.face-fix').forEach(b => b.onclick = () => {
+    const sel = $('rp-info').querySelector(`.who[data-face="${b.dataset.face}"]`);
+    sel.hidden = false; b.hidden = true; sel.focus();
+  });
   $('rp-info').querySelectorAll('.who').forEach(sel => sel.onchange = async () => {
     let id = sel.value; if (!id) return;
     if (id === '+') {
@@ -2275,7 +2281,9 @@ async function playItem(it, card) {
     try {
       const r = await api(`api/known/${enc(id)}/learn`, {method: 'POST', json: {camera: it.camera, event: e.id, face: +sel.dataset.face}});
       toast(r.message); await loadKnownPeople();
-      e.faces[+sel.dataset.face].name = (knownPeople.find(k => k.id === id) || {}).name;
+      e.faces[+sel.dataset.face].name = id === 'none' ? null : (knownPeople.find(k => k.id === id) || {}).name;
+      // Keep the alert's notes in step (what the server now has).
+      if (r.notes) e.notes = r.notes;
       playItem(it, card);
     } catch (err) { toast(err.message, true); }
   });

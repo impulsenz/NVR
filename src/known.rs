@@ -20,6 +20,10 @@ pub struct Known {
     /// Faceprints, packed.
     #[serde(default)]
     pub faces: Vec<String>,
+    /// Faces that were wrongly taken for this person (corrected on an
+    /// alert): a face closer to one of these isn't them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_faces: Vec<String>,
     /// Photo file names.
     #[serde(default)]
     pub photos: Vec<String>,
@@ -225,6 +229,24 @@ impl KnownStore {
         self.save()
     }
 
+    /// "That's not them": the person called `name` was wrongly matched to
+    /// this face. Faceprints of theirs learned from it (or nearly the same)
+    /// are dropped, and it's remembered as not them.
+    pub fn not_this(&self, name: &str, print: &[f32]) -> Result<()> {
+        {
+            let mut items = self.items.write().unwrap();
+            let Some(k) = items.iter_mut().find(|k| k.kind == "person" && k.name == name) else {
+                return Ok(());
+            };
+            k.faces.retain(|f| cosine(&unpack(f), print) < 0.9);
+            k.not_faces.push(pack(print));
+            if k.not_faces.len() > 100 {
+                k.not_faces.remove(0);
+            }
+        }
+        self.save()
+    }
+
     /// The known person this faceprint belongs to (name, similarity).
     pub fn match_face(&self, print: &[f32]) -> Option<(String, f32)> {
         self.items
@@ -238,7 +260,14 @@ impl KnownStore {
                     .iter()
                     .map(|f| cosine(&unpack(f), print))
                     .fold(f32::MIN, f32::max);
-                (best >= crate::recog::FACE_MATCH).then(|| (k.name.clone(), best))
+                // Corrected before: this looks more like a face that was
+                // wrongly taken for them than like them.
+                let wrong = k
+                    .not_faces
+                    .iter()
+                    .map(|f| cosine(&unpack(f), print))
+                    .fold(f32::MIN, f32::max);
+                (best >= crate::recog::FACE_MATCH && wrong < best).then(|| (k.name.clone(), best))
             })
             .max_by(|a, b| a.1.total_cmp(&b.1))
     }
@@ -282,6 +311,31 @@ fn clean_plates(p: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrected_faces_stop_matching() {
+        let dir = std::env::temp_dir().join(format!("nvr-known-fix-{}", std::process::id()));
+        let s = KnownStore::open(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mum = s.create("person", "Mum", vec![]).unwrap();
+        let mum_face: Vec<f32> =
+            crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
+        s.add(&mum, Some(&mum_face), None, None).unwrap();
+        // A visitor who looks a bit like Mum: taken for her.
+        let visitor: Vec<f32> = crate::recog::normalize(
+            (0..128).map(|i| (i as f32 * 0.37).sin() + 0.6 * (i as f32 * 2.3).cos()).collect(),
+        );
+        assert_eq!(s.match_face(&visitor).map(|x| x.0).as_deref(), Some("Mum"));
+        // "Not Mum": no longer taken for her; Mum herself still is.
+        s.not_this("Mum", &visitor).unwrap();
+        assert!(s.match_face(&visitor).is_none());
+        assert_eq!(s.match_face(&mum_face).map(|x| x.0).as_deref(), Some("Mum"));
+        // Named as a new person: matched to them.
+        let gran = s.create("person", "Gran", vec![]).unwrap();
+        s.add(&gran, Some(&visitor), None, None).unwrap();
+        assert_eq!(s.match_face(&visitor).map(|x| x.0).as_deref(), Some("Gran"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn people_and_vehicles() {

@@ -565,13 +565,16 @@ struct LearnReq {
     face: usize,
 }
 
-/// "This is …": name a face seen in an alert (and learn it).
+/// "This is …": name a face seen in an alert (and learn it), or correct a
+/// wrong name: the person it was wrongly taken for stops matching it. The
+/// id "none" means "not anyone I know".
 async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnReq>) -> Response {
     let res = (|| {
-        let k = m
-            .known
-            .get(&id)
-            .ok_or_else(|| anyhow::anyhow!("not found"))?;
+        let k = if id == "none" {
+            None
+        } else {
+            Some(m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?)
+        };
         let c = m
             .camera(&r.camera)
             .ok_or_else(|| anyhow::anyhow!("camera not found"))?;
@@ -584,20 +587,44 @@ async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnR
             .get_mut(r.face)
             .ok_or_else(|| anyhow::anyhow!("face not found"))?;
         let print = crate::known::unpack(&f.print);
-        let photo = std::fs::read(c.events.dir().join(&f.file)).ok();
-        m.known.add(&id, Some(&print), None, photo.as_deref())?;
-        f.name = Some(k.name.clone());
-        e.notes.retain(|n| n != "Unknown face");
-        let note = format!("Recognized {}", k.name);
-        if !e.notes.contains(&note) {
-            e.notes.push(note);
+        let new_name = k.as_ref().map(|k| k.name.clone());
+        // Wrongly named before: that person no longer matches this face.
+        let old = f.name.clone().filter(|o| Some(o) != new_name.as_ref());
+        if let Some(o) = &old {
+            m.known.not_this(o, &print)?;
         }
+        if let Some(k) = &k {
+            let photo = std::fs::read(c.events.dir().join(&f.file)).ok();
+            m.known.add(&k.id, Some(&print), None, photo.as_deref())?;
+        }
+        f.name = new_name.clone();
+        // The alert's notes: who was recognised, and whether a face is unknown.
+        let names: Vec<String> = e.faces.iter().filter_map(|f| f.name.clone()).collect();
+        e.notes.retain(|n| {
+            n.strip_prefix("Recognized ").is_none_or(|who| names.iter().any(|x| x == who))
+        });
+        for n in &names {
+            let note = format!("Recognized {n}");
+            if !e.notes.contains(&note) {
+                e.notes.push(note);
+            }
+        }
+        let unknown = e.faces.iter().any(|f| f.name.is_none());
+        e.notes.retain(|n| n != "Unknown face");
+        if unknown {
+            e.notes.push("Unknown face".into());
+        }
+        let notes = e.notes.clone();
         c.events.save(e);
-        anyhow::Ok(k.name)
+        anyhow::Ok((notes, match (new_name, old) {
+            (Some(n), Some(o)) => format!("Corrected — this is {n}, not {o}. GAZE won't take this face for {o} again."),
+            (Some(n), None) => format!("Learned — this is {n}"),
+            (None, Some(o)) => format!("Corrected — not {o}. GAZE won't take this face for {o} again."),
+            (None, None) => "Marked as someone you don't know".to_string(),
+        }))
     })();
     match res {
-        Ok(name) => Json(json!({ "ok": true, "message": format!("Learned — this is {name}") }))
-            .into_response(),
+        Ok((notes, message)) => Json(json!({ "ok": true, "message": message, "notes": notes })).into_response(),
         Err(e) => bad(e),
     }
 }
