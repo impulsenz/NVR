@@ -50,8 +50,8 @@ Windows service too.
 
 ## 2. Publishing a new version
 
-GitHub builds and publishes everything when a **version tag** is pushed. The
-workflow that does it is `.github/workflows/release.yml`.
+GitHub builds and publishes everything **when the version number goes up**.
+The workflow that does it is `.github/workflows/release.yml`.
 
 1. Raise the version in `Cargo.toml`, e.g. `version = "0.6.0"`.
    Installed copies only update to a **higher** version.
@@ -61,19 +61,23 @@ workflow that does it is `.github/workflows/release.yml`.
    - What changed…
    ```
    This section becomes the release notes shown in GAZE before updating.
-3. Commit and push, then tag the commit and push the tag:
+3. Commit and push to the repository's default branch:
    ```bash
    git commit -am "Version 0.6.0"
    git push
-   git tag v0.6.0
-   git push origin v0.6.0
    ```
+   That's all. There's no tag to make: GitHub sees the new version, builds
+   it, and creates the tag `v0.6.0` and the release itself. Pushing a
+   version tag by hand (`git tag v0.6.0`, `git push origin v0.6.0`) works
+   too.
 4. On GitHub, open **Actions** → *Release* to follow the build. It takes
-   about 10–15 minutes. When it's done, **Releases** has *GAZE v0.6.0*
-   with these files:
+   about 10–15 minutes. When it's done, **Releases** has *GAZE v0.6.0* with
+   these files:
    - `nvr-windows-x64.exe` and `nvr-windows-x64.exe.sha256`
    - `nvr-linux-x64` and `nvr-linux-x64.sha256`
-5. That's it. Installed copies see the new version within a minute.
+5. Installed copies see the new version within a minute.
+
+Pushes that don't change the version build nothing.
 
 To test a build without publishing it, start the *Release* workflow by hand
 (**Actions → Release → Run workflow**). It builds both programs and attaches

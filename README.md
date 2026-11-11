@@ -141,8 +141,8 @@ viewing, finding footage, and managing everything, all from the browser.
   (Settings → About, off by default) it installs as soon as one is found, when no alert is going on. The new
   program is downloaded, its checksum verified, swapped in, and GAZE restarts in seconds — also when it
   runs as a Windows service. The previous version is kept until the next start.
-- **[UPDATES.md](UPDATES.md)** explains downloading, publishing a new version (GitHub builds it from a
-  version tag) and hosting your own copy on your own GitHub (your builds then update from your releases).
+- **[UPDATES.md](UPDATES.md)** explains downloading, publishing a new version (raise the version number:
+  GitHub builds and publishes it) and hosting your own copy on your own GitHub (your builds then update from your releases).
 
 **System & logs**
 - **Smart load balancing** (on by default): when the GPU is busy (a game, another program) and the
