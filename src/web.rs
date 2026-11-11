@@ -202,6 +202,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/media/{id}/play/{kind}/{name}", get(play_converted))
         .route("/media/{id}/sprite/{kind}/{name}", get(sprite_image))
         .route("/live/{id}/stream.mjpeg", get(live_mjpeg))
+        .route("/live/{id}/audio.mp3", get(live_audio))
         .route("/live/{id}/frame.jpg", get(live_frame))
         .route("/snapshot/{id}", get(snapshot))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
@@ -2358,6 +2359,74 @@ async fn live_mjpeg(
         }
     });
     mjpeg_response(futures_util::stream::poll_fn(move |cx| out.poll_recv(cx)))
+}
+
+/// The camera's sound, live, as an MP3 stream for an <audio> element (the
+/// live picture comes as JPEGs, which carry no sound). Taken from the shared
+/// camera connection, which already carries the audio; ends when the page
+/// stops listening.
+async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
+    let c = camera!(m, id);
+    let ffmpeg = m.config().server.ffmpeg_path;
+    let rx = c.relay_main.subscribe();
+    let child = crate::load::cmd(&ffmpeg)
+        .args(["-hide_banner", "-loglevel", "error"])
+        .args(crate::relay::pipe_input_args())
+        .args([
+            "-vn",
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "64k",
+            "-ac",
+            "1",
+            "-ar",
+            "22050",
+        ])
+        .args(["-flush_packets", "1", "-f", "mp3", "pipe:1"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("can't start ffmpeg: {e}"),
+            );
+        }
+    };
+    let stop = tokio_util::sync::CancellationToken::new();
+    crate::relay::feed(rx, child.stdin.take().unwrap(), stop.clone());
+    let mut stdout = child.stdout.take().unwrap();
+    let (tx, mut out) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 4096];
+        loop {
+            tokio::select! {
+                n = stdout.read(&mut buf) => match n {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => if tx.send(Ok(Bytes::copy_from_slice(&buf[..n]))).await.is_err() { break },
+                },
+                _ = tx.closed() => break,
+            }
+        }
+        stop.cancel();
+        let _ = child.kill().await;
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CACHE_CONTROL, "no-cache, no-store"),
+        ],
+        axum::body::Body::from_stream(futures_util::stream::poll_fn(move |cx| out.poll_recv(cx))),
+    )
+        .into_response()
 }
 
 async fn live_frame(

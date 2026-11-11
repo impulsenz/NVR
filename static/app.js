@@ -195,7 +195,7 @@ function camState(c) {
   return {cls: 'idle', text: 'Idle'};
 }
 const pillHtml = (c) => { const s = camState(c); return `<span class="pill st-${s.cls}"><span class="dot"></span>${esc(s.text)}</span>`; };
-const MODE_TEXT = {continuous: 'HD 24/7', continuous_sub: 'Sub-stream 24/7', sub_plus_events: 'Sub-stream 24/7 + HD alerts', events: 'HD on alerts only', off: 'Not recording'};
+const MODE_TEXT = {continuous: 'HD 24/7', continuous_sub: 'Sub-stream 24/7', sub_plus_events: 'Substream 24/7 plus HD AI alerts', events: 'HD on alerts only', off: 'Not recording'};
 
 // ======================================================================
 // Live video over one WebSocket
@@ -1179,6 +1179,9 @@ function showLive(id) {
   setupTalkButton(c);
   $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
+  $('focus-title').textContent = c.name;
+  if (soundCam && soundCam !== c.id) stopSound();
+  $('focus-sound').onclick = () => soundCam ? stopSound() : startSound(c.id);
   setupQuickView(c);
   setupPtz(c);
   camTl.open(c.id);
@@ -1397,7 +1400,37 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   });
 })();
 setInterval(() => { if (page === 'live' && focusId && !camTl.end) camTl.load(); }, 30000);
-function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); stopTalk(); }
+function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); stopTalk(); stopSound(); }
+
+// ---------- live sound ----------
+// The live picture is JPEGs (no sound): the camera's audio comes as its own
+// MP3 stream. A second or two behind the picture.
+let soundCam = null;
+function soundLabel(on) {
+  const b = $('focus-sound'); if (!b) return;
+  b.querySelector('i').textContent = on ? '🔊' : '🔇';
+  b.querySelector('span').textContent = on ? 'Sound on' : 'Sound';
+  b.classList.toggle('primary', on);
+}
+function startSound(camId) {
+  const a = $('focus-audio');
+  soundCam = camId;
+  a.volume = +store.get('live-volume', 1);
+  $('focus-vol').value = a.volume;
+  a.src = `live/${enc(camId)}/audio.mp3?t=${Date.now()}`;
+  const none = () => { if (soundCam === camId) { toast('No sound from this camera (it has no microphone, or its audio is switched off in the camera).', true); stopSound(); } };
+  a.onerror = none;
+  a.onended = () => { if (soundCam !== camId) return; if (a.currentTime < 0.5) none(); else stopSound(); };
+  a.play().then(() => soundLabel(true)).catch(e => { toast('Could not play sound: ' + e.message, true); stopSound(); });
+}
+function stopSound() {
+  const a = $('focus-audio'); if (!a) return;
+  soundCam = null;
+  a.onerror = a.onended = null;
+  a.pause(); a.removeAttribute('src'); a.load();
+  soundLabel(false);
+}
+$('focus-vol').oninput = (e) => { $('focus-audio').volume = +e.target.value; store.set('live-volume', +e.target.value); };
 
 // ---------- two-way audio ----------
 // Push to talk: hold the button and speak; a quick tap keeps talking until
@@ -2311,7 +2344,7 @@ async function loadJobs() {
   };
   const target = $('set-tasks') || $('sys-tasks');
   const w = $('tasks-waiting');
-  if (w && r.waiting) w.innerHTML = `<span class="pill">${r.waiting.describe} alert${r.waiting.describe === 1 ? '' : 's'} waiting to be described</span> <span class="pill">${r.waiting.identify} waiting for faces &amp; plates</span>`;
+  if (w && r.waiting) w.innerHTML = `<span class="wait-pill">${r.waiting.describe} alert${r.waiting.describe === 1 ? '' : 's'} waiting to be described</span> <span class="wait-pill">${r.waiting.identify} waiting for faces &amp; plates</span>`;
   target.innerHTML = (live.length ? live.map(row).join('') : '<div class="hint">Nothing running right now.</div>') +
     (done.length ? `<details class="jobs-done" ${showDoneJobs ? 'open' : ''}><summary>Finished (${done.length})</summary>${done.map(row).join('')}</details>` : '');
   const d = target.querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
@@ -2715,7 +2748,7 @@ async function openCameraDialog(id, clone) {
         <div class="radio-cards" style="grid-template-columns:1fr">
           ${[['continuous', 'HD 24/7', 'Records the main stream around the clock.'],
              ['continuous_sub', 'Sub-stream 24/7', 'Records the low-resolution stream around the clock. Uses much less space.'],
-             ['sub_plus_events', 'Sub-stream 24/7 + HD on alerts', 'Low-res around the clock, plus full-quality clips around motion/AI alerts.'],
+             ['sub_plus_events', 'Substream 24/7 plus HD AI alerts', 'Low-res around the clock, plus full-quality clips around motion/AI alerts.'],
              ['events', 'HD on alerts only', 'Only full-quality clips around motion/AI alerts. Uses the least space.'],
              ['off', 'Off', 'Live view (and alerts) only, nothing recorded.']]
             .map(([v, t, d]) => `<label><input type="radio" name="c-mode" value="${v}" ${c.record_mode === v ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}

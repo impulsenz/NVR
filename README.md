@@ -33,7 +33,7 @@ viewing, finding footage, and managing everything, all from the browser.
 - Per-camera modes, like Blue Iris:
   - **HD 24/7**
   - **Sub-stream 24/7** (saves space)
-  - **Sub-stream 24/7 + HD clips on alerts**
+  - **Substream 24/7 plus HD AI alerts**
   - **HD on alerts only**
   - **Off**
 - **Pre-event buffer**: in alert modes, full-quality video is buffered continuously (30 s by default),

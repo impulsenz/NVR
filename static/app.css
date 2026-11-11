@@ -624,7 +624,7 @@ ol.steps code { user-select: all; }
 
 .task-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .task-action button { width: 100%; text-align: left; }
-.pill { display: inline-block; background: var(--panel2); border-radius: 999px; padding: 2px 10px; margin: 0 6px 4px 0; font-size: 13px; }
+.wait-pill { display: inline-block; background: var(--panel2); border-radius: 999px; padding: 2px 10px; margin: 0 6px 4px 0; font-size: 13px; }
 
 #focus-talk { user-select: none; -webkit-user-select: none; touch-action: none; -webkit-touch-callout: none; }
 #focus-talk.connecting { background: var(--panel2); animation: talkpulse 0.8s ease-in-out infinite; }
@@ -635,3 +635,8 @@ ol.steps code { user-select: all; }
 .ib img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; }
 .ib img.wide { width: 100%; height: 80px; }
 .ib select { width: 100%; font-size: 13px; }
+
+/* Live sound: volume slider appears on hover. */
+.vol-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.vol-wrap input[type=range] { width: 0; opacity: 0; transition: width .2s, opacity .2s; }
+.vol-wrap:hover input[type=range], .vol-wrap:focus-within input[type=range] { width: 90px; opacity: 1; }

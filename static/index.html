@@ -91,11 +91,12 @@
             <button id="focus-back"><i class="bi">←</i><span>All cameras</span></button>
             <button id="focus-live" class="primary" hidden>● Back to live</button>
             <button id="focus-rec" class="op-only"></button>
+            <span class="vol-wrap"><button id="focus-sound" title="Hear the camera (live sound)"><i class="bi">🔇</i><span>Sound</span></button><input type="range" id="focus-vol" min="0" max="1" step="0.05" value="1" title="Volume"></span>
+            <audio id="focus-audio" preload="none"></audio>
             <button id="focus-talk" class="op-only" hidden title="Hold to talk through the camera's speaker (tap to keep talking)"><i class="bi">🎙️</i><span>Hold to talk</span></button>
             <a class="btn" id="focus-snap"><i class="bi">📷</i><span>Snapshot</span></a>
             <a class="btn" id="focus-recs"><i class="bi">🎞️</i><span>Recordings</span></a>
             <button id="focus-motion" title="Draw boxes around moving objects with their size"><i class="bi">〰️</i><span>Show motion</span></button>
-            <button id="focus-edit" class="admin-only"><i class="bi">✎</i><span>Edit camera</span></button>
           </div>
           <div class="row" id="focus-quick" style="margin-top:8px">
             <span class="muted">Grid picture</span>
@@ -117,7 +118,8 @@
         </div>
         <div>
           <div class="card">
-            <h2>Camera</h2>
+            <div class="row" style="margin-bottom:6px"><h2 id="focus-title" style="margin:0;flex:1;text-transform:none;letter-spacing:0;font-size:16px;color:var(--text, inherit)">Camera</h2>
+              <button id="focus-edit" class="small admin-only" title="Change this camera's settings">✎ Edit</button></div>
             <dl id="focus-info"></dl>
             <div class="err" id="focus-err" style="margin-top:8px" hidden></div>
           </div>

@@ -1,5 +1,14 @@
 # What's new in GAZE
 
+## 0.5.2 — November 2026
+- **Live sound**: the camera view has a 🔊 Sound button (volume on hover) to hear the camera — together with Hold to talk, a two-way conversation.
+- **Alert pictures in HD**: every alert's picture is remade from the full-quality footage once it's over. Faces and number plates are only read from full-quality video.
+- Alerts show just the object (“person 88%”) without colour words or dots.
+- Camera view: the status card is titled with the camera's name, with ✎ Edit next to it.
+- The red recording dot is back on camera tiles and in Settings → Cameras.
+- The recording mode is now called “Substream 24/7 plus HD AI alerts”.
+- Smart search downloads no longer leave a cut-off model that crashes GAZE; a model that does crash it is downloaded again, or smart search pauses instead of restarting over and over.
+
 ## 0.5.1 — November 2026
 - First release published on GitHub: GAZE can now update itself from Settings → About.
 - Model and update downloads show as a small “⬇ 51%” in the header instead of a banner across the page.
