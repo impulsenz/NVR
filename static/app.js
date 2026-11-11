@@ -2705,7 +2705,9 @@ async function openCameraDialog(id, clone) {
   const brandOpts = '<option value="">Format…</option>' + BRANDS.map(b => `<option value="${b[0]}">${esc(b[1])}</option>`).join('');
   const segOpts = [[0, 'Default (' + fmtDur(settings ? settings.storage.segment_seconds : 300) + ')'], [300, '5 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [86400, 'One long file per day']];
   $('f-cam').innerHTML = `
-    <div class="head"><h2>${clone ? 'Clone camera' : id ? 'Edit camera' : 'Add camera'}</h2><button type="button" class="small" data-close>✕</button></div>
+    <div class="head"><h2>${clone ? 'Clone camera' : id ? 'Edit camera' : 'Add camera'}</h2>
+      ${id && !clone && cameraCfgs.length > 1 ? (() => { const i = cameraCfgs.findIndex(x => x.id === id); return `<span class="cam-nav"><button type="button" class="small" data-nav="-1" title="Previous camera">◀</button><span class="muted small">${i + 1} of ${cameraCfgs.length}</span><button type="button" class="small" data-nav="1" title="Next camera">▶</button></span>`; })() : ''}
+      <button type="button" class="small" data-close>✕</button></div>
     <div class="body">
       <div class="profile-bar"><b>Profile</b>
         <select id="c-prof"><option value="">Choose a saved profile…</option></select>
@@ -2941,7 +2943,20 @@ async function openCameraDialog(id, clone) {
     if (p) { $('c-dir').value = p; $('c-dir').oninput(); }
   };
   f.onsubmit = saveCamera;
-  $('cam-dialog').showModal();
+  // Previous / next camera without closing the editor (same tab stays open).
+  let dirty = false;
+  f.addEventListener('input', () => { dirty = true; });
+  f.addEventListener('change', () => { dirty = true; });
+  f.querySelectorAll('[data-nav]').forEach(b => b.onclick = async () => {
+    if (dirty && !confirm('Leave this camera without saving your changes?')) return;
+    const i = cameraCfgs.findIndex(x => x.id === id), n = cameraCfgs.length;
+    const next = cameraCfgs[(i + +b.dataset.nav + n) % n];
+    const tab = (f.querySelector('#c-tabs button.active') || {}).dataset;
+    stopPreviews(); stopMotionMeter();
+    await openCameraDialog(next.id);
+    if (tab && tab.t) { const t = $('f-cam').querySelector(`#c-tabs button[data-t="${tab.t}"]`); if (t) t.click(); }
+  });
+  if (!$('cam-dialog').open) $('cam-dialog').showModal();
 }
 function closeCameraDialog() { stopPreviews(); $('cam-dialog').close(); }
 $('cam-dialog').addEventListener('close', () => { stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });

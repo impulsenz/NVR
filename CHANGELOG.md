@@ -5,6 +5,7 @@
 - **Alert pictures in HD**: every alert's picture is remade from the full-quality footage once it's over. Faces and number plates are only read from full-quality video.
 - Alerts show just the object (“person 88%”) without colour words or dots.
 - Camera view: the status card is titled with the camera's name, with ✎ Edit next to it.
+- Camera settings: ◀ ▶ buttons switch to the previous/next camera without closing the editor (it stays on the same tab and asks before dropping unsaved changes).
 - The red recording dot is back on camera tiles and in Settings → Cameras.
 - The recording mode is now called “Substream 24/7 plus HD AI alerts”.
 - Smart search downloads no longer leave a cut-off model that crashes GAZE; a model that does crash it is downloaded again, or smart search pauses instead of restarting over and over.
