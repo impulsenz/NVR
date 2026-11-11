@@ -1056,11 +1056,14 @@ function settle(tiles, moved) {
 }
 
 const phoneGrid = () => ($('dash').clientWidth || window.innerWidth) < 640;
+// Columns on a phone: one full-width camera per row unless this phone was
+// set to two (Edit layout on the phone).
+const phoneCols = () => store.get('phone-cols', 1) === 2 ? 2 : 1;
 function renderPhoneEditor() {
   const dash = $('dash'), all = viewCams();
   const order = layout.map(t => t.camera).filter(id => cam(id));
   const hidden = all.filter(c => !order.includes(c.id)).map(c => c.id);
-  let cols = layout.length && layout.every(x => x.w <= 6) ? 2 : 1;
+  let cols = phoneCols();
   const ids = [...order, ...hidden], shown = new Set(order.length ? order : all.map(c => c.id));
   const draw = () => {
     dash.style.height = '';
@@ -1072,7 +1075,7 @@ function renderPhoneEditor() {
         <label class="check"><input type="checkbox" ${shown.has(id) ? 'checked' : ''}> ${esc((cam(id) || {}).name || id)}</label>
         <span><button type="button" class="small" data-mv="-1" ${i === 0 ? 'disabled' : ''} title="Move up">▲</button><button type="button" class="small" data-mv="1" ${i === ids.length - 1 ? 'disabled' : ''} title="Move down">▼</button></span></div>`).join('')}
     </div>`;
-    dash.querySelectorAll('#pe-cols button').forEach(b => b.onclick = () => { cols = +b.dataset.c; apply(); draw(); });
+    dash.querySelectorAll('#pe-cols button').forEach(b => b.onclick = () => { cols = +b.dataset.c; store.set('phone-cols', cols); apply(); draw(); });
     dash.querySelectorAll('.pe-row').forEach(r => {
       const id = r.dataset.id;
       r.querySelector('input').onchange = (e) => { if (e.target.checked) shown.add(id); else shown.delete(id); apply(); draw(); };
@@ -1172,12 +1175,13 @@ function placeTiles() {
     const t = wallSolo && !editing ? {x: 0, y: 0, w: 12, h: 12} : layout.find(x => x.camera === el.dataset.id);
     if (!t) continue;
     if (m.narrow && !editing) {
-      // One or two columns (chosen in the phone layout editor).
-      const cols = layout.length > 1 && layout.every(x => x.w <= 6) ? 2 : 1;
-      const i = [...dash.querySelectorAll('.tile')].indexOf(el), cw = (m.W - 4) / cols, h = (cw - 8) * 9 / 16;
-      const top = Math.floor(i / cols) * (h + 8) + 4;
-      Object.assign(el.style, {left: (i % cols) * cw + 4 + 'px', top: top + 'px', width: cw - 8 + 'px', height: h + 'px'});
-      maxB = Math.max(maxB, top + h + 4);
+      // Phones: one camera across the whole width of the screen, the rest
+      // stacked below (or two side by side, if chosen in the phone layout).
+      const cols = phoneCols(), gap = 6;
+      const i = [...dash.querySelectorAll('.tile')].indexOf(el), cw = (m.W - gap * (cols - 1)) / cols, h = cw * 9 / 16;
+      const top = Math.floor(i / cols) * (h + gap);
+      Object.assign(el.style, {left: (i % cols) * (cw + gap) + 'px', top: top + 'px', width: cw + 'px', height: h + 'px'});
+      maxB = Math.max(maxB, top + h);
     } else {
       const rowH = wallSolo && !editing ? m.H / 12 : m.rowH;
       Object.assign(el.style, {left: t.x * m.colW + g + 'px', top: t.y * rowH + g + 'px', width: t.w * m.colW - m.gap + 'px', height: t.h * rowH - m.gap + 'px'});
