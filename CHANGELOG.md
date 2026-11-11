@@ -1,5 +1,14 @@
 # What's new in GAZE
 
+## 0.5.7 — November 2026
+- **Update checks fixed**: "403 rate limit exceeded" from GitHub is gone. GAZE now reads the newest version from GitHub's release page instead of its API (which allows only 60 requests an hour per internet connection), and waits as long as GitHub asks if it's ever told to slow down.
+- **Video player controls on the video**: play, the timeline, ±10 s, speed, clip start/end, download, volume and full screen sit on the picture and fade while it plays. **Full screen keeps them**, together with the camera's on-screen display (name and the recording's date and time).
+- **Taller, more detailed timeline**: minute marks, grid lines and a "now" line. A strip under each camera shows which parts of the time-lapse are loaded (blue), loading (striped) or not yet; it replaces the progress bar, and new footage keeps loading while the page stays open.
+- **Alerts**: Person, Car, Truck, Motorcycle, Item left/taken, Faces and Number plates are selected by default (remembered per browser), and a new drop-down shows only the alerts of a saved person or vehicle.
+- **On-screen display**: Settings → Live view & display has the same layout editor as each camera — every item, the nine positions and a live preview — and items can be dragged on the preview, snapping to the nine positions or staying exactly where you drop them.
+- **Removed**: alert descriptions and the description search (smart search, vision-model descriptions, the Describe button, descriptions in notifications) — to be rebuilt later. The old models and indexes are deleted, freeing 0.6–1.7 GB. Vehicles are recognised by number plate only.
+- **Removed**: the camera's ONVIF settings tab. **Restart camera** is under General, for cameras that answer over ONVIF.
+
 ## 0.5.6 — November 2026
 - **Much better alert descriptions**: choose who writes them in Settings → Object recognition → **Descriptions written by**. A vision-language model looks at several moments of each alert together and writes what happened ("A courier in a hi-vis vest leaves a parcel at the door and walks back to a white van"), instead of set phrases. Use **Ollama or LM Studio on your own computer** (free, pictures stay at home), **Claude** or **Gemini** (cloud). A daily limit keeps cloud costs known, and **Describe the latest alert** tries it before saving.
 - **One AI for notifications too**: the same model writes the notification text and judges what looks suspicious. Notifications no longer have separate Gemini settings — an existing Gemini key moves over by itself.
