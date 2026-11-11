@@ -572,22 +572,6 @@ impl Manager {
     }
 
     /// Change a camera's live-view options without restarting it.
-    pub async fn set_camera_view(&self, id: &str, view: crate::config::ViewConfig) -> Result<()> {
-        let _g = self.edit.lock().await;
-        let mut cfg = self.config();
-        let Some(c) = cfg.cameras.iter_mut().find(|c| c.id == id) else {
-            bail!("camera not found")
-        };
-        c.view = view.clone();
-        c.validate()?;
-        self.commit(cfg)?;
-        if let Some(rt) = self.camera(id) {
-            rt.live_sub.set_view(view.clone());
-            rt.live_main.set_view(view);
-        }
-        Ok(())
-    }
-
     pub async fn update_dashboard(&self, d: DashboardConfig) -> Result<()> {
         let _g = self.edit.lock().await;
         let mut cfg = self.config();
@@ -691,7 +675,11 @@ impl Manager {
             }
             cfg.notify = n;
         }
-        if let Some(c) = up.cloud {
+        if let Some(mut c) = up.cloud {
+            // The form never receives the saved password; empty means "keep".
+            if c.password.is_empty() {
+                c.password = old.cloud.password.clone();
+            }
             cfg.cloud = c;
         }
         if cfg.storage.dir != old.storage.dir {

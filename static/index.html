@@ -17,13 +17,13 @@
     <a href="#alerts" data-page="alerts"><i class="ni">🔔</i><span>Alerts</span> <span class="badge" id="alert-badge" hidden></span></a>
     <a href="#recordings" data-page="recordings"><i class="ni">🎞️</i><span>Recordings</span></a>
     <a href="#system" data-page="system"><i class="ni">📊</i><span>System</span></a>
-    <a href="#logs" data-page="logs" class="admin-only"><i class="ni">📜</i><span>Logs</span> <span class="badge" id="log-badge" hidden></span></a>
-    <a href="#settings" data-page="settings" class="admin-only"><i class="ni">⚙️</i><span>Settings</span></a>
+    <a href="#settings" data-page="settings" class="admin-only"><i class="ni">⚙️</i><span>Settings</span> <span class="badge" id="log-badge" hidden></span></a>
   </nav>
   <span class="spacer"></span>
   <span id="bw" class="bw"></span>
   <a id="dl-chip" class="dl-chip admin-only" href="#settings/tasks" hidden></a>
   <span id="clock"></span>
+  <button type="button" id="app-fs" class="small" title="Full screen (any page)"><i class="ni">⛶</i><span class="fs-label"> Full screen</span></button>
   <button type="button" id="upd-btn" class="small admin-only" title="Check for updates">⟳ <span class="hide-sm">Updates</span></button>
   <div class="dropdown user-menu" id="user-menu" hidden>
     <button type="button" id="um-btn" class="small" title="Your account"><i class="ni">👤</i> <span id="um-name"></span><span class="hide-sm"> ▾</span></button>
@@ -31,7 +31,6 @@
       <div class="muted small" id="um-role"></div>
       <div class="phone-only um-links">
         <a href="#system" class="btn">📊 System</a>
-        <a href="#logs" class="btn admin-only">📜 Logs</a>
         <button type="button" class="admin-only" id="um-upd">⟳ Check for updates</button>
       </div>
       <label class="small muted" style="display:block;margin:6px 0 2px">Data saver on this device</label>
@@ -105,12 +104,6 @@
             <a class="btn" id="focus-recs"><i class="bi">🎞️</i><span>Recordings</span></a>
             <button id="focus-motion" title="Draw boxes around moving objects with their size"><i class="bi">〰️</i><span>Show motion</span></button>
           </div>
-          <div class="row" id="focus-quick" style="margin-top:8px">
-            <span class="muted">Grid picture</span>
-            <select id="fq-quality" title="What this camera shows in the camera grid"><option value="auto">Sub-stream (light)</option><option value="main">Full quality</option></select>
-            <span class="muted">Grid fps</span><select id="fq-gfps"></select>
-            <span class="muted">Full-screen fps</span><select id="fq-hfps"></select>
-          </div>
           <div class="card camtl" id="cam-tl">
             <div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Timeline</h2>
               <button type="button" class="small" id="ctl-left" title="Earlier">◀</button>
@@ -158,7 +151,6 @@
         <div class="popover" id="f-date-pop" hidden></div>
       </div>
       <button id="f-refresh" title="Refresh">↻</button>
-      <button id="rec-fs" title="Use the whole screen for browsing recordings">⛶ Full screen</button>
     </div>
     <div class="chips" id="f-types" style="margin-bottom:12px"></div>
 
@@ -227,7 +219,8 @@
   </section>
 
   <!-- ============ LOGS ============ -->
-  <section id="page-logs" hidden>
+  <section id="page-logs" hidden><div id="logs-box">
+    <div class="card"><h2 style="margin-bottom:8px">Logs</h2>
     <div class="filters">
       <select id="lg-level"><option value="info">All levels</option><option value="warn">Warnings &amp; errors</option><option value="error">Errors only</option></select>
       <select id="lg-kind"><option value="">Everything</option><option value="event">Alerts &amp; events</option><option value="system">System</option></select>
@@ -240,8 +233,8 @@
     </div>
     <div class="card" style="padding:6px">
       <div class="logs" id="lg-list"></div>
-    </div>
-  </section>
+    </div></div>
+  </div></section>
 
   <!-- ============ SETTINGS ============ -->
   <section id="page-settings" hidden>
@@ -255,10 +248,11 @@
         <a href="#settings/hardware" data-s="hardware">GPU acceleration</a>
         <a href="#settings/notify" data-s="notify">Notifications</a>
         <a href="#settings/tasks" data-s="tasks">Tasks</a>
-        <a href="#settings/cloud" data-s="cloud">Cloud backup</a>
+        <a href="#settings/cloud" data-s="cloud">Backup (cloud / NAS)</a>
         <a href="#settings/backup" data-s="backup">Export / import setup</a>
         <a href="#settings/users" data-s="users">Users</a>
         <a href="#settings/system" data-s="system">System</a>
+        <a href="#settings/logs" data-s="logs">Logs</a>
         <a href="#settings/info" data-s="info">About</a>
       </div>
       <div id="settings-body"></div>

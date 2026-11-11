@@ -1,4 +1,4 @@
-//! Zones, like Frigate and Blue Iris: named areas and lines on the picture.
+//! Zones: named areas and lines on the picture.
 //!
 //! - **Area**: a polygon. Objects count as "in" it when the bottom middle
 //!   of their box (their feet / wheels) is inside. Each area can be limited

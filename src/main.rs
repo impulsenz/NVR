@@ -13,6 +13,7 @@ mod events;
 mod ffmpeg;
 mod finalize;
 mod fsbrowse;
+mod ftp;
 mod identify;
 mod imgutil;
 mod inbox;

@@ -340,15 +340,18 @@ const LABEL_ICON = {person: '🚶', car: '🚗', truck: '🚚', bus: '🚌', mot
   horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', package: '📦', motion: '〰️'};
 const labelIcon = (l) => LABEL_ICON[l] || '🔷';
 // What the timeline colours and symbols mean.
-function legendHtml(kind) {
-  const objs = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat', 'bird'];
-  const bars = kind === 'tl'
-    ? [['<i class="lg-bar rec"></i>', 'Recording'], ['<i class="lg-bar clip"></i>', 'HD alert clip'], ['<i class="lg-bar ev"></i>', 'Alert (AI)'], ['<i class="lg-bar mo"></i>', 'Motion only']]
-    : [['<i class="lg-bar rec"></i>', 'Recording'], ['<i class="lg-bar clip"></i>', 'HD alert clip'], ['<i class="lg-tick"></i>', 'Motion only']];
-  return bars.map(([i, t]) => `<span>${i}${t}</span>`).join('') + '<span class="lg-sep"></span>'
-    + objs.map(o => `<span>${labelIcon(o)} ${o}</span>`).join('') + `<span>${labelIcon('?')} other</span>`;
+// What the marks on a timeline mean: only what's on it — the kinds of
+// footage shown and the objects these cameras look for.
+function legendHtml(kind, data) {
+  const rows = data || [], segs = rows.flatMap(c => c.segments || []), evs = rows.flatMap(c => c.events || []);
+  const watched = [...new Set(rows.flatMap(c => (cam(c.camera) || {}).watch || []))];
+  const bars = [['<i class="lg-bar rec"></i>', 'Recording']];
+  if (segs.some(s => s.kind === 'clip')) bars.push(['<i class="lg-bar clip"></i>', 'HD alert clip']);
+  if (kind === 'tl' && evs.some(e => e.labels.length)) bars.push(['<i class="lg-bar ev"></i>', 'Alert (AI)']);
+  if (evs.some(e => !e.labels.length)) bars.push([kind === 'tl' ? '<i class="lg-bar mo"></i>' : '<i class="lg-tick"></i>', 'Motion only']);
+  return bars.map(([i, t]) => `<span>${i}${t}</span>`).join('')
+    + (watched.length ? '<span class="lg-sep"></span>' + watched.map(o => `<span>${labelIcon(o)} ${esc(o)}</span>`).join('') : '');
 }
-document.querySelectorAll('[data-legend]').forEach(el => el.innerHTML = legendHtml(el.dataset.legend));
 // On-screen display: the camera's own settings, or the global ones.
 function osdFor(c) {
   if (c.osd && c.osd.custom) return c.osd;
@@ -358,13 +361,14 @@ function overlayHtml(c, q, noFs) {
   const d = status.display, o = osdFor(c);
   const parts = Object.fromEntries(SPOTS.map(([k]) => [k, []]));
   // A spot that isn't one of the nine ("p:X,Y") gets its own box.
-  for (const k of ['name_corner', 'text_corner', 'status_corner', 'detections_corner', 'clock_corner', 'fps_corner']) if (o[k] && !parts[o[k]]) parts[o[k]] = [];
+  for (const k of ['name_corner', 'text_corner', 'status_corner', 'detections_corner', 'clock_corner', 'fps_corner', 'res_corner']) if (o[k] && !parts[o[k]]) parts[o[k]] = [];
   if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name" data-osd="name">${esc(c.name)}</span>`);
   if (o.text) parts[o.text_corner].push(`<span class="ovtext" data-osd="text">${esc(o.text)}</span>`);
   if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill" data-osd="status">${pillHtml(c)}</span>`);
   if (o.show_detections) parts[o.detections_corner].push('<span class="ov-alert" data-osd="detections"></span>');
   if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-osd="clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}">${esc(fmtDate(new Date(), o.clock_format || d.clock_format || undefined))}</span>`);
   if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps" data-osd="fps"></span>');
+  if (o.show_res) parts[o.res_corner || 'tl'].push('<span class="ovtext ov-res" data-osd="res"></span>');
   // Stream 1 / Stream 2 switch, next to the first fullscreen button (or top right).
   const corners = noFs ? [] : d.fullscreen_corners;
   const sc = corners[0] || 'tr';
@@ -382,7 +386,7 @@ function ovBox(k, inner, extra = '') {
   return `<div class="ov ${k} ${extra}">${inner}</div>`;
 }
 // The on-screen display items and their places, as form rows (`px`: id prefix).
-const OSD_ITEMS = [['name', 'Camera name'], ['clock', 'Date &amp; time'], ['status', 'Recording status (REC / armed / offline)'], ['detections', 'Alert type (motion, 🚶 person, 🚗 car …)'], ['fps', 'Frame rate and stream details']];
+const OSD_ITEMS = [['name', 'Camera name'], ['clock', 'Date &amp; time'], ['status', 'Recording status (REC / armed / offline)'], ['detections', 'Alert type (motion, 🚶 person, 🚗 car …)'], ['fps', 'Frame rate'], ['res', 'Resolution and video format']];
 function osdItemsHtml(px, o) {
   return OSD_ITEMS.map(([k, t]) => `<span></span><div class="row osd-row"><label class="check" style="padding:0;min-width:300px"><input type="checkbox" id="${px}-${k}" ${o['show_' + k] ? 'checked' : ''}> ${t}</label>${cornerSel(`${px}-${k}-c`, o[k + '_corner'])}</div>`).join('')
     + `<label for="${px}-text">Extra text</label><div class="row"><input type="text" id="${px}-text" value="${esc(o.text || '')}" maxlength="200" placeholder="e.g. Driveway – north" style="flex:1">${cornerSel(px + '-text-c', o.text_corner)}</div>
@@ -472,7 +476,12 @@ function updateOverlay(surface, c, q) {
   if (fps) {
     const info = c.info && (q === 'main' ? c.info.main : c.info.sub);
     const shown = Live.fps(c.id, q) || (q === 'main' ? Live.fps(c.id, 'sub') : 0);
-    fps.textContent = (shown ? `${shown.toFixed(1)} fps` : '– fps') + (info ? ` · ${info.width}×${info.height} ${String(info.codec).toUpperCase()}${info.fps ? ` (camera ${info.fps} fps)` : ''}` : '');
+    fps.textContent = shown ? `${shown.toFixed(1)} fps` : '– fps';
+  }
+  const res = surface.querySelector('.ov-res');
+  if (res) {
+    const info = c.info && (q === 'main' ? c.info.main : c.info.sub);
+    res.textContent = info ? `${info.width}×${info.height} ${String(info.codec).toUpperCase()}` : '–';
   }
   const a = surface.querySelector('.ov-alert');
   if (a) {
@@ -486,13 +495,15 @@ function updateOverlay(surface, c, q) {
 // ======================================================================
 // Routing & status
 // ======================================================================
-const PAGES = ['live', 'recordings', 'system', 'logs', 'settings'];
+const PAGES = ['live', 'recordings', 'system', 'settings'];
 // A notification link: #alerts?open=<camera>~<alert id> opens that alert.
 let openAlertId = null;
 function route() {
   const [h, q] = (location.hash.slice(1) || 'live').split('?');
   const want = q && new URLSearchParams(q).get('open');
   if (want) { openAlertId = want.split('~').pop(); history.replaceState(null, '', '#' + h); }
+  // The logs are under Settings now.
+  if (h === 'logs') { location.replace('#settings/logs'); return; }
   const [p0, sub, extra] = h.split('/');
   // Alerts and Recordings (timeline) share one page section.
   const p = p0 === 'alerts' ? 'recordings' : p0;
@@ -502,11 +513,10 @@ function route() {
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
   if (page !== 'live' && typeof soundCam !== 'undefined' && soundCam) stopSound();
-  if (page !== 'recordings') { pauseAllPlayback(); if ($('page-recordings').classList.contains('rec-fs')) recFullscreen(false); }
+  if (page !== 'recordings') pauseAllPlayback();
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
   else if (page === 'system') showSystem();
-  else if (page === 'logs') showLogs();
   else showSettings(sub || 'cameras');
   updateSubscriptions();
 }
@@ -516,6 +526,9 @@ async function refreshStatus() {
   try { status = await api('api/status?device=' + deviceKind()); } catch (e) { return; }
   $('nvr-name').title = status.name;
   document.title = status.name && status.name !== 'GAZE' ? `GAZE — ${status.name}` : 'GAZE';
+  // How live pictures fill their boxes, everywhere (stream 2 is often a
+  // squeezed 4:3 picture: stretched, it fills the box like the main stream).
+  document.body.dataset.fit = status.display.tile_fit || 'stretch';
   // New alerts.
   const ab = $('alert-badge'), n = status.alerts_unseen || 0;
   ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
@@ -1314,7 +1327,6 @@ function showLive(id) {
   $('focus-edit').onclick = () => openCameraDialog(c.id);
   $('focus-title').textContent = c.name;
   if (soundCam && soundCam !== c.id) stopSound();
-  setupQuickView(c);
   setupPtz(c);
   camTl.open(c.id);
   updateFocus();
@@ -1351,21 +1363,6 @@ function showFocusLoading() {
   loadingTimer = setTimeout(() => { el.querySelector('span').textContent = 'Full-quality stream not available — showing sub-stream'; setTimeout(() => el.hidden = true, 5000); }, 20000);
 }
 function hideFocusLoading() { clearTimeout(loadingTimer); $('focus-loading').hidden = true; }
-
-// Quick live-view options for this camera (saved without restarting it).
-function setupQuickView(c) {
-  const v = c.view || {grid_quality: 'auto', grid_fps: 0, hd_fps: 0}, l = status.live;
-  const fpsOpts = (cur, def) => [0, 1, 2, 5, 10, 15, 20, 25, 30].map(f => `<option value="${f}" ${f === cur ? 'selected' : ''}>${f ? f + ' fps' : 'Default (' + def + ')'}</option>`).join('');
-  $('fq-quality').value = v.grid_quality || 'auto';
-  $('fq-gfps').innerHTML = fpsOpts(v.grid_fps || 0, l.fps);
-  $('fq-hfps').innerHTML = fpsOpts(v.hd_fps || 0, l.hd_fps);
-  const save = async () => {
-    const nv = {grid_quality: $('fq-quality').value, grid_fps: +$('fq-gfps').value, hd_fps: +$('fq-hfps').value};
-    try { await api(`api/cameras/${enc(c.id)}/view`, {method: 'PUT', json: nv}); c.view = nv; toast('Saved for ' + c.name); updateSubscriptions(); }
-    catch (e) { toast(e.message, true); }
-  };
-  $('fq-quality').onchange = $('fq-gfps').onchange = $('fq-hfps').onchange = save;
-}
 
 // ---------- PTZ controls ----------
 // Pan / tilt / zoom on the picture: the pad and zoom buttons (press and
@@ -1485,10 +1482,7 @@ const camTl = {
     } catch (e) {}
   },
   // The files the time-lapse comes from (the light stream 2 copies when kept).
-  sources() {
-    const segs = (this.data && this.data.segments) || [], sub = segs.some(x => x.kind === 'sub');
-    return segs.filter(x => x.kind !== 'clip' && !(sub && x.kind === 'recording'));
-  },
+  sources() { return previewSources((this.data && this.data.segments) || []); },
   draw() {
     if (!this.data || this.dragging) return;
     const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
@@ -1513,6 +1507,7 @@ const camTl = {
     const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
     lb.innerHTML = lane + '<div class="head" hidden></div>';
     lb.appendChild(pv);
+    $('cam-tl').querySelector('.legend').innerHTML = legendHtml('cam', [{...this.data, camera: this.id}]);
     this.paintStrip(); this.paintHead();
   },
   // Which parts of the time-lapse are ready to scrub.
@@ -1957,21 +1952,24 @@ setInterval(async () => {
   if (!r) return;
   if (r.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen : i.name).join() !== before) { rec.items = r; renderRecordings(); }
 }, 8000);
-// Search box: as you type (after a short pause) or on Enter.
 $('f-refresh').onclick = () => rec.mode === 'list' ? loadRecordings() : loadTimeline();
-// Full screen for browsing recordings (timeline videos get the whole width).
-async function recFullscreen(on) {
-  const el = $('page-recordings');
-  el.classList.toggle('rec-fs', on);
-  $('rec-fs').textContent = on ? '✕ Exit full screen' : '⛶ Full screen';
-  if (on && !document.fullscreenElement && el.requestFullscreen) await el.requestFullscreen().catch(() => {});
-  if (!on && document.fullscreenElement === el) document.exitFullscreen().catch(() => {});
-  if (rec.mode === 'timeline') drawTimeline();
-}
-$('rec-fs').onclick = () => recFullscreen(!$('page-recordings').classList.contains('rec-fs'));
-document.addEventListener('fullscreenchange', () => {
-  if (!document.fullscreenElement && $('page-recordings').classList.contains('rec-fs')) recFullscreen(false);
-});
+// Full screen for the whole app, from the header (any page, phones too
+// where the browser allows it).
+(function wireAppFullscreen() {
+  const b = $('app-fs'), root = document.documentElement;
+  if (!(root.requestFullscreen || root.webkitRequestFullscreen)) { b.hidden = true; return; }
+  const paint = () => {
+    const on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    b.querySelector('.fs-label').textContent = on ? ' Exit full screen' : ' Full screen';
+    b.classList.toggle('on', on);
+  };
+  b.onclick = () => {
+    if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+  };
+  document.addEventListener('fullscreenchange', paint);
+  document.addEventListener('webkitfullscreenchange', paint);
+})();
 
 function renderFilters() {
   if (!status) return;
@@ -1990,7 +1988,7 @@ function renderFilters() {
   // Dates
   const same = startOfDay(rec.from).getTime() === startOfDay(rec.to).getTime();
   const today = startOfDay(new Date()).getTime(), f0 = startOfDay(rec.from).getTime();
-  let label = same ? (f0 === today ? 'Today' : f0 === today - 86400000 ? 'Yesterday' : fmtDay(rec.from)) : `${fmtDay(rec.from)} – ${fmtDay(rec.to)}`;
+  let label = rec.from.getFullYear() <= 2000 ? 'All time' : same ? (f0 === today ? 'Today' : f0 === today - 86400000 ? 'Yesterday' : fmtDay(rec.from)) : `${fmtDay(rec.from)} – ${fmtDay(rec.to)}`;
   if (rec.todFrom || rec.todTo) label += `, ${rec.todFrom || '00:00'}–${rec.todTo || '23:59'}`;
   $('f-date-btn').textContent = '📅 ' + label;
   // Types
@@ -2007,7 +2005,16 @@ function reloadRec() { rec.mode === 'list' ? loadRecordings() : loadTimeline(); 
 // ---------- calendar with range + time-of-day ----------
 const Calendar = {
   month: null, a: null, b: null,
-  open() { this.a = startOfDay(rec.from); this.b = startOfDay(rec.to); this.month = new Date(this.b.getFullYear(), this.b.getMonth(), 1); this.render(); },
+  open() { this.a = startOfDay(rec.from); this.b = startOfDay(rec.to); this.first = null; this.month = new Date(this.b.getFullYear(), this.b.getMonth(), 1); this.render(); },
+  // Show the chosen days right away (close the calendar unless a range is
+  // being picked).
+  apply(close) {
+    const lo = Math.min(this.a, this.b ?? this.a), hi = Math.max(this.a, this.b ?? this.a);
+    rec.from = startOfDay(new Date(lo)); rec.to = endOfDay(new Date(hi));
+    if ($('cal-tf')) { rec.todFrom = $('cal-tf').value; rec.todTo = $('cal-tt').value; }
+    if (close) $('f-date-pop').hidden = true;
+    renderFilters(); tl.day = null; reloadRec();
+  },
   render() {
     const p = $('f-date-pop'), m = this.month, first = new Date(m), today = startOfDay(new Date()).getTime();
     first.setDate(1 - ((first.getDay() + 6) % 7));
@@ -2021,29 +2028,35 @@ const Calendar = {
     p.innerHTML = `<div class="cal">
       <div class="head"><button type="button" class="small" data-nav="-1">◀</button><b>${MONTHS[m.getMonth()]} ${m.getFullYear()}</b><button type="button" class="small" data-nav="1">▶</button></div>
       <div class="days">${DAYS.map(d => `<span>${d.slice(0, 2)}</span>`).join('')}${cells}</div>
-      <div class="hint">Click one day, or a first and last day for a range.</div>
-      <div class="row" style="margin-top:8px"><button type="button" class="small" data-p="0">Today</button><button type="button" class="small" data-p="1">Yesterday</button><button type="button" class="small" data-p="7">Last 7 days</button><button type="button" class="small" data-p="30">Last 30 days</button></div>
+      <div class="hint">${this.first != null ? 'Click another day to show the days in between too.' : 'Click a day to show it; click a second day for a range.'}</div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap"><button type="button" class="small" data-p="0">Today</button><button type="button" class="small" data-p="1">Yesterday</button><button type="button" class="small" data-p="7">Last 7 days</button><button type="button" class="small" data-p="30">Last 30 days</button><button type="button" class="small" data-p="all">All time</button></div>
       <div class="row" style="margin-top:10px"><span class="muted">Only between</span><input type="time" id="cal-tf" value="${rec.todFrom}" style="width:auto"><span class="muted">and</span><input type="time" id="cal-tt" value="${rec.todTo}" style="width:auto"></div>
-      <div class="actions" style="margin-top:10px"><button type="button" class="primary" data-apply>Apply</button><button type="button" data-clear-time>Any time</button></div></div>`;
+      <div class="actions" style="margin-top:10px"><button type="button" class="primary" data-apply>Done</button><button type="button" data-clear-time>Whole day</button></div></div>`;
     p.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => { this.month.setMonth(this.month.getMonth() + +b.dataset.nav); this.render(); });
-    p.querySelectorAll('[data-t]').forEach(b => b.onclick = () => {
+    p.querySelectorAll('[data-t]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation();
       const t = +b.dataset.t;
-      if (this.b !== null || this.a === null) { this.a = t; this.b = null; } else { this.b = t; }
-      this.render();
+      if (this.first != null && this.first !== t) {
+        // Second day: the range between them.
+        this.a = this.first; this.b = t; this.first = null;
+        this.apply(true); return;
+      }
+      this.a = this.b = t; this.first = t;
+      this.apply(false); this.render();
     });
     p.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
-      const n = +b.dataset.p, t = startOfDay(new Date());
-      if (n === 1) { t.setDate(t.getDate() - 1); this.a = this.b = t.getTime(); }
-      else { this.b = t.getTime(); const s = new Date(t); s.setDate(s.getDate() - Math.max(0, n - 1)); this.a = s.getTime(); }
-      this.render();
+      const t = startOfDay(new Date());
+      if (b.dataset.p === 'all') { this.b = t.getTime(); this.a = new Date(2000, 0, 1).getTime(); }
+      else {
+        const n = +b.dataset.p;
+        if (n === 1) { t.setDate(t.getDate() - 1); this.a = this.b = t.getTime(); }
+        else { this.b = t.getTime(); const s = new Date(t); s.setDate(s.getDate() - Math.max(0, n - 1)); this.a = s.getTime(); }
+      }
+      this.first = null; this.apply(true);
     });
-    p.querySelector('[data-clear-time]').onclick = () => { $('cal-tf').value = ''; $('cal-tt').value = ''; };
-    p.querySelector('[data-apply]').onclick = () => {
-      const lo = Math.min(this.a, this.b ?? this.a), hi = Math.max(this.a, this.b ?? this.a);
-      rec.from = startOfDay(new Date(lo)); rec.to = endOfDay(new Date(hi));
-      rec.todFrom = $('cal-tf').value; rec.todTo = $('cal-tt').value;
-      p.hidden = true; renderFilters(); tl.day = null; reloadRec();
-    };
+    p.querySelector('[data-clear-time]').onclick = () => { $('cal-tf').value = ''; $('cal-tt').value = ''; this.apply(false); };
+    p.querySelectorAll('#cal-tf, #cal-tt').forEach(i => i.onchange = () => this.apply(false));
+    p.querySelector('[data-apply]').onclick = () => this.apply(true);
   },
 };
 
@@ -2464,6 +2477,7 @@ function drawTimeline() {
   const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="${selStyle(pct)}"><div class="tl-h in" title="Drag to change the clip start"></div><div class="tl-h out" title="Drag to change the clip end"></div></div>` : '';
   box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"></div>`;
   box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
+  document.querySelector('#rec-timeline .legend').innerHTML = legendHtml('tl', tl.data);
   paintPreviewStrips();
   // Clip export
   const has = tl.inT != null && tl.outT != null;
@@ -2540,16 +2554,25 @@ async function spriteFor(cam, seg) {
 }
 // Prepare previews for every file in view (nearest to the playhead first),
 // showing progress, so scrubbing is instant.
+// The files the time-lapse of a camera comes from: the light timeline
+// copies, and the recordings of any time without a copy.
+function previewSources(segs) {
+  const subs = segs.filter(x => x.kind === 'sub').map(x => [new Date(x.start).getTime(), new Date(x.end).getTime()]);
+  return segs.filter(x => {
+    if (x.kind === 'sub') return true;
+    if (x.kind !== 'recording') return false;
+    const a = new Date(x.start).getTime(), b = new Date(x.end).getTime();
+    return !subs.some(([s0, s1]) => s0 <= a + 5000 && s1 >= b - 5000);
+  });
+}
 // Under each camera's lane: which parts of the time-lapse are loaded and
 // ready to scrub (filled), still loading (striped) or not loaded yet.
 function paintPreviewStrips() {
   const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
   for (const el of document.querySelectorAll('#tl .tlp')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
-    const useSub = c.segments.some(y => y.kind === 'sub');
     let h = '';
-    for (const sg of c.segments) {
-      if (sg.kind === 'clip' || (useSub && sg.kind === 'recording')) continue;
+    for (const sg of previewSources(c.segments)) {
       const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
       const st = (tl.pv && tl.pv.get(sg.url)) || {state: 'wait'};
       const end = st.state === 'ready' && st.secs ? Math.min(Math.max(s1, isGrowing(sg) ? Date.now() : s1), s0 + st.secs * 1000) : s1;
@@ -2564,7 +2587,7 @@ function prefetchSprites() {
   const gen = tl.pfGen = (tl.pfGen || 0) + 1;
   const a = tl.winStart, b = a + tl.zoom * 1000;
   const list = [];
-  for (const c of tl.data) for (const sg of c.segments.filter(x => !(x.kind === 'recording' && c.segments.some(y => y.kind === 'sub')))) {
+  for (const c of tl.data) for (const sg of previewSources(c.segments)) {
     const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
     if (s1 >= a && s0 <= b) list.push({cam: c.camera, sg, d: Math.abs((s0 + s1) / 2 - tl.T)});
   }
@@ -2901,7 +2924,7 @@ window.addEventListener('resize', () => { if (page === 'system') drawGraph(); })
 // Logs
 // ======================================================================
 let logLast = 0, logTimer = null;
-$('log-badge').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); $('lg-level').value = 'error'; if (page === 'logs') reloadLogs(); else location.hash = '#logs'; });
+$('log-badge').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); $('lg-level').value = 'error'; if (page === 'settings' && section === 'logs') reloadLogs(); else location.hash = '#settings/logs'; });
 $('lg-dismiss').onclick = () => {
   const ids = (status && status.problems.error_ids) || [];
   if (ids.length) store.set('errors-seen', ids[ids.length - 1]);
@@ -2915,7 +2938,7 @@ function showLogs() {
   }
   reloadLogs();
   clearInterval(logTimer);
-  logTimer = setInterval(() => { if (page !== 'logs') return clearInterval(logTimer); if ($('lg-live').checked) loadLogs(true); }, 3000);
+  logTimer = setInterval(() => { if (page !== 'settings' || section !== 'logs') return clearInterval(logTimer); if ($('lg-live').checked) loadLogs(true); }, 3000);
 }
 function logQuery(after) {
   const q = new URLSearchParams({level: $('lg-level').value, limit: 1000});
@@ -2947,7 +2970,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'notify', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'info'];
+const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'notify', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'logs', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -2959,8 +2982,11 @@ async function showSettings(sec) {
   try { await loadSettings(); } catch (e) { toast(e.message, true); return; }
   camPreviewUnbind.splice(0).forEach(u => u());
   const body = $('settings-body');
+  // The log view is kept, and lent to the Logs section while it's open.
+  const lb = $('logs-box'); if (lb.parentElement !== $('page-logs')) $('page-logs').appendChild(lb);
   ({cameras: renderCameras, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, tasks: renderTasks, system: renderSystemSettings, info: renderInfo})[section](body);
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, tasks: renderTasks, system: renderSystemSettings, info: renderInfo,
+    logs: (b) => { b.innerHTML = ''; b.appendChild($('logs-box')); showLogs(); }})[section](body);
 }
 function settingsTick() {
   if (section !== 'cameras') return;
@@ -3074,8 +3100,12 @@ async function scanNetwork() {
 
 // Common RTSP URL formats. {auth} = user:password@
 const BRANDS = [
-  ['hikvision', 'Hikvision / Annke / HiLook', 554, '/Streaming/Channels/{ch}01', '/Streaming/Channels/{ch}02'],
-  ['dahua', 'Dahua / Amcrest / Lorex', 554, '/cam/realmonitor?channel={ch}&subtype=0', '/cam/realmonitor?channel={ch}&subtype=1'],
+  ['hikvision', 'Hikvision / Annke / HiLook / HiWatch', 554, '/Streaming/Channels/{ch}01', '/Streaming/Channels/{ch}02'],
+  ['hikold', 'Hikvision (older firmware)', 554, '/h264/ch{ch}/main/av_stream', '/h264/ch{ch}/sub/av_stream'],
+  ['dahua', 'Dahua', 554, '/cam/realmonitor?channel={ch}&subtype=0', '/cam/realmonitor?channel={ch}&subtype=1'],
+  ['amcrest', 'Amcrest', 554, '/cam/realmonitor?channel={ch}&subtype=0', '/cam/realmonitor?channel={ch}&subtype=1'],
+  ['lorex', 'Lorex (Dahua-based)', 554, '/cam/realmonitor?channel={ch}&subtype=0', '/cam/realmonitor?channel={ch}&subtype=1'],
+  ['imou', 'Imou', 554, '/cam/realmonitor?channel={ch}&subtype=0', '/cam/realmonitor?channel={ch}&subtype=1'],
   ['reolink', 'Reolink (H.264)', 554, '/h264Preview_0{ch}_main', '/h264Preview_0{ch}_sub'],
   ['reolink265', 'Reolink (H.265 / 4K)', 554, '/Preview_0{ch}_main', '/Preview_0{ch}_sub'],
   ['tapo', 'TP-Link Tapo / VIGI', 554, '/stream1', '/stream2'],
@@ -3087,7 +3117,13 @@ const BRANDS = [
   ['ezviz', 'EZVIZ (password = verification code)', 554, '/h264/ch{ch}/main/av_stream', '/h264/ch{ch}/sub/av_stream'],
   ['eufy', 'Eufy (RTSP turned on)', 554, '/live0', ''],
   ['wyze', 'Wyze (RTSP firmware)', 554, '/live', ''],
-  ['onvif', 'Generic ONVIF', 554, '/onvif1', '/onvif2'],
+  ['milesight', 'Milesight', 554, '/main', '/sub'],
+  ['bosch', 'Bosch', 554, '/video?inst=1', '/video?inst=2'],
+  ['vivotek', 'Vivotek', 554, '/live.sdp', '/live2.sdp'],
+  ['panasonic', 'Panasonic / i-PRO', 554, '/MediaInput/h264/stream_1', '/MediaInput/h264/stream_2'],
+  ['instar', 'INSTAR', 554, '/11', '/12'],
+  ['dlink', 'D-Link', 554, '/live1.sdp', '/live2.sdp'],
+  ['onvif', 'Generic ONVIF (Vstarcam, Sricam …)', 554, '/onvif1', '/onvif2'],
   ['generic', 'Other (stream1 / stream2)', 554, '/stream1', '/stream2'],
 ];
 function brandUrl(brand, which) {
@@ -3178,6 +3214,12 @@ async function openCameraDialog(id, clone) {
         <label for="c-transport">RTSP transport</label>
         <div><select id="c-transport"><option value="tcp">TCP (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
+        <h3>Live view</h3>
+        ${(() => { const v = c.view || {}, l = status.live, fpsOpts = (cur, def) => [0, 1, 2, 5, 10, 15, 20, 25, 30].map(f => `<option value="${f}" ${f === (cur || 0) ? 'selected' : ''}>${f ? f + ' fps' : 'Default (' + def + ')'}</option>`).join('');
+          return `<label for="c-vq">Grid picture</label><div><select id="c-vq"><option value="auto" ${v.grid_quality !== 'main' ? 'selected' : ''}>Sub-stream (light)</option><option value="main" ${v.grid_quality === 'main' ? 'selected' : ''}>Full quality</option></select></div>
+        <label for="c-vg">Grid frame rate</label><div><select id="c-vg">${fpsOpts(v.grid_fps, l.fps)}</select></div>
+        <label for="c-vh">Full-screen frame rate</label><div><select id="c-vh">${fpsOpts(v.hd_fps, l.hd_fps)}</select>
+          <div class="hint">“Default” follows Settings → Live view &amp; display.</div></div>`; })()}
       </div>
 
       <div data-tab="recording" class="form" hidden>
@@ -3308,8 +3350,6 @@ async function openCameraDialog(id, clone) {
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
       <div data-tab="zones" hidden>
-        <div class="hint" style="margin-bottom:8px">Like Frigate and Blue Iris: <b>areas</b> (an object counts as inside when its feet / wheels are) and <b>lines</b> objects cross.
-          Use them to alert only for the driveway, notice people crossing the gate, someone hanging around the porch, or a parcel left (or something taken) at the door.</div>
         <div class="row" style="margin-bottom:8px"><button type="button" id="z-add-area">＋ Area</button><button type="button" id="z-add-line">＋ Line</button>
           <span class="muted" id="z-msg">Click on the picture to place the corners; click the first corner (or Done) to finish.</span><button type="button" id="z-done" hidden class="primary">Done</button></div>
         <div class="surface zone-ed" id="z-prev"><img alt=""><svg id="z-svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
@@ -3530,14 +3570,14 @@ function readOsd(raw) {
   const f = val('o-fmt2') === 'custom' ? val('o-fmt2-c').trim() : val('o-fmt2');
   return {custom: chk('o-custom'), show_name: chk('o-name'), name_corner: val('o-name-c'), show_clock: chk('o-clock'), clock_corner: val('o-clock-c'), clock_format: f,
     show_status: chk('o-status'), status_corner: val('o-status-c'), show_detections: chk('o-detections'), detections_corner: val('o-detections-c'),
-    show_fps: chk('o-fps'), fps_corner: val('o-fps-c'), text: val('o-text').trim(), text_corner: val('o-text-c')};
+    show_fps: chk('o-fps'), fps_corner: val('o-fps-c'), show_res: chk('o-res'), res_corner: val('o-res-c'), text: val('o-text').trim(), text_corner: val('o-text-c')};
 }
 let osdPrevUnbind = null;
 function setupOsdTab(c, camId) {
   const prev = $('o-prev');
   if (!CLOCK_FORMATS.includes(c.osd.clock_format) && c.osd.clock_format) { $('o-fmt2').value = 'custom'; $('o-fmt2-c').hidden = false; }
   const live = camId ? cam(camId) : null;
-  const ctrls = ['o-name', 'o-name-c', 'o-clock', 'o-clock-c', 'o-status', 'o-status-c', 'o-detections', 'o-detections-c', 'o-fps', 'o-fps-c', 'o-fmt2', 'o-fmt2-c', 'o-text', 'o-text-c'];
+  const ctrls = ['o-name', 'o-name-c', 'o-clock', 'o-clock-c', 'o-status', 'o-status-c', 'o-detections', 'o-detections-c', 'o-fps', 'o-fps-c', 'o-res', 'o-res-c', 'o-fmt2', 'o-fmt2-c', 'o-text', 'o-text-c'];
   osdOwn = null;
   const showFollow = () => {
     const custom = chk('o-custom');
@@ -3545,10 +3585,10 @@ function setupOsdTab(c, camId) {
       // Following Settings → Live view & display: show those values, read-only.
       if (osdOwn === null || $('o-name').disabled === false) osdOwn = readOsd(true);
       const g = osdFor({osd: {custom: false}});
-      for (const k of ['name', 'clock', 'status', 'detections', 'fps']) { $('o-' + k).checked = !!g['show_' + k]; $('o-' + k + '-c').value = g[k + '_corner']; }
+      for (const k of ['name', 'clock', 'status', 'detections', 'fps', 'res']) { $('o-' + k).checked = !!g['show_' + k]; $('o-' + k + '-c').value = g[k + '_corner'] || 'tl'; }
       $('o-fmt2').value = ''; $('o-fmt2-c').hidden = true;
     } else if (osdOwn && $('o-name').disabled) {
-      for (const k of ['name', 'clock', 'status', 'detections', 'fps']) { $('o-' + k).checked = !!osdOwn['show_' + k]; $('o-' + k + '-c').value = osdOwn[k + '_corner']; }
+      for (const k of ['name', 'clock', 'status', 'detections', 'fps', 'res']) { $('o-' + k).checked = !!osdOwn['show_' + k]; $('o-' + k + '-c').value = osdOwn[k + '_corner'] || 'tl'; }
     }
     ctrls.forEach(id => { if ($(id)) $(id).disabled = !custom; });
     paintCorners();
@@ -3627,7 +3667,7 @@ function collectCamera() {
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
     timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true,
     osd: readOsd(),
-    view: (cameraCfgs.find(x => x.id === editingId) || {}).view || {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
+    view: {grid_quality: val('c-vq') || 'auto', grid_fps: +val('c-vg') || 0, hd_fps: +val('c-vh') || 0},
     ptz: {enabled: chk('p-on'), host: val('p-host').trim(), port: Math.round(num('p-port')) || 80, username: val('p-user').trim(), password: $('p-pass').value,
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
@@ -3962,11 +4002,11 @@ function renderDisplay(body) {
     <label for="g-fmt">Date &amp; time format</label><div><select id="g-fmt">${CLOCK_FORMATS.map(f => `<option ${f === d.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom" ${custom ? 'selected' : ''}>Custom…</option></select>
       <input type="text" id="g-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
       <div class="hint">Preview: <b id="g-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>
-    <label for="g-tilefit">Video in dashboard tiles</label><div><select id="g-tilefit">
+    <label for="g-tilefit">Camera pictures</label><div><select id="g-tilefit">
       <option value="stretch" ${d.tile_fit === 'stretch' ? 'selected' : ''}>Stretch to fill the box</option>
       <option value="crop" ${d.tile_fit === 'crop' ? 'selected' : ''}>Zoom to fill (trims the edges)</option>
       <option value="fit" ${d.tile_fit === 'fit' ? 'selected' : ''}>Show the whole picture (black bars)</option></select>
-      <div class="hint">For cameras whose picture shape differs from the tile (e.g. 4:3 sub-streams).</div></div>
+      <div class="hint">For cameras whose picture shape differs from the box (e.g. 4:3 sub-streams): in the grid, the camera view and the previews in Settings.</div></div>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
   const fmt = () => val('g-fmt') === 'custom' ? val('g-custom') : val('g-fmt');
   const prev = () => $('g-prev').textContent = fmtDate(new Date(), fmt());
@@ -3980,7 +4020,8 @@ function renderDisplay(body) {
     const fake = {...c0, sound: false, osd: {...readOsdItems('go'), custom: true, clock_format: fmt()}};
     gp.insertAdjacentHTML('beforeend', overlayHtml(fake, 'sub', true));
     gp.querySelectorAll('.ov-alert').forEach(a => a.innerHTML = `<span class="alertbadge">${labelIcon('person')} person</span>`);
-    gp.querySelectorAll('.ov-fps').forEach(a => a.textContent = '15 fps · 640×360');
+    gp.querySelectorAll('.ov-fps').forEach(a => a.textContent = '15.0 fps');
+    gp.querySelectorAll('.ov-res').forEach(a => a.textContent = '640×360 H264');
     gp.querySelectorAll('[data-osd]').forEach(el => el.classList.add('osd-drag'));
   };
   $('f-display').addEventListener('input', redrawG);
@@ -4136,19 +4177,31 @@ async function renderHardware(body) {
 // ---------- cloud ----------
 function renderCloud(body) {
   const c = settings.cloud;
-  let method = c.remote ? (/^([a-zA-Z]:[\\/]|\\\\|\/)/.test(c.remote.trim()) ? 'folder' : 'rclone') : 'folder';
-  body.innerHTML = `<form class="card" id="f-cloud"><h2>Cloud backup</h2>
-    <p class="muted" style="margin-top:0">Keeps a copy of your alerts (or all recordings) in the cloud, so they're safe even if this computer is stolen or breaks. Everything also stays on this computer.</p>
+  let method = !c.remote ? 'folder' : /^ftp:\/\//.test(c.remote.trim()) ? 'ftp' : (/^([a-zA-Z]:[\\/]|\\\\|\/)/.test(c.remote.trim()) ? 'folder' : 'rclone');
+  const ftp = (() => { const m = /^ftp:\/\/([^/:]+)(?::(\d+))?\/?(.*)$/.exec(c.remote.trim()); return m ? {host: m[1], port: m[2] || '21', folder: m[3]} : {host: '', port: '21', folder: 'GAZE'}; })();
+  body.innerHTML = `<form class="card" id="f-cloud"><h2>Backup — cloud or NAS</h2>
+    <p class="muted" style="margin-top:0">Keeps a copy of your alerts (or all recordings) in the cloud or on a NAS, so they're safe even if this computer is stolen or breaks. Everything also stays on this computer.</p>
     <div class="cl-status" id="cl-status"></div>
     <h3>1. Where to back up</h3>
     <div class="radio-cards cl-methods">
-      <label><input type="radio" name="cl-m" value="folder" ${method === 'folder' ? 'checked' : ''}><b>A synced folder — easiest</b>
-        <small>If Google Drive for desktop, OneDrive or Dropbox is installed on this PC, pick its folder. GAZE copies the files there and that app uploads them. Nothing else to install.</small></label>
+      <label><input type="radio" name="cl-m" value="folder" ${method === 'folder' ? 'checked' : ''}><b>A folder or NAS shared folder — easiest</b>
+        <small>A NAS's shared folder (\\\\NAS\\cameras), another drive, or the folder of Google Drive for desktop, OneDrive or Dropbox (that app uploads what GAZE copies there). Nothing else to install.</small></label>
+      <label><input type="radio" name="cl-m" value="ftp" ${method === 'ftp' ? 'checked' : ''}><b>A NAS over FTP</b>
+        <small>Synology, QNAP, a router's USB drive… anything with an FTP server on your network. Built in, nothing to install.</small></label>
       <label><input type="radio" name="cl-m" value="rclone" ${method === 'rclone' ? 'checked' : ''}><b>A cloud account through rclone</b>
         <small>No sync app needed; works with Google Drive, OneDrive, Dropbox, Amazon S3, Backblaze B2 and 70+ more. Needs the free rclone program set up once.</small></label>
     </div>
     <div class="form" id="cl-folder">
-      <label for="cl-dir">Synced folder</label><div class="row"><input type="text" id="cl-dir" value="${method === 'folder' ? esc(c.remote) : ''}" placeholder="e.g. C:\\Users\\you\\Google Drive\\GAZE" style="flex:1"><button type="button" id="cl-pick">Browse…</button></div>
+      <label for="cl-dir">Folder</label><div class="row"><input type="text" id="cl-dir" value="${method === 'folder' ? esc(c.remote) : ''}" placeholder="e.g. \\\\NAS\\cameras or C:\\Users\\you\\Google Drive\\GAZE" style="flex:1"><button type="button" id="cl-pick">Browse…</button></div>
+    </div>
+    <div class="form" id="cl-share">
+      <label for="cl-suser">NAS login</label><div class="row"><input type="text" id="cl-suser" value="${esc(c.user || '')}" placeholder="user name (only if the share asks)" style="flex:1" autocomplete="off"><input type="password" id="cl-spass" placeholder="${c.has_password ? 'Saved – leave empty to keep' : 'password'}" style="flex:1" autocomplete="new-password"></div>
+    </div>
+    <div class="form" id="cl-ftp">
+      <label for="cl-fhost">NAS address</label><div class="row"><input type="text" id="cl-fhost" value="${esc(ftp.host)}" placeholder="e.g. 192.168.1.20 or nas.local" style="flex:3"><input type="number" id="cl-fport" value="${esc(ftp.port)}" min="1" max="65535" style="flex:1" title="FTP port (21)"></div>
+      <label for="cl-ffold">Folder</label><div><input type="text" id="cl-ffold" value="${esc(ftp.folder)}" placeholder="e.g. Cameras/GAZE"><div class="hint">Made if it doesn't exist. Each camera gets its own folder inside.</div></div>
+      <label for="cl-fuser">Login</label><div class="row"><input type="text" id="cl-fuser" value="${esc(c.user || '')}" placeholder="user name" style="flex:1" autocomplete="off"><input type="password" id="cl-fpass" placeholder="${c.has_password ? 'Saved – leave empty to keep' : 'password'}" style="flex:1" autocomplete="new-password"></div>
+      <span></span><div class="hint">Turn FTP on in the NAS first (Synology: Control Panel → File Services → FTP). Plain FTP, as NAS boxes offer it at home: use it on your own network.</div>
     </div>
     <div class="form" id="cl-rclone">
       <label>Step 1</label><div>Install rclone from <a href="https://rclone.org/downloads/" target="_blank" rel="noopener">rclone.org</a>.
@@ -4162,13 +4215,21 @@ function renderCloud(body) {
         <option value="events" ${c.upload === 'events' ? 'selected' : ''}>All alerts, including motion-only</option>
         <option value="all" ${c.upload === 'all' ? 'selected' : ''}>Everything, including 24/7 recordings (needs a fast upload and lots of cloud space)</option></select></div></div>
     <h3>3. Turn it on</h3>
-    <div class="form"><span></span><label class="check"><input type="checkbox" id="cl-on" ${c.enabled ? 'checked' : ''}> Back up to the cloud</label></div>
+    <div class="form"><span></span><label class="check"><input type="checkbox" id="cl-on" ${c.enabled ? 'checked' : ''}> Back up</label></div>
     <div class="actions"><button type="button" id="cl-test">Test</button><button class="primary">Save</button></div><div id="cl-result" style="margin-top:10px"></div></form>`;
-  const sync = () => { method = document.querySelector('input[name=cl-m]:checked').value; $('cl-folder').hidden = method !== 'folder'; $('cl-rclone').hidden = method !== 'rclone'; };
+  const sync = () => {
+    method = document.querySelector('input[name=cl-m]:checked').value;
+    $('cl-folder').hidden = method !== 'folder'; $('cl-rclone').hidden = method !== 'rclone'; $('cl-ftp').hidden = method !== 'ftp';
+    $('cl-share').hidden = !(method === 'folder' && /^\\\\/.test(val('cl-dir').trim()));
+  };
+  $('cl-dir').addEventListener('input', sync);
   document.querySelectorAll('input[name=cl-m]').forEach(r => r.onchange = sync); sync();
   if (method === 'rclone' && c.remote) { const [acc, ...rest] = c.remote.split(':'); $('cl-acc').innerHTML += `<option value="${esc(acc)}" selected>${esc(acc)}</option>`; $('cl-sub').value = rest.join(':'); }
-  const remote = () => method === 'folder' ? val('cl-dir').trim() : (val('cl-acc') ? `${val('cl-acc')}:${val('cl-sub').trim()}` : '');
-  const form = () => ({enabled: chk('cl-on'), remote: remote(), upload: val('cl-what'), rclone_path: val('cl-path').trim() || 'rclone'});
+  const remote = () => method === 'folder' ? val('cl-dir').trim()
+    : method === 'ftp' ? (val('cl-fhost').trim() ? `ftp://${val('cl-fhost').trim()}${val('cl-fport') && val('cl-fport') !== '21' ? ':' + val('cl-fport') : ''}/${val('cl-ffold').trim().replace(/^\/+/, '')}` : '')
+    : (val('cl-acc') ? `${val('cl-acc')}:${val('cl-sub').trim()}` : '');
+  const login = () => method === 'ftp' ? {user: val('cl-fuser').trim(), password: val('cl-fpass')} : method === 'folder' ? {user: val('cl-suser').trim(), password: val('cl-spass')} : {user: '', password: ''};
+  const form = () => ({enabled: chk('cl-on'), remote: remote(), ...login(), upload: val('cl-what'), rclone_path: val('cl-path').trim() || 'rclone'});
   const result = (ok, msg) => $('cl-result').innerHTML = `<span class="${ok ? 'ok' : 'err'}">${ok ? '✓' : '✗'} ${esc(msg)}</span>`;
   $('cl-pick').onclick = async () => { const p = await pickFolder(val('cl-dir'), 'Choose the synced folder'); if (p) $('cl-dir').value = p; };
   $('cl-check').onclick = async () => {
@@ -4178,7 +4239,7 @@ function renderCloud(body) {
     $('cl-acc').innerHTML = '<option value="">Choose the account…</option>' + r.remotes.map(x => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('');
     result(true, r.remotes.length ? `rclone works — ${r.remotes.length} account${r.remotes.length === 1 ? '' : 's'} found. Choose one in step 3.` : 'rclone works, but no account is set up yet — do step 2, then Check again.');
   };
-  $('f-cloud').onsubmit = async (e) => { e.preventDefault(); if (chk('cl-on') && !remote()) return result(false, method === 'folder' ? 'Choose the synced folder first.' : 'Choose the rclone account first.'); await saveSettings({cloud: form()}); paintCloudStatus(); };
+  $('f-cloud').onsubmit = async (e) => { e.preventDefault(); if (chk('cl-on') && !remote()) return result(false, method === 'folder' ? 'Choose the folder first.' : method === 'ftp' ? 'Enter the NAS address first.' : 'Choose the rclone account first.'); await saveSettings({cloud: form()}); paintCloudStatus(); };
   $('cl-test').onclick = async () => {
     $('cl-result').innerHTML = '<span class="muted">Testing…</span>';
     const r = await api('api/cloud/test', {method: 'POST', json: form()}).catch(e => ({ok: false, message: e.message}));

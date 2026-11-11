@@ -1002,7 +1002,7 @@ pub struct MotionObject {
     pub y: f32,
     pub w: f32,
     pub h: f32,
-    /// Size in pixels of a 640×360 picture (like Blue Iris' object size).
+    /// Size in pixels of a 640×360 picture.
     pub size: u32,
 }
 
@@ -1042,7 +1042,7 @@ impl MotionSettings {
     }
 }
 
-/// Blue Iris-style motion detection on a 4× downscaled grey image:
+/// Motion detection on a 4× downscaled grey image:
 /// pixels that differ from a slowly updated background by more than the
 /// minimum contrast are grouped into connected objects; objects smaller than
 /// the minimum size are ignored; motion must last the make time (and,

@@ -124,7 +124,7 @@
 **Major**
 - **AI object detection** (built-in, local server or cloud), alerts with clips and a pre-alert buffer.
 - **Video wall and camera groups**, drag-and-drop dashboard, multi-camera timeline with time-lapse previews.
-- **PTZ control**, per-camera on-screen display, Blue Iris-style motion detection.
+- **PTZ control**, per-camera on-screen display, finer motion detection settings.
 
 **Smaller changes**
 - One shared connection per camera stream, system monitor and logs, playback conversion for H.265, fixes.

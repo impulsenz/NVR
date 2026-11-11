@@ -1,6 +1,8 @@
-//! Optional backup of recordings to the cloud, two ways:
-//! - **a synced folder** on this computer (Google Drive, OneDrive or Dropbox
-//!   for desktop): files are copied there and that app uploads them;
+//! Optional backup of recordings, three ways:
+//! - **a folder or network share**: a folder synced by a cloud app (Google
+//!   Drive, OneDrive or Dropbox for desktop), another drive, or a NAS's
+//!   shared folder (`\\NAS\cameras`, with its login if it needs one);
+//! - **a NAS over FTP** (`ftp://nas.local/Cameras`), built in;
 //! - **rclone** (Google Drive, OneDrive, Dropbox, S3, Backblaze B2, … — anything
 //!   rclone supports), no sync app needed.
 //!
@@ -89,9 +91,55 @@ fn copy_local(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A NAS's shared folder that needs a login: connect to it (Windows), so
+/// copies there work, also when GAZE runs as a service.
+#[cfg(windows)]
+async fn connect_share(cfg: &CloudConfig) {
+    let r = cfg.remote.trim();
+    if !r.starts_with("\\\\") || cfg.user.trim().is_empty() {
+        return;
+    }
+    // \\server\share
+    let share: String = r
+        .split('\\')
+        .filter(|p| !p.is_empty())
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("\\");
+    let share = format!("\\\\{share}");
+    let _ = crate::load::cmd("net")
+        .args([
+            "use",
+            &share,
+            &cfg.password,
+            &format!("/user:{}", cfg.user.trim()),
+            "/persistent:no",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await;
+}
+#[cfg(not(windows))]
+async fn connect_share(_cfg: &CloudConfig) {}
+
 /// Check that the destination is reachable.
 pub async fn test(cfg: &CloudConfig) -> Result<String> {
+    if crate::ftp::is_ftp(&cfg.remote) {
+        let t = crate::ftp::parse(&cfg.remote)
+            .ok_or_else(|| anyhow::anyhow!("enter the NAS like ftp://192.168.1.20/Cameras"))?;
+        crate::ftp::test(&t, &cfg.user, &cfg.password).await?;
+        return Ok(format!(
+            "Connected to {} — GAZE can save in {}",
+            t.host,
+            if t.folder.is_empty() {
+                "/".to_string()
+            } else {
+                format!("/{}", t.folder)
+            }
+        ));
+    }
     if is_local(&cfg.remote) {
+        connect_share(cfg).await;
         let dir = PathBuf::from(cfg.remote.trim());
         std::fs::create_dir_all(&dir)
             .map_err(|e| anyhow::anyhow!("can't use {}: {e}", dir.display()))?;
@@ -194,6 +242,9 @@ pub async fn run(mgr: Arc<Manager>) {
             continue;
         }
         let remote = cfg.cloud.remote.trim().trim_end_matches('/').to_string();
+        if is_local(&remote) {
+            connect_share(&cfg.cloud).await;
+        }
         let stores = mgr.event_stores();
         for cam in &cfg.cameras {
             let dir = cfg.camera_dir(cam);
@@ -211,7 +262,21 @@ pub async fn run(mgr: Arc<Manager>) {
                     j.pause_point().await;
                     j.step(rel.clone());
                 }
-                let res = if is_local(&remote) {
+                let res = if crate::ftp::is_ftp(&remote) {
+                    match crate::ftp::parse(&remote) {
+                        Some(t) => {
+                            crate::ftp::upload(
+                                &t,
+                                &cfg.cloud.user,
+                                &cfg.cloud.password,
+                                &path,
+                                &format!("{}/{rel}", cam.id),
+                            )
+                            .await
+                        }
+                        None => Err(anyhow::anyhow!("the FTP address isn't valid")),
+                    }
+                } else if is_local(&remote) {
                     let dest = PathBuf::from(&remote).join(&cam.id).join(&rel);
                     let p = path.clone();
                     tokio::task::spawn_blocking(move || copy_local(&p, &dest))

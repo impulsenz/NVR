@@ -139,7 +139,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
             put(update_camera).delete(delete_camera),
         )
         .route("/api/cameras/{id}/pause", post(pause))
-        .route("/api/cameras/{id}/view", put(set_view))
         .route("/api/cameras/{id}/ptz/move", post(ptz_move))
         .route("/api/cameras/{id}/device", get(device_get))
         .route("/api/cameras/{id}/device/reboot", post(device_reboot))
@@ -392,10 +391,13 @@ async fn download_logs(req: Request) -> Response {
 async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_token = !cfg.notify.token.is_empty();
+    let has_cloud_password = !cfg.cloud.password.is_empty();
     cfg.server.password.clear();
     cfg.notify.token.clear();
+    cfg.cloud.password.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["notify"]["has_token"] = json!(has_token);
+    v["cloud"]["has_password"] = json!(has_cloud_password);
     v.as_object_mut().unwrap().remove("cameras");
     Json(v).into_response()
 }
@@ -785,6 +787,7 @@ async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Respon
         cfg.server.username.clear();
         // Every stored secret: API keys, notification tokens, camera logins.
         cfg.notify.token.clear();
+        cfg.cloud.password.clear();
         for c in &mut cfg.cameras {
             c.url = mask_url(&c.url).replace(":****@", ":PASSWORD@");
             c.live_url = mask_url(&c.live_url).replace(":****@", ":PASSWORD@");
@@ -905,17 +908,6 @@ async fn delete_camera(
     Query(q): Query<DeleteQuery>,
 ) -> Response {
     match m.delete_camera(&id, q.delete_recordings).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => bad(e),
-    }
-}
-
-async fn set_view(
-    State(m): App,
-    Path(id): Path<String>,
-    Json(v): Json<crate::config::ViewConfig>,
-) -> Response {
-    match m.set_camera_view(&id, v).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
     }
@@ -1350,7 +1342,12 @@ async fn cloud_remotes(Json(c): Json<crate::config::CloudConfig>) -> Response {
     }
 }
 
-async fn cloud_test(Json(c): Json<crate::config::CloudConfig>) -> Response {
+async fn cloud_test(State(m): App, Json(mut c): Json<crate::config::CloudConfig>) -> Response {
+    // The saved password only goes to the saved destination.
+    let saved = m.config().cloud;
+    if c.password.is_empty() && c.remote.trim() == saved.remote.trim() {
+        c.password = saved.password;
+    }
     match crate::cloud::test(&c).await {
         Ok(msg) => Json(json!({ "ok": true, "message": msg })).into_response(),
         Err(e) => Json(json!({ "ok": false, "message": format!("{e:#}") })).into_response(),
@@ -1847,43 +1844,48 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
         let mut job: Option<crate::jobs::Job> = None;
         if force || m.config().storage.prebuild_timelapse {
             let since = Local::now() - chrono::Duration::hours(24);
-            let mut todo: Vec<(
+            type Todo = (
                 Arc<crate::manager::CameraRuntime>,
                 &'static str,
                 String,
                 DateTime<Local>,
-            )> = Vec::new();
+                DateTime<Local>,
+            );
+            let mut todo: Vec<Todo> = Vec::new();
             for c in m.cameras() {
-                // Cameras with a light timeline copy: previews from that
-                // (cheap, also for the file still being recorded, refreshed
-                // each round). Otherwise from the recordings themselves.
-                let copies = library::timeline_recordings(&c);
-                if !copies.is_empty() {
-                    for r in copies.iter().filter(|r| r.end >= since) {
-                        todo.push((c.clone(), "tl", r.name.clone(), r.start));
+                // The light timeline copies (cheap; also the file still being
+                // recorded, refreshed each round), and the recordings of any
+                // time without a copy (e.g. while the copy was reconnecting).
+                let copies: Vec<_> = library::timeline_recordings(&c)
+                    .into_iter()
+                    .filter(|r| r.end >= since)
+                    .collect();
+                for r in &copies {
+                    todo.push((c.clone(), "tl", r.name.clone(), r.start, r.end));
+                }
+                for r in library::recordings(&c).iter().filter(|r| r.end >= since) {
+                    // Skip the file still being written (it keeps growing).
+                    if (Local::now() - r.end).num_seconds() < 30 {
+                        continue;
                     }
-                } else {
-                    for r in library::recordings(&c).iter().filter(|r| r.end >= since) {
-                        // Skip the file still being written (it keeps growing).
-                        if (Local::now() - r.end).num_seconds() < 30 {
-                            continue;
-                        }
-                        todo.push((c.clone(), "rec", r.name.clone(), r.start));
+                    let covered = copies.iter().any(|t| {
+                        t.start <= r.start + chrono::Duration::seconds(5)
+                            && t.end >= r.end - chrono::Duration::seconds(5)
+                    });
+                    if !covered {
+                        todo.push((c.clone(), "rec", r.name.clone(), r.start, r.end));
                     }
                 }
                 for e in c.events.between(since, Local::now()) {
                     if let Some(clip) = e.clip {
-                        todo.push((c.clone(), "clip", clip, e.start));
+                        todo.push((c.clone(), "clip", clip, e.start, e.end));
                     }
                 }
             }
-            todo.sort_by(|a, b| b.3.cmp(&a.3));
-            for (c, kind, name, start) in todo {
-                if !force && !m.config().storage.prebuild_timelapse {
-                    break;
-                }
-                let Ok(src) = media_path(&c, kind, &name) else {
-                    continue;
+            // Only what isn't ready yet, newest first.
+            todo.retain(|(c, kind, name, ..)| {
+                let Ok(src) = media_path(c, kind, name) else {
+                    return false;
                 };
                 let first = src
                     .parent()
@@ -1891,17 +1893,38 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                     .join(".thumbs")
                     .join(format!("{name}.sprite-000.jpg"));
                 let meta = first.with_file_name(format!("{name}.sprite.json"));
-                if fresh(&first, &src) && sprite_meta_current(&meta) {
-                    continue;
+                !(fresh(&first, &src) && sprite_meta_current(&meta))
+            });
+            todo.sort_by(|a, b| b.3.cmp(&a.3));
+            if !todo.is_empty() {
+                job.get_or_insert_with(|| {
+                    crate::jobs::start("previews", "Time-lapse previews (last 24 hours)")
+                })
+                .total(todo.len() as u64);
+            }
+            for (c, kind, name, start, end) in todo {
+                if !force && !m.config().storage.prebuild_timelapse {
+                    break;
                 }
                 let j = job.get_or_insert_with(|| {
                     crate::jobs::start("previews", "Time-lapse previews (last 24 hours)")
                 });
                 j.waiting();
-                // Only when the computer has room to spare.
-                crate::load::wait_for_cpu(75, std::time::Duration::from_secs(600)).await;
+                // Room to spare first, but never held up for long: the
+                // newest footage should always be ready to scrub.
+                crate::load::wait_for_cpu(90, std::time::Duration::from_secs(60)).await;
                 j.pause_point().await;
-                j.step(format!("{} — {}", c.cfg.name, start.format("%H:%M")));
+                j.step(format!(
+                    "{} — {} {}–{}",
+                    c.cfg.name,
+                    match kind {
+                        "tl" => "timeline copy",
+                        "clip" => "alert clip",
+                        _ => "recording",
+                    },
+                    start.format("%H:%M:%S"),
+                    end.format("%H:%M:%S")
+                ));
                 // Let people scrubbing the timeline go first.
                 while THUMB_JOBS.available_permits() < 3 {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -1914,8 +1937,8 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                 }
                 if ensure_sprite(&m, &c, kind, &name).await.is_ok() {
                     built += 1;
-                    j.done_one();
                 }
+                j.done_one();
             }
         }
         drop(job);

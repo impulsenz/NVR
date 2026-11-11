@@ -30,7 +30,7 @@ viewing, finding footage, and managing everything, all from the browser.
   (sub-stream), separately for the grid and the opened camera; each browser remembers the choice.
 
 **Recording**
-- Per-camera modes, like Blue Iris:
+- Per-camera modes:
   - **HD 24/7**
   - **Sub-stream 24/7** (saves space)
   - **Substream 24/7 plus HD AI alerts**
@@ -54,7 +54,7 @@ viewing, finding footage, and managing everything, all from the browser.
   it to other cameras in one click.
 
 **Motion detection & AI**
-- Blue Iris-style motion detection: **min. contrast**, **min. object size** in pixels, **make time**,
+- Motion detection: **min. contrast**, **min. object size** in pixels, **make time**,
   **object must travel**, and **areas to ignore** painted on the picture. A live readout shows how big
   the moving objects are, and *Show motion* draws boxes around them. Lighting changes are ignored.
 - AI checks run **only while there is motion**: no motion, nothing is sent to the AI.
@@ -79,7 +79,7 @@ viewing, finding footage, and managing everything, all from the browser.
   confident answer is kept.
 - Each recognized object gets a **colour**.
 - "Test on this camera" shows the camera's picture with detection boxes.
-- **Zones** (camera settings → Zones), like Frigate and Blue Iris: draw areas and lines on the picture.
+- **Zones** (camera settings → Zones): draw areas and lines on the picture.
   Alert only for objects inside an area, when something **crosses a line** (in either or one direction),
   when someone **lingers**, or when an **item is left or taken** (packages on the porch).
 - **Stationary objects** (camera settings → AI): a car parked in the driveway alerts when it arrives,
@@ -161,7 +161,7 @@ viewing, finding footage, and managing everything, all from the browser.
 - Add, edit, **clone** and delete cameras in the browser.
 - **Restart a camera** from GAZE (camera editor → General), for cameras that answer over ONVIF.
 - **Camera brand quick setup**: pick the brand, enter the IP and login, and the main and sub-stream URLs
-  are filled in for you. 15 common formats are included.
+  are filled in for you. Formats for Hikvision, Dahua, Amcrest, Lorex, Imou, Reolink, Tapo, Uniview, Axis, Hanwha, Milesight, Bosch, Vivotek, Panasonic, Foscam, Swann, EZVIZ, INSTAR, D-Link, Eufy, Wyze and generic ONVIF cameras are included.
 - **Test connection** plays both streams live and shows their codec, resolution and frame rate.
 - **Export / import your whole setup** (cameras, settings, layout) to restore after a reinstall.
 - GPU acceleration (NVIDIA, Intel, AMD, Apple) with automatic CPU fallback.

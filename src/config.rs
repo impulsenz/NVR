@@ -379,8 +379,13 @@ impl Default for NotifyConfig {
 pub struct CloudConfig {
     pub enabled: bool,
     pub rclone_path: String,
-    /// rclone destination, e.g. `gdrive:NVR` or `dropbox:Cameras`.
+    /// Where to: a folder or network share (`D:\Backup`, `\\NAS\cameras`),
+    /// a NAS over FTP (`ftp://nas.local/Cameras`) or an rclone destination
+    /// (`gdrive:NVR`).
     pub remote: String,
+    /// Login for the NAS (FTP, or a network share that needs one).
+    pub user: String,
+    pub password: String,
     /// "ai" (only alerts confirmed by object recognition), "events" (all alert
     /// clips and pictures, including motion-only) or "all" (every recording).
     pub upload: String,
@@ -392,6 +397,8 @@ impl Default for CloudConfig {
             enabled: false,
             rclone_path: "rclone".into(),
             remote: String::new(),
+            user: String::new(),
+            password: String::new(),
             upload: "events".into(),
         }
     }
@@ -557,7 +564,7 @@ impl Schedule {
 #[serde(default)]
 pub struct DetectConfig {
     pub motion: bool,
-    /// Blue Iris-style motion settings (sizes are in pixels of a 640×360 picture):
+    /// Motion settings (sizes are in pixels of a 640×360 picture):
     /// how different a pixel must be from the background to count as changed (1–255).
     pub min_contrast: u32,
     /// Smallest moving object that counts, in pixels.
@@ -652,6 +659,9 @@ pub struct OsdConfig {
     pub detections_corner: String,
     pub show_fps: bool,
     pub fps_corner: String,
+    /// Resolution and video format of the stream shown.
+    pub show_res: bool,
+    pub res_corner: String,
     /// Extra text, e.g. "Driveway – north".
     pub text: String,
     pub text_corner: String,
@@ -672,6 +682,8 @@ impl Default for OsdConfig {
             detections_corner: "bl".into(),
             show_fps: false,
             fps_corner: "tl".into(),
+            show_res: false,
+            res_corner: "tl".into(),
             text: String::new(),
             text_corner: "br".into(),
         }
@@ -999,6 +1011,7 @@ impl CameraConfig {
             &o.status_corner,
             &o.detections_corner,
             &o.fps_corner,
+            &o.res_corner,
             &o.text_corner,
         ] {
             if !valid_position(c) {
@@ -1235,6 +1248,7 @@ impl Config {
             &o.status_corner,
             &o.detections_corner,
             &o.fps_corner,
+            &o.res_corner,
             &o.text_corner,
         ] {
             if !valid_position(c) {
