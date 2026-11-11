@@ -156,9 +156,7 @@ impl Clip {
         std::fs::create_dir_all(&self.dir)?;
         info!("smart search: downloading {url}");
         self.status.lock().unwrap().downloading = true;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(1800))
-            .build()?;
+        let client = crate::jobs::download_client()?;
         let mut resp = client.get(url).send().await?.error_for_status()?;
         let total = resp.content_length();
         let tmp = path.with_extension("part");
@@ -184,6 +182,7 @@ impl Clip {
         }
         tokio::io::AsyncWriteExt::flush(&mut file).await?;
         drop(file);
+        crate::jobs::check_complete(&tmp, got, total.unwrap_or(0))?;
         tokio::fs::rename(&tmp, path).await?;
         let mut s = self.status.lock().unwrap();
         s.downloading = false;
@@ -218,17 +217,36 @@ impl Clip {
                 .await
                 .with_context(|| format!("downloading the smart-search model ({which})"))?;
             let need_tok = self.loaded.lock().unwrap().tokenizer.is_none();
-            let (plan, tok) =
-                tokio::task::spawn_blocking(move || -> Result<(Plan, Option<Tokenizer>)> {
-                    let plan = load(&model, visual)?;
-                    let tok = if need_tok {
-                        Some(Tokenizer::from_gz(&std::fs::read(&vocab)?)?)
-                    } else {
-                        None
-                    };
-                    Ok((plan, tok))
-                })
-                .await??;
+            // If loading this model ever brings GAZE down (a damaged file,
+            // too little memory), don't do it again on every restart.
+            let marker = model.with_extension("loading");
+            let crashes: u32 = std::fs::read_to_string(&marker).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            if crashes >= 2 {
+                anyhow::bail!(
+                    "loading the {which} model stopped GAZE twice, so smart search is paused. Choose the Standard model or free up memory, then turn smart search off and on again (Settings → Object recognition)."
+                );
+            }
+            if crashes == 1 {
+                warn!("smart search: GAZE stopped while loading the {which} model last time; downloading it again");
+                let _ = std::fs::remove_file(&model);
+                self.download(&format!("{BASE}/{}/{which}.onnx", self.model()), &model).await?;
+            }
+            let _ = std::fs::write(&marker, (crashes + 1).to_string());
+            if let Some(free) = crate::sysmon::free_memory() {
+                info!("smart search: loading the {which} model ({} MB of memory free)", free / 1_000_000);
+            }
+            let path = model.clone();
+            let (plan, tok) = crate::load::big_stack(move || -> Result<(Plan, Option<Tokenizer>)> {
+                let plan = load(&path, visual)?;
+                let tok = if need_tok {
+                    Some(Tokenizer::from_gz(&std::fs::read(&vocab)?)?)
+                } else {
+                    None
+                };
+                Ok((plan, tok))
+            })
+            .await??;
+            let _ = std::fs::remove_file(&marker);
             let mut l = self.loaded.lock().unwrap();
             if visual {
                 l.visual = Some(plan);

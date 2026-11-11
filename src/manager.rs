@@ -698,6 +698,15 @@ impl Manager {
             if a.api_key.is_empty() {
                 a.api_key = old.ai.api_key.clone();
             }
+            // Saving the AI settings gives a model that stopped GAZE while
+            // loading another chance.
+            if let Ok(rd) = std::fs::read_dir(self.data_dir.join("models")) {
+                for e in rd.flatten() {
+                    if e.path().extension().is_some_and(|x| x == "loading") {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
             cfg.ai = a;
         }
         if let Some(u) = up.update {

@@ -638,3 +638,10 @@ The command completed successfully."#;
         assert!(total > 0 && free <= total);
     }
 }
+
+/// Memory free for programs right now, in bytes.
+pub fn free_memory() -> Option<u64> {
+    let mut s = sysinfo::System::new().ok()?;
+    s.refresh_memory();
+    Some(s.available_memory()).filter(|m| *m > 0)
+}

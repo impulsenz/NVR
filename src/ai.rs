@@ -345,9 +345,7 @@ impl Ai {
             s.download_percent = Some(0.0);
         }
         std::fs::create_dir_all(&self.models_dir)?;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(600))
-            .build()?;
+        let client = crate::jobs::download_client()?;
         let mut resp = client.get(&url).send().await?.error_for_status()?;
         let total = resp.content_length();
         let tmp = path.with_extension("part");
@@ -364,6 +362,7 @@ impl Ai {
         }
         tokio::io::AsyncWriteExt::flush(&mut file).await?;
         drop(file);
+        crate::jobs::check_complete(&tmp, got, total.unwrap_or(0))?;
         tokio::fs::rename(&tmp, path).await?;
         info!(
             "AI: model saved to {} ({} MB)",

@@ -143,6 +143,26 @@ pub fn list() -> Vec<JobInfo> {
     v
 }
 
+/// A download must be as long as the server said; a connection that
+/// dropped part-way must never leave a cut-off model file behind (loading
+/// one can crash the program).
+pub fn check_complete(tmp: &std::path::Path, got: u64, total: u64) -> anyhow::Result<()> {
+    if total > 0 && got != total {
+        let _ = std::fs::remove_file(tmp);
+        anyhow::bail!("the download was cut off ({got} of {total} bytes); it will be tried again");
+    }
+    Ok(())
+}
+
+/// For downloads: give up when nothing arrives for a minute, however long
+/// the whole file takes on a slow connection.
+pub fn download_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .build()
+}
+
 /// Download a file, showing it as a task with progress.
 pub async fn download(
     what: &str,
@@ -156,9 +176,7 @@ pub async fn download(
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(1800))
-            .build()?;
+        let client = download_client()?;
         let mut resp = client.get(url).send().await?.error_for_status()?;
         let total = resp.content_length().unwrap_or(0);
         let tmp = path.with_extension("part");
@@ -171,6 +189,7 @@ pub async fn download(
         }
         tokio::io::AsyncWriteExt::flush(&mut file).await?;
         drop(file);
+        check_complete(&tmp, got, total)?;
         if got < min_bytes {
             let _ = std::fs::remove_file(&tmp);
             anyhow::bail!("the download looks wrong ({got} bytes)");

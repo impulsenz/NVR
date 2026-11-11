@@ -117,7 +117,8 @@ pub fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
 fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .user_agent(concat!("GAZE-updater/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(1800))
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(60))
         .build()?)
 }
 
