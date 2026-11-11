@@ -28,13 +28,18 @@ This guide covers:
 5. Start the program and open <http://localhost:8080>. The first visit asks
    you to create the admin account.
 
-**Updating:** **Settings → About → Updates** shows your version and the
-newest one.
-- **Update now** installs the newest version straight away. GAZE restarts
-  and the page reloads by itself.
-- **Install updates automatically** (on by default) does the same at night
-  (2–5 am) when no alert is going on.
-- This also works when GAZE runs as a Windows service.
+**Updating:** GAZE checks for a new version **every minute**. When there
+is one, a bar slides down under the header for admins:
+- **Update now** installs it straight away. GAZE restarts and the page
+  reloads by itself.
+- **What's new** shows the release notes.
+- **✕** hides the bar until the next version.
+
+**⟳ Updates**, next to your name in the header, checks right away. The same
+controls are in **Settings → About → Updates**. **Install updates
+automatically** (off by default) installs new versions as soon as they're
+found, when no alert is going on. This all works when GAZE runs as a
+Windows service too.
 
 > Moving from a version you built yourself (0.4 or older)? Those don't have
 > the updater yet. Download the new program once as above and use it instead
@@ -68,8 +73,7 @@ workflow that does it is `.github/workflows/release.yml`.
    with these files:
    - `nvr-windows-x64.exe` and `nvr-windows-x64.exe.sha256`
    - `nvr-linux-x64` and `nvr-linux-x64.sha256`
-5. That's it. Installed copies see the new version within 6 hours, or at
-   once with **Check for updates**.
+5. That's it. Installed copies see the new version within a minute.
 
 To test a build without publishing it, start the *Release* workflow by hand
 (**Actions → Release → Run workflow**). It builds both programs and attaches
@@ -123,9 +127,10 @@ installation over, because GAZE only updates to higher versions.
 ## 4. How it works
 
 **Checking:** GAZE asks GitHub for the newest release
-(`api.github.com/repos/<owner>/<repo>/releases/latest`) every 6 hours and
-when you press **Check for updates**. GitHub allows 60 such requests an hour
-per internet connection without signing in, far more than GAZE needs.
+(`api.github.com/repos/<owner>/<repo>/releases/latest`) every minute, and
+when you press **⟳ Updates**. It asks "has anything changed?" (an ETag):
+GitHub answers "no" without counting it against its limit of 60 requests an
+hour per internet connection.
 
 **Updating:**
 1. GAZE downloads the program for this system from the release.

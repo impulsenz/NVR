@@ -447,6 +447,7 @@ async function refreshStatus() {
     chip.textContent = `⬇ ${pct != null ? pct + '%' : '…'}${dls.length > 1 ? ` (+${dls.length - 1})` : ''}`;
     chip.title = dls.map(x => x.title).join('\n') + '\nClick for details (Settings → Tasks)';
   }
+  showUpdateBar(status.update);
   const ss = status.smart_search, gb = $('g-banner');
   if (ss && ss.error && status.smart_search_on && !ss.downloading) {
     gb.hidden = false; gb.innerHTML = `<b>Smart search problem:</b> ${esc(ss.error)} <a href="#settings/ai">Settings</a>`;
@@ -2350,6 +2351,49 @@ async function loadJobs() {
   const d = target.querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
 }
 
+// ---------- update notice ----------
+// A bar under the header when a newer GAZE is out (admins), until updated
+// or dismissed for that version.
+function showUpdateBar(u) {
+  const bar = $('upd-bar');
+  if (!u || !me || me.role !== 'admin') { bar.hidden = true; return; }
+  if (u.state === 'downloading' || u.state === 'installing' || u.state === 'restarting') {
+    bar.hidden = false; bar.classList.add('show');
+    bar.innerHTML = `<span>⟳ Updating to GAZE ${esc(u.latest || '')}… GAZE restarts by itself in a few seconds.</span>`;
+    if (u.state === 'restarting') waitForGazeRestart();
+    return;
+  }
+  if (!u.available || store.get('upd-dismissed', '') === u.latest) { bar.hidden = true; bar.classList.remove('show'); return; }
+  if (!bar.hidden && bar.dataset.v === u.latest) return;
+  bar.dataset.v = u.latest;
+  bar.innerHTML = `<span>🎉 <b>GAZE ${esc(u.latest)}</b> is available (you have ${esc(status.version || '')}).</span>
+    <button type="button" class="primary small" id="ub-go">Update now</button>
+    <a class="btn small" href="#settings/info">What's new</a>
+    <button type="button" class="small" id="ub-x" title="Hide until the next version">✕</button>`;
+  bar.hidden = false; requestAnimationFrame(() => bar.classList.add('show'));
+  $('ub-x').onclick = () => { store.set('upd-dismissed', u.latest); bar.classList.remove('show'); bar.hidden = true; };
+  $('ub-go').onclick = async () => {
+    if (!confirm(`Update to GAZE ${u.latest} now? GAZE restarts (a few seconds without recording).`)) return;
+    try { await api('api/update/install', {method: 'POST'}); bar.innerHTML = `<span>⟳ Downloading GAZE ${esc(u.latest)}…</span>`; } catch (e) { toast(e.message, true); }
+  };
+}
+let restartWait = null;
+function waitForGazeRestart() {
+  if (restartWait) return;
+  restartWait = setInterval(async () => {
+    try { const r = await fetch('api/update'); if (r.ok && (await r.json()).state !== 'restarting') { clearInterval(restartWait); location.reload(); } } catch (_) {}
+  }, 2000);
+}
+$('upd-btn').onclick = async () => {
+  const b = $('upd-btn'); b.disabled = true;
+  try {
+    const u = await api('api/update/check', {method: 'POST'});
+    if (u.available) { store.set('upd-dismissed', ''); showUpdateBar({available: true, latest: u.latest, state: u.state}); }
+    else toast(u.latest ? `GAZE is up to date (${u.current}).` : 'No releases found yet.');
+  } catch (e) { toast(e.message, true); }
+  b.disabled = false;
+};
+
 // ---------- Settings → Tasks ----------
 const TASK_ACTIONS = [
   ['previews', '🖼️ Rebuild previews', 'Throws away the scrub and time-lapse previews and makes the last 24 hours again. Use it if previews look wrong or black.', null,
@@ -3967,8 +4011,8 @@ async function renderInfo(body) {
     <dt>Config file</dt><dd>${esc(sysinfo.config_path)}</dd><dt>Data folder</dt><dd>${esc(sysinfo.data_dir)}</dd>
     <dt>Log file</dt><dd>${esc(sysinfo.log_file || '–')}</dd><dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd></dl></div>
     <div class="card admin-only"><h2>Updates</h2><div id="upd"></div>
-      <div class="form" style="margin-top:8px"><span></span><div><label class="check"><input type="checkbox" id="upd-auto" ${settings.update && settings.update.auto === false ? '' : 'checked'}> Install updates automatically</label>
-        <div class="hint">At night (2–5 am), when no alert is going on: GAZE downloads the new version from GitHub, checks it, swaps it in and restarts in a few seconds — also when it runs as a Windows service. Recording continues right after.</div></div>
+      <div class="form" style="margin-top:8px"><span></span><div><label class="check"><input type="checkbox" id="upd-auto" ${settings.update && settings.update.auto ? 'checked' : ''}> Install updates automatically</label>
+        <div class="hint">GAZE checks for a new version every minute. Off: a bar at the top tells you, and you choose when (⟳ Updates next to your name checks right away). On: it installs as soon as it's found, when no alert is going on — downloads, checks it, swaps it in and restarts in a few seconds (also as a Windows service).</div></div>
         <label for="upd-repo">Update from</label><div><div class="row"><span class="muted">github.com/</span><input type="text" id="upd-repo" value="${esc((settings.update && settings.update.repo) || '')}" placeholder="owner/repository" style="flex:1"><button type="button" id="upd-repo-save">Save</button></div>
           <div class="hint">Empty: the GitHub repository this copy of GAZE was built from. Enter your own (e.g. <code>you/NVR</code>) to get updates from your fork's releases — see UPDATES.md.</div></div></div></div>
     <div class="card changelog"><h2>What's new</h2><div id="chlog" class="muted">Loading…</div></div>`;

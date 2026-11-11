@@ -5,6 +5,8 @@
 - **Alert pictures in HD**: every alert's picture is remade from the full-quality footage once it's over. Faces and number plates are only read from full-quality video.
 - Alerts show just the object (“person 88%”) without colour words or dots.
 - Camera view: the status card is titled with the camera's name, with ✎ Edit next to it.
+- **Updates**: GAZE checks every minute; a bar under the header says when a new version is out (Update now / What's new / hide). ⟳ Updates next to your name checks right away. Automatic installing is now off by default and, when on, installs as soon as an update is found.
+- Faces and number plates are on by default for new installations.
 - Camera settings: ◀ ▶ buttons switch to the previous/next camera without closing the editor (it stays on the same tab and asks before dropping unsaved changes).
 - Time-lapse previews of the last 24 hours are prepared every minute (they were every 5) and the file still being recorded shows its latest preview at once instead of making you wait; previews are only removed together with their recordings (retention or low disk space).
 - The red recording dot is back on camera tiles and in Settings → Cameras.

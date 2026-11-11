@@ -642,3 +642,9 @@ ol.steps code { user-select: all; }
 .vol-wrap:hover input[type=range], .vol-wrap:focus-within input[type=range] { width: 90px; opacity: 1; }
 
 .cam-nav { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; margin-right: 8px; }
+
+/* Update notice: slides down under the header (pushes the page, covers nothing). */
+.upd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 16px; max-height: 0; overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel)); border-bottom: 1px solid var(--accent); transition: max-height .35s ease, padding .35s ease; font-size: 14px; }
+.upd-bar.show { max-height: 120px; padding: 8px 16px; }
+.upd-bar span { flex: 1; min-width: 200px; }

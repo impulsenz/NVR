@@ -287,8 +287,8 @@ impl Default for AiConfig {
             smart_search: false,
             smart_model: "ViT-B-32".into(),
             summary_frames: 4,
-            faces: false,
-            plates: false,
+            faces: true,
+            plates: true,
         }
     }
 }
@@ -297,7 +297,7 @@ impl Default for AiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct UpdateConfig {
-    /// Install new versions automatically at night (2–5 am).
+    /// Install new versions as soon as they're found (off: ask first).
     pub auto: bool,
     /// GitHub repository to update from ("owner/name"); empty = the one
     /// this program was built from.
@@ -307,7 +307,7 @@ pub struct UpdateConfig {
 impl Default for UpdateConfig {
     fn default() -> Self {
         Self {
-            auto: true,
+            auto: false,
             repo: String::new(),
         }
     }

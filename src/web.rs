@@ -291,6 +291,7 @@ async fn status(
         .collect();
     let (warnings, errors) =
         logs::buffer().problems_since(Local::now() - chrono::Duration::hours(1));
+    let upd = crate::update::status();
     Json(json!({
         "name": cfg.server.name,
         "version": env!("CARGO_PKG_VERSION"),
@@ -303,6 +304,8 @@ async fn status(
         "cameras": cameras,
         "ai": m.ai.get().status(),
         "smart_search": m.clip.status(),
+        // A newer GAZE (for the notice at the top; admins only use it).
+        "update": {"available": upd.available, "latest": upd.latest, "state": upd.state},
         // Downloads in progress (AI models, updates), for the header.
         "downloads": crate::jobs::list().into_iter()
             .filter(|j| j.kind == "download" && j.finished.is_none())

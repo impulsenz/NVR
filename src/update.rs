@@ -8,7 +8,7 @@
 //! updates on, this happens at night when no alert is going on.
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Local, Timelike};
+use chrono::{DateTime, Local};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -80,6 +80,8 @@ pub struct Status {
 }
 
 static STATUS: Mutex<Option<Status>> = Mutex::new(None);
+/// GitHub's tag for the last answer (repository, ETag).
+static ETAG: Mutex<Option<(String, String)>> = Mutex::new(None);
 /// How to restart GAZE once the new program is in place (set by main).
 static RESTART: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
@@ -130,16 +132,34 @@ pub async fn check(repo: &str) -> Result<Status> {
         s.repo = repo.to_string();
     });
     let res = async {
-        let v: Value = client()?
+        // "Has anything changed since last time?": GitHub answers 304 for
+        // nothing new, and those answers don't count against its limit of
+        // 60 checks an hour, so GAZE can check every minute.
+        let etag = ETAG
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|(r, _)| r == repo)
+            .map(|(_, e)| e);
+        let mut req = client()?
             .get(format!(
                 "{}/repos/{repo}/releases/latest",
                 std::env::var("GAZE_UPDATE_API")
                     .unwrap_or_else(|_| "https://api.github.com".into())
             ))
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await
-            .context("cannot reach GitHub")?
+            .header("Accept", "application/vnd.github+json");
+        if let Some(e) = &etag {
+            req = req.header("If-None-Match", e);
+        }
+        let resp = req.send().await.context("cannot reach GitHub")?;
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            with(|s| s.checked = Some(Local::now()));
+            return anyhow::Ok(());
+        }
+        if let Some(e) = resp.headers().get("etag").and_then(|v| v.to_str().ok()) {
+            *ETAG.lock().unwrap() = Some((repo.to_string(), e.to_string()));
+        }
+        let v: Value = resp
             .error_for_status()
             .map_err(|e| {
                 if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
@@ -315,39 +335,38 @@ pub async fn install() -> Result<()> {
     }
 }
 
-/// Background: check now and then; with automatic updates on, install at
-/// night (2–5 am) when no alert is going on.
+/// Background: check every minute; with automatic updates on, install as
+/// soon as one is found and no alert is going on.
 pub async fn run(mgr: Arc<crate::manager::Manager>) {
     clean_old();
-    tokio::time::sleep(Duration::from_secs(120)).await;
-    let mut last_check: Option<std::time::Instant> = None;
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let mut announced: Option<String> = None;
     loop {
-        if last_check.is_none_or(|t| t.elapsed() > Duration::from_secs(6 * 3600)) {
-            last_check = Some(std::time::Instant::now());
-            match check(&repo(&mgr.config().update)).await {
-                Ok(s) if s.available => {
-                    info!("update available: GAZE {}", s.latest.unwrap_or_default())
-                }
-                Ok(_) => {}
-                Err(e) => tracing::debug!("update check: {e:#}"),
+        match check(&repo(&mgr.config().update)).await {
+            Ok(s) if s.available && announced != s.latest => {
+                info!(
+                    "update available: GAZE {}",
+                    s.latest.clone().unwrap_or_default()
+                );
+                announced = s.latest;
             }
+            Ok(_) => {}
+            Err(e) => tracing::debug!("update check: {e:#}"),
         }
         let st = status();
-        let night = (2..5).contains(&Local::now().hour());
         let busy = mgr
             .cameras()
             .iter()
             .any(|c| c.detector().is_some_and(|d| d.status().event_active));
         if st.available
             && mgr.config().update.auto
-            && night
             && !busy
             && st.state == "idle"
             && let Err(e) = install().await
         {
             warn!("automatic update failed: {e:#}");
         }
-        tokio::time::sleep(Duration::from_secs(300)).await;
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
 

@@ -136,8 +136,9 @@ viewing, finding footage, and managing everything, all from the browser.
   open the timeline (older days are prepared when you open them).
 
 **Updates**
-- GAZE checks GitHub for new versions. Settings → About shows what's new and has **Update now**; with
-  *Install updates automatically* (on by default) it updates at night when no alert is going on. The new
+- GAZE checks GitHub for a new version every minute; when there is one, a bar under the header offers
+  **Update now** (⟳ Updates next to your name checks right away). With *Install updates automatically*
+  (Settings → About, off by default) it installs as soon as one is found, when no alert is going on. The new
   program is downloaded, its checksum verified, swapped in, and GAZE restarts in seconds — also when it
   runs as a Windows service. The previous version is kept until the next start.
 - **[UPDATES.md](UPDATES.md)** explains downloading, publishing a new version (GitHub builds it from a
