@@ -126,8 +126,6 @@ function singleClick(fn, delay = 260) {
   };
 }
 
-const COLOR_CSS = {black: '#111', white: '#f5f5f5', grey: '#777', silver: '#c0c4c8', red: '#dc2626', orange: '#f97316', yellow: '#facc15',
-  green: '#16a34a', blue: '#2563eb', purple: '#9333ea', pink: '#ec4899', brown: '#8b5a2b', beige: '#d6c7a1'};
 // Zoom a whole-picture thumbnail into the recognized object (the box stays the same size).
 function zoomStyle(f) {
   if (!f) return '';
@@ -148,7 +146,7 @@ function boxesHtml(ev, labels) {
   }).join('') + '</div>';
 }
 function labelTags(labels, motion) {
-  if (labels && labels.length) return labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}">${l.color ? esc(l.color) + ' ' : ''}${esc(l.label)} ${Math.round(l.score * 100)}%</span>`).join('');
+  if (labels && labels.length) return labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}">${esc(l.label)} ${Math.round(l.score * 100)}%</span>`).join('');
   return motion ? '<span class="tag motion">motion</span>' : '';
 }
 
@@ -1805,7 +1803,7 @@ function renderRecordings() {
     card.dataset.eid = it.event ? it.event.id : '';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
-    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc((l.color ? l.color + ' ' : '') + l.label)} ${Math.round(l.score * 100)}%">${l.color ? `<i class="cdot" style="background:${COLOR_CSS[l.color] || l.color}"></i>` : ''}${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
+    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc(l.label)} ${Math.round(l.score * 100)}%">${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
     card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw" style="${zoomStyle(it.event && it.event.focus)}"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
         <div class="tags">${it.kind === 'event' && !it.seen ? '<span class="tag newtag">NEW</span>' : ''}${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small op-only" data-a="del" title="Delete">✕</button></div>

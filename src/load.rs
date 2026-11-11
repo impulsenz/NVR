@@ -64,7 +64,9 @@ pub fn gpu_too_busy(what: &str) -> bool {
 /// Run heavy, deeply nested work (preparing an AI model) on its own thread
 /// with plenty of stack: Windows programs need more stack than Linux for
 /// the same work, and running out of it ends the whole program.
-pub async fn big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> anyhow::Result<T> {
+pub async fn big_stack<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> anyhow::Result<T> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
         .name("model-load".into())
@@ -72,7 +74,8 @@ pub async fn big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static
         .spawn(move || {
             let _ = tx.send(f());
         })?;
-    rx.await.map_err(|_| anyhow::anyhow!("loading stopped unexpectedly"))
+    rx.await
+        .map_err(|_| anyhow::anyhow!("loading stopped unexpectedly"))
 }
 
 /// Wait (up to `max`) while the CPU is busier than `limit` %.

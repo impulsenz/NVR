@@ -22,7 +22,11 @@ fn hd_source(
         let off = (t - cs).num_milliseconds() as f64 / 1000.0;
         return Some((rt.events.dir().join(clip), off.max(0.0)));
     }
-    // Continuous recording (full quality unless the camera records stream 2 only).
+    // Continuous recording, if it's the full-quality stream (not stream 2).
+    let hd = rt.cfg.record_mode.continuous_stream() == Some(false) || !rt.cfg.has_sub();
+    if !hd {
+        return None;
+    }
     let recs = crate::library::recordings(rt);
     let r = recs.iter().find(|r| r.start <= t && t <= r.end)?;
     Some((
@@ -222,17 +226,14 @@ async fn identify(
     let cfg = mgr.config();
     let (want_faces, want_plates) = (cfg.ai.faces, cfg.ai.plates);
     let t = e.thumb_at.unwrap_or(e.start + chrono::Duration::seconds(1));
-    let frame = match hd_source(rt, &e, t) {
-        Some((file, off)) => grab(&cfg.server.ffmpeg_path, &file, off).await?,
-        None => {
-            // No recording at that moment: the alert picture is all there is.
-            let thumb = e
-                .thumb
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("no picture"))?;
-            crate::imgutil::decode_jpeg(&std::fs::read(store.dir().join(thumb))?)?
-        }
+    // Faces and plates only from full-quality video: the small stream 2
+    // picture isn't sharp enough and gives wrong names.
+    let Some((file, off)) = hd_source(rt, &e, t) else {
+        e.identified = true;
+        store.save(e);
+        return Ok(());
     };
+    let frame = grab(&cfg.server.ffmpeg_path, &file, off).await?;
     let (fw, fh) = (frame.width as f32, frame.height as f32);
     let mut notes: Vec<String> = Vec::new();
     if want_faces {
@@ -334,38 +335,82 @@ pub async fn refresh_pictures(mgr: Arc<Manager>, days: i64) {
             e.start.format("%d/%m %H:%M:%S")
         ));
         job.done_one();
-        let t = e.thumb_at.unwrap_or(e.start + chrono::Duration::seconds(1));
-        let Some((file, off)) = hd_source(&rt, &e, t) else {
+        if sharpen(&ffmpeg, &rt, &mut e).await {
+            rt.events.save(e);
+            done += 1;
+        } else {
             skipped += 1;
-            continue;
-        };
-        let Ok(frame) = grab(&ffmpeg, &file, off).await else {
-            skipped += 1;
-            continue;
-        };
-        let name = format!("{}-hd.jpg", e.id);
-        let dir = rt.events.dir();
-        let tmp = dir.join(format!("{name}.tmp"));
-        let Ok(jpg) = frame.fit(1280).jpeg(85) else {
-            continue;
-        };
-        if std::fs::write(&tmp, jpg).is_err() || std::fs::rename(&tmp, dir.join(&name)).is_err() {
-            continue;
         }
-        if let Some(old) = e.thumb.replace(name) {
-            let _ = std::fs::remove_file(dir.join(old));
-        }
-        rt.events.save(e);
-        done += 1;
     }
     info!("alert pictures: {done} made sharper from recordings, {skipped} without a recording");
+}
+
+/// Replace an alert's picture with the same moment from the full-quality
+/// recording. False when there's no HD footage of it.
+pub async fn sharpen(ffmpeg: &str, rt: &CameraRuntime, e: &mut Event) -> bool {
+    let t = e.thumb_at.unwrap_or(e.start + chrono::Duration::seconds(1));
+    let Some((file, off)) = hd_source(rt, e, t) else {
+        return false;
+    };
+    let Ok(frame) = grab(ffmpeg, &file, off).await else {
+        return false;
+    };
+    let name = format!("{}-hd.jpg", e.id);
+    let dir = rt.events.dir();
+    let tmp = dir.join(format!("{name}.tmp"));
+    let Ok(jpg) = frame.fit(1280).jpeg(85) else {
+        return false;
+    };
+    if std::fs::write(&tmp, jpg).is_err() || std::fs::rename(&tmp, dir.join(&name)).is_err() {
+        return false;
+    }
+    if let Some(old) = e.thumb.replace(name) {
+        let _ = std::fs::remove_file(dir.join(old));
+    }
+    true
+}
+
+/// Every alert's picture is remade from the full-quality footage once the
+/// alert is over (the live picture comes from the small stream 2).
+async fn sharpen_new(mgr: &Manager, tried: &mut std::collections::HashSet<String>) {
+    let ffmpeg = mgr.config().server.ffmpeg_path;
+    let now = chrono::Local::now();
+    for rt in mgr.cameras() {
+        let todo: Vec<Event> = rt
+            .events
+            .between(now - chrono::Duration::hours(24), now)
+            .into_iter()
+            .filter(|e| e.thumb.as_deref().is_some_and(|t| !t.ends_with("-hd.jpg")))
+            // Over for a minute, so its HD clip has been written.
+            .filter(|e| {
+                (now - e.end).num_seconds() > 60 && !rt.in_progress(e) && !tried.contains(&e.id)
+            })
+            .take(10)
+            .collect();
+        for mut e in todo {
+            tried.insert(e.id.clone());
+            crate::load::wait_for_cpu(85, Duration::from_secs(120)).await;
+            if sharpen(&ffmpeg, &rt, &mut e).await {
+                // Keep what was added meanwhile (descriptions, faces).
+                if let Some(mut cur) = rt.events.get(&e.id) {
+                    cur.thumb = e.thumb;
+                    rt.events.save(cur);
+                }
+            }
+        }
+    }
+    if tried.len() > 5000 {
+        tried.clear();
+    }
 }
 
 /// Background job: alerts with people or vehicles, newest first.
 pub async fn run(mgr: Arc<Manager>) {
     tokio::time::sleep(Duration::from_secs(40)).await;
     let mut last_err = String::new();
+    let mut tried = std::collections::HashSet::new();
     loop {
+        sharpen_new(&mgr, &mut tried).await;
         let cfg = mgr.config();
         if cfg.ai.faces || cfg.ai.plates {
             let cutoff = chrono::Local::now() - chrono::Duration::days(7);
