@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.5.1 — November 2026
+- First release published on GitHub: GAZE can now update itself from Settings → About.
+- Model and update downloads show as a small “⬇ 51%” in the header instead of a banner across the page.
+- The web port is simply typed in (no list of common ports).
+
 ## 0.5.0 — November 2026
 **Major**
 - **Updates from GitHub** (Settings → About): GAZE checks for new versions, downloads and checks them, and restarts itself — with one click, or automatically at night. No more building it yourself.
@@ -25,8 +30,6 @@
 - Number plates the reader isn't sure of are ignored.
 
 **Smaller changes**
-- Model and update downloads no longer cover the top of the page: a small “⬇ 51%” in the header shows progress and opens Settings → Tasks. Other notices (new camera found) sit in the bottom corner.
-- The web port is simply typed in (no list of common ports).
 - Alerts are only described and identified once they're over; notifications, descriptions and faces added while an alert is still going are no longer lost.
 
 ## 0.4.0 — November 2026
