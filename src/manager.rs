@@ -376,7 +376,16 @@ pub struct Manager {
 }
 
 impl Manager {
+    /// The AI models load again (on the GPU or the processor, as set now).
+    pub fn reload_models(&self) {
+        let cfg = self.config();
+        self.ai.replace(cfg.ai.clone(), &self.data_dir);
+        self.clip.unload();
+        self.recog.unload();
+    }
+
     pub fn new(cfg_path: PathBuf, data_dir: PathBuf, config: Config) -> Arc<Self> {
+        crate::infer::set_use_gpu(config.ai.device != "cpu");
         crate::load::set_balance(config.hardware.balance);
         let _ = std::fs::create_dir_all(data_dir.join("tmp"));
         let ai = Arc::new(AiHandle::new(config.ai.clone(), &data_dir));
@@ -809,6 +818,13 @@ impl Manager {
         };
         if cfg.ai != old.ai {
             self.ai.replace(cfg.ai.clone(), &self.data_dir);
+        }
+        if cfg.ai.device != old.ai.device {
+            crate::infer::set_use_gpu(cfg.ai.device != "cpu");
+            self.reload_models();
+            if cfg.ai.device != "cpu" {
+                crate::infer::GPU_WANTED.notify_one();
+            }
         }
         let env_changed = RuntimeEnv::from(&cfg) != RuntimeEnv::from(&old);
         for cam in &cfg.cameras {

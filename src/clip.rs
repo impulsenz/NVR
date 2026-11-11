@@ -50,7 +50,7 @@ pub const NEUTRAL: &[&str] = &[
     "a dark night scene",
 ];
 
-type Plan = Arc<tract_onnx::prelude::TypedSimplePlan>;
+type Plan = Arc<crate::infer::Net>;
 
 struct Loaded {
     visual: Option<Plan>,
@@ -140,6 +140,13 @@ impl Clip {
     }
 
     /// Free the models after a while without use.
+    /// Load the models again next time (e.g. on the GPU now).
+    pub fn unload(&self) {
+        let mut l = self.loaded.lock().unwrap();
+        l.visual = None;
+        l.textual = None;
+    }
+
     pub fn unload_if_idle(&self) {
         let mut l = self.loaded.lock().unwrap();
         if (l.visual.is_some() || l.textual.is_some()) && l.used.elapsed() > IDLE_UNLOAD {
@@ -304,12 +311,7 @@ impl Clip {
         let t = t.ok_or_else(|| anyhow!("model not loaded"))?;
         // "a photo of …" is how CLIP was trained to read descriptions.
         let ids = tok.encode(&format!("a photo of {key}"));
-        let input: tract_onnx::prelude::Tensor =
-            tract_onnx::prelude::tract_ndarray::Array2::from_shape_vec(
-                (1, CONTEXT),
-                ids.into_iter().map(|x| x as i64).collect(),
-            )?
-            .into();
+        let input = text_input(ids);
         let v = tokio::task::spawn_blocking(move || run(&t, input)).await??;
         let mut c = self.text_cache.lock().unwrap();
         if c.len() > 200 {
@@ -321,32 +323,42 @@ impl Clip {
 }
 
 fn load(path: &Path, visual: bool) -> Result<Plan> {
-    use tract_onnx::prelude::*;
-    let m = tract_onnx::onnx()
-        .model_for_path(path)
-        .map_err(|e| anyhow!("{e}"))?;
-    let m = if visual {
-        m.with_input_fact(0, f32::fact([1, 3, 224, 224]).into())
+    let what = if visual {
+        "smart search (pictures)"
     } else {
-        m.with_input_fact(0, i64::fact([1, CONTEXT]).into())
-    }
-    .map_err(|e| anyhow!("{e}"))?;
-    m.into_optimized()
-        .map_err(|e| anyhow!("{e}"))?
-        .into_runnable()
-        .map_err(|e| anyhow!("{e}"))
+        "smart search (words)"
+    };
+    let net = crate::infer::load(path, what, || {
+        use tract_onnx::prelude::*;
+        let m = tract_onnx::onnx()
+            .model_for_path(path)
+            .map_err(|e| anyhow!("{e}"))?;
+        let m = if visual {
+            m.with_input_fact(0, f32::fact([1, 3, 224, 224]).into())
+        } else {
+            m.with_input_fact(0, i64::fact([1, CONTEXT]).into())
+        }
+        .map_err(|e| anyhow!("{e}"))?;
+        m.into_optimized()
+            .map_err(|e| anyhow!("{e}"))?
+            .into_runnable()
+            .map_err(|e| anyhow!("{e}"))
+    })?;
+    Ok(Arc::new(net))
 }
 
-fn run(plan: &Plan, input: tract_onnx::prelude::Tensor) -> Result<Vec<f32>> {
-    use tract_onnx::prelude::*;
-    let out = plan.run(tvec!(input.into())).map_err(|e| anyhow!("{e}"))?;
-    let v: Vec<f32> = out[0]
-        .to_plain_array_view::<f32>()
-        .map_err(|e| anyhow!("{e}"))?
-        .iter()
-        .copied()
-        .collect();
+fn run(plan: &Plan, input: crate::infer::Input) -> Result<Vec<f32>> {
+    let out = plan.run(input)?;
+    let v = out
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no model output"))?;
     Ok(normalize(v))
+}
+
+/// Word codes for the text model.
+fn text_input(ids: Vec<u32>) -> crate::infer::Input {
+    crate::infer::Input::i64(&[1, CONTEXT], ids.into_iter().map(|x| x as i64).collect())
 }
 
 pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
@@ -356,7 +368,7 @@ pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 }
 
 /// CLIP's picture input: shortest side to 224, centre crop, normalized.
-fn preprocess(f: &Frame) -> tract_onnx::prelude::Tensor {
+fn preprocess(f: &Frame) -> crate::infer::Input {
     const MEAN: [f32; 3] = [0.481_454_66, 0.457_827_5, 0.408_210_73];
     const STD: [f32; 3] = [0.268_629_54, 0.261_302_6, 0.275_777_1];
     let s = 224.0 / f.width.min(f.height).max(1) as f32;
@@ -375,7 +387,7 @@ fn preprocess(f: &Frame) -> tract_onnx::prelude::Tensor {
             }
         }
     }
-    tract_onnx::prelude::Tensor::from_shape(&[1, 3, 224, 224], &data).unwrap()
+    crate::infer::Input::f32(&[1, 3, 224, 224], data)
 }
 
 // ------------------------------------------------------------- tokenizer
@@ -646,13 +658,7 @@ mod tests {
             ("a bicycle", "dog"),
         ] {
             let ids = tok.encode(&format!("a photo of {q}"));
-            let input: tract_onnx::prelude::Tensor =
-                tract_onnx::prelude::tract_ndarray::Array2::from_shape_vec(
-                    (1, CONTEXT),
-                    ids.into_iter().map(|x| x as i64).collect(),
-                )
-                .unwrap()
-                .into();
+            let input = text_input(ids);
             let t = run(&txt, input).unwrap();
             let scores: Vec<(&str, f32)> = pics
                 .iter()
@@ -695,13 +701,7 @@ mod tests {
             .collect();
         let txt_vec = |q: &str| {
             let ids = tok.encode(&format!("a photo of {q}"));
-            let input: tract_onnx::prelude::Tensor =
-                tract_onnx::prelude::tract_ndarray::Array2::from_shape_vec(
-                    (1, CONTEXT),
-                    ids.into_iter().map(|x| x as i64).collect(),
-                )
-                .unwrap()
-                .into();
+            let input = text_input(ids);
             run(&txt, input).unwrap()
         };
         let neutral: Vec<Vec<f32>> = NEUTRAL.iter().map(|q| txt_vec(q)).collect();

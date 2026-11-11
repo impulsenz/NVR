@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::info;
 
-type Plan = Arc<tract_onnx::prelude::TypedSimplePlan>;
+type Plan = Arc<crate::infer::Net>;
 
 const YUNET: (&str, &str) = (
     "face-yunet-2023mar.onnx",
@@ -89,6 +89,11 @@ impl Recog {
         })
     }
 
+    /// Load the models again next time (e.g. on the GPU now).
+    pub fn unload(&self) {
+        *self.loaded.lock().unwrap() = Loaded::default();
+    }
+
     pub fn unload_if_idle(&self) {
         let mut l = self.loaded.lock().unwrap();
         if l.used.is_some_and(|u| u.elapsed() > IDLE_UNLOAD) {
@@ -123,22 +128,26 @@ impl Recog {
             r.map_err(|e| anyhow!("downloading {}: {e:#}", which.0))?;
         }
         let p = path.clone();
+        let what = format!("faces & plates ({})", which.0);
         let plan = tokio::task::spawn_blocking(move || -> Result<Plan> {
-            use tract_onnx::prelude::*;
-            let mut m = tract_onnx::onnx()
-                .with_ignore_value_info(true)
-                .with_ignore_output_shapes(true)
-                .model_for_path(&p)
-                .map_err(|e| anyhow!("{e}"))?;
-            if let Some(shape) = u8_input {
-                m = m
-                    .with_input_fact(0, u8::fact(shape).into())
+            let net = crate::infer::load(&p, &what, || {
+                use tract_onnx::prelude::*;
+                let mut m = tract_onnx::onnx()
+                    .with_ignore_value_info(true)
+                    .with_ignore_output_shapes(true)
+                    .model_for_path(&p)
                     .map_err(|e| anyhow!("{e}"))?;
-            }
-            m.into_optimized()
-                .map_err(|e| anyhow!("{e}"))?
-                .into_runnable()
-                .map_err(|e| anyhow!("{e}"))
+                if let Some(shape) = u8_input {
+                    m = m
+                        .with_input_fact(0, u8::fact(shape).into())
+                        .map_err(|e| anyhow!("{e}"))?;
+                }
+                m.into_optimized()
+                    .map_err(|e| anyhow!("{e}"))?
+                    .into_runnable()
+                    .map_err(|e| anyhow!("{e}"))
+            })?;
+            Ok(Arc::new(net))
         })
         .await??;
         *pick(&mut self.loaded.lock().unwrap()) = Some(plan.clone());
@@ -158,7 +167,6 @@ impl Recog {
         let plan = self.model(SFACE, |l| &mut l.sface, None).await?;
         let aligned = align_face(f, &face.marks);
         tokio::task::spawn_blocking(move || {
-            use tract_onnx::prelude::*;
             let mut data = vec![0f32; 3 * 112 * 112];
             for y in 0..112 {
                 for x in 0..112 {
@@ -168,14 +176,11 @@ impl Recog {
                     }
                 }
             }
-            let t = Tensor::from_shape(&[1, 3, 112, 112], &data).map_err(|e| anyhow!("{e}"))?;
-            let out = plan.run(tvec!(t.into())).map_err(|e| anyhow!("{e}"))?;
-            let v: Vec<f32> = out[0]
-                .to_plain_array_view::<f32>()
-                .map_err(|e| anyhow!("{e}"))?
-                .iter()
-                .copied()
-                .collect();
+            let out = plan.run(crate::infer::Input::f32(&[1, 3, 112, 112], data))?;
+            let v = out
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("no model output"))?;
             Ok(crate::clip::normalize(v))
         })
         .await?
@@ -248,7 +253,6 @@ fn letterbox(f: &Frame, size: u32) -> (Vec<u8>, f32) {
 }
 
 fn detect_faces(plan: &Plan, f: &Frame) -> Result<Vec<Face>> {
-    use tract_onnx::prelude::*;
     const S: usize = 640;
     let (img, r) = letterbox(f, S as u32);
     // YuNet takes BGR, 0..255.
@@ -258,16 +262,11 @@ fn detect_faces(plan: &Plan, f: &Frame) -> Result<Vec<Face>> {
         data[S * S + i] = img[i * 3 + 1] as f32;
         data[2 * S * S + i] = img[i * 3] as f32;
     }
-    let t = Tensor::from_shape(&[1, 3, S, S], &data).map_err(|e| anyhow!("{e}"))?;
-    let out = plan.run(tvec!(t.into())).map_err(|e| anyhow!("{e}"))?;
-    let v = |i: usize| -> Result<Vec<f32>> {
-        Ok(out[i]
-            .to_plain_array_view::<f32>()
-            .map_err(|e| anyhow!("{e}"))?
-            .iter()
-            .copied()
-            .collect())
-    };
+    let out = plan.run(crate::infer::Input::f32(&[1, 3, S, S], data))?;
+    if out.len() < 12 {
+        return Err(anyhow!("unexpected face model output"));
+    }
+    let v = |i: usize| -> Result<Vec<f32>> { Ok(out[i].clone()) };
     let mut faces = Vec::new();
     // Outputs: cls ×3, obj ×3, bbox ×3, kps ×3 (strides 8, 16, 32).
     for (k, stride) in [8usize, 16, 32].into_iter().enumerate() {
@@ -388,7 +387,6 @@ pub fn align_face(f: &Frame, marks: &[[f32; 2]; 5]) -> Vec<u8> {
 /// Plate boxes (pixels, with score) — the model's output already has
 /// overlapping boxes removed: rows of (batch, x1, y1, x2, y2, class, score).
 fn detect_plates(plan: &Plan, f: &Frame) -> Result<Vec<(f32, f32, f32, f32, f32)>> {
-    use tract_onnx::prelude::*;
     const S: usize = 384;
     let (img, r) = letterbox(f, S as u32);
     let mut data = vec![0f32; 3 * S * S];
@@ -397,16 +395,11 @@ fn detect_plates(plan: &Plan, f: &Frame) -> Result<Vec<(f32, f32, f32, f32, f32)
             data[c * S * S + i] = img[i * 3 + c] as f32 / 255.0;
         }
     }
-    let t = Tensor::from_shape(&[1, 3, S, S], &data).map_err(|e| anyhow!("{e}"))?;
-    let out = plan.run(tvec!(t.into())).map_err(|e| anyhow!("{e}"))?;
-    let v: Vec<f32> = out[0]
-        .cast_to::<f32>()
-        .map_err(|e| anyhow!("{e}"))?
-        .to_plain_array_view::<f32>()
-        .map_err(|e| anyhow!("{e}"))?
-        .iter()
-        .copied()
-        .collect();
+    let out = plan.run(crate::infer::Input::f32(&[1, 3, S, S], data))?;
+    let v = out
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no model output"))?;
     let mut plates = Vec::new();
     for row in v.chunks_exact(7) {
         let (x1, y1, x2, y2, score) = (row[1], row[2], row[3], row[4], row[6]);
@@ -427,16 +420,12 @@ fn detect_plates(plan: &Plan, f: &Frame) -> Result<Vec<(f32, f32, f32, f32, f32)
 }
 
 fn read_plate(plan: &Plan, f: &Frame) -> Result<Option<(String, f32)>> {
-    use tract_onnx::prelude::*;
     let small = crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, 128, 64);
-    let t = Tensor::from_shape(&[1, 64, 128, 3], &small).map_err(|e| anyhow!("{e}"))?;
-    let out = plan.run(tvec!(t.into())).map_err(|e| anyhow!("{e}"))?;
-    let p: Vec<f32> = out[0]
-        .to_plain_array_view::<f32>()
-        .map_err(|e| anyhow!("{e}"))?
-        .iter()
-        .copied()
-        .collect();
+    let out = plan.run(crate::infer::Input::u8(&[1, 64, 128, 3], small))?;
+    let p = out
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no model output"))?;
     let n = OCR_ALPHABET.len();
     let (mut text, mut conf) = (String::new(), Vec::new());
     for slot in p.chunks_exact(n) {

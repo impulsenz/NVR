@@ -942,32 +942,36 @@ pub fn parse_llm(text: &str) -> Result<Vec<Detection>> {
 
 // ---------- built-in YOLOX ----------
 
-type Plan = std::sync::Arc<tract_onnx::prelude::TypedSimplePlan>;
-
 pub struct Yolox {
-    plan: Plan,
+    net: crate::infer::Net,
     pub size: usize,
 }
 
 impl Yolox {
     pub fn load(path: &Path) -> Result<Self> {
-        use tract_onnx::prelude::*;
-        let model = tract_onnx::onnx()
-            .model_for_path(path)
-            .map_err(|e| anyhow!("{e}"))?
-            .into_optimized()
-            .map_err(|e| anyhow!("{e}"))?;
-        let size = model
-            .input_fact(0)
-            .ok()
-            .and_then(|f| f.shape.as_concrete().and_then(|s| s.get(2).copied()))
-            .unwrap_or(416);
-        let plan = model.into_runnable().map_err(|e| anyhow!("{e}"))?;
-        Ok(Self { plan, size })
+        // Nano and Tiny take 416×416 pictures, the bigger models 640×640.
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let size = if name.contains("nano") || name.contains("tiny") {
+            416
+        } else {
+            640
+        };
+        let net = crate::infer::load(path, &format!("object detection ({name})"), || {
+            use tract_onnx::prelude::*;
+            tract_onnx::onnx()
+                .model_for_path(path)
+                .map_err(|e| anyhow!("{e}"))?
+                .with_input_fact(0, f32::fact([1, 3, size, size]).into())
+                .map_err(|e| anyhow!("{e}"))?
+                .into_optimized()
+                .map_err(|e| anyhow!("{e}"))?
+                .into_runnable()
+                .map_err(|e| anyhow!("{e}"))
+        })?;
+        Ok(Self { net, size })
     }
 
     pub fn detect(&self, frame: &Frame, min_score: f32) -> Result<Vec<Detection>> {
-        use tract_onnx::prelude::*;
         let size = self.size;
         let r = (size as f32 / frame.width as f32).min(size as f32 / frame.height as f32);
         let (nw, nh) = (
@@ -987,16 +991,11 @@ impl Yolox {
                 input[2 * plane + o] = resized[i] as f32;
             }
         }
-        let tensor = Tensor::from_shape(&[1, 3, size, size], &input).map_err(|e| anyhow!("{e}"))?;
         let out = self
-            .plan
-            .run(tvec!(tensor.into()))
-            .map_err(|e| anyhow!("{e}"))?;
-        let view = out[0]
-            .to_plain_array_view::<f32>()
-            .map_err(|e| anyhow!("{e}"))?;
-        let data = view
-            .as_slice()
+            .net
+            .run(crate::infer::Input::f32(&[1, 3, size, size], input))?;
+        let data = out
+            .first()
             .ok_or_else(|| anyhow!("unexpected model output"))?;
         let stride_len = 85;
         let mut dets = Vec::new();

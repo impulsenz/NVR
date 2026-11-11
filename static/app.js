@@ -3753,6 +3753,11 @@ function renderAi(body) {
     <p class="muted" style="margin-top:0">When a camera sees motion, a picture is checked for people, vehicles and animals. Turn it on per camera under <i>Motion &amp; AI</i>.</p>
     <div class="radio-cards">${PROVIDERS.map(([k, t, dsc]) => `<label><input type="radio" name="ai-p" value="${k}" ${a.provider === k ? 'checked' : ''}><b>${t}</b><small>${dsc}</small></label>`).join('')}</div>
     <div class="form" style="margin-top:14px">
+      <label for="ai-device">Run AI on</label><div><select id="ai-device">
+        <option value="gpu" ${a.device !== 'cpu' ? 'selected' : ''}>Graphics card (GPU) — recommended</option>
+        <option value="cpu" ${a.device === 'cpu' ? 'selected' : ''}>Processor (CPU)</option></select>
+        <div class="hint">For the built-in object recognition, smart search and faces &amp; plates. The graphics card is much faster and leaves the processor free for video; it works with any recent NVIDIA, AMD or Intel graphics on Windows (DirectX 12). The GPU runtime (about 25 MB) downloads by itself the first time; until then, or if the graphics card can't be used, the processor takes over.</div>
+        <div class="hint" id="ai-device-st"></div></div>
       <label class="p-builtin" for="ai-model">Model</label><div class="p-builtin"><select id="ai-model">
         <option value="yolox_nano" ${a.builtin_model === 'yolox_nano' ? 'selected' : ''}>Nano — fastest (≈30 ms), good for small PCs</option>
         <option value="yolox_tiny" ${a.builtin_model === 'yolox_tiny' ? 'selected' : ''}>Tiny — balanced (≈90 ms), recommended</option>
@@ -3806,11 +3811,12 @@ function renderAi(body) {
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'), url: val('ai-url').trim(),
     api_key: val('ai-key'), model: val('ai-mname').trim(), max_per_minute: Math.round(num('ai-rate')), timeout_seconds: Math.round(num('ai-timeout')) || 20,
-    verify_model: val('ai-verify'), night_boost: chk('ai-night'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel'), summary_frames: +val('ai-sframes') || 4});
+    verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device'), smart_search: chk('ai-smart'), smart_model: val('ai-smodel'), summary_frames: +val('ai-sframes') || 4});
   const showStatus = () => {
     const ss = status && status.smart_search;
     if (ss && $('ai-smart-st')) $('ai-smart-st').innerHTML = !a.smart_search ? '' : ss.downloading ? `Downloading the smart-search model… ${Math.round(ss.download_percent || 0)}%`
       : ss.error ? `<span class="err">${esc(ss.error)}</span>` : `<span class="ok">On</span> — ${ss.indexed} alert${ss.indexed === 1 ? '' : 's'} described so far (newest first, last 60 days).`;
+    if ($('ai-device-st') && status) $('ai-device-st').innerHTML = `Running on: <b>${esc(status.ai_device || '')}</b>`;
     const s = status && status.ai; if (!s) return;
     $('ai-status').innerHTML = s.provider === 'none' ? '' : `Current: <b>${esc(s.provider)}</b> — ${s.downloading ? `downloading model ${Math.round(s.download_percent || 0)}%` : s.ready ? '<span class="ok">ready</span>' : 'loading'}` +
       ` · ${s.requests} checks${s.failures ? `, ${s.failures} failed` : ''}${s.last_ms != null ? ` · last took ${s.last_ms} ms` : ''}${s.error ? `<br><span class="err">${esc(s.error)}</span>` : ''}`;

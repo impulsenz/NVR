@@ -306,6 +306,8 @@ async fn status(
         "cameras": cameras,
         "ai": m.ai.get().status(),
         "smart_search": m.clip.status(),
+        // Where the AI models run (GPU or processor, and why).
+        "ai_device": crate::infer::status(),
         // A newer GAZE (for the notice at the top; admins only use it).
         "update": {"available": upd.available, "latest": upd.latest, "state": upd.state},
         // Downloads in progress (AI models, updates), for the header.

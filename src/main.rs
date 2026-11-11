@@ -17,6 +17,7 @@ mod fsbrowse;
 mod identify;
 mod imgutil;
 mod inbox;
+mod infer;
 mod jobs;
 mod known;
 mod library;
@@ -277,6 +278,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(identify::run(mgr.clone()));
     tokio::spawn(notify::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));
+    tokio::spawn(infer::run(mgr.clone()));
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

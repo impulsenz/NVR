@@ -558,7 +558,11 @@ fn parse_typeperf(text: &str) -> Option<f32> {
         };
         let inst = inst.split(')').next().unwrap_or(inst);
         // Drop the process part ("pid_1234_").
-        let engine = inst.split_once("_luid_").map(|(_, e)| e).unwrap_or(inst).to_string();
+        let engine = inst
+            .split_once("_luid_")
+            .map(|(_, e)| e)
+            .unwrap_or(inst)
+            .to_string();
         let v: f32 = val.trim().parse().unwrap_or(0.0);
         *per_engine.entry(engine).or_default() += v;
     }

@@ -58,6 +58,10 @@ viewing, finding footage, and managing everything, all from the browser.
   **object must travel**, and **areas to ignore** painted on the picture. A live readout shows how big
   the moving objects are, and *Show motion* draws boxes around them. Lighting changes are ignored.
 - AI checks run **only while there is motion**: no motion, nothing is sent to the AI.
+- **AI on the graphics card**: the built-in object recognition, smart search and faces & plates run on the
+  GPU (ONNX Runtime with DirectML — any recent NVIDIA, AMD or Intel graphics on Windows; the 25 MB runtime
+  downloads itself the first time), or on the processor if you choose (Settings → Object recognition →
+  Run AI on). If the graphics card can't be used, the processor takes over and the settings say why.
 - Object recognition, with a choice of AI:
   - **Built-in**: a YOLOX model runs on this computer's CPU. It's free and private, and the model downloads automatically.
     Five sizes, from Nano (≈30 ms per picture) to Large (≈2 s, for powerful PCs).

@@ -261,6 +261,8 @@ pub struct AiConfig {
     pub night_boost: bool,
     /// Smart search: describe alert pictures with CLIP so they can be found
     /// with words ("kid with a red backpack").
+    /// Where the AI runs: "gpu" (the graphics card, via DirectML) or "cpu".
+    pub device: String,
     pub smart_search: bool,
     /// CLIP model for smart search: ViT-B-32, ViT-B-16 or ViT-L-14.
     pub smart_model: String,
@@ -285,6 +287,7 @@ impl Default for AiConfig {
             timeout_seconds: 20,
             verify_model: String::new(),
             night_boost: true,
+            device: "gpu".into(),
             smart_search: false,
             smart_model: "ViT-B-32".into(),
             summary_frames: 4,
