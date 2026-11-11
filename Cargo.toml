@@ -2,6 +2,7 @@
 name = "nvr"
 version = "0.5.3"
 edition = "2024"
+description = "GAZE — network video recorder for IP cameras"
 
 [dependencies]
 anyhow = "1.0.104"
