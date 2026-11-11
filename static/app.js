@@ -608,6 +608,36 @@ class Player {
     video.after(this.alt);
     this.nextSeg = null;
     for (const v of [video, this.alt]) this.wire(v);
+    // The controls sit on the video (and so stay there in full screen),
+    // fading out while it plays until the mouse moves.
+    this.surface = video.parentElement;
+    this.surface.classList.add('has-pov');
+    if (controls) { controls.classList.add('pov'); this.surface.appendChild(controls); }
+    this.osd = document.createElement('div');
+    this.osd.className = 'pov-osdbox';
+    this.surface.appendChild(this.osd);
+    let idle = null;
+    const wake = () => {
+      this.surface.classList.remove('pov-idle'); clearTimeout(idle);
+      idle = setTimeout(() => { if (!this.video.paused && !this.surface.matches(':has(.pov:hover)')) this.surface.classList.add('pov-idle'); }, 2500);
+    };
+    for (const ev of ['pointermove', 'pointerdown', 'keydown']) this.surface.addEventListener(ev, wake);
+    this.surface.addEventListener('pointerleave', () => { if (!this.video.paused) this.surface.classList.add('pov-idle'); });
+    for (const v of [video, this.alt]) { v.addEventListener('pause', wake); v.addEventListener('play', wake); }
+  }
+  // The camera's on-screen display: its name, and the clock showing the
+  // time in the recording.
+  buildOsd() {
+    const c = status && status.cameras.find(x => x.id === this.item.camera);
+    if (!c) { this.osd.innerHTML = ''; return; }
+    const o = osdFor(c), d = status.display;
+    const parts = {};
+    const add = (corner, html) => (parts[corner] = parts[corner] || []).push(html);
+    if (o.show_name) add(o.name_corner, `<span class="ovtext name">${esc(c.name)}</span>`);
+    if (o.text) add(o.text_corner, `<span class="ovtext">${esc(o.text)}</span>`);
+    if (o.show_clock) add(o.clock_corner, `<span class="ovtext p-clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}"></span>`);
+    add(o.show_clock ? o.clock_corner : 'tl', '<span class="ovtext p-rec">▶ Recording</span>');
+    this.osd.innerHTML = Object.entries(parts).map(([k, v]) => `<div class="ov pov-osd ${k}">${v.join('')}</div>`).join('');
   }
   wire(video) {
     const on = (ev, f) => video.addEventListener(ev, (e) => { if (video === this.video) f(e); });
@@ -683,7 +713,7 @@ class Player {
     mute.onclick = () => { const m = !this.video.muted; for (const v of [this.video, this.alt]) v.muted = m; if (!m && this.video.volume === 0) this.video.volume = this.alt.volume = 0.5; paintVol(); };
     vol.oninput = () => { for (const v of [this.video, this.alt]) { v.volume = +vol.value; v.muted = +vol.value === 0; } store.set('volume', +vol.value); paintVol(); };
     paintVol();
-    q('.p-fs').onclick = () => fullscreen(this.video.parentElement);
+    q('.p-fs').onclick = () => fullscreen(this.surface);
     this.el.clip.onclick = () => this.downloadClip();
     this.dl = q('.p-dl');
     this.wireScrub();
@@ -730,6 +760,7 @@ class Player {
     }
     this.dl.href = item.url + '?download=1';
     this.marks = item.marks || [];
+    this.buildOsd();
     this.paint();
     const kind = item.kind === 'clip' ? 'clip' : 'rec';
     try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
@@ -737,6 +768,7 @@ class Player {
   stop() {
     for (const v of [this.video, this.alt]) { v.pause(); v.removeAttribute('src'); v.load(); }
     this.item = null; this.nextSeg = null;
+    if (this.osd) this.osd.innerHTML = '';
   }
   paintButtons() { if (this.el) this.el.play.textContent = this.video.paused ? '▶' : '❚❚'; }
   paint() {
@@ -745,6 +777,8 @@ class Player {
     this.el.fill.style.width = pct(t);
     this.el.head.style.left = pct(t);
     this.el.time.textContent = `${fmtTime(this.wallAt(t))} · ${fmtClock(t)} / ${fmtClock(d)}`;
+    const clk = this.osd && this.osd.querySelector('.p-clock');
+    if (clk) clk.textContent = fmtDate(this.wallAt(t), clk.dataset.fmt || undefined);
     const hasSel = this.inT != null && this.outT != null;
     this.el.hin.hidden = this.inT == null; this.el.hout.hidden = this.outT == null; this.el.sel.hidden = !hasSel;
     if (this.inT != null) this.el.hin.style.left = pct(this.inT);
@@ -1671,7 +1705,7 @@ function playInFocus(it) {
   focusPlayback = it;
   updateSubscriptions();
   $('focus-img').hidden = true;
-  $('focus-surface').querySelectorAll('.ov').forEach(o => o.hidden = true);
+  $('focus-surface').querySelectorAll('.ov:not(.pov-osd)').forEach(o => o.hidden = true);
   if (!focusPlayer) focusPlayer = new Player($('focus-video'), $('focus-player-controls'), $('focus-msg'));
   focusPlayer.setHidden(false);
   $('focus-player-controls').hidden = false;
@@ -1685,7 +1719,7 @@ function stopFocusPlayback(resub = true) {
   if (focusPlayer) focusPlayer.setHidden(true);
   $('focus-img').hidden = false;
   $('focus-player-controls').hidden = true;
-  $('focus-surface').querySelectorAll('.ov').forEach(o => o.hidden = false);
+  $('focus-surface').querySelectorAll('.ov:not(.pov-osd)').forEach(o => o.hidden = false);
   $('focus-live').hidden = true;
   $('focus-activity').querySelectorAll('.act').forEach(a => a.classList.remove('active'));
   if (resub) updateSubscriptions();
@@ -2092,12 +2126,14 @@ function segAt(c, T) {
   return null;
 }
 // Keep the timeline current while looking at recent footage.
+// While looking at a window that reaches now, new footage and its time-lapse
+// keep being added, however long the page stays open.
 setInterval(() => {
-  if (page === 'recordings' && rec.mode === 'timeline' && !tl.playing && Date.now() - tl.T < 3600000) {
-    const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
-    if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
-    api('api/timeline?' + q).then(d => { tl.data = d; tl.loadedAt = Date.now(); drawTimeline(); }).catch(() => {});
-  }
+  if (page !== 'recordings' || rec.mode !== 'timeline' || document.hidden || tl.dragging) return;
+  if (tl.winStart + tl.zoom * 1000 < Date.now() - 300000) return;
+  const q = new URLSearchParams({from: rec.from.toISOString(), to: new Date(Math.max(rec.to.getTime(), Date.now())).toISOString()});
+  if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
+  api('api/timeline?' + q).then(d => { if (tl.dragging) return; tl.data = d; tl.loadedAt = Date.now(); drawTimeline(); prefetchSprites(); }).catch(() => {});
 }, 30000);
 
 // Keep each camera's video at the shared time `tl.T`.
@@ -2241,13 +2277,20 @@ function selStyle(pct) {
 function drawTimeline() {
   const box = $('tl'), W0 = tl.winStart, span = tl.zoom * 1000;
   const pct = (t) => ((t - W0) / span * 100);
-  const steps = [60, 300, 600, 900, 1800, 3600, 7200, 10800, 21600].map(s => s * 1000);
-  const step = steps.find(s => span / s <= 8) || 21600000;
-  let axis = '';
-  for (let t = Math.ceil(W0 / step) * step; t <= W0 + span; t += step) {
+  // Labels about every 1/10 of the window, with small ticks between.
+  const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600].map(s => s * 1000);
+  const step = steps.find(s => span / s <= 12) || 21600000;
+  const minor = step / ([120000, 600000, 1800000, 7200000].includes(step) ? 4 : step === 10800000 ? 3 : 5);
+  let axis = '', grid = '';
+  for (let t = Math.ceil(W0 / minor) * minor; t <= W0 + span; t += minor) {
+    const major = Math.abs(t % step) < 1;
+    if (!major) { axis += `<i class="mn" style="left:${pct(t)}%"></i>`; continue; }
     const d = new Date(t);
-    axis += `<span style="left:${pct(t)}%">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}${d.getHours() === 0 && d.getMinutes() === 0 ? ' ' + fmtDay(d) : ''}</span>`;
+    axis += `<i class="mj" style="left:${pct(t)}%"></i><span style="left:${pct(t)}%">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}${d.getHours() === 0 && d.getMinutes() === 0 ? ' ' + fmtDay(d) : ''}</span>`;
+    grid += `<i style="left:${pct(t)}%"></i>`;
   }
+  const nowP = pct(Date.now());
+  if (nowP >= 0 && nowP <= 100) grid += `<i class="now" style="left:${nowP}%" title="Now"></i>`;
   let rows = '';
   for (const c of tl.data) {
     let lane = '';
@@ -2261,11 +2304,13 @@ function drawTimeline() {
       const tip = e.labels.length ? e.labels.map(l => l.label).join(', ') : 'motion';
       lane += `<div class="ev ${e.labels.length ? '' : 'motion'}" style="left:${Math.max(0, a)}%;width:${Math.max(0.3, b - a)}%" title="${esc(tip)} ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" data-cam="${esc(c.camera)}">${e.labels.length ? `<span class="ic">${labelIcon(e.labels[0].label)}</span>` : ''}</div>`;
     }
-    rows += `<div class="tl-row"><div class="label" title="${esc(c.name)}">${esc(c.name)}</div><div class="lane">${lane}</div></div>`;
+    rows += `<div class="tl-row"><div class="label" title="${esc(c.name)}">${esc(c.name)}</div><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
+      <div class="tlp" data-cam="${esc(c.camera)}" title="Time-lapse previews — blue: ready to scrub · striped: loading · grey: not loaded yet · red: couldn't be made"></div></div></div>`;
   }
   const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="${selStyle(pct)}"><div class="tl-h in" title="Drag to change the clip start"></div><div class="tl-h out" title="Drag to change the clip end"></div></div>` : '';
   box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"></div>`;
   box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
+  paintPreviewStrips();
   // Clip export
   const has = tl.inT != null && tl.outT != null;
   $('tl-clear').hidden = !has;
@@ -2300,7 +2345,7 @@ function drawHead() {
     const mark = e.target.closest('.ev');
     if (mark) { e.preventDefault(); tlShowEvent(mark.dataset.cam, +mark.dataset.t); return; }
     const t = tAt(e); if (t == null || e.clientX < box.querySelector('.lane').getBoundingClientRect().left) return;
-    drag = true; was = tl.playing; if (was) tlPlay(false);
+    drag = true; tl.dragging = true; was = tl.playing; if (was) tlPlay(false);
     box.setPointerCapture(e.pointerId);
     tl.T = t; drawHead(); previewAll();
   });
@@ -2319,7 +2364,7 @@ function drawHead() {
   });
   const end = () => {
     if (handle) { handle = null; drawTimeline(); tlSync(true); hideSpritesWhenReady(); return; }
-    if (!drag) return; drag = false;
+    if (!drag) return; drag = false; tl.dragging = false;
     tlSync(true); hideSpritesWhenReady(); if (was) tlPlay(true);
   };
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
@@ -2341,6 +2386,26 @@ async function spriteFor(cam, seg) {
 }
 // Prepare previews for every file in view (nearest to the playhead first),
 // showing progress, so scrubbing is instant.
+// Under each camera's lane: which parts of the time-lapse are loaded and
+// ready to scrub (filled), still loading (striped) or not loaded yet.
+function paintPreviewStrips() {
+  const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
+  for (const el of document.querySelectorAll('#tl .tlp')) {
+    const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
+    const useSub = c.segments.some(y => y.kind === 'sub');
+    let h = '';
+    for (const sg of c.segments) {
+      if (sg.kind === 'clip' || (useSub && sg.kind === 'recording')) continue;
+      const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
+      const st = (tl.pv && tl.pv.get(sg.url)) || {state: 'wait'};
+      const end = st.state === 'ready' && st.secs ? Math.min(Math.max(s1, isGrowing(sg) ? Date.now() : s1), s0 + st.secs * 1000) : s1;
+      const a = Math.max(0, pct(s0)), b = Math.min(100, pct(end));
+      if (b <= 0 || a >= 100 || b <= a) continue;
+      h += `<i class="${st.state}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"></i>`;
+    }
+    el.innerHTML = h;
+  }
+}
 function prefetchSprites() {
   const gen = tl.pfGen = (tl.pfGen || 0) + 1;
   const a = tl.winStart, b = a + tl.zoom * 1000;
@@ -2351,14 +2416,7 @@ function prefetchSprites() {
   }
   list.sort((x, y) => x.d - y.d);
   const todo = list.slice(0, 300);
-  const st = {total: todo.length, done: 0};
-  const show = () => {
-    if (gen !== tl.pfGen) return;
-    $('tl-sp').hidden = !st.total;
-    $('tl-sp-bar').style.width = (st.total ? st.done / st.total * 100 : 0) + '%';
-    $('tl-sp-t').textContent = st.done >= st.total ? `ready (${st.total} file${st.total === 1 ? '' : 's'})` : `${st.done} of ${st.total} files ready`;
-  };
-  show();
+  tl.pv = tl.pv || new Map();
   tl.pagesDone = tl.pagesDone || new Set();
   const loadPages = (sp) => Promise.all([...Array(sp.info.pages).keys()].map(p => tl.pagesDone.has(sp.url + p) ? null :
     new Promise(r => { const im = spritePage(sp.url + p), ok = () => { tl.pagesDone.add(sp.url + p); r(); };
@@ -2366,10 +2424,14 @@ function prefetchSprites() {
   let i = 0;
   const worker = async () => {
     while (i < todo.length && gen === tl.pfGen) {
-      const job = todo[i++];
+      const job = todo[i++], key = job.sg.url, had = tl.pv.get(key);
+      // Already loaded (and not still growing): nothing to do.
+      if (had && had.state === 'ready' && !(isGrowing(job.sg) && Date.now() - had.at > 30000)) continue;
+      if (!had || had.state !== 'ready') { tl.pv.set(key, {state: 'loading'}); paintPreviewStrips(); }
       const sp = await spriteFor(job.cam, job.sg);
       if (sp) await loadPages(sp);
-      st.done++; show();
+      tl.pv.set(key, sp ? {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval} : {state: isGrowing(job.sg) ? 'wait' : 'none'});
+      paintPreviewStrips();
     }
   };
   worker(); worker();
@@ -2984,10 +3046,11 @@ async function openCameraDialog(id, clone) {
         <button type="button" class="small" id="c-prof-save" title="Save this camera's recording, motion and AI settings as a profile">💾 Save as profile…</button>
         <button type="button" class="small" id="c-prof-del" title="Delete the chosen profile">✕</button>
         <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button><button type="button" data-t="zones">Zones</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="zones">Zones</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
+        <span class="c-restart" hidden></span><div class="c-restart row" hidden><button type="button" id="c-restart">⟳ Restart camera</button><span class="hint" id="c-restart-info"></span></div>
         <h3>Quick setup</h3>
         <label for="q-brand">Camera brand</label>
         <div><div class="row"><select id="q-brand">${brandOpts.replace('Format…', 'Choose brand…')}</select></div>
@@ -3139,7 +3202,6 @@ async function openCameraDialog(id, clone) {
         <span></span><div class="row"><label class="check"><input type="checkbox" id="p-inv-pan" ${c.ptz.invert_pan ? 'checked' : ''}> Reverse left/right</label><label class="check"><input type="checkbox" id="p-inv-tilt" ${c.ptz.invert_tilt ? 'checked' : ''}> Reverse up/down</label></div>
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
-      <div data-tab="device" hidden><div id="dv-body"></div></div>
       <div data-tab="zones" hidden>
         <div class="hint" style="margin-bottom:8px">Like Frigate and Blue Iris: <b>areas</b> (an object counts as inside when its feet / wheels are) and <b>lines</b> objects cross.
           Use them to alert only for the driveway, notice people crossing the gate, someone hanging around the porch, or a parcel left (or something taken) at the door.</div>
@@ -3158,10 +3220,9 @@ async function openCameraDialog(id, clone) {
   f.querySelectorAll('#c-tabs button').forEach(b => b.onclick = () => {
     f.querySelectorAll('#c-tabs button').forEach(x => x.classList.toggle('active', x === b));
     f.querySelectorAll('[data-tab]').forEach(t => t.hidden = t.dataset.tab !== b.dataset.t);
-    if (b.dataset.t === 'device' && !deviceLoaded) loadDeviceTab();
     if (b.dataset.t === 'zones') drawZones();
   });
-  deviceLoaded = false; deviceDirty = new Set();
+  setupRestartButton(id && !clone ? id : null);
   setupProfiles(c);
   setupZones(c, id && !clone ? id : null);
   setupPackageArea(c, id && !clone ? id : null);
@@ -3490,134 +3551,25 @@ function collectCamera() {
       parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgArea.length >= 3, package_area: pkgArea},
   };
 }
-// ---------- camera's own settings over ONVIF ----------
-let deviceLoaded = false, deviceReport = null;
-const prefixMask = (p) => { const m = p ? (0xffffffff << (32 - p)) >>> 0 : 0; return [24, 16, 8, 0].map(s => (m >>> s) & 255).join('.'); };
-async function loadDeviceTab() {
-  const box = $('dv-body');
-  if (!editingId) { box.innerHTML = '<div class="hint">Save the camera first, then its own settings can be changed here.</div>'; return; }
-  deviceLoaded = true;
-  box.innerHTML = '<div class="hint"><span class="spinner small"></span> Asking the camera for its settings (ONVIF)…</div>';
-  let res;
-  try { res = await api(`api/cameras/${enc(editingId)}/device`); } catch (e) {
-    box.innerHTML = `<div class="err">${esc(e.message)}</div>`; deviceLoaded = false; return;
-  }
-  const r = deviceReport = res.report, er = r.errors || {};
-  const na = (k) => er[k] ? `<div class="hint">Not available on this camera: ${esc(er[k])}</div>` : '';
-  const intro = `<div class="hint" style="margin-bottom:10px">These are the camera's own settings, changed directly on the camera over ONVIF (${esc(res.address)}).
-    The address, port and login come from the <b>Pan / tilt / zoom</b> tab (blank there = from the stream URL). Changes here are sent to the camera when you press <b>Save camera</b>.
-    <button type="button" class="small" id="dv-reload" style="margin-left:6px">↻ Reload</button></div>`;
-  if (er.connection) {
-    box.innerHTML = intro + `<div class="err">Could not reach the camera: ${esc(er.connection)}</div>
-      <div class="hint">Check that ONVIF is turned on in the camera (some brands need a separate ONVIF user) and the port on the Pan / tilt / zoom tab (80 for most, 2020 for Tapo, 8000 for Reolink).</div>`;
-    $('dv-reload').onclick = loadDeviceTab; deviceLoaded = false; return;
-  }
-  const i = r.info || {}, n = r.network, t = r.time, im = r.imaging;
-  let h = intro;
-  h += `<div class="dv-sec"><h3>Device</h3><dl class="kv">
-    <dt>Make &amp; model</dt><dd>${esc(i.manufacturer)} ${esc(i.model)}</dd><dt>Firmware</dt><dd>${esc(i.firmware) || '–'}</dd>
-    <dt>Serial number</dt><dd>${esc(i.serial) || '–'}</dd>${n && n.mac ? `<dt>MAC address</dt><dd>${esc(n.mac)}</dd>` : ''}</dl>
-    <button type="button" id="dv-reboot">⟳ Restart camera</button></div>`;
-  // Network
-  h += `<div class="dv-sec" data-sec="network"><h3>Network</h3>${na('network')}`;
-  if (n) h += `<div class="form">
-    <label>Address</label><div class="row"><label class="check"><input type="radio" name="dv-dhcp" value="0" ${n.dhcp ? '' : 'checked'}> Fixed (static)</label><label class="check"><input type="radio" name="dv-dhcp" value="1" ${n.dhcp ? 'checked' : ''}> Automatic (DHCP)</label></div>
-    <label for="dv-ip">IP address</label><div><input type="text" id="dv-ip" value="${esc(n.ip)}" placeholder="192.168.1.64"></div>
-    <label for="dv-prefix">Subnet mask</label><div><select id="dv-prefix">${Array.from({length: 17}, (_, k) => 16 + k).map(p => `<option value="${p}" ${p === n.prefix ? 'selected' : ''}>${prefixMask(p)} (/${p})</option>`).join('')}</select></div>
-    <label for="dv-gw">Gateway (router)</label><div><input type="text" id="dv-gw" value="${esc(n.gateway)}" placeholder="192.168.1.1"></div>
-    <label for="dv-dns">DNS servers</label><div><input type="text" id="dv-dns" value="${esc((n.dns || []).join(', '))}" placeholder="192.168.1.1, 8.8.8.8"></div>
-    <label for="dv-host">Host name</label><div><input type="text" id="dv-host" value="${esc(n.hostname)}"></div>
-    <span></span><div><label class="check"><input type="checkbox" id="dv-upd" checked> Also change this camera's stream addresses in the NVR</label>
-      <div class="hint">Changing the address makes the camera reconnect (some restart). Make sure the new address is free and on your network, or you'll have to find the camera again.</div></div>
-    </div>`;
-  h += '</div>';
-  // Time
-  h += `<div class="dv-sec" data-sec="time"><h3>Date &amp; time</h3>${na('time')}`;
-  if (t) {
-    const cam = t.utc ? new Date(t.utc) : null, diff = cam ? Math.round((cam - new Date(res.computer_utc)) / 1000) : null;
-    h += `<div class="form">
-      <label>Camera clock</label><div>${cam ? `${fmtDate(cam)} — ${Math.abs(diff) < 3 ? '<span class="ok">matches this computer</span>' : `<span class="warnc">${fmtDur(Math.abs(diff))} ${diff > 0 ? 'ahead of' : 'behind'} this computer</span>`}` : '–'}
-        <div class="hint">A wrong camera clock can make ONVIF logins fail and puts the wrong time on the picture.</div></div>
-      <label for="dv-ntp">Time server</label><div><input type="text" id="dv-ntp" value="${esc((t.ntp || []).join(', '))}" placeholder="pool.ntp.org"></div>
-      <label for="dv-mode">Keep time from</label><div><select id="dv-mode"><option value="NTP" ${t.mode !== 'Manual' ? 'selected' : ''}>The time server (recommended)</option><option value="Manual" ${t.mode === 'Manual' ? 'selected' : ''}>Its own clock</option></select></div>
-      <label for="dv-tz">Time zone</label><div><input type="text" id="dv-tz" value="${esc(t.tz)}" placeholder="e.g. NZST-12NZDT,M9.5.0,M4.1.0/3">
-        <div class="hint">In the camera's format (POSIX). Common: <a href="javascript:void 0" data-tz="NZST-12NZDT,M9.5.0,M4.1.0/3">New Zealand</a> · <a href="javascript:void 0" data-tz="AEST-10AEDT,M10.1.0,M4.1.0/3">Sydney</a> · <a href="javascript:void 0" data-tz="GMT0BST,M3.5.0/1,M10.5.0">UK</a> · <a href="javascript:void 0" data-tz="EST5EDT,M3.2.0,M11.1.0">US Eastern</a> · <a href="javascript:void 0" data-tz="PST8PDT,M3.2.0,M11.1.0">US Pacific</a> · <a href="javascript:void 0" data-tz="CET-1CEST,M3.5.0,M10.5.0/3">Central Europe</a></div></div>
-      <span></span><div class="row"><button type="button" id="dv-time-sync">Set camera clock to this computer's time now</button></div></div>`;
-  }
-  h += '</div>';
-  // Video
-  h += `<div class="dv-sec"><h3>Video streams</h3>${na('video')}`;
-  (r.video || []).forEach((v, k) => {
-    const res2 = v.resolutions.length ? v.resolutions : [[v.width, v.height]];
-    const fpsOpts = v.fps_options.length ? v.fps_options : Array.from(new Set([1, 2, 5, 8, 10, 12, 15, 20, 25, 30, v.fps])).filter(x => !v.fps_max || (x >= (v.fps_min || 1) && x <= v.fps_max)).sort((a, b) => a - b);
-    h += `<div class="dv-stream" data-sec="video" data-k="${k}"><b>${k === 0 ? 'Stream 1 (main)' : k === 1 ? 'Stream 2 (sub)' : 'Stream ' + (k + 1)}</b> <span class="muted">${esc(v.name)}</span>
-      <div class="form">
-        <label>Video format</label><div>${v.encodings.length > 1 ? `<select class="dv-enc">${v.encodings.map(e => `<option ${e === v.encoding ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>` : esc(v.encoding)}</div>
-        <label>Resolution</label><div><select class="dv-res">${res2.map(([w, hh]) => `<option value="${w}x${hh}" ${w === v.width && hh === v.height ? 'selected' : ''}>${w} × ${hh}</option>`).join('')}</select></div>
-        <label>Frame rate</label><div><select class="dv-fps">${fpsOpts.map(x => `<option value="${x}" ${x == v.fps ? 'selected' : ''}>${x} fps</option>`).join('')}</select></div>
-        <label>Bitrate</label><div class="row"><input type="number" class="dv-br" value="${v.bitrate}" min="${v.bitrate_min || 32}" ${v.bitrate_max ? `max="${v.bitrate_max}"` : ''} style="width:120px"><span class="muted">kbit/s${v.bitrate_max ? ` (${v.bitrate_min}–${v.bitrate_max})` : ''}</span></div>
-        <label>Keyframe interval</label><div class="row"><input type="number" class="dv-gov" value="${v.gov || ''}" min="1" max="400" style="width:120px"><span class="muted">frames (about ${v.fps ? Math.max(1, Math.round((v.gov || 0) / v.fps)) : '?'} s; 1–2 s seeks and starts fastest)</span></div>
-        </div></div>`;
-  });
-  h += '</div>';
-  // Picture
-  h += `<div class="dv-sec" data-sec="imaging"><h3>Picture</h3>${na('imaging')}`;
-  if (im) {
-    const sl = (key, label) => im[key] == null ? '' : (() => { const [lo, hi] = (im.ranges || {})[key] || [0, 100]; return `<label>${label}</label><div class="row"><input type="range" id="dv-${key}" min="${lo}" max="${hi}" value="${im[key]}" style="flex:1"><span class="muted" style="width:40px" id="dv-${key}-v">${im[key]}</span></div>`; })();
-    const irName = {AUTO: 'Automatic day / night', ON: 'Day (colour)', OFF: 'Night (black & white, infrared)'};
-    h += `<div class="form">${sl('brightness', 'Brightness')}${sl('contrast', 'Contrast')}${sl('saturation', 'Colour')}${sl('sharpness', 'Sharpness')}
-      ${im.ir_cut != null ? `<label>Day / night</label><div><select id="dv-ir">${(im.ir_modes.length ? im.ir_modes : ['AUTO', 'ON', 'OFF']).map(m => `<option value="${m}" ${m === im.ir_cut ? 'selected' : ''}>${irName[m] || m}</option>`).join('')}</select></div>` : ''}
-      </div>`;
-  }
-  h += '</div>';
-  box.innerHTML = h;
-  const busy = async (btn, fn) => { const t0 = btn.textContent; btn.disabled = true; btn.textContent = 'Saving…'; try { await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; btn.textContent = t0; } };
-  const url = (p) => `api/cameras/${enc(editingId)}/device/${p}`;
-  $('dv-reload').onclick = loadDeviceTab;
-  $('dv-reboot').onclick = () => { if (confirm('Restart the camera now? It will be offline for about a minute.')) busy($('dv-reboot'), async () => { await api(url('reboot'), {method: 'POST'}); toast('The camera is restarting.'); }); };
-  box.querySelectorAll('[data-tz]').forEach(a => a.onclick = () => $('dv-tz').value = a.dataset.tz);
-  box.querySelectorAll('input[type=range]').forEach(el => el.oninput = () => { const v = $(el.id + '-v'); if (v) v.textContent = el.value; });
-  const syncDhcp = () => { const d = document.querySelector('input[name=dv-dhcp]:checked'); if (!d) return; ['dv-ip', 'dv-prefix', 'dv-gw', 'dv-dns'].forEach(x => $(x).disabled = d.value === '1'); };
-  box.querySelectorAll('input[name=dv-dhcp]').forEach(x => x.onchange = syncDhcp); syncDhcp();
-  // Remember which parts were changed; "Save camera" sends only those.
-  deviceDirty = new Set();
-  box.querySelectorAll('[data-sec]').forEach(sec => {
-    const mark = () => deviceDirty.add(sec.dataset.sec === 'video' ? 'video:' + sec.dataset.k : sec.dataset.sec);
-    sec.addEventListener('input', mark); sec.addEventListener('change', mark);
-  });
-  const timeBody = () => ({mode: val('dv-mode'), tz: val('dv-tz').trim(), ntp_dhcp: false, ntp: val('dv-ntp').split(/[,\s]+/).filter(Boolean)});
-  if ($('dv-time-sync')) $('dv-time-sync').onclick = () => busy($('dv-time-sync'), async () => { await api(url('time'), {method: 'PUT', json: {...timeBody(), sync_clock: true}}); toast("The camera's clock now matches this computer."); loadDeviceTab(); });
-  saveDevice = async () => {
-    const done = [];
-    if (deviceDirty.has('network') && n) {
-      const dhcp = document.querySelector('input[name=dv-dhcp]:checked').value === '1';
-      const body = {token: n.token, mac: n.mac, dhcp, ip: val('dv-ip').trim(), prefix: +val('dv-prefix'), gateway: val('dv-gw').trim(),
-        dns: val('dv-dns').split(/[,\s]+/).filter(Boolean), dns_dhcp: n.dns_dhcp, hostname: val('dv-host').trim(), update_nvr: chk('dv-upd')};
-      const changing = dhcp !== n.dhcp || body.ip !== n.ip || body.prefix !== n.prefix;
-      if (!changing || confirm((dhcp ? 'Switch the camera to an automatic (DHCP) address? Its address may change and the NVR will lose it until you enter the new address.'
-        : `Change the camera's address from ${n.ip} to ${body.ip}?`) + '\n\nSome cameras restart to apply a new address; that is done automatically.')) {
-        const r2 = await api(url('network'), {method: 'PUT', json: body});
-        done.push('network' + (r2.nvr_updated ? ' (the NVR now uses the new address)' : '') + (r2.restarted ? ' — the camera is restarting' : ''));
-      }
-    }
-    if (deviceDirty.has('time') && t) { await api(url('time'), {method: 'PUT', json: timeBody()}); done.push('date & time'); }
-    for (const el of box.querySelectorAll('.dv-stream')) {
-      if (!deviceDirty.has('video:' + el.dataset.k)) continue;
-      const v = r.video[+el.dataset.k], [w, hh] = el.querySelector('.dv-res').value.split('x').map(Number), enc2 = el.querySelector('.dv-enc');
-      await api(url('video'), {method: 'PUT', json: {token: v.token, width: w, height: hh, fps: +el.querySelector('.dv-fps').value, bitrate: Math.round(+el.querySelector('.dv-br').value),
-        gov: Math.round(+el.querySelector('.dv-gov').value) || 0, encoding: enc2 ? enc2.value : ''}});
-      done.push(`stream ${+el.dataset.k + 1}`);
-    }
-    if (deviceDirty.has('imaging') && im) {
-      const g = (k) => $('dv-' + k) ? +$('dv-' + k).value : null;
-      await api(url('imaging'), {method: 'PUT', json: {brightness: g('brightness'), contrast: g('contrast'), saturation: g('saturation'), sharpness: g('sharpness'), ir_cut: $('dv-ir') ? $('dv-ir').value : null}});
-      done.push('picture');
-    }
-    deviceDirty.clear();
-    return done;
+// ---------- restart the camera over ONVIF ----------
+// Shown under General when the camera answers over ONVIF (address and login
+// from the Pan / tilt / zoom tab, or the stream URL).
+async function setupRestartButton(id) {
+  const rows = document.querySelectorAll('.c-restart');
+  rows.forEach(r => r.hidden = true);
+  if (!id) return;
+  let r; try { r = await api(`api/cameras/${enc(id)}/device`); } catch (_) { return; }
+  if (!r.ok || editingId !== id) return;
+  rows.forEach(x => x.hidden = false);
+  $('c-restart-info').textContent = [r.info.manufacturer, r.info.model].filter(Boolean).join(' ');
+  $('c-restart').onclick = async () => {
+    if (!confirm('Restart the camera now? It will be offline for about a minute.')) return;
+    const b = $('c-restart'); b.disabled = true;
+    try { await api(`api/cameras/${enc(id)}/device/reboot`, {method: 'POST'}); toast('The camera is restarting — it will be back in about a minute.'); }
+    catch (e) { toast(e.message, true); }
+    b.disabled = false;
   };
 }
-let deviceDirty = new Set(), saveDevice = null;
 
 // ---------- zones ----------
 let dlgZones = [], zoneDraft = null, zoneUnbind = null;
@@ -3798,14 +3750,8 @@ async function finishSave(body) {
     if (move) btn.textContent = 'Moving recordings…';
     if (editingId) await api(`api/cameras/${enc(editingId)}?move_recordings=${!!move}`, {method: 'PUT', json: body});
     else await api('api/cameras', {method: 'POST', json: body});
-    // Settings on the camera itself (Camera settings tab), if any changed.
-    let onCamera = [];
-    if (editingId && deviceLoaded && saveDevice && deviceDirty.size) {
-      btn.textContent = 'Saving to the camera…';
-      try { onCamera = await saveDevice(); } catch (e) { closeCameraDialog(); toast('Saved in the NVR, but the camera refused: ' + e.message, true); await loadSettings(); await refreshStatus(); return; }
-    }
     closeCameraDialog();
-    toast((editingId ? 'Camera updated' : cloneMode ? 'Camera cloned' : 'Camera added') + (onCamera.length ? '; on the camera: ' + onCamera.join(', ') : ''));
+    toast(editingId ? 'Camera updated' : cloneMode ? 'Camera cloned' : 'Camera added');
     await loadSettings(); await refreshStatus();
     if (page === 'settings') showSettings(section); else route();
   } catch (e) { err(e.message); }

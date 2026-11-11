@@ -78,8 +78,6 @@ pub struct Status {
 }
 
 static STATUS: Mutex<Option<Status>> = Mutex::new(None);
-/// GitHub's tag for the last answer (repository, ETag).
-static ETAG: Mutex<Option<(String, String)>> = Mutex::new(None);
 /// How to restart GAZE once the new program is in place (set by main).
 static RESTART: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
@@ -122,74 +120,169 @@ fn client() -> Result<reqwest::Client> {
         .build()?)
 }
 
+/// GitHub's normal web pages (the release page and downloads): not limited
+/// like its API, which allows only 60 requests an hour per internet
+/// connection when not signed in. `GAZE_UPDATE_WEB` points elsewhere for
+/// tests.
+fn web_base() -> String {
+    std::env::var("GAZE_UPDATE_WEB").unwrap_or_else(|_| "https://github.com".into())
+}
+
+fn api_base() -> String {
+    std::env::var("GAZE_UPDATE_API").unwrap_or_else(|_| "https://api.github.com".into())
+}
+
+/// GitHub said "too many requests": don't ask again before this.
+static NOT_BEFORE: Mutex<Option<DateTime<Local>>> = Mutex::new(None);
+
+/// When GitHub lets us ask again, from its answer (Retry-After or its
+/// rate-limit reset time); 15 minutes if it doesn't say.
+fn retry_time(resp: &reqwest::Response) -> DateTime<Local> {
+    let h = |n: &str| {
+        resp.headers()
+            .get(n)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<i64>().ok())
+    };
+    let now = Local::now();
+    if let Some(secs) = h("retry-after") {
+        return now + chrono::Duration::seconds(secs.clamp(10, 3600));
+    }
+    if let Some(reset) = h("x-ratelimit-reset")
+        && let Some(t) = DateTime::from_timestamp(reset, 0)
+    {
+        let t = t.with_timezone(&Local);
+        if t > now {
+            return t.min(now + chrono::Duration::hours(1));
+        }
+    }
+    now + chrono::Duration::minutes(15)
+}
+
+fn limited(resp: &reqwest::Response) -> bool {
+    resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || (resp.status() == reqwest::StatusCode::FORBIDDEN
+            && resp
+                .headers()
+                .get("x-ratelimit-remaining")
+                .is_some_and(|v| v == "0"))
+}
+
 /// Ask GitHub for the newest release.
+///
+/// The newest version comes from the address github.com/<repo>/releases/latest
+/// redirects to (a web page, not the limited API); the program and its
+/// checksum are at fixed download addresses. The API is only asked once
+/// per new version, for the release notes (optional).
 pub async fn check(repo: &str) -> Result<Status> {
+    if let Some(t) = *NOT_BEFORE.lock().unwrap()
+        && t > Local::now()
+    {
+        bail!(
+            "GitHub asked GAZE to wait before checking again (it limits checks from one internet connection); checking again at {}",
+            t.format("%H:%M")
+        );
+    }
     with(|s| {
         s.state = "checking".into();
         s.error = None;
         s.repo = repo.to_string();
     });
     let res = async {
-        // "Has anything changed since last time?": GitHub answers 304 for
-        // nothing new, and those answers don't count against its limit of
-        // 60 checks an hour, so GAZE can check every minute.
-        let etag = ETAG
-            .lock()
-            .unwrap()
-            .clone()
-            .filter(|(r, _)| r == repo)
-            .map(|(_, e)| e);
-        let mut req = client()?
-            .get(format!(
-                "{}/repos/{repo}/releases/latest",
-                std::env::var("GAZE_UPDATE_API")
-                    .unwrap_or_else(|_| "https://api.github.com".into())
-            ))
-            .header("Accept", "application/vnd.github+json");
-        if let Some(e) = &etag {
-            req = req.header("If-None-Match", e);
+        let web = web_base();
+        let no_redirect = reqwest::Client::builder()
+            .user_agent(concat!("GAZE-updater/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let resp = no_redirect
+            .get(format!("{web}/{repo}/releases/latest"))
+            .send()
+            .await
+            .context("cannot reach GitHub")?;
+        if limited(&resp) {
+            let t = retry_time(&resp);
+            *NOT_BEFORE.lock().unwrap() = Some(t);
+            bail!(
+                "GitHub limits how often one internet connection can check; checking again at {}",
+                t.format("%H:%M")
+            );
         }
-        let resp = req.send().await.context("cannot reach GitHub")?;
-        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            bail!("repository {repo} not found (or it's private)");
+        }
+        let location = resp
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        // ".../releases/tag/v0.5.6"; without any release it points at ".../releases".
+        let Some(tag) = location
+            .rsplit_once("/releases/tag/")
+            .map(|(_, t)| t.split(['?', '#']).next().unwrap_or(t).to_string())
+            .filter(|t| !t.is_empty())
+        else {
+            bail!("no releases yet");
+        };
+        let tag = urlencoding_decode(&tag);
+        let version = tag.trim_start_matches('v').to_string();
+        let newer =
+            matches!((parse_version(&tag), parse_version(VERSION)), (Some(l), Some(c)) if l > c);
+        let name = match asset_name() {
+            Some(n) => n,
+            None if newer => bail!("no ready-made updates for this kind of computer"),
+            None => "",
+        };
+        let known = with(|s| s.latest.as_deref() == Some(version.as_str()) && s.checked.is_some());
+        if known {
             with(|s| s.checked = Some(Local::now()));
             return anyhow::Ok(());
         }
-        if let Some(e) = resp.headers().get("etag").and_then(|v| v.to_str().ok()) {
-            *ETAG.lock().unwrap() = Some((repo.to_string(), e.to_string()));
+        let url = format!("{web}/{repo}/releases/download/{tag}/{name}");
+        // A new version: is the program for this computer attached?
+        // (its small checksum file; GitHub's file storage refuses HEAD requests)
+        let has_asset = newer
+            && client()?
+                .get(format!("{url}.sha256"))
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success());
+        // Release notes and date (optional; the API may be rate-limited).
+        let (mut notes, mut published) = (String::new(), None);
+        if newer
+            && let Ok(r) = client()?
+                .get(format!("{}/repos/{repo}/releases/tags/{tag}", api_base()))
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+            && r.status().is_success()
+            && let Ok(v) = r.json::<Value>().await
+        {
+            notes = v["body"].as_str().unwrap_or("").to_string();
+            published = v["published_at"].as_str().map(String::from);
         }
-        let v: Value = resp
-            .error_for_status()
-            .map_err(|e| {
-                if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                    anyhow!("no releases yet")
-                } else {
-                    e.into()
-                }
-            })?
-            .json()
-            .await?;
-        let tag = v["tag_name"].as_str().unwrap_or("").to_string();
-        let name = asset_name()
-            .ok_or_else(|| anyhow!("no ready-made updates for this kind of computer"))?;
-        let find = |n: &str| {
-            v["assets"]
-                .as_array()
-                .and_then(|a| a.iter().find(|x| x["name"] == n))
-                .and_then(|x| x["browser_download_url"].as_str())
-                .map(String::from)
-        };
-        let newer =
-            matches!((parse_version(&tag), parse_version(VERSION)), (Some(l), Some(c)) if l > c);
-        let url = find(name);
         with(|s| {
-            s.latest = Some(tag.trim_start_matches('v').to_string());
-            s.notes = v["body"].as_str().unwrap_or("").to_string();
-            s.published = v["published_at"].as_str().map(String::from);
-            s.available = newer && url.is_some();
-            s.url = url.unwrap_or_default();
-            s.sha_url = find(&format!("{name}.sha256")).unwrap_or_default();
+            s.latest = Some(version);
+            s.notes = notes;
+            s.published = published;
+            s.available = newer && has_asset;
+            s.url = if has_asset {
+                url.clone()
+            } else {
+                String::new()
+            };
+            s.sha_url = if has_asset {
+                format!("{url}.sha256")
+            } else {
+                String::new()
+            };
             s.checked = Some(Local::now());
         });
+        if newer && !has_asset {
+            bail!("GAZE {tag} has no ready-made program for this kind of computer yet");
+        }
         anyhow::Ok(())
     }
     .await;
@@ -201,6 +294,26 @@ pub async fn check(repo: &str) -> Result<Status> {
         }
     });
     res.map(|_| status())
+}
+
+/// "%2B" → "+" in a tag taken from an address.
+fn urlencoding_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn sibling(exe: &Path, suffix: &str) -> PathBuf {
@@ -370,6 +483,27 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
 
 #[cfg(test)]
 mod tests {
+    /// Against the real GitHub: GAZE_TEST_GITHUB=impulsenz/NVR cargo test finds_latest
+    #[tokio::test]
+    async fn finds_latest_release_without_the_api() {
+        let Ok(repo) = std::env::var("GAZE_TEST_GITHUB") else {
+            return;
+        };
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let s = super::check(&repo).await.unwrap();
+        assert!(s.latest.is_some(), "{s:?}");
+        println!(
+            "latest: {:?} available: {} url: {}",
+            s.latest, s.available, s.url
+        );
+    }
+
+    #[test]
+    fn decodes_tags() {
+        assert_eq!(super::urlencoding_decode("v1.0.0%2Bbuild"), "v1.0.0+build");
+        assert_eq!(super::urlencoding_decode("v0.5.6"), "v0.5.6");
+    }
+
     use super::*;
 
     #[test]

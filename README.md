@@ -181,11 +181,7 @@ viewing, finding footage, and managing everything, all from the browser.
 
 **Setup**
 - Add, edit, **clone** and delete cameras in the browser.
-- **Change the camera's own settings over ONVIF** (camera editor → Camera settings): IP address / DHCP,
-  subnet, gateway, DNS and host name (the NVR follows the camera to its new address), time server, time
-  zone and clock sync, each stream's resolution, frame rate, bitrate, keyframe interval and H.264/H.265,
-  brightness / contrast / colour / sharpness and day/night mode, and restart. What a camera doesn't
-  support over ONVIF is shown as not available.
+- **Restart a camera** from GAZE (camera editor → General), for cameras that answer over ONVIF.
 - **Camera brand quick setup**: pick the brand, enter the IP and login, and the main and sub-stream URLs
   are filled in for you. 15 common formats are included.
 - **Test connection** plays both streams live and shows their codec, resolution and frame rate.

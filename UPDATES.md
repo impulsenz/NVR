@@ -134,11 +134,14 @@ installation over, because GAZE only updates to higher versions.
 
 ## 4. How it works
 
-**Checking:** GAZE asks GitHub for the newest release
-(`api.github.com/repos/<owner>/<repo>/releases/latest`) every minute, and
-when you press **⟳ Updates**. It asks "has anything changed?" (an ETag):
-GitHub answers "no" without counting it against its limit of 60 requests an
-hour per internet connection.
+**Checking:** every minute, and when you press **⟳ Updates**, GAZE opens
+`github.com/<owner>/<repo>/releases/latest` and reads which version it leads
+to. That's GitHub's normal web page, not its API, which allows only 60
+requests an hour per internet connection when not signed in (and answers
+"403 rate limit exceeded" after that). The program and its checksum are
+downloaded from the release's fixed download addresses; the API is asked only
+once per new version, for the release notes. If GitHub still says to slow
+down, GAZE waits until the time GitHub gives before checking again.
 
 **Updating:**
 1. GAZE downloads the program for this system from the release.
@@ -160,6 +163,12 @@ HTTPS.
 ---
 
 ## 5. Troubleshooting
+
+**"403 rate limit exceeded" for api.github.com**
+Versions before 0.5.7 asked GitHub's API every minute, and GitHub allows only
+60 such requests an hour per internet connection (fewer if other programs at
+home use it too). It sorts itself out within the hour. From 0.5.7 GAZE checks
+GitHub's normal release page instead, which doesn't have that limit.
 
 **"no releases yet"**
 No version has been published in that repository. See
