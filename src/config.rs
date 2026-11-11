@@ -182,6 +182,9 @@ impl Default for DisplayConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct HardwareConfig {
+    /// Choose the GPU decoder and encoder automatically at start-up (the
+    /// first that works on this computer). Off: use the choices below.
+    pub auto: bool,
     /// GPU video decoding: none, auto, cuda, qsv, vaapi, videotoolbox, d3d11va, dxva2.
     pub hwaccel: String,
     /// H.264 encoder used when recordings are converted.
@@ -200,6 +203,7 @@ pub struct HardwareConfig {
 impl Default for HardwareConfig {
     fn default() -> Self {
         Self {
+            auto: true,
             hwaccel: "none".into(),
             encoder: "auto".into(),
             device: String::new(),

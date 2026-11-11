@@ -404,6 +404,66 @@ pub async fn test_hardware(ffmpeg: &str, hw: &HardwareConfig) -> HwTest {
     }
 }
 
+/// The best GPU video setup that works on this computer: the first GPU
+/// decoder that decodes a test clip (also used for the small sub-streams),
+/// and the first GPU encoder that encodes one. Nothing on the GPU works:
+/// the processor, as before.
+pub async fn auto_hardware(
+    ffmpeg: &str,
+    caps: &Capabilities,
+    cur: &HardwareConfig,
+) -> HardwareConfig {
+    let mut hw = HardwareConfig {
+        hwaccel: "none".into(),
+        encoder: "libx264".into(),
+        gpu_substreams: false,
+        ..cur.clone()
+    };
+    let decoders: &[&str] = if cfg!(windows) {
+        &["d3d11va", "cuda", "qsv", "dxva2"]
+    } else if cfg!(target_os = "macos") {
+        &["videotoolbox"]
+    } else {
+        &["cuda", "qsv"]
+    };
+    for d in decoders
+        .iter()
+        .filter(|d| caps.hwaccels.iter().any(|h| h == *d))
+    {
+        let t = HardwareConfig {
+            hwaccel: d.to_string(),
+            encoder: "libx264".into(),
+            ..cur.clone()
+        };
+        if test_hardware(ffmpeg, &t).await.decoder.ok {
+            hw.hwaccel = d.to_string();
+            hw.gpu_substreams = true;
+            break;
+        }
+    }
+    for e in [
+        "h264_nvenc",
+        "h264_amf",
+        "h264_qsv",
+        "h264_videotoolbox",
+        "h264_mf",
+    ] {
+        if !caps.encoders.iter().any(|x| x == e) {
+            continue;
+        }
+        let t = HardwareConfig {
+            hwaccel: "none".into(),
+            encoder: e.into(),
+            ..cur.clone()
+        };
+        if test_hardware(ffmpeg, &t).await.encoder.ok {
+            hw.encoder = e.into();
+            break;
+        }
+    }
+    hw
+}
+
 // ---------- camera probe ----------
 
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]

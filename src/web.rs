@@ -152,6 +152,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/talk", get(talk_ws))
         .route("/api/talk-test", post(talk_test))
         .route("/api/jobs", get(jobs_list))
+        .route("/api/where", get(where_work_runs))
         .route("/api/update", get(update_status))
         .route("/api/update/check", post(update_check))
         .route("/api/update/install", post(update_install))
@@ -2156,6 +2157,50 @@ async fn notify_status() -> Response {
 
 // ---------- System → Tasks ----------
 
+/// Settings → Tasks → "What runs where": every part that can use the
+/// graphics card, and where it runs now (and why, when it's the processor).
+async fn where_work_runs(State(m): App) -> Response {
+    let cfg = m.config();
+    let hw = &cfg.hardware;
+    let gpu_dec = hw.hwaccel != "none";
+    let no_dec = if hw.auto {
+        "no GPU video decoder worked on this computer (checked at start-up)"
+    } else {
+        "GPU video decoding is off in Settings → GPU acceleration"
+    };
+    let cams: Vec<_> = m
+        .cameras()
+        .iter()
+        .map(|c| {
+            let live_main = c.live_main.on_gpu();
+            let live_sub = c.cfg.has_sub() && c.live_sub.on_gpu();
+            let det = c.detector().map(|d| d.status().gpu_decoding);
+            json!({
+                "name": c.cfg.name,
+                "live_hd": live_main,
+                "live_small": if c.cfg.has_sub() { Some(live_sub) } else { None },
+                "detection": det,
+            })
+        })
+        .collect();
+    Json(json!({
+        "ai_device": crate::infer::status(),
+        "ai_wanted": crate::infer::use_gpu(),
+        "models": crate::infer::placed(),
+        "video": {
+            "auto": hw.auto,
+            "decoder": hw.hwaccel,
+            "encoder": hw.resolved_encoder(),
+            "small_on_gpu": hw.gpu_substreams,
+            "why_not": if gpu_dec { None } else { Some(no_dec) },
+            "balance": hw.balance,
+            "moved_to_cpu": crate::load::moved_to_cpu(),
+        },
+        "cameras": cams,
+    }))
+    .into_response()
+}
+
 async fn jobs_list(State(m): App) -> Response {
     // Alerts still waiting for the background AI.
     let cfg = m.config();
@@ -2845,6 +2890,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/update",
         "/api/logs",
         "/api/system",
+        "/api/where",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"

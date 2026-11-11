@@ -653,3 +653,12 @@ ol.steps code { user-select: all; }
   background: color-mix(in srgb, var(--accent) 18%, var(--panel)); border-bottom: 1px solid var(--accent); transition: max-height .35s ease, padding .35s ease; font-size: 14px; }
 .upd-bar.show { max-height: 120px; padding: 8px 16px; }
 .upd-bar span { flex: 1; min-width: 200px; }
+
+/* What runs where */
+table.where { width: 100%; border-collapse: collapse; }
+table.where th { text-align: left; padding: 10px 0 4px; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+table.where td { padding: 4px 8px 4px 0; vertical-align: top; }
+table.where td:first-child { width: 44px; }
+.pu { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+.pu.gpu { background: rgba(46, 204, 113, .18); color: #3dd68c; }
+.pu.cpu { background: rgba(255, 176, 32, .18); color: #ffb020; }

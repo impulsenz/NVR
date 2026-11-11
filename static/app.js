@@ -2400,6 +2400,31 @@ $('upd-btn').onclick = async () => {
   b.disabled = false;
 };
 
+// "What runs where": the graphics card or the processor, and why.
+async function loadWhere() {
+  const box = $('where'); if (!box) return;
+  let w; try { w = await api('api/where'); } catch (e) { box.textContent = e.message; return; }
+  const tag = (gpu) => gpu ? '<span class="pu gpu">GPU</span>' : '<span class="pu cpu">CPU</span>';
+  const row = (gpu, what, why) => `<tr><td>${tag(gpu)}</td><td>${what}${why ? `<div class="muted small">${esc(why)}</div>` : ''}</td></tr>`;
+  const v = w.video, rows = [];
+  rows.push(`<tr><th colspan="2">AI</th></tr>`);
+  if (w.models.length) w.models.forEach(m => rows.push(row(m.gpu, esc(m.what), m.gpu ? '' : m.why)));
+  else rows.push(`<tr><td></td><td class="muted">No AI model loaded yet (they load when first needed). ${esc(w.ai_device)}</td></tr>`);
+  rows.push(`<tr><th colspan="2">Video</th></tr>`);
+  rows.push(row(v.decoder !== 'none', `Video decoding${v.decoder !== 'none' ? ` (${esc(v.decoder)})` : ''}${v.auto ? ' — chosen automatically' : ''}`, v.why_not));
+  rows.push(row(v.encoder !== 'libx264', `Converting recordings (${esc(v.encoder)})`, v.encoder === 'libx264' ? 'no GPU encoder works with this ffmpeg — only used when a camera converts or lowers its recording frame rate' : ''));
+  w.cameras.forEach(c => {
+    const parts = [['live view (HD)', c.live_hd], ['live grid (small)', c.live_small], ['motion detection', c.detection]].filter(([, x]) => x != null);
+    rows.push(`<tr><td></td><td><b>${esc(c.name)}</b> — ${parts.map(([t, g]) => `${t}: ${tag(g)}`).join(' · ')}</td></tr>`);
+  });
+  if (v.moved_to_cpu) rows.push(row(false, `${v.moved_to_cpu} video job(s) moved to the processor`, 'smart load balancing: the GPU was over 85 % busy at the time'));
+  rows.push(`<tr><th colspan="2">Always on the processor</th></tr>`);
+  rows.push(row(false, 'Motion analysis, live-view pictures (JPEG), previews and alert pictures', 'small, quick work on pictures already decoded — moving it to the GPU would cost more in copying than it saves'));
+  rows.push(row(false, 'Recording', 'needs no decoding at all: the camera\'s video is copied as it is'));
+  box.className = '';
+  box.innerHTML = `<table class="where"><tbody>${rows.join('')}</tbody></table>`;
+}
+
 // ---------- Settings → Tasks ----------
 const TASK_ACTIONS = [
   ['previews', '🖼️ Rebuild previews', 'Throws away the scrub and time-lapse previews and makes the last 24 hours again. Use it if previews look wrong or black.', null,
@@ -2415,6 +2440,7 @@ function renderTasks(body) {
     <p class="muted" style="margin-top:0">Besides recording, GAZE works on alerts in the background: describing them (smart search), finding faces and number plates, preparing previews, downloading AI models and copying to the cloud. It waits for spare processor time, so it never slows down recording or live view.</p>
     <div id="tasks-waiting" style="margin-bottom:8px"></div>
     <div id="set-tasks"></div></div>
+    <div class="card"><h2>What runs where</h2><div id="where" class="muted">Reading…</div></div>
     <div class="card"><h2>Run again</h2><div class="task-actions">${TASK_ACTIONS.map(([k, t, d]) => `<div class="task-action"><button type="button" data-k="${k}">${t}</button><div class="hint">${d}</div></div>`).join('')}</div></div>`;
   body.querySelectorAll('.task-actions button').forEach(b => b.onclick = async () => {
     const [k, , , json, ask] = TASK_ACTIONS.find(a => a[0] === b.dataset.k);
@@ -2423,9 +2449,10 @@ function renderTasks(body) {
     try { toast((await api('api/maintenance/' + k, {method: 'POST', json: json || {}})).message); setTimeout(loadJobs, 800); } catch (e) { toast(e.message, true); }
     setTimeout(() => { b.disabled = false; }, 3000);
   });
-  loadJobs();
+  loadJobs(); loadWhere();
   clearInterval(jobsTimer);
-  jobsTimer = setInterval(() => { if ($('set-tasks') && location.hash.startsWith('#settings/tasks')) loadJobs(); else clearInterval(jobsTimer); }, 2000);
+  let n = 0;
+  jobsTimer = setInterval(() => { if ($('set-tasks') && location.hash.startsWith('#settings/tasks')) { loadJobs(); if (++n % 3 === 0) loadWhere(); } else clearInterval(jobsTimer); }, 2000);
 }
 
 function showSystem() {
@@ -3876,6 +3903,8 @@ async function renderHardware(body) {
     <form class="card" id="f-hw"><h2>GPU acceleration</h2>
     <p class="muted" style="margin-top:0">The GPU decodes video for the live view and motion detection, and encodes when a camera converts or lowers the frame rate of recordings. Normal recording copies the camera's video and needs no GPU. If the GPU fails, the NVR switches to the CPU automatically.</p>
     <div class="form">
+      <span></span><div><label class="check"><input type="checkbox" id="h-auto" ${h.auto !== false ? 'checked' : ''}> Choose automatically (recommended)</label>
+        <div class="hint">At every start GAZE tries the graphics card's video decoder and encoder and uses the first that works — for every stream, so the processor stays free. Untick to choose below yourself.</div></div>
       <label for="h-dec">Video decoding</label><div><select id="h-dec">${Object.entries(DEC_LABELS).map(([k, v]) => { const ok = k === 'none' || k === 'auto' || caps.hwaccels.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
         <div class="hint">${caps.hwaccels.length ? 'Your ffmpeg supports: ' + esc(caps.hwaccels.join(', ')) + '. Use Test to check the hardware is really there.' : 'Your ffmpeg reports no GPU support.'}</div></div>
       <label for="h-enc">H.264 encoder</label><div><select id="h-enc">${Object.entries(ENC_LABELS).map(([k, v]) => { const ok = k === 'auto' || caps.encoders.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
@@ -3891,7 +3920,9 @@ async function renderHardware(body) {
   $('h-dec').value = h.hwaccel; $('h-enc').value = h.encoder;
   const sync = () => document.querySelectorAll('.vaapi').forEach(e => e.hidden = !(val('h-dec') === 'vaapi' || val('h-enc') === 'h264_vaapi'));
   $('h-dec').onchange = $('h-enc').onchange = sync; sync();
-  const form = () => ({hwaccel: val('h-dec'), encoder: val('h-enc'), device: val('h-dev').trim(), gpu_substreams: chk('h-sub'), balance: chk('h-bal')});
+  const form = () => ({auto: chk('h-auto'), hwaccel: val('h-dec'), encoder: val('h-enc'), device: val('h-dev').trim(), gpu_substreams: chk('h-sub'), balance: chk('h-bal')});
+  // Choosing by hand switches "automatically" off.
+  ['h-dec', 'h-enc', 'h-sub'].forEach(id => $(id).addEventListener('change', () => { $('h-auto').checked = false; }));
   $('f-hw').onsubmit = (e) => { e.preventDefault(); saveSettings({hardware: form()}, 'Saved. Cameras are restarting with the new settings.'); };
   $('h-test').onclick = async () => {
     const btn = $('h-test'), out = $('h-result');

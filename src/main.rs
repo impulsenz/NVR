@@ -217,7 +217,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     // HTTPS (cloud AI, model download) uses rustls with the ring crypto backend.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (cfg, needs_save) = config::Config::load_or_create(&path)?;
+    let (mut cfg, needs_save) = config::Config::load_or_create(&path)?;
     config::private_file(&path);
     // Logs, statistics and AI models live next to the config file.
     let data_dir = path
@@ -254,6 +254,24 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         );
     } else {
         info!("{}", caps.ffmpeg_version);
+        // Video on the graphics card where possible (Settings → GPU
+        // acceleration → Choose automatically).
+        if cfg.hardware.auto {
+            let hw = ffmpeg::auto_hardware(&cfg.server.ffmpeg_path, &caps, &cfg.hardware).await;
+            info!(
+                "video: decoding on {}, converting with {}",
+                if hw.hwaccel == "none" {
+                    "the processor (no GPU decoder works)".to_string()
+                } else {
+                    format!("the GPU ({})", hw.hwaccel)
+                },
+                hw.encoder
+            );
+            if hw != cfg.hardware {
+                cfg.hardware = hw;
+                cfg.save(&path)?;
+            }
+        }
     }
     info!(
         "{} camera(s); recordings in {}",

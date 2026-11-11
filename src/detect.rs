@@ -184,6 +184,8 @@ pub struct DetectStatus {
     pub fps: f32,
     /// Parked vehicles being ignored ("car", …).
     pub parked: Vec<String>,
+    /// Decoding the camera's pictures on the GPU right now.
+    pub gpu_decoding: bool,
 }
 
 pub struct Detector {
@@ -332,6 +334,7 @@ impl Detector {
         active: &mut Option<Active>,
     ) -> Result<()> {
         let use_gpu = *use_gpu_now;
+        self.status.lock().unwrap().gpu_decoding = use_gpu;
         // Automatic CPU/GPU choice (when a GPU is set up but sub-streams are
         // not forced onto it): move when one side is overloaded for a while.
         let auto = crate::load::balance()

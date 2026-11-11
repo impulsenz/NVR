@@ -194,15 +194,59 @@ pub fn load(path: &Path, what: &str, cpu: impl FnOnce() -> Result<Plan>) -> Resu
         match gpu_session(env, path) {
             Ok(s) => {
                 info!("AI: {what} runs on the GPU");
+                record(what, true, String::new());
                 return Ok(Net::Gpu(Mutex::new(s)));
             }
             Err(e) => {
                 warn!("AI: {what} can't run on the GPU ({e:#}); using the processor");
                 note(format!("GPU (DirectML), but {what} runs on the CPU: {e:#}"));
+                record(
+                    what,
+                    false,
+                    format!("the GPU couldn't run this model: {e:#}"),
+                );
+                return Ok(Net::Cpu(cpu()?));
             }
         }
     }
+    let why = if !use_gpu() {
+        "processor chosen in the settings".to_string()
+    } else {
+        match RUNTIME_ERR.lock().unwrap().clone() {
+            Some(e) => format!("the GPU can't be used: {e}"),
+            None => {
+                "the GPU runtime wasn't ready yet when it loaded (it moves to the GPU once ready)"
+                    .into()
+            }
+        }
+    };
+    record(what, false, why);
     Ok(Net::Cpu(cpu()?))
+}
+
+/// Each model's place (for Settings → Tasks → What runs where).
+#[derive(Clone, serde::Serialize)]
+pub struct Placed {
+    pub what: String,
+    pub gpu: bool,
+    pub why: String,
+}
+
+static PLACED: Mutex<Vec<Placed>> = Mutex::new(Vec::new());
+
+fn record(what: &str, gpu: bool, why: String) {
+    let mut p = PLACED.lock().unwrap();
+    p.retain(|x| x.what != what);
+    p.push(Placed {
+        what: what.to_string(),
+        gpu,
+        why,
+    });
+}
+
+/// Models loaded so far and where they run.
+pub fn placed() -> Vec<Placed> {
+    PLACED.lock().unwrap().clone()
 }
 
 fn gpu_session(env: &ort::environment::Environment, path: &Path) -> Result<ort::session::Session> {

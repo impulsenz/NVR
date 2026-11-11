@@ -307,6 +307,11 @@ impl Live {
     }
 
     /// Run ffmpeg until it fails or nobody is watching. Returns whether any frame arrived.
+    /// Decoding on the GPU right now?
+    pub fn on_gpu(&self) -> bool {
+        self.use_gpu.load(Ordering::SeqCst)
+    }
+
     async fn run_once(&self, use_gpu: bool) -> Result<bool> {
         let live = &self.env.live;
         let fps = self.target_fps();
