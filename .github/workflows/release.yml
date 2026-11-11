@@ -7,9 +7,12 @@
 #   Actions as "Version x.y.z"), or
 # - a version tag is pushed by hand (git tag v0.6.0 && git push origin v0.6.0).
 #
+# - "Run workflow" is started by hand on the default branch and the version
+#   in Cargo.toml has no release yet (e.g. to retry a failed release).
+#
 # GAZE installations find the release, download the program for their
-# system and update themselves (Settings → About). "Run workflow" by hand
-# only builds (the programs are attached to the run).
+# system and update themselves (Settings → About). On another branch, "Run
+# workflow" only builds (the program is attached to the run).
 name: Release
 
 on:
@@ -40,14 +43,15 @@ jobs:
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           echo "version=$v" >> "$GITHUB_OUTPUT"
           release=false
+          released() { gh release view "v$v" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; }
           if [ "${GITHUB_REF_TYPE}" = tag ]; then
             release=true
+          elif [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ] && [ "${GITHUB_REF_NAME}" = "${{ github.event.repository.default_branch }}" ]; then
+            released || release=true
           elif [ "${GITHUB_EVENT_NAME}" = push ] && [ "${GITHUB_REF_NAME}" = "${{ github.event.repository.default_branch }}" ] \
                && [ "$(printf '%s' "$HEAD_TITLE" | head -n1)" = "Version $v" ]; then
             # Only versions that haven't been released yet.
-            if ! gh release view "v$v" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-              release=true
-            fi
+            released || release=true
           fi
           echo "release=$release" >> "$GITHUB_OUTPUT"
           echo "version $v, release: $release"
