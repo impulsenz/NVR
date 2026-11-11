@@ -74,6 +74,9 @@ pub struct Relay {
     shared: Mutex<Shared>,
     wake: Notify,
     info: watch::Sender<Option<StreamInfo>>,
+    /// The camera's sound track as ffmpeg described it at the last connect:
+    /// `None` before the first connect, `Some("")` when it sends no sound.
+    audio: Mutex<Option<String>>,
     cancel: CancellationToken,
     /// Picture rotation for this camera, degrees clockwise (0, 90, 180, 270).
     pub rotate: u16,
@@ -113,6 +116,7 @@ impl Relay {
             }),
             wake: Notify::new(),
             info: watch::Sender::new(None),
+            audio: Mutex::new(None),
             cancel,
         });
         tokio::spawn(r.clone().run());
@@ -131,6 +135,12 @@ impl Relay {
     }
 
     /// Codec, size and frame rate, once connected.
+    /// The sound the camera sends on this stream ("pcm_mulaw, 8000 Hz"),
+    /// `Some("")` when it sends none, `None` when not connected yet.
+    pub fn audio(&self) -> Option<String> {
+        self.audio.lock().unwrap().clone()
+    }
+
     pub fn info(&self) -> Option<StreamInfo> {
         self.info.borrow().clone()
     }
@@ -372,6 +382,7 @@ impl Relay {
         let mut lines = BufReader::new(stderr).lines();
         let mut filter = ffmpeg::StderrFilter::default();
         let mut in_input = true;
+        let mut audio = String::new();
         while let Ok(Some(line)) = lines.next_line().await {
             // "-loglevel level+info" prefixes each line with its level.
             let (level, msg) = match line
@@ -388,7 +399,19 @@ impl Relay {
             };
             if level == "info" || level == "verbose" {
                 if msg.contains("Output #0") {
+                    if in_input {
+                        if audio.is_empty() {
+                            info!("[{}] {}: the camera sends no sound", self.name, self.label);
+                        }
+                        *self.audio.lock().unwrap() = Some(audio.clone());
+                    }
                     in_input = false;
+                } else if in_input
+                    && audio.is_empty()
+                    && let Some(a) = parse_audio_line(msg)
+                {
+                    info!("[{}] {}: sound {a}", self.name, self.label);
+                    audio = a;
                 } else if in_input
                     && self.info.borrow().is_none()
                     && let Some(i) = parse_stream_line(msg)
@@ -419,6 +442,19 @@ impl Relay {
 }
 
 /// Parse ffmpeg's "Stream #0:0: Video: hevc (Main), yuvj420p(pc), 2560x1440, 15 fps, ..." line.
+/// "Stream #0:1: Audio: pcm_mulaw, 8000 Hz, mono, s16, 64 kb/s" →
+/// "pcm_mulaw, 8000 Hz".
+pub fn parse_audio_line(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("Stream #")?;
+    let a = rest.split_once("Audio: ")?.1;
+    let mut parts = a.split(',').map(str::trim);
+    let codec = parts.next()?.split(' ').next()?.to_string();
+    Some(match parts.next() {
+        Some(hz) if hz.ends_with("Hz") => format!("{codec}, {hz}"),
+        _ => codec,
+    })
+}
+
 pub fn parse_stream_line(line: &str) -> Option<StreamInfo> {
     let rest = line.trim().strip_prefix("Stream #")?;
     let v = rest.split_once("Video: ")?.1;
@@ -654,6 +690,19 @@ mod tests {
 
     #[test]
     fn parses_stream_lines() {
+        assert_eq!(
+            parse_audio_line("  Stream #0:1: Audio: pcm_mulaw, 8000 Hz, mono, s16, 64 kb/s")
+                .as_deref(),
+            Some("pcm_mulaw, 8000 Hz")
+        );
+        assert_eq!(
+            parse_audio_line(
+                "Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 16000 Hz, mono"
+            )
+            .as_deref(),
+            Some("aac, 16000 Hz")
+        );
+        assert!(parse_audio_line("Stream #0:0: Video: h264").is_none());
         let i = parse_stream_line("  Stream #0:0: Video: hevc (Main), yuvj420p(pc, bt709), 2560x1440, 15 fps, 15 tbr, 90k tbn").unwrap();
         assert_eq!(i.codec, "hevc");
         assert_eq!((i.width, i.height), (Some(2560), Some(1440)));

@@ -120,6 +120,7 @@ pub async fn run(mgr: Arc<Manager>) {
                     });
                     j.waiting();
                     crate::load::wait_for_cpu(80, Duration::from_secs(300)).await;
+                    j.pause_point().await;
                     j.step(format!("{} — {}", c.cfg.name, r.name));
                     j.done_one();
                     if !announced {

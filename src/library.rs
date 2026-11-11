@@ -256,6 +256,12 @@ fn event_matches(e: &Event, types: &HashSet<String>) -> bool {
     if types.is_empty() {
         return true;
     }
+    // Alerts where a face was seen or a number plate read.
+    if (types.contains("face") && !e.faces.is_empty())
+        || (types.contains("plate") && !e.plates.is_empty())
+    {
+        return true;
+    }
     if e.labels.is_empty() {
         return types.contains("motion");
     }

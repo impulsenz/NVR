@@ -329,6 +329,7 @@ pub async fn refresh_pictures(mgr: Arc<Manager>, days: i64) {
     for (rt, mut e) in todo {
         job.waiting();
         crate::load::wait_for_cpu(80, Duration::from_secs(300)).await;
+        job.pause_point().await;
         job.step(format!(
             "{} — {}",
             rt.cfg.name,
@@ -441,6 +442,7 @@ pub async fn run(mgr: Arc<Manager>) {
                 for e in todo {
                     job.waiting();
                     crate::load::wait_for_cpu(80, Duration::from_secs(300)).await;
+                    job.pause_point().await;
                     job.step(format!("Alert at {}", e.start.format("%d/%m %H:%M:%S")));
                     let res = identify(&mgr, &rt, &store, e.clone()).await;
                     job.done_one();

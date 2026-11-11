@@ -9,13 +9,17 @@ const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehicle', motorcycle:'vehicle', bicycle:'vehicle',
   dog:'animal', cat:'animal', bird:'animal', horse:'animal', cow:'animal', sheep:'animal', bear:'animal'};
 // Alert types. Plain recordings aren't listed: they are on the timeline.
+// The Alerts filter chips. Faces and number plates show alerts where one
+// was found.
 const FILTER_BASE = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],
-  ['motorcycle','Motorcycle'],['bicycle','Bicycle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken']];
-// The Alerts filter: the usual objects, plus any a camera watches for.
-function filterTypes() {
-  const extra = [...new Set(((status && status.cameras) || []).flatMap(c => c.watch || []))]
-    .filter(o => !FILTER_BASE.some(([k]) => k === o)).map(o => [o, o.charAt(0).toUpperCase() + o.slice(1)]);
-  return [...FILTER_BASE, ...extra, ['other', 'Other objects']];
+  ['motorcycle','Motorcycle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken'],
+  ['face','Faces'],['plate','Number plates']];
+function filterTypes() { return FILTER_BASE; }
+// Every kind of alert, for "all alerts": also objects without a chip.
+function allAlertTypes() {
+  const base = FILTER_BASE.map(t => t[0]).filter(t => t !== 'face' && t !== 'plate');
+  const extra = ((status && status.cameras) || []).flatMap(c => c.watch || []);
+  return [...new Set([...base, 'bicycle', ...extra, 'other'])];
 }
 
 let status = null, settings = null, cameraCfgs = [], sysinfo = null;
@@ -26,6 +30,14 @@ const fmtBytes = (b) => {
   const u = ['B','KB','MB','GB','TB']; let i = 0;
   while (Math.abs(b) >= 1024 && i < u.length - 1) { b /= 1024; i++; }
   return b.toFixed(i ? (b < 10 ? 2 : 1) : 0) + ' ' + u[i];
+};
+// "3 days ago" for a date.
+const ago = (d) => {
+  const s = (Date.now() - new Date(d).getTime()) / 1000;
+  if (!isFinite(s)) return '';
+  if (s < 3600) return 'just now';
+  if (s < 86400) { const h = Math.round(s / 3600); return h + (h === 1 ? ' hour ago' : ' hours ago'); }
+  const n = Math.round(s / 86400); return n === 1 ? 'yesterday' : n + ' days ago';
 };
 const fmtDur = (s) => {
   s = Math.max(0, Math.floor(s)); const d = Math.floor(s / 86400); s %= 86400;
@@ -87,7 +99,7 @@ async function api(path, opts = {}) {
 let toastTimer;
 function toast(msg, isError) {
   const t = $('toast'); t.textContent = msg; t.className = isError ? 'error' : ''; t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, isError ? 7000 : 3500);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, isError ? Math.max(7000, msg.length * 60) : 3500);
 }
 
 function fullscreen(el) {
@@ -457,6 +469,8 @@ async function refreshStatus() {
   // New alerts.
   const ab = $('alert-badge'), n = status.alerts_unseen || 0;
   ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
+  const da = $('f-seen-all');
+  if (da) { da.textContent = n ? `✓ Dismiss all new (${n > 999 ? '999+' : n})` : '✓ No new alerts'; da.disabled = !n; da.classList.toggle('primary', !!n); }
   // Downloads (AI models, updates): a small chip in the header; the
   // details are in Settings → Tasks.
   const dls = status.downloads || [], chip = $('dl-chip');
@@ -1445,10 +1459,22 @@ function startSound(camId) {
   soundCam = camId;
   a.volume = soundVolume();
   a.src = `live/${enc(camId)}/audio.mp3?t=${Date.now()}`;
-  const none = () => { if (soundCam === camId) { toast('No sound from this camera (it has no microphone, or its audio is switched off in the camera).', true); stopSound(); } };
-  a.onerror = none;
-  a.onended = () => { if (soundCam !== camId) return; if (a.currentTime < 0.5) none(); else stopSound(); };
-  a.play().then(paintSound).catch(e => { toast('Could not play sound: ' + e.message, true); stopSound(); });
+  // The browser only says "no supported source"; ask GAZE why.
+  const why = async () => {
+    if (soundCam !== camId) return;
+    stopSound();
+    let msg = 'No sound from this camera.';
+    try {
+      const ctl = new AbortController();
+      const r = await fetch(`live/${enc(camId)}/audio.mp3?t=${Date.now()}`, { signal: ctl.signal });
+      if (r.ok) { ctl.abort(); msg = 'The sound wasn\'t ready yet. Press the speaker again.'; }
+      else { const j = await r.json().catch(() => ({})); if (j.error) msg = j.error; }
+    } catch (_) {}
+    toast(msg, true);
+  };
+  a.onerror = why;
+  a.onended = () => { if (soundCam !== camId) return; if (a.currentTime < 0.5) why(); else stopSound(); };
+  a.play().then(paintSound).catch(e => { if (e && e.name === 'NotAllowedError') { toast('Could not play sound: ' + e.message, true); stopSound(); } else why(); });
   paintSound();
 }
 function stopSound() {
@@ -1600,7 +1626,7 @@ async function loadActivity() {
   const id = focusId, box = $('focus-activity');
   if (!id) return;
   const f = $('focus-filter').value;
-  const ai = filterTypes().map(t => t[0]).filter(t => t !== 'motion');
+  const ai = allAlertTypes().filter(t => t !== 'motion');
   const types = f === 'ai' ? ai.join(',') : f === 'motion' ? 'motion' : ['motion', ...ai].join(',');
   const from = new Date(Date.now() - 7 * 86400000).toISOString();
   let items = [];
@@ -1705,6 +1731,7 @@ $('f-seen-all').onclick = async () => {
   await api('api/alerts/seen-all', {method: 'POST'}).catch(e => toast(e.message, true));
   rec.items.forEach(i => i.seen = true);
   renderRecordings(); refreshStatus();
+  toast('All new alerts dismissed.');
 };
 // New alerts appear by themselves (no need to refresh the page).
 setInterval(async () => {
@@ -1822,7 +1849,7 @@ function recQuery() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString(), limit: 2000});
   if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
   // Alerts only (plain recordings are on the Recordings tab).
-  q.set('types', (rec.types.size ? [...rec.types] : filterTypes().map(t => t[0])).join(','));
+  q.set('types', (rec.types.size ? [...rec.types] : allAlertTypes()).join(','));
   if (rec.todFrom) q.set('tod_from', rec.todFrom);
   if (rec.todTo) q.set('tod_to', rec.todTo);
   if (rec.q) q.set('q', rec.q);
@@ -2347,6 +2374,11 @@ const SERIES = [
 const graphHidden = new Set(store.get('graph-hidden', []));
 
 // ---------- System → Tasks ----------
+const PAUSE_KINDS = [['ai', 'AI on alerts'], ['previews', 'Previews & pictures'], ['cloud', 'Cloud backup'], ['maintenance', 'Maintenance']];
+async function setPaused(kind, paused) {
+  try { await api('api/jobs/pause', {method: 'POST', json: {kind, paused}}); } catch (e) { toast(e.message, true); }
+  loadJobs();
+}
 const JOB_ICON = {ai: '🧠', download: '⬇️', previews: '🖼️', cloud: '☁️', scan: '📡', maintenance: '🛠️'};
 let jobsTimer = null, showDoneJobs = false;
 function fmtAgo(t) {
@@ -2363,8 +2395,9 @@ async function loadJobs() {
   const row = (j) => {
     const pct = j.total ? Math.min(100, 100 * j.done / j.total) : null;
     const prog = j.bytes ? `${fmtBytes(j.done)}${j.total ? ' of ' + fmtBytes(j.total) : ''}` : j.total ? `${j.done} of ${j.total}` : j.done ? `${j.done} done` : '';
-    const state = j.state === 'waiting' ? '<span class="muted">waiting for spare CPU</span>' : j.state === 'failed' ? '<span class="errc">failed</span>' : j.state === 'done' ? '<span class="okc">done</span>' : '<span class="spin-dot"></span>';
-    return `<div class="job ${j.state}"><div class="row"><span class="ji">${JOB_ICON[j.kind] || '•'}</span><b style="flex:1">${esc(j.title)}</b>${state}</div>
+    const isPaused = (r.paused || []).includes(j.kind);
+    const state = j.state === 'paused' || (isPaused && !j.finished) ? '<span class="paused-tag">⏸ paused</span>' : j.state === 'waiting' ? '<span class="muted">waiting for spare CPU</span>' : j.state === 'failed' ? '<span class="errc">failed</span>' : j.state === 'done' ? '<span class="okc">done</span>' : '<span class="spin-dot"></span>';
+    return `<div class="job ${j.state}"><div class="row"><span class="ji">${JOB_ICON[j.kind] || '•'}</span><b style="flex:1">${esc(j.title)}</b>${state}${j.pausable && !j.finished && me && me.role === 'admin' ? `<button type="button" class="small job-pause" data-kind="${j.kind}" data-p="${isPaused ? 0 : 1}" title="${isPaused ? 'Carry on with this kind of work' : 'Stop this kind of work for now to lighten the load, until you resume it'}">${isPaused ? '▶ Resume' : '⏸ Pause'}</button>` : ''}</div>
       <div class="muted small">${esc(j.detail)}${prog ? ` · ${prog}` : ''} · ${j.finished ? 'took ' + fmtTook(j.started, j.finished) + ', ' + fmtAgo(j.finished) : 'running ' + fmtTook(j.started)}</div>
       ${j.error ? `<div class="errc small">${esc(j.error)}</div>` : ''}
       ${!j.finished && pct != null ? `<div class="bar"><div style="width:${pct.toFixed(1)}%"></div></div>` : ''}</div>`;
@@ -2372,9 +2405,18 @@ async function loadJobs() {
   const target = $('set-tasks') || $('sys-tasks');
   const w = $('tasks-waiting');
   if (w && r.waiting) w.innerHTML = `<span class="wait-pill">${r.waiting.describe} alert${r.waiting.describe === 1 ? '' : 's'} waiting to be described</span> <span class="wait-pill">${r.waiting.identify} waiting for faces &amp; plates</span>`;
+  const pc = $('tasks-pause');
+  if (pc && me && me.role === 'admin') {
+    const p = r.paused || [], all = PAUSE_KINDS.every(([k]) => p.includes(k));
+    pc.innerHTML = `<span class="muted">Background work (click to pause or resume):</span>` + PAUSE_KINDS.map(([k, t]) =>
+      `<button type="button" class="small pause-chip ${p.includes(k) ? 'on' : ''}" data-kind="${k}" data-p="${p.includes(k) ? 0 : 1}" title="${p.includes(k) ? 'Paused — click to resume' : 'Running — click to pause'}"><i class="pdot"></i>${t}${p.includes(k) ? ' — paused' : ''}</button>`).join('') +
+      `<button type="button" class="small ${all ? 'primary' : ''}" data-kind="all" data-p="${all ? 0 : 1}">${all ? '▶ Resume all' : '⏸ Pause all'}</button>` +
+      (p.length ? `<div class="hint" style="width:100%">Paused work waits until you resume it (or GAZE restarts). Recording, live view and new alerts carry on as normal.</div>` : '');
+  }
   target.innerHTML = (live.length ? live.map(row).join('') : '<div class="hint">Nothing running right now.</div>') +
     (done.length ? `<details class="jobs-done" ${showDoneJobs ? 'open' : ''}><summary>Finished (${done.length})</summary>${done.map(row).join('')}</details>` : '');
   const d = target.querySelector('details'); if (d) d.ontoggle = () => { showDoneJobs = d.open; };
+  [target, pc].forEach(el => el && el.querySelectorAll('button[data-kind]').forEach(b => b.onclick = () => setPaused(b.dataset.kind, b.dataset.p === '1')));
 }
 
 // ---------- update notice ----------
@@ -2382,25 +2424,40 @@ async function loadJobs() {
 // or dismissed for that version.
 function showUpdateBar(u) {
   const bar = $('upd-bar');
-  if (!u || !me || me.role !== 'admin') { bar.hidden = true; return; }
-  if (u.state === 'downloading' || u.state === 'installing' || u.state === 'restarting') {
-    bar.hidden = false; bar.classList.add('show');
-    bar.innerHTML = `<span>⟳ Updating to GAZE ${esc(u.latest || '')}… GAZE restarts by itself in a few seconds.</span>`;
+  const hide = () => { bar.classList.remove('show'); bar.hidden = true; bar.dataset.v = ''; };
+  if (!u || !me || me.role !== 'admin') { hide(); return; }
+  const from = esc(status.version || ''), to = esc(u.latest || '');
+  const head = (title, sub, icon = '⬆') => `<div class="ub-icon">${icon}</div><div class="ub-text"><b>${title}</b><small>${sub}</small></div>`;
+  const busy = ['downloading', 'installing', 'restarting'].includes(u.state);
+  if (busy) {
+    const pct = u.total ? Math.min(100, Math.round(u.done / u.total * 100)) : 0;
+    const what = u.state === 'downloading' ? (u.total ? `Downloading… ${pct}% (${fmtBytes(u.done)} of ${fmtBytes(u.total)})` : 'Downloading…')
+      : u.state === 'installing' ? 'Installing…' : 'Restarting GAZE… the page reloads by itself.';
+    bar.dataset.v = 'busy';
+    bar.innerHTML = head(`Updating to GAZE ${to}`, `<span class="ub-ver">${from} → ${to}</span> ${what}`, '⟳')
+      + `<div class="ub-prog"><i style="width:${u.state === 'downloading' ? pct : 100}%"></i></div>`;
+    bar.classList.toggle('ub-busy', true);
+    bar.hidden = false; requestAnimationFrame(() => bar.classList.add('show'));
     if (u.state === 'restarting') waitForGazeRestart();
     return;
   }
-  if (!u.available || store.get('upd-dismissed', '') === u.latest) { bar.hidden = true; bar.classList.remove('show'); return; }
-  if (!bar.hidden && bar.dataset.v === u.latest) return;
-  bar.dataset.v = u.latest;
-  bar.innerHTML = `<span>🎉 <b>GAZE ${esc(u.latest)}</b> is available (you have ${esc(status.version || '')}).</span>
-    <button type="button" class="primary small" id="ub-go">Update now</button>
-    <a class="btn small" href="#settings/info">What's new</a>
-    <button type="button" class="small" id="ub-x" title="Hide until the next version">✕</button>`;
+  bar.classList.remove('ub-busy');
+  if (!u.available || store.get('upd-dismissed', '') === u.latest) { hide(); return; }
+  const key = u.latest + '|' + (u.error || '');
+  if (!bar.hidden && bar.dataset.v === key) return;
+  bar.dataset.v = key;
+  const when = u.published ? ` · released ${esc(ago(u.published))}` : '';
+  const sub = u.error ? `<span class="ub-err">The last try didn't work: ${esc(u.error)}</span>`
+    : `<span class="ub-ver">${from} → ${to}</span>${when} · takes a few seconds, recordings carry on after`;
+  bar.innerHTML = head(`GAZE ${to} is ready to install`, sub)
+    + `<div class="ub-actions"><button type="button" class="primary small" id="ub-go">${u.error ? 'Try again' : 'Update now'}</button>
+       <button type="button" class="small ub-later" id="ub-x" title="Hide until the next version">Later</button></div>`;
   bar.hidden = false; requestAnimationFrame(() => bar.classList.add('show'));
-  $('ub-x').onclick = () => { store.set('upd-dismissed', u.latest); bar.classList.remove('show'); bar.hidden = true; };
+  $('ub-x').onclick = () => { store.set('upd-dismissed', u.latest); hide(); };
   $('ub-go').onclick = async () => {
-    if (!confirm(`Update to GAZE ${u.latest} now? GAZE restarts (a few seconds without recording).`)) return;
-    try { await api('api/update/install', {method: 'POST'}); bar.innerHTML = `<span>⟳ Downloading GAZE ${esc(u.latest)}…</span>`; } catch (e) { toast(e.message, true); }
+    const go = $('ub-go'); go.disabled = true; go.textContent = 'Starting…';
+    try { await api('api/update/install', {method: 'POST'}); showUpdateBar({...u, state: 'downloading', done: 0, total: 0, error: null}); }
+    catch (e) { toast(e.message, true); go.disabled = false; go.textContent = 'Update now'; }
   };
 }
 let restartWait = null;
@@ -2412,11 +2469,20 @@ function waitForGazeRestart() {
 }
 $('upd-btn').onclick = async () => {
   const b = $('upd-btn'); b.disabled = true;
+  b.classList.remove('ok'); b.classList.add('checking');
+  const tick = b.querySelector('.upd-tick'); if (tick) tick.remove();
   try {
     const u = await api('api/update/check', {method: 'POST'});
-    if (u.available) { store.set('upd-dismissed', ''); showUpdateBar({available: true, latest: u.latest, state: u.state}); }
-    else toast(u.latest ? `GAZE is up to date (${u.current}).` : 'No releases found yet.');
+    if (u.available) { store.set('upd-dismissed', ''); showUpdateBar({...(status.update || {}), available: true, latest: u.latest, state: u.state, published: u.published, error: null}); }
+    else {
+      toast(u.latest ? `GAZE is up to date (${u.current}).` : 'No releases found yet.');
+      // A green tick after the button: checked, nothing new.
+      b.insertAdjacentHTML('beforeend', '<span class="upd-tick" title="Up to date">✓</span>');
+      b.classList.add('ok');
+      setTimeout(() => { b.classList.remove('ok'); const t = b.querySelector('.upd-tick'); if (t) t.remove(); }, 60000);
+    }
   } catch (e) { toast(e.message, true); }
+  b.classList.remove('checking');
   b.disabled = false;
 };
 
@@ -2458,6 +2524,7 @@ const TASK_ACTIONS = [
 function renderTasks(body) {
   body.innerHTML = `<div class="card"><h2>What the AI is doing</h2>
     <p class="muted" style="margin-top:0">Besides recording, GAZE works on alerts in the background: describing them (smart search), finding faces and number plates, preparing previews, downloading AI models and copying to the cloud. It waits for spare processor time, so it never slows down recording or live view.</p>
+    <div id="tasks-pause" class="tasks-pause"></div>
     <div id="tasks-waiting" style="margin-bottom:8px"></div>
     <div id="set-tasks"></div></div>
     <div class="card"><h2>What runs where</h2><div id="where" class="muted">Reading…</div></div>

@@ -152,6 +152,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/talk", get(talk_ws))
         .route("/api/talk-test", post(talk_test))
         .route("/api/jobs", get(jobs_list))
+        .route("/api/jobs/pause", post(jobs_pause))
         .route("/api/where", get(where_work_runs))
         .route("/api/update", get(update_status))
         .route("/api/update/check", post(update_check))
@@ -311,7 +312,8 @@ async fn status(
         // Where the AI models run (GPU or processor, and why).
         "ai_device": crate::infer::status(),
         // A newer GAZE (for the notice at the top; admins only use it).
-        "update": {"available": upd.available, "latest": upd.latest, "state": upd.state},
+        "update": {"available": upd.available, "latest": upd.latest, "state": upd.state,
+            "done": upd.done, "total": upd.total, "error": upd.error, "published": upd.published},
         // Downloads in progress (AI models, updates), for the header.
         "downloads": crate::jobs::list().into_iter()
             .filter(|j| j.kind == "download" && j.finished.is_none())
@@ -2054,6 +2056,7 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                 j.waiting();
                 // Only when the computer has room to spare.
                 crate::load::wait_for_cpu(75, std::time::Duration::from_secs(600)).await;
+                j.pause_point().await;
                 j.step(format!("{} — {}", c.cfg.name, start.format("%H:%M")));
                 // Let people scrubbing the timeline go first.
                 while THUMB_JOBS.available_permits() < 3 {
@@ -2223,7 +2226,36 @@ async fn jobs_list(State(m): App) -> Response {
             }
         }
     }
-    Json(json!({ "jobs": crate::jobs::list(), "waiting": {"describe": describe, "identify": identify} })).into_response()
+    Json(json!({
+        "jobs": crate::jobs::list(),
+        "waiting": {"describe": describe, "identify": identify},
+        "paused": crate::jobs::paused(),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct PauseReq {
+    /// "ai", "previews", "cloud", "maintenance", or "all".
+    kind: String,
+    paused: bool,
+}
+
+/// Pause a kind of background work to lighten the load, until resumed.
+async fn jobs_pause(Json(r): Json<PauseReq>) -> Response {
+    if r.kind == "all" {
+        for k in crate::jobs::PAUSABLE {
+            crate::jobs::set_paused(k, r.paused);
+        }
+    } else if !crate::jobs::set_paused(&r.kind, r.paused) {
+        return err(StatusCode::BAD_REQUEST, "this kind of task can't be paused");
+    }
+    tracing::info!(
+        "background work {:?} {}",
+        r.kind,
+        if r.paused { "paused" } else { "resumed" }
+    );
+    Json(json!({ "paused": crate::jobs::paused() })).into_response()
 }
 
 /// Describe the alerts of the last `days` again (smart search), e.g. after
@@ -2432,10 +2464,26 @@ async fn live_mjpeg(
 /// live picture comes as JPEGs, which carry no sound). Taken from the shared
 /// camera connection, which already carries the audio; ends when the page
 /// stops listening.
+/// What to tell the user when a camera sends no sound.
+const NO_SOUND: &str = "The camera isn't sending sound. In the camera's own settings, turn on audio for this stream (on Hikvision: Video/Audio → Video → Stream Type \"Video&Audio\", for both the main and sub-stream), then try again.";
+
 async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
     let c = camera!(m, id);
     let ffmpeg = m.config().server.ffmpeg_path;
-    let rx = c.relay_main.subscribe();
+    // The main stream, unless only the sub-stream is known to carry sound.
+    let has = |a: Option<String>| a.is_some_and(|a| !a.is_empty());
+    let relay = if c.relay_main.audio().as_deref() == Some("") && has(c.relay_sub.audio()) {
+        c.relay_sub.clone()
+    } else {
+        c.relay_main.clone()
+    };
+    if relay.audio().as_deref() == Some("")
+        && !has(c.relay_sub.audio())
+        && c.relay_sub.audio().is_some()
+    {
+        return err(StatusCode::NOT_FOUND, NO_SOUND);
+    }
+    let rx = relay.subscribe();
     let child = crate::load::cmd(&ffmpeg)
         .args(["-hide_banner", "-loglevel", "error"])
         .args(crate::relay::pipe_input_args())
@@ -2455,7 +2503,7 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
         .args(["-flush_packets", "1", "-f", "mp3", "pipe:1"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn();
     let mut child = match child {
@@ -2470,10 +2518,49 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
     let stop = tokio_util::sync::CancellationToken::new();
     crate::relay::feed(rx, child.stdin.take().unwrap(), stop.clone());
     let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    use tokio::io::AsyncReadExt;
+    // Wait for the first sound before answering, so a camera without sound
+    // gets a message the page can show instead of an empty file.
+    let mut buf = vec![0u8; 4096];
+    let first =
+        tokio::time::timeout(std::time::Duration::from_secs(15), stdout.read(&mut buf)).await;
+    let n = match first {
+        Ok(Ok(n)) if n > 0 => n,
+        other => {
+            stop.cancel();
+            let _ = child.kill().await;
+            let mut e = String::new();
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                stderr.read_to_string(&mut e),
+            )
+            .await;
+            let audio = relay.audio();
+            let msg = if audio.as_deref() == Some("") || e.contains("matches no streams") {
+                NO_SOUND.to_string()
+            } else if other.is_err() {
+                "The camera didn't send any sound within 15 seconds.".to_string()
+            } else if let Some(l) = e.lines().rev().find(|l| !l.trim().is_empty()) {
+                format!(
+                    "ffmpeg could not convert the camera's sound ({}): {}",
+                    audio.unwrap_or_default(),
+                    l.trim()
+                )
+            } else {
+                "The camera's stream isn't available right now.".to_string()
+            };
+            tracing::warn!("[{}] live sound: {msg}", c.cfg.name);
+            return err(StatusCode::NOT_FOUND, msg);
+        }
+    };
     let (tx, mut out) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+    let _ = tx.try_send(Ok(Bytes::copy_from_slice(&buf[..n])));
     tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-        let mut buf = vec![0u8; 4096];
+        // Keep stderr drained so ffmpeg never blocks on it.
+        tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+        });
         loop {
             tokio::select! {
                 n = stdout.read(&mut buf) => match n {
@@ -2892,6 +2979,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/logs",
         "/api/system",
         "/api/where",
+        "/api/jobs/pause",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"

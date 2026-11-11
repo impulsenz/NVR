@@ -551,6 +551,7 @@ pub async fn run(mgr: Arc<Manager>) {
                     }
                     job.waiting();
                     crate::load::wait_for_cpu(75, Duration::from_secs(300)).await;
+                    job.pause_point().await;
                     job.step(format!(
                         "{} — {}",
                         mgr.camera(&e.camera)

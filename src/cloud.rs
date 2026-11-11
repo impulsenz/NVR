@@ -208,6 +208,7 @@ pub async fn run(mgr: Arc<Manager>) {
             });
             for (path, rel) in todo {
                 if let Some(j) = &job {
+                    j.pause_point().await;
                     j.step(rel.clone());
                 }
                 let res = if is_local(&remote) {

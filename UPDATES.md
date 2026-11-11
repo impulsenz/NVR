@@ -27,13 +27,17 @@ This guide covers:
    you to create the admin account.
 
 **Updating:** GAZE checks for a new version **every minute**. When there
-is one, a bar slides down under the header for admins:
-- **Update now** installs it straight away. GAZE restarts and the page
-  reloads by itself.
-- **What's new** shows the release notes.
-- **✕** hides the bar until the next version.
+is one, a bar slides down under the header for admins, showing the change
+of version (e.g. `0.5.4 → 0.5.5`) and when it was released:
+- **Update now** installs it straight away. The bar shows the download's
+  progress; GAZE then restarts and the page reloads by itself. If it doesn't
+  work, the bar says why and offers **Try again**.
+- **Later** hides the bar until the next version.
 
-**⟳ Updates**, next to your name in the header, checks right away. The same
+The release notes are in Settings → About.
+
+**⟳ Updates**, next to your name in the header, checks right away; a green
+✓ on the button means you're up to date. The same
 controls are in **Settings → About → Updates**. **Install updates
 automatically** (off by default) installs new versions as soon as they're
 found, when no alert is going on. This all works when GAZE runs as a

@@ -24,18 +24,46 @@ pub struct JobInfo {
     pub bytes: bool,
     pub started: DateTime<Local>,
     pub finished: Option<DateTime<Local>>,
-    /// "running", "waiting" (for spare CPU), "done", "failed".
+    /// "running", "waiting" (for spare CPU), "paused", "done", "failed".
     pub state: &'static str,
+    /// Can be paused (Settings → Tasks).
+    pub pausable: bool,
     pub error: String,
 }
 
 static JOBS: Mutex<Vec<JobInfo>> = Mutex::new(Vec::new());
+/// Kinds of work paused by the user until resumed.
+static PAUSED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+/// Kinds of work that can be paused: background work that can wait.
+pub const PAUSABLE: &[&str] = &["ai", "previews", "cloud", "maintenance"];
+
+/// Pause or resume a kind of work. Returns false for a kind that can't be paused.
+pub fn set_paused(kind: &str, pause: bool) -> bool {
+    let Some(k) = PAUSABLE.iter().find(|k| **k == kind) else {
+        return false;
+    };
+    let mut p = PAUSED.lock().unwrap();
+    p.retain(|x| x != k);
+    if pause {
+        p.push(k);
+    }
+    true
+}
+
+pub fn paused() -> Vec<&'static str> {
+    PAUSED.lock().unwrap().clone()
+}
+
+pub fn is_paused(kind: &str) -> bool {
+    PAUSED.lock().unwrap().iter().any(|k| *k == kind)
+}
 static NEXT: AtomicU64 = AtomicU64::new(1);
 /// How many finished jobs to keep.
 const KEEP: usize = 60;
 
 pub struct Job {
     id: u64,
+    kind: &'static str,
 }
 
 pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
@@ -52,6 +80,7 @@ pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
         started: Local::now(),
         finished: None,
         state: "running",
+        pausable: PAUSABLE.contains(&kind),
         error: String::new(),
     });
     // Forget the oldest finished ones.
@@ -67,7 +96,7 @@ pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
             }
         });
     }
-    Job { id }
+    Job { id, kind }
 }
 
 impl Job {
@@ -100,6 +129,17 @@ impl Job {
     /// Waiting for the computer to have spare capacity.
     pub fn waiting(&self) {
         self.with(|j| j.state = "waiting");
+    }
+    /// Wait here while the user has paused this kind of work.
+    pub async fn pause_point(&self) {
+        if !is_paused(self.kind) {
+            return;
+        }
+        self.with(|j| j.state = "paused");
+        while is_paused(self.kind) {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        self.with(|j| j.state = "running");
     }
     /// Something went wrong with one item; the job carries on.
     pub fn problem(&self, e: impl std::fmt::Display) {
@@ -221,5 +261,31 @@ mod tests {
         drop(k);
         let f = super::list().into_iter().find(|x| x.id == kid).unwrap();
         assert_eq!((f.state, f.error.as_str()), ("failed", "no model"));
+    }
+
+    #[tokio::test]
+    async fn paused_work_waits_until_resumed() {
+        assert!(!super::set_paused("download", true));
+        let j = super::start("cloud", "Testing pause");
+        assert!(super::set_paused("cloud", true));
+        let id = j.id;
+        let t = tokio::spawn(async move {
+            j.pause_point().await;
+            j
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let st = || {
+            super::list()
+                .into_iter()
+                .find(|x| x.id == id)
+                .unwrap()
+                .state
+        };
+        assert_eq!(st(), "paused");
+        assert!(!t.is_finished());
+        super::set_paused("cloud", false);
+        let j = t.await.unwrap();
+        assert_eq!(st(), "running");
+        drop(j);
     }
 }
