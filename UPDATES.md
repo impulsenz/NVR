@@ -59,13 +59,15 @@ The workflow that does it is `.github/workflows/release.yml`.
    - What changed…
    ```
    This section becomes the release notes shown in GAZE before updating.
-3. Commit and push to the repository's default branch:
+3. Commit with the title **`Version 0.6.0`** (exactly "Version" and the
+   new number) and push to the repository's default branch:
    ```bash
    git commit -am "Version 0.6.0"
    git push
    ```
    That's all. There's no tag to make: GitHub sees the new version, builds
-   it, and creates the tag `v0.6.0` and the release itself. Pushing a
+   it, and creates the tag `v0.6.0` and the release itself. The run is
+   listed in **Actions** as "Version 0.6.0". Pushing a
    version tag by hand (`git tag v0.6.0`, `git push origin v0.6.0`) works
    too.
 4. On GitHub, open **Actions** → *Release* to follow the build. It takes
@@ -74,7 +76,8 @@ The workflow that does it is `.github/workflows/release.yml`.
    - `nvr-windows-x64.exe` and `nvr-windows-x64.exe.sha256`
 5. Installed copies see the new version within a minute.
 
-Pushes that don't change the version build nothing.
+Other pushes don't start a release (a change to `Cargo.toml` in a commit
+with another title builds nothing).
 
 To test a build without publishing it, start the *Release* workflow by hand
 (**Actions → Release → Run workflow**). It builds both programs and attaches
