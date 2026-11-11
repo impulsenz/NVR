@@ -546,14 +546,21 @@ fn parse_typeperf(text: &str) -> Option<f32> {
             .collect::<Vec<_>>()
     };
     let (h, d) = (split(header), split(data));
+    // One counter per process and engine: add up the processes using each
+    // engine ("luid_…_phys_…_eng_N_engtype_X"), then the busiest engine is
+    // the GPU's usage (as Task Manager shows it). Engines of the same type
+    // on other adapters or with another number are separate: adding them
+    // together (as before) made a mostly idle GPU look 100% busy.
     let mut per_engine: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
     for (name, val) in h.iter().zip(d.iter()).skip(1) {
-        let Some(eng) = name.split("engtype_").nth(1) else {
+        let Some(inst) = name.split("GPU Engine(").nth(1) else {
             continue;
         };
-        let eng = eng.split(')').next().unwrap_or(eng).to_string();
+        let inst = inst.split(')').next().unwrap_or(inst);
+        // Drop the process part ("pid_1234_").
+        let engine = inst.split_once("_luid_").map(|(_, e)| e).unwrap_or(inst).to_string();
         let v: f32 = val.trim().parse().unwrap_or(0.0);
-        *per_engine.entry(eng).or_default() += v;
+        *per_engine.entry(engine).or_default() += v;
     }
     per_engine
         .values()
@@ -606,7 +613,14 @@ mod tests {
 "(PDH-CSV 4.0)","\\PC\GPU Engine(pid_1_luid_0x0_phys_0_eng_0_engtype_3D)\Utilization Percentage","\\PC\GPU Engine(pid_2_luid_0x0_phys_0_eng_0_engtype_3D)\Utilization Percentage","\\PC\GPU Engine(pid_2_luid_0x0_phys_0_eng_3_engtype_VideoDecode)\Utilization Percentage"
 "11/08/2026 06:35:39.686","12.5","20.0","41.0"
 The command completed successfully."#;
+        // The 3D engine is used by two processes (12.5 + 20): 41 is busiest.
         assert_eq!(parse_typeperf(text), Some(41.0));
+        // Two video decoders and two adapters at 60 % each: 60 %, not 100 %.
+        let two = r#"
+"(PDH-CSV 4.0)","\\PC\GPU Engine(pid_9_luid_0x1_phys_0_eng_3_engtype_VideoDecode)\Utilization Percentage","\\PC\GPU Engine(pid_9_luid_0x1_phys_0_eng_4_engtype_VideoDecode)\Utilization Percentage","\\PC\GPU Engine(pid_9_luid_0x2_phys_0_eng_3_engtype_VideoDecode)\Utilization Percentage"
+"11/08/2026 06:35:39.686","60","60","60"
+"#;
+        assert_eq!(parse_typeperf(two), Some(60.0));
     }
 
     #[test]
