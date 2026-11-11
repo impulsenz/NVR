@@ -867,6 +867,8 @@ pub struct CameraConfig {
     pub schedule_enabled: bool,
     pub schedule: Schedule,
     pub record_audio: bool,
+    /// Live sound: a speaker button on the camera's live picture.
+    pub live_sound: bool,
     /// Two-way audio: talk through the camera's speaker from the live view.
     pub talk: bool,
     /// RTSP address with the camera's audio back-channel (empty = main stream).
@@ -912,6 +914,7 @@ impl Default for CameraConfig {
             schedule_enabled: false,
             schedule: Schedule::default(),
             record_audio: true,
+            live_sound: true,
             talk: false,
             talk_url: String::new(),
             transcode: false,

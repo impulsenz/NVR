@@ -275,6 +275,7 @@ async fn status(
                 // What it alerts on (the Alerts filter offers these).
                 "watch": c.cfg.detect.objects,
                 "talk": c.cfg.talk,
+                "sound": c.cfg.live_sound,
                 "url": mask_url(&c.cfg.url),
                 "transcode": c.cfg.reencode(),
                 "detection": c.cfg.detection_enabled(),

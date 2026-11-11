@@ -358,12 +358,24 @@ function overlayHtml(c, q, noFs) {
   // Stream 1 / Stream 2 switch, next to the first fullscreen button (or top right).
   const corners = noFs ? [] : d.fullscreen_corners;
   const sc = corners[0] || 'tr';
+  // Live sound: speaker (click: on/off; hover: volume).
+  if (c.sound !== false) parts[sc].push(`<span class="snd-wrap"><button type="button" class="fsbtn snd" data-cam="${esc(c.id)}" title="Sound on/off">${soundCam === c.id ? '🔊' : '🔇'}</button><input type="range" class="snd-vol" min="0" max="1" step="0.05" value="${soundVolume()}" title="Volume"></span>`);
   parts[sc].push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
   for (const corner of corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen (or double-click the picture)">⛶</button>');
   return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => `<div class="ov ${k}">${v.join('')}</div>`).join('');
 }
 function wireOverlay(surface) {
-  surface.querySelectorAll('.fsbtn:not(.sbtn)').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(surface); });
+  surface.querySelectorAll('.snd').forEach(b => {
+    b.onpointerdown = (e) => e.stopPropagation();
+    b.ondblclick = (e) => e.stopPropagation();
+    b.onclick = (e) => { e.stopPropagation(); soundCam === b.dataset.cam ? stopSound() : startSound(b.dataset.cam); };
+  });
+  surface.querySelectorAll('.snd-vol').forEach(r => {
+    r.onpointerdown = (e) => e.stopPropagation();
+    r.onclick = (e) => e.stopPropagation();
+    r.oninput = (e) => { e.stopPropagation(); setSoundVolume(+r.value); };
+  });
+  surface.querySelectorAll('.fsbtn:not(.sbtn):not(.snd)').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(surface); });
   surface.querySelectorAll('.sbtn').forEach(b => {
     b.onpointerdown = (e) => e.stopPropagation();
     b.onclick = (e) => { e.stopPropagation(); switchStream(surface); };
@@ -427,6 +439,7 @@ function route() {
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
+  if (page !== 'live' && typeof soundCam !== 'undefined' && soundCam) stopSound();
   if (page !== 'recordings') { pauseAllPlayback(); if ($('page-recordings').classList.contains('rec-fs')) recFullscreen(false); }
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
@@ -1188,7 +1201,6 @@ function showLive(id) {
   $('focus-edit').onclick = () => openCameraDialog(c.id);
   $('focus-title').textContent = c.name;
   if (soundCam && soundCam !== c.id) stopSound();
-  $('focus-sound').onclick = () => soundCam ? stopSound() : startSound(c.id);
   setupQuickView(c);
   setupPtz(c);
   camTl.open(c.id);
@@ -1407,37 +1419,45 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   });
 })();
 setInterval(() => { if (page === 'live' && focusId && !camTl.end) camTl.load(); }, 30000);
-function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); stopTalk(); stopSound(); }
+function stopFocus() { if (focusUnbind) { focusUnbind(); focusUnbind = null; } stopFocusPlayback(false); stopTalk(); }
 
 // ---------- live sound ----------
 // The live picture is JPEGs (no sound): the camera's audio comes as its own
-// MP3 stream. A second or two behind the picture.
+// MP3 stream, a second or two behind the picture. One camera at a time; the
+// speaker on each live picture switches it, hovering it shows the volume.
 let soundCam = null;
-function soundLabel(on) {
-  const b = $('focus-sound'); if (!b) return;
-  b.querySelector('i').textContent = on ? '🔊' : '🔇';
-  b.querySelector('span').textContent = on ? 'Sound on' : 'Sound';
-  b.classList.toggle('primary', on);
+function soundVolume() { const v = +store.get('live-volume', 1); return isFinite(v) ? v : 1; }
+function setSoundVolume(v) {
+  store.set('live-volume', v);
+  $('focus-audio').volume = v;
+  document.querySelectorAll('.snd-vol').forEach(r => { if (+r.value !== v) r.value = v; });
+}
+function paintSound() {
+  document.querySelectorAll('.snd').forEach(b => {
+    const on = b.dataset.cam === soundCam;
+    b.textContent = on ? '🔊' : '🔇';
+    b.classList.toggle('on', on);
+    b.title = on ? 'Sound on — click to mute' : 'Sound off — click to hear this camera';
+  });
 }
 function startSound(camId) {
   const a = $('focus-audio');
   soundCam = camId;
-  a.volume = +store.get('live-volume', 1);
-  $('focus-vol').value = a.volume;
+  a.volume = soundVolume();
   a.src = `live/${enc(camId)}/audio.mp3?t=${Date.now()}`;
   const none = () => { if (soundCam === camId) { toast('No sound from this camera (it has no microphone, or its audio is switched off in the camera).', true); stopSound(); } };
   a.onerror = none;
   a.onended = () => { if (soundCam !== camId) return; if (a.currentTime < 0.5) none(); else stopSound(); };
-  a.play().then(() => soundLabel(true)).catch(e => { toast('Could not play sound: ' + e.message, true); stopSound(); });
+  a.play().then(paintSound).catch(e => { toast('Could not play sound: ' + e.message, true); stopSound(); });
+  paintSound();
 }
 function stopSound() {
   const a = $('focus-audio'); if (!a) return;
   soundCam = null;
   a.onerror = a.onended = null;
   a.pause(); a.removeAttribute('src'); a.load();
-  soundLabel(false);
+  paintSound();
 }
-$('focus-vol').oninput = (e) => { $('focus-audio').volume = +e.target.value; store.set('live-volume', +e.target.value); };
 
 // ---------- two-way audio ----------
 // Push to talk: hold the button and speak; a quick tap keeps talking until
@@ -2768,7 +2788,7 @@ async function openCameraDialog(id, clone) {
   const base = id ? cameraCfgs.find(c => c.id === id) : null;
   const c = base ? JSON.parse(JSON.stringify(base)) : {
     name: '', enabled: true, url: '', live_url: '', rtsp_transport: 'tcp', record_mode: 'continuous', schedule_enabled: false,
-    schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, talk: false, talk_url: '', transcode: false, record_fps: 0,
+    schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, live_sound: true, talk: false, talk_url: '', transcode: false, record_fps: 0,
     segment_seconds: 0, storage_dir: '', retention_days: 0, max_storage_gb: 0,
     osd: {custom: false, show_name: true, name_corner: 'bl', show_clock: true, clock_corner: 'tl', clock_format: '', show_status: true, status_corner: 'tr',
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
@@ -2794,7 +2814,7 @@ async function openCameraDialog(id, clone) {
         <button type="button" class="small" id="c-prof-save" title="Save this camera's recording, motion and AI settings as a profile">💾 Save as profile…</button>
         <button type="button" class="small" id="c-prof-del" title="Delete the chosen profile">✕</button>
         <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button><button type="button" data-t="zones">Zones</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">Camera settings</button><button type="button" data-t="zones">Zones</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
@@ -2817,11 +2837,6 @@ async function openCameraDialog(id, clone) {
         <label for="c-transport">RTSP transport</label>
         <div><select id="c-transport"><option value="tcp">TCP (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
-        <label>Two-way audio</label>
-        <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker</label>
-          <div class="hint">Shows a <b>🎙️ Hold to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
-          <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
-          <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
       </div>
 
       <div data-tab="recording" class="form" hidden>
@@ -2841,7 +2856,6 @@ async function openCameraDialog(id, clone) {
           <div class="row" style="margin-top:8px"><input type="time" id="c-start" value="${esc(c.schedule.start)}" style="width:auto"><span class="muted">to</span><input type="time" id="c-end" value="${esc(c.schedule.end)}" style="width:auto"></div>
           <div class="hint">If the end is earlier than the start, recording runs overnight. Same start and end = all day.</div></div>
         <h3>Video</h3>
-        <span></span><label class="check"><input type="checkbox" id="c-audio" ${c.record_audio ? 'checked' : ''}> Record audio</label>
         <span></span><div><label class="check"><input type="checkbox" id="c-tlcopy" ${c.timeline_copy !== false ? 'checked' : ''}> Keep a light stream 2 copy for the timeline</label>
           <div class="hint">With “HD 24/7”: the sub-stream is recorded too, so the timeline opens and scrubs instantly (alerts and downloads still use HD). Uses roughly 5–15% extra space.</div></div>
         <label for="c-fps">Recording frame rate</label>
@@ -2889,6 +2903,19 @@ async function openCameraDialog(id, clone) {
         <div class="row"><input type="number" id="d-post" min="3" max="600" value="${c.detect.post_seconds}" style="width:110px"><span class="muted">seconds</span></div>
         <label for="d-fps">Analysis frame rate</label>
         <div class="row"><input type="number" id="d-fps" min="1" max="15" value="${c.detect.fps}" style="width:110px"><span class="muted">pictures per second checked for motion</span></div>
+      </div>
+      <div data-tab="audio" class="form" hidden>
+        <label>Recording</label>
+        <div><label class="check"><input type="checkbox" id="c-audio" ${c.record_audio ? 'checked' : ''}> Record audio</label>
+          <div class="hint">The camera's microphone is saved with the video (if it has one).</div></div>
+        <label>Live sound</label>
+        <div><label class="check"><input type="checkbox" id="c-sound" ${c.live_sound !== false ? 'checked' : ''}> Speaker button on the live picture</label>
+          <div class="hint">Click 🔇 on the camera's picture (grid, camera view or full screen) to hear it; hover it for the volume. One camera plays at a time.</div></div>
+        <label>Two-way audio</label>
+        <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker</label>
+          <div class="hint">Shows a <b>🎙️ Hold to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
+          <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
+          <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
       </div>
       <div data-tab="ai" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="d-ai" ${c.detect.ai ? 'checked' : ''}> Object recognition (AI)</label>
@@ -3278,7 +3305,7 @@ function collectCamera() {
     name: val('c-name').trim(), enabled: chk('c-enabled'), url: val('c-url').trim(), live_url: val('c-live').trim(),
     rtsp_transport: val('c-transport'), record_mode: mode, schedule_enabled: chk('c-sched-on'),
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
-    talk: chk('c-talk'), talk_url: val('c-talk-url').trim(),
+    talk: chk('c-talk'), talk_url: val('c-talk-url').trim(), live_sound: chk('c-sound'),
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
