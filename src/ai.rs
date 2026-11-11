@@ -101,6 +101,50 @@ pub const COCO: [&str; 80] = [
 ];
 
 /// Objects most useful for home security, offered as alert choices.
+/// Shown on every camera's AI tab (and the Alerts filter).
+pub const MAIN_OBJECTS: &[&str] = &[
+    "person",
+    "car",
+    "truck",
+    "motorcycle",
+    "bicycle",
+    "dog",
+    "cat",
+];
+
+/// "More things to watch for": the rest the built-in model knows, the
+/// most useful for a home camera first.
+pub fn more_objects() -> Vec<&'static str> {
+    const FIRST: &[&str] = &[
+        "bus",
+        "bird",
+        "horse",
+        "cow",
+        "sheep",
+        "bear",
+        "backpack",
+        "handbag",
+        "suitcase",
+        "umbrella",
+        "boat",
+        "train",
+        "airplane",
+        "skateboard",
+        "sports ball",
+        "kite",
+        "frisbee",
+        "bench",
+        "chair",
+        "potted plant",
+    ];
+    let mut v: Vec<&str> = FIRST.to_vec();
+    v.extend(
+        COCO.iter()
+            .filter(|o| !FIRST.contains(o) && !MAIN_OBJECTS.contains(o)),
+    );
+    v
+}
+
 pub const SECURITY_OBJECTS: &[&str] = &[
     "person",
     "car",

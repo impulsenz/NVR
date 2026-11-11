@@ -11,16 +11,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Object labels with their own filter tick box; anything else is "other".
+/// Objects with their own button in the Alerts filter; "Other objects"
+/// is everything else.
 pub const FILTER_LABELS: &[&str] = &[
     "person",
     "car",
     "truck",
-    "bus",
     "motorcycle",
     "bicycle",
     "dog",
     "cat",
-    "bird",
     "package",
 ];
 

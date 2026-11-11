@@ -100,6 +100,11 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 .ov.tr { top: 0; right: 0; align-items: flex-end; }
 .ov.bl { bottom: 0; left: 0; align-items: flex-start; }
 .ov.br { bottom: 0; right: 0; align-items: flex-end; }
+.ov.tc { top: 0; left: 50%; transform: translateX(-50%); align-items: center; }
+.ov.bc { bottom: 0; left: 50%; transform: translateX(-50%); align-items: center; }
+.ov.ml { top: 50%; left: 0; transform: translateY(-50%); align-items: flex-start; }
+.ov.mr { top: 50%; right: 0; transform: translateY(-50%); align-items: flex-end; }
+.ov.mc { top: 50%; left: 50%; transform: translate(-50%, -50%); align-items: center; }
 .ov > * { pointer-events: auto; }
 .ovtext { background: rgba(0,0,0,.55); padding: 1px 7px; border-radius: 4px; font-size: 12px; white-space: nowrap;
   font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px #000; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -494,11 +499,11 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 .tl-h.out { right: -8px; }
 
 /* Corner picker */
-.corner-pick { display: inline-grid; grid-template-columns: 18px 18px; grid-template-rows: 12px 12px; gap: 3px; padding: 4px; border: 1px solid var(--border); border-radius: 6px; background: #000; vertical-align: middle; }
+.corner-pick { display: inline-grid; grid-template-columns: 18px 18px 18px; grid-template-rows: 12px 12px 12px; gap: 3px; padding: 4px; border: 1px solid var(--border); border-radius: 6px; background: #000; vertical-align: middle; }
 .corner-pick button { padding: 0; min-height: 0 !important; width: 18px; height: 12px; border-radius: 2px; background: #333; border: 0; cursor: pointer; }
 .corner-pick button.on { background: var(--accent); }
 .corner-pick button:disabled { cursor: default; opacity: .5; }
-@media (max-width: 760px) { .corner-pick { grid-template-columns: 26px 26px; grid-template-rows: 18px 18px; } .corner-pick button { width: 26px; height: 18px; } }
+@media (max-width: 760px) { .corner-pick { grid-template-columns: 26px 26px 26px; grid-template-rows: 18px 18px 18px; } .corner-pick button { width: 26px; height: 18px; } }
 /* OSD preview: items can be dragged to a corner */
 #o-prev .osd-drag { cursor: grab; outline: 1px dashed rgba(255,255,255,.35); outline-offset: 2px; touch-action: none; }
 .osd-ghost { position: fixed; z-index: 1000; pointer-events: none; transform: translate(-50%, -50%); opacity: .85; }

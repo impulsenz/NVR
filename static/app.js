@@ -9,8 +9,14 @@ const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehicle', motorcycle:'vehicle', bicycle:'vehicle',
   dog:'animal', cat:'animal', bird:'animal', horse:'animal', cow:'animal', sheep:'animal', bear:'animal'};
 // Alert types. Plain recordings aren't listed: they are on the timeline.
-const FILTER_TYPES = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],['bus','Bus'],
-  ['motorcycle','Motorcycle'],['bicycle','Bicycle'],['dog','Dog'],['cat','Cat'],['bird','Bird'],['package','Item left/taken'],['other','Other objects']];
+const FILTER_BASE = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],
+  ['motorcycle','Motorcycle'],['bicycle','Bicycle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken']];
+// The Alerts filter: the usual objects, plus any a camera watches for.
+function filterTypes() {
+  const extra = [...new Set(((status && status.cameras) || []).flatMap(c => c.watch || []))]
+    .filter(o => !FILTER_BASE.some(([k]) => k === o)).map(o => [o, o.charAt(0).toUpperCase() + o.slice(1)]);
+  return [...FILTER_BASE, ...extra, ['other', 'Other objects']];
+}
 
 let status = null, settings = null, cameraCfgs = [], sysinfo = null;
 let page = 'live';
@@ -342,7 +348,7 @@ function osdFor(c) {
 }
 function overlayHtml(c, q, noFs) {
   const d = status.display, o = osdFor(c);
-  const parts = {tl: [], tr: [], bl: [], br: []};
+  const parts = Object.fromEntries(SPOTS.map(([k]) => [k, []]));
   if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name" data-osd="name">${esc(c.name)}</span>`);
   if (o.text) parts[o.text_corner].push(`<span class="ovtext" data-osd="text">${esc(o.text)}</span>`);
   if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill" data-osd="status">${pillHtml(c)}</span>`);
@@ -1574,7 +1580,7 @@ async function loadActivity() {
   const id = focusId, box = $('focus-activity');
   if (!id) return;
   const f = $('focus-filter').value;
-  const ai = FILTER_TYPES.map(t => t[0]).filter(t => t !== 'motion');
+  const ai = filterTypes().map(t => t[0]).filter(t => t !== 'motion');
   const types = f === 'ai' ? ai.join(',') : f === 'motion' ? 'motion' : ['motion', ...ai].join(',');
   const from = new Date(Date.now() - 7 * 86400000).toISOString();
   let items = [];
@@ -1731,7 +1737,7 @@ function renderFilters() {
   if (rec.todFrom || rec.todTo) label += `, ${rec.todFrom || '00:00'}–${rec.todTo || '23:59'}`;
   $('f-date-btn').textContent = '📅 ' + label;
   // Types
-  $('f-types').innerHTML = '<span class="muted" style="padding:3px 4px">Show:</span>' + FILTER_TYPES.map(([k, v]) =>
+  $('f-types').innerHTML = '<span class="muted" style="padding:3px 4px">Show:</span>' + filterTypes().map(([k, v]) =>
     `<label><input type="checkbox" value="${k}" ${rec.types.has(k) ? 'checked' : ''}>${v}</label>`).join('') +
     (rec.types.size ? '<button class="small" id="f-types-clear">All alerts</button>' : '');
   $('f-types').querySelectorAll('input').forEach(i => i.onchange = () => { i.checked ? rec.types.add(i.value) : rec.types.delete(i.value); renderFilters(); loadRecordings(); });
@@ -1796,7 +1802,7 @@ function recQuery() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString(), limit: 2000});
   if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
   // Alerts only (plain recordings are on the Recordings tab).
-  q.set('types', (rec.types.size ? [...rec.types] : FILTER_TYPES.map(t => t[0])).join(','));
+  q.set('types', (rec.types.size ? [...rec.types] : filterTypes().map(t => t[0])).join(','));
   if (rec.todFrom) q.set('tod_from', rec.todFrom);
   if (rec.todTo) q.set('tod_to', rec.todTo);
   if (rec.q) q.set('q', rec.q);
@@ -2744,7 +2750,9 @@ async function openCameraDialog(id, clone) {
     detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   const q = parseUrl(c.url) || {};
-  const objs = (sysinfo && sysinfo.ai_objects) || ['person','car','truck','bus','motorcycle','bicycle','dog','cat','bird'];
+  // The usual objects, plus any this camera already watches for.
+  const objs = [...new Set([...((sysinfo && sysinfo.ai_objects) || ['person','car','truck','motorcycle','bicycle','dog','cat']), ...c.detect.objects])];
+  const more = ((sysinfo && sysinfo.ai_more) || []).filter(o => !objs.includes(o));
   const aiOn = settings && settings.ai.provider !== 'none';
   const brandOpts = '<option value="">Format…</option>' + BRANDS.map(b => `<option value="${b[0]}">${esc(b[1])}</option>`).join('');
   const segOpts = [[0, 'Default (' + fmtDur(settings ? settings.storage.segment_seconds : 300) + ')'], [300, '5 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [86400, 'One long file per day']];
@@ -2859,7 +2867,9 @@ async function openCameraDialog(id, clone) {
         <span></span><div><label class="check"><input type="checkbox" id="d-ai" ${c.detect.ai ? 'checked' : ''}> Object recognition (AI)</label>
           <div class="hint">${aiOn ? `Uses <b>${esc(settings.ai.provider)}</b>. Pictures are only sent to the AI while motion is seen (needs motion detection).` : '<span class="warnc">No AI is set up yet.</span> Choose one in Settings → Object recognition.'}</div></div>
         <label>Alert on</label>
-        <div class="chips" id="d-objs">${objs.map(o => `<label><input type="checkbox" value="${o}" ${c.detect.objects.includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
+        <div><div class="chips" id="d-objs">${objs.map(o => `<label><input type="checkbox" value="${o}" ${c.detect.objects.includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
+          ${more.length ? `<details class="more-objs"><summary>More things to watch for…</summary><div class="chips" id="d-more">${more.map(o => `<label><input type="checkbox" value="${o}">${o}</label>`).join('')}</div>
+            <div class="hint">Tick one to add it to the list above.</div></details>` : ''}</div>
         <label for="d-conf">Minimum confidence</label>
         <div class="row"><input type="range" id="d-conf" min="5" max="95" value="${Math.round(c.detect.min_confidence * 100)}" style="flex:1"><span id="d-conf-v" class="muted" style="width:40px">${Math.round(c.detect.min_confidence * 100)}%</span></div>
         <label for="d-trig">What makes an alert</label>
@@ -2931,6 +2941,13 @@ async function openCameraDialog(id, clone) {
   setupProfiles(c);
   setupZones(c, id && !clone ? id : null);
   setupPackageArea(c, id && !clone ? id : null);
+  // "More things to watch for": a ticked one joins the list (ticked).
+  if ($('d-more')) $('d-more').onchange = (e) => {
+    const inp = e.target; if (!inp.checked) return;
+    const o = inp.value; inp.closest('label').remove();
+    $('d-objs').insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${esc(o)}" checked>${esc(o)}</label>`);
+    if (!$('d-parked-objs').querySelector(`input[value="${CSS.escape(o)}"]`)) $('d-parked-objs').insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${esc(o)}">${esc(o)}</label>`);
+  };
   $('c-talk-test').onclick = async () => {
     const r = $('c-talk-res'); r.textContent = 'Connecting to the speaker…'; r.className = 'hint';
     try {
@@ -3094,9 +3111,11 @@ function drawMotionBoxes(svg, objects) {
   }
   svg.innerHTML = out;
 }
-// Corner picker: four buttons laid out like the corners of the picture.
+// Places on the picture: a 3×3 grid (top/middle/bottom × left/centre/right).
+const SPOTS = [['tl', 'Top left'], ['tc', 'Top centre'], ['tr', 'Top right'], ['ml', 'Middle left'], ['mc', 'Centre'], ['mr', 'Middle right'], ['bl', 'Bottom left'], ['bc', 'Bottom centre'], ['br', 'Bottom right']];
+// Position picker: nine buttons laid out like places on the picture.
 function cornerSel(id, cur) {
-  return `<span class="corner-pick" data-for="${id}"><input type="hidden" id="${id}" value="${cur || 'tl'}">${[['tl', 'Top left'], ['tr', 'Top right'], ['bl', 'Bottom left'], ['br', 'Bottom right']]
+  return `<span class="corner-pick" data-for="${id}"><input type="hidden" id="${id}" value="${cur || 'tl'}">${SPOTS
     .map(([k, t]) => `<button type="button" data-c="${k}" title="${t}" class="${k === (cur || 'tl') ? 'on' : ''}"></button>`).join('')}</span>`;
 }
 document.addEventListener('click', (e) => {
@@ -3174,7 +3193,8 @@ function setupOsdTab(c, camId) {
       ghost.remove(); item.style.opacity = '';
       const r = prev.getBoundingClientRect();
       if (ev.clientX < r.left - 40 || ev.clientX > r.right + 40 || ev.clientY < r.top - 40 || ev.clientY > r.bottom + 40) return;
-      const corner = (ev.clientY < r.top + r.height / 2 ? 't' : 'b') + (ev.clientX < r.left + r.width / 2 ? 'l' : 'r');
+      const fy = (ev.clientY - r.top) / r.height, fx = (ev.clientX - r.left) / r.width;
+      const corner = (fy < 1 / 3 ? 't' : fy < 2 / 3 ? 'm' : 'b') + (fx < 1 / 3 ? 'l' : fx < 2 / 3 ? 'c' : 'r');
       const inp = $(k === 'text' ? 'o-text-c' : `o-${k}-c`);
       if (inp) { inp.value = corner; paintCorners(); redraw(); }
     };
@@ -3665,7 +3685,7 @@ async function renderStorage(body) {
 const CLOCK_FORMATS = ['DD/MM/YYYY HH:mm:ss', 'DD/MM/YYYY h:mm:ss a', 'MM/DD/YYYY h:mm:ss A', 'YYYY-MM-DD HH:mm:ss', 'ddd D MMM YYYY HH:mm:ss', 'dddd D MMMM YYYY h:mm a', 'HH:mm:ss'];
 function renderDisplay(body) {
   const l = settings.live, d = settings.display;
-  const corners = [['tl', 'Top left'], ['tr', 'Top right'], ['bl', 'Bottom left'], ['br', 'Bottom right']];
+  const corners = SPOTS;
   const custom = !CLOCK_FORMATS.includes(d.clock_format);
   body.innerHTML = `<form class="card" id="f-display"><h2>Live view</h2><div class="form">
     <label for="l-fps">Grid frame rate</label><div class="row"><input type="number" id="l-fps" min="1" max="30" value="${l.fps}" style="width:110px"><span class="muted">fps for the camera grid (sub-streams)</span></div>

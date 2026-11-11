@@ -7,6 +7,8 @@
 - Camera view: the status card is titled with the camera's name, with ✎ Edit next to it.
 - **Updates**: GAZE checks every minute; a bar under the header says when a new version is out (Update now / What's new / hide). ⟳ Updates next to your name checks right away. Automatic installing is now off by default and, when on, installs as soon as an update is found.
 - Faces and number plates are on by default for new installations.
+- Camera AI tab: the object list is the usual few (person, car, truck, motorbike, bicycle, dog, cat); “More things to watch for…” adds others (bus, bird, horse, suitcase…), which then also appear in the Alerts filter.
+- On-screen display: items can sit in 9 places — the corners, the middle of each edge, or the centre (pickers and drag-and-drop).
 - Camera settings: ◀ ▶ buttons switch to the previous/next camera without closing the editor (it stays on the same tab and asks before dropping unsaved changes).
 - Time-lapse previews of the last 24 hours are prepared every minute (they were every 5) and the file still being recorded shows its latest preview at once instead of making you wait; previews are only removed together with their recordings (retention or low disk space).
 - The red recording dot is back on camera tiles and in Settings → Cameras.

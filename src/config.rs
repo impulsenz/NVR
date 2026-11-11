@@ -31,7 +31,8 @@ pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s", "yo
 /// Motion mask grid size.
 pub const MASK_W: usize = 32;
 pub const MASK_H: usize = 18;
-pub const CORNERS: &[&str] = &["tl", "tr", "bl", "br"];
+/// Places on the picture: top/middle/bottom × left/centre/right.
+pub const CORNERS: &[&str] = &["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
 /// Longest allowed recording file ("one long file").
 pub const MAX_SEGMENT_SECONDS: u64 = 86_400;
 
@@ -1198,7 +1199,7 @@ impl Config {
             .chain([&d.clock_corner])
             .any(|c| !CORNERS.contains(&c.as_str()))
         {
-            bail!("corners must be tl, tr, bl or br");
+            bail!("positions must be one of {}", CORNERS.join(", "));
         }
         if d.clock_format.trim().is_empty() {
             bail!("clock format cannot be empty");

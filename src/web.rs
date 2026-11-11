@@ -271,6 +271,8 @@ async fn status(
                 "enabled": c.cfg.enabled,
                 "record_mode": c.cfg.record_mode,
                 "has_sub": c.cfg.has_sub(),
+                // What it alerts on (the Alerts filter offers these).
+                "watch": c.cfg.detect.objects,
                 "talk": c.cfg.talk,
                 "url": mask_url(&c.cfg.url),
                 "transcode": c.cfg.reencode(),
@@ -335,7 +337,8 @@ async fn system(State(m): App) -> Response {
         "addresses": local_addresses(),
         "uptime_seconds": m.started.elapsed().as_secs(),
         "capabilities": caps,
-        "ai_objects": crate::ai::SECURITY_OBJECTS,
+        "ai_objects": crate::ai::MAIN_OBJECTS,
+        "ai_more": crate::ai::more_objects(),
     }))
     .into_response()
 }
