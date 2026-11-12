@@ -861,3 +861,9 @@ table.where td:first-child { width: 44px; }
 
 /* Alerts → "New faces & plates to name" */
 .nf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+
+/* Settings → Profiles */
+.prof-list { display: grid; gap: 10px; }
+.prof { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.prof .row { gap: 6px; }
+.profile-mode .profile-bar { display: none; }

@@ -579,7 +579,13 @@ impl Manager {
         self.commit(cfg)
     }
 
-    pub async fn update_profiles(&self, mut p: Vec<crate::config::Profile>) -> Result<()> {
+    /// Save the profiles. `rename` (old name, new name): cameras following
+    /// the old name follow the new one.
+    pub async fn update_profiles(
+        &self,
+        mut p: Vec<crate::config::Profile>,
+        rename: Option<(String, String)>,
+    ) -> Result<()> {
         let _g = self.edit.lock().await;
         for x in &mut p {
             x.name = x.name.trim().to_string();
@@ -589,6 +595,13 @@ impl Manager {
         }
         let mut cfg = self.config();
         cfg.profiles = p.clone();
+        if let Some((old, new)) = &rename {
+            for cam in cfg.cameras.iter_mut() {
+                if cam.profile.eq_ignore_ascii_case(old.trim()) {
+                    cam.profile = new.trim().to_string();
+                }
+            }
+        }
         // Cameras following a deleted profile keep their settings, unlinked.
         let mut changed = Vec::new();
         for cam in cfg.cameras.iter_mut() {

@@ -1805,12 +1805,35 @@ function stopTalk() {
   t.ctx && t.ctx.close().catch(() => {});
   talkLabel('Hold to talk');
 }
+// A two-tone "ding-dong" doorbell chime: 8 kHz, 16-bit samples, like the
+// voice sent to the camera's speaker.
+function doorbellChime() {
+  const rate = 8000, notes = [[659.25, 0], [523.25, 0.55]], len = Math.round(rate * 1.6);
+  const out = new Int16Array(len);
+  for (const [f, start] of notes) {
+    const s0 = Math.round(start * rate);
+    for (let i = 0; s0 + i < len; i++) {
+      const t = i / rate, env = Math.min(1, t / 0.01) * Math.exp(-t * 3.2);
+      const v = Math.sin(2 * Math.PI * f * t) + 0.35 * Math.sin(2 * Math.PI * f * 2 * t) + 0.12 * Math.sin(2 * Math.PI * f * 3 * t);
+      out[s0 + i] = Math.max(-32767, Math.min(32767, out[s0 + i] + v * env * 0.55 * 32767 / 1.47));
+    }
+  }
+  return out;
+}
 async function startTalk(camId, latch) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.AudioWorkletNode) {
     toast('The browser only allows the microphone on secure pages: open GAZE as https://… (for example through Tailscale) or as http://localhost on this computer.', true);
     return;
   }
   const t = talk = {cam: camId, latch, ready: false, queue: []};
+  // A doorbell chime first (camera's setting): sent ahead of the voice, which
+  // starts once the chime has played.
+  const camInfo = status && status.cameras.find(x => x.id === camId);
+  if (!camInfo || camInfo.talk_chime !== false) {
+    const chime = doorbellChime();
+    for (let i = 0; i < chime.length; i += 320) t.queue.push(chime.slice(i, i + 320).buffer);
+    t.muteUntil = performance.now() + chime.length / 8;
+  }
   talkLabel('Connecting…', 'connecting');
   // Connect to the speaker and open the microphone at the same time.
   t.ws = new WebSocket(location.href.replace(/^http/, 'ws').replace(/[#?].*$/, '').replace(/[^/]*$/, '') + `api/cameras/${enc(camId)}/talk`);
@@ -1842,6 +1865,8 @@ async function startTalk(camId, latch) {
   };
   t.flush = push;
   node.port.onmessage = (e2) => {
+    // While the chime plays, the microphone isn't sent (the chime goes first).
+    if (t.muteUntil && performance.now() < t.muteUntil) { pos = acc = cnt = 0; return; }
     // Average the samples that fall into each 1/8000 s (a simple low-pass).
     for (const v of e2.data) {
       acc += v; cnt++; pos += 1;
@@ -3282,7 +3307,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'notify', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'logs', 'info'];
+const SECTIONS = ['cameras', 'profiles', 'storage', 'display', 'ai', 'known', 'notify', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'logs', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -3296,7 +3321,7 @@ async function showSettings(sec) {
   const body = $('settings-body');
   // The log view is kept, and lent to the Logs section while it's open.
   const lb = $('logs-box'); if (lb.parentElement !== $('page-logs')) $('page-logs').appendChild(lb);
-  ({cameras: renderCameras, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
+  ({cameras: renderCameras, profiles: renderProfiles, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
     cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, tasks: renderTasks, system: renderSystemSettings, info: renderInfo,
     logs: (b) => { b.innerHTML = ''; b.appendChild($('logs-box')); showLogs(); }})[section](body);
 }
@@ -3471,15 +3496,19 @@ function stopPreviews() { previewImgs.splice(0).forEach(i => i.removeAttribute('
 
 // Changes each time a camera's settings window is opened.
 let camDlgGen = 0;
-async function openCameraDialog(id, clone) {
+// Editing a profile in the camera window ({idx, name}; idx -1 = new), or null.
+let profileEdit = null;
+async function openCameraDialog(id, clone, prof) {
   camDlgGen++;
+  profileEdit = prof || null;
+  if (prof) { id = null; clone = false; }
   if (!settings) await loadSettings().catch(() => {});
   if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
   editingId = clone ? null : (id || null); cloneMode = !!clone;
   const base = id ? cameraCfgs.find(c => c.id === id) : null;
   const c = base ? JSON.parse(JSON.stringify(base)) : {
     name: '', enabled: true, url: '', live_url: '', rtsp_transport: 'tcp', record_mode: 'continuous', schedule_enabled: false,
-    schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, live_sound: true, talk: false, talk_url: '', transcode: false, record_fps: 0,
+    schedule: {days: [0,1,2,3,4,5,6], start: '18:00', end: '07:00'}, record_audio: true, live_sound: true, talk: false, talk_chime: true, talk_url: '', transcode: false, record_fps: 0,
     segment_seconds: 0, storage_dir: '', retention_days: 0, max_storage_gb: 0,
     osd: {custom: false, show_name: true, name_corner: 'bl', show_clock: true, clock_corner: 'tl', clock_format: '', show_status: true, status_corner: 'tr',
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
@@ -3487,6 +3516,8 @@ async function openCameraDialog(id, clone) {
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
     detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
+  // A profile: its settings on top of a new camera's.
+  if (prof) { Object.assign(c, JSON.parse(JSON.stringify(prof.values || {}))); c.detect = {...c.detect, mask: ''}; c.name = prof.name; }
   const q = parseUrl(c.url) || {};
   // The usual objects, plus any this camera already watches for.
   const objs = [...new Set([...((sysinfo && sysinfo.ai_objects) || ['person','car','truck','motorcycle','bicycle','dog','cat']), ...c.detect.objects])];
@@ -3501,9 +3532,8 @@ async function openCameraDialog(id, clone) {
     <div class="body">
       <div class="profile-bar"><b>Profile</b>
         <select id="c-prof"><option value="">Choose a saved profile…</option></select>
-        <button type="button" class="small" id="c-prof-apply" title="Fill in this profile's recording, motion and AI settings">Apply</button>
-        <button type="button" class="small" id="c-prof-save" title="Save this camera's recording, motion and AI settings as a profile">💾 Save as profile…</button>
-        <button type="button" class="small" id="c-prof-del" title="Delete the chosen profile">✕</button>
+        <button type="button" class="small" id="c-prof-apply" hidden>Apply</button>
+        <a class="btn small" href="#settings/profiles" id="c-prof-manage" title="Create and edit profiles">Manage profiles →</a>
         <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
       <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="zones">Zones</button></div>
       <div data-tab="general" class="form">
@@ -3615,6 +3645,7 @@ async function openCameraDialog(id, clone) {
         <label>Two-way audio</label>
         <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker</label>
           <div class="hint">Shows a <b>🎙️ Hold to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there</label>
           <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
           <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
       </div>
@@ -3689,6 +3720,21 @@ async function openCameraDialog(id, clone) {
   });
   setupRestartButton(id && !clone ? id : null);
   setupProfiles(c);
+  $('cam-dialog').classList.toggle('profile-mode', !!prof);
+  if (prof) {
+    // Only the settings a profile holds: Recording, Motion and AI.
+    f.querySelector('.head h2').textContent = prof.idx >= 0 ? `Edit profile “${prof.name}”` : `New profile “${prof.name}”`;
+    f.querySelectorAll('#c-tabs button').forEach(b => b.hidden = !['recording', 'detection', 'ai'].includes(b.dataset.t));
+    f.querySelector('#c-tabs [data-t=recording]').click();
+    $('c-save').textContent = 'Save profile';
+    // The camera-only fields (hidden here) mustn't stop the form being sent.
+    f.querySelectorAll('[required]').forEach(x => x.required = false);
+    // Areas drawn on a camera's own picture stay with each camera.
+    for (const el of [$('d-mask'), $('d-pkg-area')]) {
+      const box = el.closest('div:not(.surface)'), label = box && box.previousElementSibling;
+      if (box) box.hidden = true; if (label && label.tagName === 'LABEL') label.hidden = true;
+    }
+  }
   setupZones(c, id && !clone ? id : null);
   setupPackageArea(c, id && !clone ? id : null);
   // "More things to watch for": a ticked one joins the list (ticked).
@@ -4030,7 +4076,25 @@ async function saveCamera(ev) {
   const err = (m) => { $('c-err').hidden = false; $('c-err').textContent = m; };
   if (body.schedule_enabled && !days.length) return err('Choose at least one day for the schedule.');
   if (body.detect.ai && !objects.length) return err('Choose at least one object to alert on.');
-  return finishSave(body);
+  return profileEdit ? saveProfileForm(body) : finishSave(body);
+}
+// Save the camera window's Recording, Motion and AI settings as the profile
+// being edited; cameras following it change too.
+async function saveProfileForm(body) {
+  const pe = profileEdit, p = {name: pe.name};
+  for (const k of PROFILE_KEYS) p[k] = JSON.parse(JSON.stringify(body[k]));
+  p.detect.mask = ''; p.detect.packages = false; p.detect.package_area = [];
+  const profiles = [...((settings && settings.profiles) || [])];
+  if (pe.idx >= 0) profiles[pe.idx] = p; else profiles.push(p);
+  const btn = $('c-save'); btn.disabled = true;
+  try {
+    await api('api/profiles', {method: 'PUT', json: profiles});
+    closeCameraDialog();
+    const n = cameraCfgs.filter(c => (c.profile || '').toLowerCase() === pe.name.toLowerCase()).length;
+    toast(`Profile “${pe.name}” saved${n ? ` — ${n} camera${n === 1 ? '' : 's'} following it updated` : ''}`);
+    showSettings('profiles');
+  } catch (e) { $('c-err').hidden = false; $('c-err').textContent = e.message; }
+  finally { btn.disabled = false; }
 }
 // Read the camera form.
 function collectCamera() {
@@ -4041,7 +4105,7 @@ function collectCamera() {
     name: val('c-name').trim(), enabled: chk('c-enabled'), url: val('c-url').trim(), live_url: val('c-live').trim(),
     rtsp_transport: val('c-transport'), record_mode: mode, schedule_enabled: chk('c-sched-on'),
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
-    talk: chk('c-talk'), talk_url: val('c-talk-url').trim(), live_sound: chk('c-sound'),
+    talk: chk('c-talk'), talk_chime: chk('c-chime'), talk_url: val('c-talk-url').trim(), live_sound: chk('c-sound'),
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
@@ -4193,10 +4257,9 @@ function setupProfiles(cfg) {
   const tabs = $('f-cam').querySelectorAll('[data-tab=recording], [data-tab=detection]');
   tabs.forEach(t => t.addEventListener('input', (e) => {
     if (!camProfile || e.isTrusted === false || e.target.closest('#d-mask')) return;
-    toast(`Own settings now — no longer following “${camProfile}” (use “Save as profile” to change the profile for every camera).`);
+    toast(`Own settings now — no longer following “${camProfile}” (to change it for every camera, edit the profile in Settings → Profiles).`);
     camProfile = ''; sel.value = ''; showLink();
   }));
-  const save = async (profiles) => { await api('api/profiles', {method: 'PUT', json: profiles}); settings.profiles = profiles; };
   $('c-prof-apply').onclick = () => {
     const p = list()[+sel.value];
     if (sel.value === '' || !p) { camProfile = ''; showLink(); return; }
@@ -4205,26 +4268,57 @@ function setupProfiles(cfg) {
     toast(`Following “${p.name}” — press Save camera to keep it.`);
   };
   sel.onchange = () => $('c-prof-apply').click();
-  $('c-prof-save').onclick = async () => {
-    const cur = sel.value !== '' ? list()[+sel.value] : null;
-    const name = (prompt('Profile name (an existing name is replaced):', cur ? cur.name : '') || '').trim();
-    if (!name) return;
-    const body = collectCamera(), p = {name};
-    for (const k of PROFILE_KEYS) p[k] = JSON.parse(JSON.stringify(body[k]));
-    p.detect.mask = '';
-    const profiles = list().filter(x => x.name.toLowerCase() !== name.toLowerCase()).concat([p]);
-    try {
-      await save(profiles); fill(profiles.length - 1); camProfile = name; showLink();
-      const n = cameraCfgs.filter(c => (c.profile || '').toLowerCase() === name.toLowerCase() && c.id !== editingId).length;
-      toast(`Saved profile “${name}”${n ? ` — ${n} other camera${n === 1 ? '' : 's'} following it ${n === 1 ? 'was' : 'were'} updated` : ''}.`);
-      await loadSettings();
-    } catch (e) { msg(e.message); }
+  $('c-prof-manage').onclick = () => closeCameraDialog();
+}
+// ---------- Settings → Profiles ----------
+// Recording, motion and AI settings shared by cameras: edit a profile and
+// every camera following it changes too.
+const REC_MODE_NAMES = {continuous: 'Records all the time (full quality)', continuous_sub: 'Records all the time (sub-stream)', sub_plus_events: 'Sub-stream all the time + full-quality alerts', events: 'Records alerts only', off: 'Not recording'};
+function renderProfiles(body) {
+  const list = settings.profiles || [];
+  const followers = (name) => cameraCfgs.filter(c => (c.profile || '').toLowerCase() === name.toLowerCase());
+  const summary = (p) => [REC_MODE_NAMES[p.record_mode] || p.record_mode,
+    p.detect.motion ? 'motion detection' : 'no motion detection',
+    p.detect.ai ? 'AI: ' + p.detect.objects.join(', ') : 'no AI'].join(' · ');
+  body.innerHTML = `<div class="card"><div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Profiles</h2>
+      <button type="button" id="pr-new">＋ New profile</button>
+      ${cameraCfgs.length ? `<select id="pr-from" title="Start a profile from a camera's recording, motion and AI settings"><option value="">＋ New from a camera…</option>${cameraCfgs.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>` : ''}</div>
+    <p class="muted" style="margin-top:0">A profile holds recording, motion and AI settings. Cameras following a profile change when it's edited — set it up once for all the cameras that should behave the same. Each camera keeps its own picture-based settings (ignore areas, package spot, zones). Choose which profile a camera follows in its settings (top of the window).</p>
+    ${list.length ? '' : '<div class="hint">No profiles yet.</div>'}
+    <div class="prof-list">${list.map((p, i) => { const f = followers(p.name); return `<div class="prof" data-i="${i}">
+      <div class="row"><b style="flex:1">${esc(p.name)}</b><button type="button" class="small pr-edit">Edit</button><button type="button" class="small pr-ren">Rename</button><button type="button" class="small danger pr-del">Delete</button></div>
+      <div class="muted small">${esc(summary(p))}</div>
+      <div class="small" style="margin-top:4px">${f.length ? 'Followed by: ' + f.map(c => esc(c.name)).join(', ') : '<span class="muted">No camera follows it yet</span>'}</div></div>`; }).join('')}</div></div>`;
+  const askName = (cur) => {
+    const name = (prompt('Profile name:', cur || '') || '').trim();
+    if (!name) return null;
+    if (list.some(p => p.name.toLowerCase() === name.toLowerCase() && p.name !== cur)) { toast(`There's already a profile called “${name}”.`, true); return null; }
+    return name;
   };
-  $('c-prof-del').onclick = async () => {
-    const p = list()[+sel.value];
-    if (sel.value === '' || !p || !confirm(`Delete the profile “${p.name}”? Cameras keep their settings.`)) return;
-    try { await save(list().filter(x => x !== p)); fill(); if (camProfile === p.name) camProfile = ''; showLink(); toast(`Deleted “${p.name}”; cameras that followed it keep their settings.`); await loadSettings(); } catch (e) { msg(e.message); }
+  const valuesOf = (src) => { const v = {}; for (const k of PROFILE_KEYS) v[k] = JSON.parse(JSON.stringify(src[k])); return v; };
+  $('pr-new').onclick = () => { const name = askName(); if (name) openCameraDialog(null, false, {idx: -1, name, values: null}); };
+  if ($('pr-from')) $('pr-from').onchange = (e) => {
+    const c = cameraCfgs.find(x => x.id === e.target.value); e.target.value = '';
+    if (!c) return;
+    const name = askName(c.name + ' settings'); if (name) openCameraDialog(null, false, {idx: -1, name, values: valuesOf(c)});
   };
+  const save = async (profiles, rename) => {
+    const q = rename ? `?rename_from=${enc(rename[0])}&rename_to=${enc(rename[1])}` : '';
+    try { await api('api/profiles' + q, {method: 'PUT', json: profiles}); return true; } catch (e) { toast(e.message, true); return false; }
+  };
+  body.querySelectorAll('.prof').forEach(el => {
+    const i = +el.dataset.i, p = list[i];
+    el.querySelector('.pr-edit').onclick = () => openCameraDialog(null, false, {idx: i, name: p.name, values: valuesOf(p)});
+    el.querySelector('.pr-ren').onclick = async () => {
+      const name = askName(p.name); if (!name || name === p.name) return;
+      const profiles = list.map((x, j) => j === i ? {...x, name} : x);
+      if (await save(profiles, [p.name, name])) { toast(`Renamed to “${name}”`); showSettings('profiles'); }
+    };
+    el.querySelector('.pr-del').onclick = async () => {
+      if (!confirm(`Delete the profile “${p.name}”? Cameras following it keep their current settings.`)) return;
+      if (await save(list.filter((_, j) => j !== i))) { toast(`Deleted “${p.name}”`); showSettings('profiles'); }
+    };
+  });
 }
 // Put a profile's settings into the camera form (the camera's mask stays).
 function applyProfile(p) {

@@ -904,6 +904,9 @@ pub struct CameraConfig {
     pub talk: bool,
     /// RTSP address with the camera's audio back-channel (empty = main stream).
     pub talk_url: String,
+    /// A doorbell chime plays through the camera's speaker as soon as you
+    /// start talking (to get the attention of whoever is there).
+    pub talk_chime: bool,
     /// Re-encode recordings to H.264 (uses the GPU encoder if configured).
     pub transcode: bool,
     /// Recording frame rate (0 = camera's own; other values re-encode).
@@ -947,6 +950,7 @@ impl Default for CameraConfig {
             record_audio: true,
             live_sound: true,
             talk: false,
+            talk_chime: true,
             talk_url: String::new(),
             transcode: false,
             record_fps: 0,

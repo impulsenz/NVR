@@ -270,6 +270,7 @@ async fn status(
                 // What it alerts on (the Alerts filter offers these).
                 "watch": c.cfg.detect.objects,
                 "talk": c.cfg.talk,
+                "talk_chime": c.cfg.talk_chime,
                 "sound": c.cfg.live_sound,
                 "url": mask_url(&c.cfg.url),
                 "transcode": c.cfg.reencode(),
@@ -821,8 +822,19 @@ async fn get_profiles(State(m): App) -> Response {
     Json(m.config().profiles).into_response()
 }
 
-async fn put_profiles(State(m): App, Json(p): Json<Vec<crate::config::Profile>>) -> Response {
-    match m.update_profiles(p).await {
+#[derive(Deserialize)]
+struct ProfileRename {
+    rename_from: Option<String>,
+    rename_to: Option<String>,
+}
+
+async fn put_profiles(
+    State(m): App,
+    Query(r): Query<ProfileRename>,
+    Json(p): Json<Vec<crate::config::Profile>>,
+) -> Response {
+    let rename = r.rename_from.zip(r.rename_to);
+    match m.update_profiles(p, rename).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => bad(e),
     }

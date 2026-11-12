@@ -432,6 +432,8 @@ pub struct Talk {
     pending: Vec<i16>,
     camera: String,
     last_keepalive: std::time::Instant,
+    /// When the next packet is due to play (for sending at playing speed).
+    play_at: std::time::Instant,
     uri: String,
 }
 
@@ -513,17 +515,33 @@ impl Talk {
             pending: Vec::new(),
             camera: camera.to_string(),
             last_keepalive: std::time::Instant::now(),
+            play_at: std::time::Instant::now(),
             uri: base,
         })
     }
 
-    /// Send 8 kHz mono samples to the camera's speaker.
+    /// Send 8 kHz mono samples to the camera's speaker, at playing speed:
+    /// at most a tenth of a second ahead of real time (a sound made in one
+    /// go, like the doorbell chime, is spread out; speech arrives in real
+    /// time anyway). Cameras play packets as they come, so a burst would be
+    /// sped up or lost.
     pub async fn send(&mut self, samples: &[i16]) -> Result<()> {
         self.pending.extend_from_slice(samples);
         let n = self.pending.len() / PACKET * PACKET;
-        let mut out = Vec::with_capacity(n / PACKET * (4 + 12 + PACKET));
-        for chunk in self.pending[..n].chunks(PACKET) {
+        let chunks: Vec<Vec<i16>> = self.pending[..n].chunks(PACKET).map(<[i16]>::to_vec).collect();
+        self.pending.drain(..n);
+        let step = Duration::from_millis((PACKET as u64 * 1000) / 8000);
+        for chunk in chunks {
+            let now = std::time::Instant::now();
+            if self.play_at < now {
+                self.play_at = now;
+            }
+            if self.play_at > now + Duration::from_millis(100) {
+                tokio::time::sleep(self.play_at - now - Duration::from_millis(100)).await;
+            }
+            self.play_at += step;
             let len = (12 + PACKET) as u16;
+            let mut out = Vec::with_capacity(4 + 12 + PACKET);
             out.extend_from_slice(&[b'$', self.channel]);
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(&[0x80, self.speaker.payload & 0x7f]);
@@ -534,9 +552,6 @@ impl Talk {
             out.extend(chunk.iter().map(|&s| if pcmu { ulaw(s) } else { alaw(s) }));
             self.seq = self.seq.wrapping_add(1);
             self.ts = self.ts.wrapping_add(PACKET as u32);
-        }
-        self.pending.drain(..n);
-        if !out.is_empty() {
             self.rtsp
                 .wr
                 .write_all(&out)
