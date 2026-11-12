@@ -368,9 +368,12 @@ const labelIcon = (l) => LABEL_ICON[l] || '🔷';
 function legendHtml(kind, data) {
   const rows = data || [], segs = rows.flatMap(c => c.segments || []), evs = rows.flatMap(c => c.events || []);
   const watched = [...new Set(rows.flatMap(c => (cam(c.camera) || {}).watch || []))];
-  const bars = [['<i class="lg-bar rec"></i>', 'Recording']];
+  // Green: sub-stream footage; purple: main stream (HD), 24/7 or alert clips.
+  const sm = (x) => x.stream || (x.kind === 'sub' ? 'sub' : 'main');
+  const bars = [];
+  if (!segs.length || segs.some(x => sm(x) === 'sub')) bars.push(['<i class="lg-bar rec"></i>', 'Sub-stream']);
+  if (segs.some(x => sm(x) === 'main')) bars.push(['<i class="lg-bar clip"></i>', segs.every(x => sm(x) !== 'main' || x.kind === 'clip') ? 'HD alert clips' : 'Main stream (HD)']);
   if (segs.some(isGrowing)) bars.push(['<i class="lg-bar live"></i>', 'Recording now']);
-  if (segs.some(s => s.kind === 'clip')) bars.push(['<i class="lg-bar clip"></i>', 'HD alert clip']);
   // Alerts in the colour of their kind (only kinds that are on it).
   const cats = new Set(evs.map(evCat));
   for (const [k, t] of [['person', 'People'], ['vehicle', 'Vehicles'], ['animal', 'Animals'], ['package', 'Packages'], ['other', 'Other'], ['motion', 'Motion only']])
@@ -602,6 +605,7 @@ function parkVideos(root) {
   for (const v of root.querySelectorAll('video:not([data-hls])')) {
     if (v.dataset.parked || v.networkState !== HTMLMediaElement.NETWORK_LOADING || !v.getAttribute('src')) continue;
     v.dataset.parked = v.getAttribute('src'); v.dataset.parkedAt = v.currentTime;
+    keepStill(v);
     v.pause(); v.removeAttribute('src'); v.load();
   }
 }
@@ -613,7 +617,31 @@ function unparkVideos(root) {
     if (v.getAttribute('src')) continue;  // already given something new
     v.addEventListener('loadedmetadata', () => { try { v.currentTime = t; } catch (_) {} }, {once: true});
     v.src = src;
+    dropStillWhenShown(v);
   }
+}
+// The picture a video was showing, kept on screen while it's let go of and
+// loaded again (no black box when coming back to the page).
+function keepStill(v) {
+  if (v.readyState < 2 || v.style.visibility === 'hidden' || v.hidden || !v.videoWidth) return;
+  try {
+    const w = Math.min(960, v.videoWidth), c = document.createElement('canvas');
+    c.width = w; c.height = Math.round(v.videoHeight * w / v.videoWidth);
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    if (v._still) v._still.remove();
+    const im = v._still = document.createElement('img');
+    im.className = 'park-still'; im.alt = '';
+    im.style.objectFit = getComputedStyle(v).objectFit;
+    im.src = c.toDataURL('image/jpeg', 0.85);
+    v.after(im);
+  } catch (_) {}
+}
+function dropStillWhenShown(v) {
+  const im = v._still; if (!im) return;
+  const done = () => { if (v._still === im) { v._still = null; im.remove(); } };
+  // Gone once the video shows a picture again (or another player took over).
+  const ck = () => { if (v._still !== im) return; if ((v.readyState >= 2 && !v.seeking) || v.style.visibility === 'hidden') done(); else setTimeout(ck, 80); };
+  setTimeout(ck, 80); setTimeout(done, 10000);
 }
 
 async function refreshStatus() {
@@ -1789,7 +1817,7 @@ const camTl = {
     for (const sg of this.data.segments) {
       const live = sg === lastRec && isGrowing(sg);
       const x0 = Math.max(0, pct(new Date(sg.start).getTime())), x1 = Math.min(100, pct(live ? Date.now() : new Date(sg.end).getTime()));
-      if (x1 > 0 && x0 < 100 && x1 > x0) pieces.push({a: x0, b: x1, cls: sg.kind === 'clip' ? 'clip' : 'rec', live});
+      if (x1 > 0 && x0 < 100 && x1 > x0) pieces.push({a: x0, b: x1, cls: streamOf(sg) === 'main' ? 'clip' : 'rec', live});
     }
     lane += solidBars(pieces, 15000 / (b - a) * 100, 'div', 'seg');
     this.groups = [];
@@ -2315,7 +2343,31 @@ function setRecMode(mode) {
   $('f-types').hidden = mode !== 'list';
   document.querySelectorAll('#page-recordings .list-only').forEach(e => e.hidden = mode !== 'list');
   if (mode === 'list') { tlStop(); loadRecordings(); }
-  else { closeAlert(); loadTimeline(); }
+  else { closeAlert(); if (!resumeTimeline()) loadTimeline(); }
+}
+// What the timeline shows (cameras and days): coming back to the same, it
+// carries on as it was — players, pictures and time-lapse kept — instead of
+// loading everything again (only newer footage is fetched).
+const tlKey = () => [[...rec.cameras].sort().join(','), rec.from && rec.from.getTime(), rec.to && rec.to.getTime()].join('|');
+function resumeTimeline() {
+  if (tl.key !== tlKey() || !document.querySelector('#tl-videos .surface') || Date.now() - (tl.loadedAt || 0) > 3 * 3600000) return false;
+  drawTimeline(); tlSync(true); prefetchSprites();
+  refreshTimelineData();
+  return true;
+}
+// Newer footage and alerts for the timeline as it is (nothing reloaded).
+function refreshTimelineData() {
+  const q = new URLSearchParams({from: rec.from.toISOString(), to: new Date(Math.max(rec.to.getTime(), Date.now())).toISOString()});
+  if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
+  return api('api/timeline?' + q).then(d => {
+    if (tl.dragging || page !== 'recordings') return;
+    // A camera added or removed meanwhile: build the players afresh.
+    const same = d.length === tl.data.length && d.every((c, i) => c.camera === tl.data[i].camera);
+    tl.data = d; tl.loadedAt = Date.now();
+    if (!same) buildTimelineVideos();
+    drawTimeline(); prefetchSprites();
+    if (!same) tlSync(true);
+  }).catch(() => {});
 }
 $('f-seen').onchange = () => { rec.seen = val('f-seen'); loadRecordings(); };
 // People and vehicles taught in People & vehicles: only their alerts.
@@ -2732,6 +2784,7 @@ async function loadTimeline() {
   tl.zoom = +$('tl-zoom').value;
   centerWindow();
   buildTimelineVideos();
+  tl.key = tlKey();
   drawTimeline();
   tlSync(true);
   prefetchSprites();
@@ -2950,13 +3003,14 @@ function segAt(c, T, force) {
 setInterval(() => {
   if (page !== 'recordings' || rec.mode !== 'timeline' || document.hidden || tl.dragging) return;
   if (tl.winStart + tl.zoom * 1000 < Date.now() - 300000) return;
-  const q = new URLSearchParams({from: rec.from.toISOString(), to: new Date(Math.max(rec.to.getTime(), Date.now())).toISOString()});
-  if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
-  api('api/timeline?' + q).then(d => { if (tl.dragging) return; tl.data = d; tl.loadedAt = Date.now(); drawTimeline(); prefetchSprites(); }).catch(() => {});
+  refreshTimelineData();
 }, 30000);
 
 // Keep each camera's video at the shared time `tl.T`.
 function tlSync(force) {
+  // While dragging only the time-lapse shows (a playlist or player that
+  // loads meanwhile waits for the drop).
+  if (tl.dragging) return;
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
     const msg = el.querySelector('.msg');
@@ -3132,7 +3186,7 @@ function drawTimeline() {
     for (const s of shown) {
       const live = s === lastRec && isGrowing(s);
       const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(s.end).getTime()));
-      if (b > 0 && a < 100 && b > a) pieces.push({a, b, cls: s.kind === 'clip' ? 'clip' : 'rec', live});
+      if (b > 0 && a < 100 && b > a) pieces.push({a, b, cls: streamOf(s) === 'main' ? 'clip' : 'rec', live});
     }
     lane += solidBars(pieces, 15000 / span * 100, 'div', 'seg');
     lane += evMarks(c.events, pct, `data-cam="${esc(c.camera)}"`, c.camera, lanePx, tl.groups);
@@ -3455,7 +3509,9 @@ function previewAll() {
     // Main stream, recorded only for alerts) has no footage; letting go
     // there says so.
     const ps = c && previewSources(c.segments).find(x => new Date(x.start).getTime() <= T && T < (isGrowing(x) ? Date.now() : new Date(x.end).getTime()) + 1000);
-    const s = (c && segAt(c, T)) || (tl.scrub === 'timelapse' && !el._tc ? ps : null), sp = el.querySelector('.sprite');
+    // (The pictures don't depend on how the video plays: also for cameras
+    // whose HD footage plays converted.)
+    const s = (c && segAt(c, T)) || (tl.scrub === 'timelapse' ? ps : null), sp = el.querySelector('.sprite');
     if (sp.classList.contains('fading')) { sp._gen = (sp._gen || 0) + 1; sp.classList.remove('fading'); }
     el.querySelector('.msg').hidden = !!s;
     if (!s) [...el._vids, el._hlsV].forEach(x => x.style.visibility = 'hidden');
@@ -3769,11 +3825,29 @@ async function loadSystem() {
       <td>${esc(l.cameras.join(', ') || '–')}</td><td>${fmtBytes(l.used_bytes)}</td><td>${fmtBytes(l.free_bytes)} of ${fmtBytes(l.total_bytes)}</td>
       <td class="hide-sm">${fmtBytes(l.bytes_per_day)}</td><td>${l.days_until_full != null ? l.days_until_full.toFixed(1) + ' days' : '–'}</td></tr>`).join('') + '</tbody></table>'
     + `<div class="hint">“Full in” is how long until free space runs out at the current rate (keeping the “free disk space” reserve). After that, the oldest recordings are deleted automatically. Total space allowed for recordings: ${usage.capacity_bytes ? fmtBytes(usage.capacity_bytes) : '–'}.</div>` : '<div class="muted">No data yet.</div>';
+  loadKinds();
   $('sys-cams').innerHTML = usage.cameras.length ? `<table><thead><tr><th>Camera</th><th>Per hour</th><th>Per 24 h</th><th class="hide-sm">Stored</th><th class="hide-sm">Oldest</th><th>Keep</th></tr></thead><tbody>` +
     usage.cameras.map(u => `<tr><td>${esc(u.name)}<div class="sub">${esc(u.dir)}</div></td><td>${fmtBytes(u.bytes_per_hour)}</td><td>${fmtBytes(u.bytes_per_day)}</td>
       <td class="hide-sm">${fmtBytes(u.used_bytes)}</td><td class="hide-sm">${u.oldest ? fmtDate(u.oldest) : '–'}</td><td>${u.retention_days ? u.retention_days + ' days' : 'forever'}</td></tr>`).join('') + '</tbody></table>' : '<div class="muted">No cameras.</div>';
 }
 
+// Space taken by each kind of footage (counted by the NVR every few minutes).
+const KINDS = [['sub', 'Sub-stream recordings', '#3f9d63'], ['main', 'Main stream (HD) recordings', '#7c5fd0'], ['alerts', 'Alerts (HD clips & pictures)', '#f59e0b'], ['timelapse', 'Time-lapse previews', '#22d3ee'], ['other', 'Other', '#6b7280']];
+async function loadKinds() {
+  if (loadKinds.busy || Date.now() - (loadKinds.at || 0) < 60000) return;
+  loadKinds.busy = true;
+  let list;
+  try { list = await api('api/usage/kinds'); } catch (e) { return; } finally { loadKinds.busy = false; }
+  loadKinds.at = Date.now();
+  const tot = {}; for (const [k] of KINDS) tot[k] = list.reduce((a, u) => a + (u[k] || 0), 0);
+  const sum = (u) => KINDS.reduce((a, [k]) => a + (u[k] || 0), 0);
+  const bar = (u) => { const t = sum(u) || 1; return `<div class="kbar">${KINDS.map(([k, , c]) => u[k] ? `<i style="width:${(u[k] / t * 100).toFixed(2)}%;background:${c}" title="${esc(KINDS.find(x => x[0] === k)[1])}: ${fmtBytes(u[k])}"></i>` : '').join('')}</div>`; };
+  const cell = (u, k) => `<td>${u[k] ? fmtBytes(u[k]) : '–'}</td>`;
+  $('sys-kinds').innerHTML = `<div class="klegend">${KINDS.map(([k, t, c]) => `<span><i style="background:${c}"></i>${t}: <b>${fmtBytes(tot[k])}</b></span>`).join('')}</div>${bar(tot)}
+    <table><thead><tr><th>Camera</th>${KINDS.map(([, t]) => `<th class="${t === 'Other' ? 'hide-sm' : ''}">${t.replace(/ \(.*\)| recordings| previews/g, '')}</th>`).join('')}<th>Total</th></tr></thead><tbody>
+    ${list.map(u => `<tr><td>${esc(u.name)}${bar(u)}</td>${KINDS.map(([k]) => k === 'other' ? `<td class="hide-sm">${u[k] ? fmtBytes(u[k]) : '–'}</td>` : cell(u, k)).join('')}<td><b>${fmtBytes(sum(u))}</b></td></tr>`).join('')}
+    </tbody></table><div class="hint">Counted every few minutes. “Sub-stream” includes the light copies kept for the timeline; time-lapse previews are deleted along with their recordings.</div>`;
+}
 function drawGraph() {
   const svg = $('sys-graph'), W = svg.clientWidth || 800, H = 220, h = sysHist;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);

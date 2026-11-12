@@ -327,35 +327,7 @@ pub fn timeline(
             continue;
         }
         let id = &rt.cfg.id;
-        // Which stream each recording is: told by its picture size (the
-        // recording mode may have changed since); a file still being
-        // written (no header yet) is of the stream recorded now.
-        let now_stream = if rt.cfg.record_mode.continuous_stream() == Some(true) {
-            "sub"
-        } else {
-            "main"
-        };
-        let h = |r: &crate::relay::Relay| r.info().and_then(|i| i.height);
-        let (main_h, sub_h) = (h(&rt.relay_main), h(&rt.relay_sub));
-        let stream_of = |name: &str| match mp4_height_cached(&rt.dir.join(name)) {
-            Some(fh) => match (main_h, sub_h) {
-                (Some(m), Some(s)) if s < m => {
-                    if fh * 2 <= s + m {
-                        "sub"
-                    } else {
-                        "main"
-                    }
-                }
-                _ => {
-                    if fh <= 576 {
-                        "sub"
-                    } else {
-                        "main"
-                    }
-                }
-            },
-            None => now_stream,
-        };
+        let stream_of = |name: &str| recording_stream(&rt, name);
         let mut segments: Vec<Segment> = recordings(&rt)
             .into_iter()
             .filter(|r| r.end >= from && r.start <= to)
@@ -482,6 +454,26 @@ pub fn unseen_count(mgr: &Manager) -> usize {
         .count()
 }
 
+/// Which stream a recording is ("main" or "sub"): told by its picture size
+/// (the recording mode may have changed since); a file still being written
+/// (no header yet) is of the stream recorded now.
+pub fn recording_stream(rt: &CameraRuntime, name: &str) -> &'static str {
+    let now_stream = if rt.cfg.record_mode.continuous_stream() == Some(true) { "sub" } else { "main" };
+    let h = |r: &crate::relay::Relay| r.info().and_then(|i| i.height);
+    let (main_h, sub_h) = (h(&rt.relay_main), h(&rt.relay_sub));
+    match mp4_height_cached(&rt.dir.join(name)) {
+        Some(fh) => match (main_h, sub_h) {
+            (Some(m), Some(s)) if s < m => {
+                if fh * 2 <= s + m { "sub" } else { "main" }
+            }
+            _ => {
+                if fh <= 576 { "sub" } else { "main" }
+            }
+        },
+        None => now_stream,
+    }
+}
+
 /// Picture height of an MP4 file, read from its header (no ffmpeg), kept
 /// once known (a file still being written has no header yet).
 fn mp4_height_cached(path: &std::path::Path) -> Option<u32> {
@@ -590,4 +582,74 @@ mod mp4_tests {
         assert_eq!(super::mp4_height(&p), Some(720));
         let _ = std::fs::remove_file(&p);
     }
+}
+
+/// Space a camera's footage takes, by kind (bytes).
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct SpaceUse {
+    pub camera: String,
+    pub name: String,
+    /// 24/7 (and other) recordings of the main stream.
+    pub main: u64,
+    /// Recordings of the sub-stream, and the light timeline copies.
+    pub sub: u64,
+    /// Alert clips and pictures.
+    pub alerts: u64,
+    /// Time-lapse previews (and other thumbnails).
+    pub timelapse: u64,
+    /// Anything else (push-to-talk sound, notes).
+    pub other: u64,
+}
+
+fn dir_size(dir: &std::path::Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// What a camera's folder holds, by kind.
+pub fn space_use(rt: &CameraRuntime) -> SpaceUse {
+    let mut u = SpaceUse { camera: rt.cfg.id.clone(), name: rt.cfg.name.clone(), ..Default::default() };
+    let events = rt.events.dir().to_path_buf();
+    let timeline = storage::timeline_dir(&rt.dir);
+    for (dir, is_rec) in [(rt.dir.clone(), true), (timeline.clone(), false)] {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_dir() {
+                if p == events || p == timeline {
+                    continue;
+                }
+                let n = dir_size(&p);
+                if e.file_name() == ".thumbs" { u.timelapse += n } else { u.other += n }
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".mp4") {
+                u.other += m.len();
+            } else if !is_rec || recording_stream(rt, &name) == "sub" {
+                u.sub += m.len();
+            } else {
+                u.main += m.len();
+            }
+        }
+    }
+    if let Ok(rd) = std::fs::read_dir(&events) {
+        for e in rd.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_dir() {
+                let n = dir_size(&e.path());
+                if e.file_name() == ".thumbs" { u.timelapse += n } else { u.alerts += n }
+            } else {
+                u.alerts += m.len();
+            }
+        }
+    }
+    u
 }

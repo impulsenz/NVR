@@ -123,6 +123,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/system", get(system))
         .route("/api/monitor", get(monitor))
         .route("/api/usage", get(usage))
+        .route("/api/usage/kinds", get(usage_kinds))
         .route("/api/logs", get(get_logs))
         .route("/api/logs/download", get(download_logs))
         .route("/api/settings", get(get_settings).put(put_settings))
@@ -1585,6 +1586,26 @@ async fn timeline(
         .await
         .unwrap_or_default();
     Json(t).into_response()
+}
+
+/// Space taken by each kind of footage, per camera (counted every few
+/// minutes: walking the folders takes a moment).
+async fn usage_kinds(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<library::SpaceUse>)>> = std::sync::Mutex::new(None);
+    let cached = CACHE.lock().unwrap().as_ref().filter(|(t, _)| t.elapsed() < Duration::from_secs(180)).map(|(_, v)| v.clone());
+    let list = match cached {
+        Some(v) => v,
+        None => {
+            let v = tokio::task::spawn_blocking(move || m.cameras().iter().map(|c| library::space_use(c)).collect::<Vec<_>>())
+                .await
+                .unwrap_or_default();
+            *CACHE.lock().unwrap() = Some((std::time::Instant::now(), v.clone()));
+            v
+        }
+    };
+    let vis = visible(&user);
+    let list: Vec<_> = list.into_iter().filter(|u| vis.as_ref().is_none_or(|v| v.contains(&u.camera))).collect();
+    Json(list).into_response()
 }
 
 #[derive(Deserialize)]
