@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.10 — November 2026
+- **See how far "Object must travel" is**: camera → Motion now draws a green ring on the camera picture showing how far something's centre has to move before it counts, and it changes as you type the number (like the blue box for the minimum object size).
+
 ## 0.6.9 — November 2026
 - **S1 / S2 in full screen**: switching a camera between stream 1 and stream 2 on the Live page no longer takes it out of full screen — it stays in full screen (or stays out of it) and just changes the picture.
 
