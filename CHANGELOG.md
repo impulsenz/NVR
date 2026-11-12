@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.13 — November 2026
+- **Profiles save in the background**: the window closes as soon as you press **Save profile**; the profile is saved and the cameras following it updated in the background ("Profile saved" appears when done). If it's refused, the window comes back with the reason.
+- The hint next to "AI check interval" (camera → AI) no longer mentions cloud AI.
+
 ## 0.6.12 — November 2026
 - **Settings → Profiles**: profiles now have their own place in Settings. Create one (from scratch or from a camera's settings), edit its Recording, Motion and AI settings, rename or delete it, and see which cameras follow it. In a camera's settings you just choose which profile it follows. Each camera keeps its own ignore areas, package spot and zones.
 - **Doorbell chime when you talk**: pressing 🎙️ Hold to talk rings a "ding-dong" through the camera's speaker straight away, to get the attention of whoever is there; your voice follows right after. It can be turned off per camera (Audio tab).
