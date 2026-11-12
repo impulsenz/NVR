@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.9 — November 2026
+- **S1 / S2 in full screen**: switching a camera between stream 1 and stream 2 on the Live page no longer takes it out of full screen — it stays in full screen (or stays out of it) and just changes the picture.
+
 ## 0.6.8 — November 2026
 - **Correct faces from People & vehicles**: each person now lists the faces recognised as them in the last 30 days of alerts ("Recognised as … — check for mistakes"). Any of them has **✎ Wrong?**: it's someone else, a new person, or not anyone you know. GAZE stops taking that face for them.
 - **Alerts → New faces & plates to name**: a new choice in the person filter (next to "Anyone") shows the faces nobody is named for yet and number plates of no known vehicle, from the days chosen in the calendar. The same person seen in several alerts is shown once: choose who it is (or New person / New vehicle) and all those alerts are named and the face learned, or hide passers-by.
