@@ -1812,7 +1812,7 @@ fn media_path(
 /// Time-lapse previews are switched off for now: making them (in the
 /// background and while scrubbing) kept the computer too busy. Nothing is
 /// made or served while this is false.
-pub const TIMELAPSE: bool = false;
+pub const TIMELAPSE: bool = true;
 
 /// Only a couple of preview jobs at a time.
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);

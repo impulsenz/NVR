@@ -98,7 +98,7 @@ function watchFps(v) {
 }
 // Time-lapse previews are switched off for now (making them kept the
 // computer busy): scrubbing moves the video itself instead.
-const TIMELAPSE = false;
+const TIMELAPSE = true;
 if (!TIMELAPSE) document.documentElement.classList.add('no-timelapse');
 async function api(path, opts = {}) {
   if (opts.json !== undefined) {
@@ -580,6 +580,7 @@ async function refreshStatus() {
   }
   showUpdateBar(status.update);
   paintUpdBtn(status.update);
+  alertsChanged();
   const gb = $('g-banner');
   if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
     gb.hidden = false;
@@ -2084,14 +2085,14 @@ const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); retur
 const endOfDay = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
 // The Alerts filter starts on the usual things (remembered per browser).
 const DEFAULT_TYPES = ['person', 'car', 'truck', 'motorcycle', 'package', 'face', 'plate'];
-const rec = {mode: 'list', cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '',
+const rec = {mode: 'list', today: true, cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '',
   types: new Set(store.get('alert-types', DEFAULT_TYPES)), items: [], who: ''};
 const saveTypes = () => store.set('alert-types', [...rec.types]);
 // The Alerts filters as they start: today, every camera, the usual kinds,
 // new and viewed, anyone.
 function resetAlertFilters() {
   rec.cameras = new Set(); rec.prevCameras = null;
-  rec.from = startOfDay(new Date()); rec.to = endOfDay(new Date()); rec.todFrom = ''; rec.todTo = '';
+  rec.from = startOfDay(new Date()); rec.to = endOfDay(new Date()); rec.todFrom = ''; rec.todTo = ''; rec.today = true;
   rec.types = new Set(DEFAULT_TYPES); saveTypes();
   rec.seen = ''; rec.who = '';
   if ($('f-seen')) $('f-seen').value = '';
@@ -2136,13 +2137,25 @@ $('f-seen-all').onclick = async () => {
   toast('All new alerts dismissed.');
 };
 // New alerts appear by themselves (no need to refresh the page).
-setInterval(async () => {
-  if (page !== 'recordings' || rec.mode !== 'list' || document.hidden || rec.loading || rec.who === '__new') return;
-  const before = rec.items.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen : i.name).join();
-  const r = await fetchRecordings().catch(() => null);
-  if (!r) return;
-  if (r.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen : i.name).join() !== before) { rec.items = r; renderRecordings(); }
-}, 8000);
+// Refreshed as soon as the status shows a new or changed alert (it comes
+// every 2 s), and every 8 s anyway (for pictures and details added later).
+async function refreshAlertList() {
+  if (page !== 'recordings' || rec.mode !== 'list' || rec.loading || rec.who === '__new' || refreshAlertList.busy) return;
+  // "Today" moves on at midnight on a page left open.
+  if (rec.today && rec.to.getTime() < Date.now()) { rec.from = startOfDay(new Date()); rec.to = endOfDay(new Date()); renderFilters(); }
+  refreshAlertList.busy = true;
+  try {
+    const before = rec.items.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen + (i.thumb || '') : i.name).join();
+    const r = await fetchRecordings().catch(() => null);
+    if (r && r.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen + (i.thumb || '') : i.name).join() !== before) { rec.items = r; renderRecordings(); }
+  } finally { refreshAlertList.busy = false; }
+}
+setInterval(() => { if (!document.hidden) refreshAlertList(); }, 8000);
+let alertSig = '';
+function alertsChanged() {
+  const sig = (status.alerts_unseen || 0) + '|' + status.cameras.map(c => c.detect ? `${c.detect.last_event || ''}${c.detect.event_active ? '*' : ''}` : '').join(',');
+  if (sig !== alertSig) { const first = !alertSig; alertSig = sig; if (!first) refreshAlertList(); }
+}
 $('f-refresh').onclick = () => rec.mode === 'list' ? loadRecordings() : loadTimeline();
 // Full screen for the whole app, from the header (any page, phones too
 // where the browser allows it).
@@ -2202,6 +2215,7 @@ const Calendar = {
   apply(close) {
     const lo = Math.min(this.a, this.b ?? this.a), hi = Math.max(this.a, this.b ?? this.a);
     rec.from = startOfDay(new Date(lo)); rec.to = endOfDay(new Date(hi));
+    rec.today = rec.from.getTime() === startOfDay(new Date()).getTime() && rec.to.getTime() === endOfDay(new Date()).getTime();
     if ($('cal-tf')) { rec.todFrom = $('cal-tf').value; rec.todTo = $('cal-tt').value; }
     if (close) $('f-date-pop').hidden = true;
     renderFilters(); tl.day = null; reloadRec();
@@ -2500,7 +2514,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {scrub: store.get('tl-scrub', 'sub'), quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {scrub: store.get('tl-scrub', 'timelapse'), quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
@@ -2822,6 +2836,24 @@ function drawHead() {
   $('tl-time').textContent = fmtDate(new Date(tl.T));
 }
 
+// The alert marker of the timeline row under the pointer that is nearest
+// to it (within 8 px), or null: markers can be a few pixels wide and close
+// together, so the pointer doesn't have to be exactly on one.
+function markAt(e) {
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const row = el && el.closest('#tl .tl-row');
+  if (!row) return null;
+  let best = null, score = Infinity;
+  for (const m of row.querySelectorAll('.ev')) {
+    const r = m.getBoundingClientRect();
+    if (e.clientY < r.top - 6 || e.clientY > r.bottom + 6) continue;
+    const d = e.clientX < r.left ? r.left - e.clientX : e.clientX > r.right ? e.clientX - r.right : 0;
+    if (d > 8) continue;
+    const sc = d * 1000 + Math.abs((r.left + r.right) / 2 - e.clientX);
+    if (sc < score) { score = sc; best = m; }
+  }
+  return best;
+}
 // Scrubbing the timeline shows sprite previews on every camera.
 (function wireTimeline() {
   const box = $('tl');
@@ -2836,14 +2868,21 @@ function drawHead() {
     // Clip start / end handles: drag to change the clip.
     const hd = e.target.closest('.tl-h');
     if (hd) { e.preventDefault(); handle = hd.classList.contains('in') ? 'in' : 'out'; box.setPointerCapture(e.pointerId); return; }
-    // An alert marker or symbol: watch that alert on that camera.
-    const mark = e.target.closest('.ev');
+    // An alert marker or symbol (the nearest to the pointer, see below):
+    // watch that alert on that camera.
+    const mark = markAt(e);
     if (mark) { e.preventDefault(); tlShowEvent(mark.dataset.cam, +mark.dataset.t); return; }
     const t = tAt(e); if (t == null || e.clientX < box.querySelector('.lane').getBoundingClientRect().left) return;
     drag = true; tl.dragging = true; was = tl.playing; if (was) tlPlay(false);
     box.setPointerCapture(e.pointerId);
     tl.T = t; drawHead(); previewAll();
   });
+  // Highlight the alert marker the pointer is on (or a few pixels from),
+  // so close markers are easy to pick.
+  let hot = null;
+  const setHot = (m) => { if (hot === m) return; if (hot) hot.classList.remove('hot'); hot = m; if (hot) hot.classList.add('hot'); box.style.cursor = hot ? 'pointer' : ''; };
+  box.addEventListener('pointerleave', () => setHot(null));
+  box.addEventListener('pointermove', (e) => { if (!drag && !handle) setHot(markAt(e)); });
   box.addEventListener('pointermove', (e) => {
     if (handle) {
       const t = Math.min(tAt(e), Date.now());

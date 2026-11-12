@@ -729,15 +729,16 @@ pub async fn sprite(
     const PER_PAGE: u32 = 100;
     let (tw, th) = (256u32, 144u32);
     let duration = duration(ffmpeg, file).await.unwrap_or(0.0);
-    let interval = if dense { 1.0 } else { 2.0 };
+    // One picture every 10 seconds (light on the computer), from keyframes
+    // only for full-quality files.
+    let _ = dense;
+    let interval = 10.0;
     let aspect = display_aspect(ffmpeg, file).await.unwrap_or(16.0 / 9.0);
     let vf = format!("fps=1/{interval},scale={tw}:{th}");
     let mut command = crate::load::cmd(ffmpeg);
     let cmd = crate::load::background(&mut command);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
-    if !dense {
-        cmd.args(["-skip_frame", "nokey"]);
-    }
+    cmd.args(["-skip_frame", "nokey"]);
     let mut child = cmd
         .arg("-i")
         .arg(file)
