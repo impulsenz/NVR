@@ -419,8 +419,25 @@ async fn monitor(State(m): App, Query(q): Query<MonitorQuery>) -> Response {
     Json(json!({ "current": m.monitor.current(), "history": m.monitor.history(range, 360), "range": range })).into_response()
 }
 
-async fn usage(State(m): App) -> Response {
-    Json(m.usage()).into_response()
+async fn usage(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let mut u = m.usage();
+    let admin = user.as_ref().is_none_or(|x| x.0.0.role == crate::users::Role::Admin);
+    if let Some(v) = visible(&user) {
+        u.cameras.retain(|c| v.contains(&c.usage.camera));
+        for l in &mut u.locations {
+            l.cameras.retain(|c| v.contains(c));
+        }
+        u.locations.retain(|l| !l.cameras.is_empty());
+    }
+    if !admin {
+        for c in &mut u.cameras {
+            c.usage.dir = PathBuf::new();
+        }
+        for l in &mut u.locations {
+            l.path = PathBuf::new();
+        }
+    }
+    Json(u).into_response()
 }
 
 async fn get_logs(Query(q): Query<LogQuery>) -> Response {
@@ -624,7 +641,15 @@ struct LearnReq {
 /// "This is …": name a face seen in an alert (and learn it), or correct a
 /// wrong name: the person it was wrongly taken for stops matching it. The
 /// id "none" means "not anyone I know".
-async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnReq>) -> Response {
+async fn known_learn(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Path(id): Path<String>,
+    Json(r): Json<LearnReq>,
+) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
     let res = (|| {
         let k = if id == "none" {
             None
@@ -1932,6 +1957,14 @@ async fn play_converted(
         Ok(p) => p,
         Err(e) => return err(StatusCode::NOT_FOUND, e),
     };
+    // Each one is a video encoder running: a few at a time, so no one
+    // (or a stuck page asking again and again) can tie up the computer.
+    let Ok(permit) = CONVERSIONS.clone().try_acquire_owned() else {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many videos are being converted right now — try again in a moment",
+        );
+    };
     let cfg = m.config();
     let hw = &cfg.hardware;
     let gpu = hw.uses_gpu() && !crate::load::gpu_too_busy("video conversion");
@@ -1997,10 +2030,10 @@ async fn play_converted(
     let stdout = child.stdout.take().unwrap();
     // The ffmpeg process lives as long as the response body (browser disconnect ends it).
     let stream = futures_util::stream::unfold(
-        (tokio_util::io::ReaderStream::new(stdout), child),
-        |(mut r, c)| async move {
+        (tokio_util::io::ReaderStream::new(stdout), child, permit),
+        |(mut r, c, p)| async move {
             use futures_util::StreamExt;
-            r.next().await.map(|x| (x, (r, c)))
+            r.next().await.map(|x| (x, (r, c, p)))
         },
     );
     Response::builder()
@@ -2009,6 +2042,10 @@ async fn play_converted(
         .body(Body::from_stream(stream))
         .unwrap()
 }
+
+/// Videos being converted for the browser at once.
+static CONVERSIONS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(6)));
 
 /// Resolve "rec"/"clip" + name to a file of the camera.
 fn media_path(
@@ -2766,7 +2803,14 @@ struct ReadyReq {
 /// Which of these files already have their time-lapse preview made (and
 /// its details), in one go — nothing is made here. The timeline asks this
 /// when it opens, so previews made before show at once after a reload.
-async fn sprites_ready(State(m): App, Json(r): Json<ReadyReq>) -> Response {
+async fn sprites_ready(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Json(r): Json<ReadyReq>,
+) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
     if !crate::picturelog::enabled() {
         return Json(json!({})).into_response();
     }
@@ -3482,6 +3526,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
     // Changes anyone signed in may make.
     if path.starts_with("/api/alerts/")
         || path == "/api/dashboard"
+        || path == "/api/sprites-ready"
         || path.starts_with("/api/auth/")
     {
         return true;
@@ -3510,14 +3555,25 @@ fn foreign_origin(req: &Request) -> bool {
     let Some(origin) = h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
         return false; // not a browser (curl, scripts with a session)
     };
-    let origin_host = origin.split("://").nth(1).unwrap_or("");
+    let Some((scheme, origin_host)) = origin.split_once("://") else {
+        return true;
+    };
     let host = h
         .get("x-forwarded-host")
         .or_else(|| h.get(header::HOST))
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let bare = |s: &str| s.split(':').next().unwrap_or("").to_ascii_lowercase();
-    origin == "null" || bare(origin_host) != bare(host)
+    origin == "null" || authority(origin_host, scheme) != authority(host, scheme)
+}
+
+/// "host:port" in lower case, without the scheme's default port. The port
+/// counts: another program's page on another port of the same computer is
+/// the same "site" to the browser (its SameSite cookies don't stop it), but
+/// it isn't GAZE.
+fn authority(a: &str, scheme: &str) -> String {
+    let a = a.trim().trim_end_matches('/').to_ascii_lowercase();
+    let default = if scheme.eq_ignore_ascii_case("https") { ":443" } else { ":80" };
+    a.strip_suffix(default).map(str::to_string).unwrap_or(a)
 }
 
 /// Security headers on every answer.
@@ -3769,5 +3825,42 @@ async fn users_delete(
     match m.users.delete(&name) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(method: &str, origin: Option<&str>, host: &str) -> Request {
+        let mut b = axum::http::Request::builder().method(method).uri("/api/settings").header(header::HOST, host);
+        if let Some(o) = origin {
+            b = b.header(header::ORIGIN, o);
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn other_sites_cannot_make_changes() {
+        // GAZE's own page.
+        assert!(!foreign_origin(&req("POST", Some("http://192.168.1.5:8080"), "192.168.1.5:8080")));
+        assert!(!foreign_origin(&req("POST", Some("https://nvr.home"), "nvr.home:443")));
+        assert!(!foreign_origin(&req("POST", Some("http://NVR.home"), "nvr.home")));
+        // Another program's page on another port of the same computer.
+        assert!(foreign_origin(&req("POST", Some("http://192.168.1.5:3000"), "192.168.1.5:8080")));
+        assert!(foreign_origin(&req("POST", Some("http://evil.example"), "192.168.1.5:8080")));
+        assert!(foreign_origin(&req("POST", Some("null"), "192.168.1.5:8080")));
+        // Reading is fine; tools without a browser send no Origin.
+        assert!(!foreign_origin(&req("GET", Some("http://evil.example"), "192.168.1.5:8080")));
+        assert!(!foreign_origin(&req("POST", None, "192.168.1.5:8080")));
+    }
+
+    #[test]
+    fn viewers_can_load_previews_but_not_settings() {
+        use crate::users::Role::*;
+        let post = axum::http::Method::POST;
+        assert!(allowed(Viewer, &post, "/api/sprites-ready"));
+        assert!(!allowed(Viewer, &post, "/api/settings"));
+        assert!(!allowed(Operator, &axum::http::Method::GET, "/api/cameras"));
     }
 }

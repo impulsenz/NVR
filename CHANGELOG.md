@@ -1,5 +1,15 @@
 # What's new in GAZE
 
+## 0.6.49 — November 2026
+Security fixes:
+- **Other web pages on the same computer can't make changes any more**: GAZE checked that a change came from its own page by the address only, not the port, so a web page served by another program on the same computer (or the same router address) could make changes while you were signed in. The port is now checked too.
+- **Accounts limited to some cameras** can no longer get the time-lapse details of other cameras, or name faces from other cameras' alerts.
+- **Space use** only lists the cameras an account may see, and the recording folders are only shown to admins.
+- **Video conversion is limited** to a few at a time, so one browser (or a page stuck asking again and again) can't tie up the computer.
+
+Fixes:
+- **Time-lapse scrubbing works for viewer and operator accounts** (it was refused for anyone but an admin).
+
 ## 0.6.48 — November 2026
 - **Full-screen timeline uses the whole width**: the camera name column is gone, so the time line runs edge to edge.
 - **Live cameras go straight to the slide-up timeline**: full screen on a Live grid camera (double-click or ⛶) now opens it in full screen with the same timeline as Recordings — move the mouse to the bottom of the screen and it slides up. The ⏪ Timeline button is gone. Leaving full screen goes back to the grid.
