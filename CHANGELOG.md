@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.20 — November 2026
+- **Deleted alerts really stay gone**: on Windows the list of alerts sometimes couldn't be replaced at the moment of deleting (another program holding the file for a moment), so the old alerts came back — without pictures — when GAZE next started (e.g. after an update). The list is now saved reliably, and when GAZE starts it drops any alert whose picture and clip are both gone, which also clears the black ones already showing.
+- **Delete footage** also clears the alerts of cameras that are switched off.
+
 ## 0.6.19 — November 2026
 - **No more black gaps between recordings**: on the Recordings timeline the next file is loaded in the background and switched to only once it has a picture, so playback runs straight from one 5-minute file into the next.
 - **Updates button shows what's happening**: it spins while checking, shows a dot when a new version is ready, and while updating a ring fills up with "Updating 45%", then "Installing…" and "Restarting…".
