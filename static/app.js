@@ -3583,7 +3583,7 @@ async function openCameraDialog(id, clone) {
         <label for="d-make">Make time</label>
         <div class="row"><input type="number" id="d-make" min="0" max="30" step="0.1" value="${c.detect.make_time_ms / 1000}" style="width:120px"><span class="muted">seconds of motion before it triggers</span></div>
         <label for="d-travel">Object must travel</label>
-        <div class="row"><input type="number" id="d-travel" min="0" max="640" step="10" value="${c.detect.min_travel_px}" style="width:120px"><span class="muted">pixels (0 = off). Ignores trees and flags moving in place.</span></div>
+        <div class="row"><input type="number" id="d-travel" min="0" max="640" step="10" value="${c.detect.min_travel_px}" style="width:120px"><span class="muted">pixels (0 = off). Ignores trees and flags moving in place. <span style="color:#22c55e">Green ring</span> on the picture below: how far something must move.</span></div>
         <label>Ignore areas</label>
         <div><div class="surface" id="d-mask" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair">
             <img alt="" id="d-mask-img" style="object-fit:fill"><div class="msg" id="d-mask-msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div>
@@ -3717,7 +3717,7 @@ async function openCameraDialog(id, clone) {
   $('d-motion').onchange = () => { if (!chk('d-motion')) $('d-ai').checked = false; };
   $('d-contrast').oninput = () => $('d-contrast-v').textContent = val('d-contrast');
   setupMaskEditor(c.detect.mask, id && !clone ? id : null);
-  $('d-objpx').oninput = () => drawMotionBoxes($('d-mask-boxes'), lastMeterObjects);
+  $('d-objpx').oninput = $('d-travel').oninput = () => drawMotionBoxes($('d-mask-boxes'), lastMeterObjects);
   drawMotionBoxes($('d-mask-boxes'), []);
   setupOsdTab(c, id && !clone ? id : null);
   $('p-speed').oninput = () => $('p-speed-v').textContent = val('p-speed') + '%';
@@ -3905,6 +3905,16 @@ function drawMotionBoxes(svg, objects) {
   if (px > 0) {
     const wpx = Math.sqrt(px / 2), w = Math.min(1, wpx / 640), h = Math.min(1, wpx * 2 / 360);
     out += `<rect x="${(1 - w) / 2}" y="${(1 - h) / 2}" width="${w}" height="${h}" fill="rgba(79,140,255,.18)" stroke="#4f8cff" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>`;
+  }
+  // "Object must travel": how far an object's centre has to move from where
+  // it first moved (pixels of a 640-wide picture, the same both ways), as a
+  // ring around the middle with an arrow to its edge.
+  const tr = $('d-travel') ? +$('d-travel').value : 0;
+  if (tr > 0) {
+    const rx = tr / 640, ry = tr / 360;
+    out += `<ellipse cx="0.5" cy="0.5" rx="${rx}" ry="${ry}" fill="rgba(34,197,94,.08)" stroke="#22c55e" stroke-width="2" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>`
+      + `<line x1="0.5" y1="0.5" x2="${Math.min(0.995, 0.5 + rx)}" y2="0.5" stroke="#22c55e" stroke-width="2" vector-effect="non-scaling-stroke"/>`
+      + `<circle cx="0.5" cy="0.5" r="0.006" fill="#22c55e"/>`;
   }
   svg.innerHTML = out;
 }
