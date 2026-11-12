@@ -584,6 +584,14 @@ document.querySelector('nav a[data-page="recordings"]').addEventListener('click'
   loadTimeline();
   toast('Recordings reloaded');
 });
+// A GAZE window or tab that isn't being looked at doesn't load Recordings
+// in the background (several open windows would all be fetching and asking
+// for time-lapse pictures); it carries on when it's shown again.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { cutPageDownloads(); pauseAllPlayback(); return; }
+  if (page === 'recordings' && rec.mode === 'timeline' && tl.key) { tlSync(true); prefetchSprites(); }
+  else if (page !== 'recordings' && !tl.key) setTimeout(preloadRecordings, 1500);
+});
 // A browser only opens a few connections (6) to the NVR at a time. The
 // time-lapse pictures of Live and Recordings (each can take a while to
 // make) and half-loaded videos kept them all busy after leaving those
@@ -2934,7 +2942,9 @@ function leaveHls(el) {
 // Play camera `el` at tl.T with the continuous stream; false: play the file.
 function tlHls(el, c, s, force) {
   const hd = tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
-  if (el._tc || (el._noHls && Date.now() - el._noHls < 60000) || s.kind === 'clip' || hd || !hlsReady()) { leaveHls(el); return false; }
+  // (Converted playback is for files this browser can't play, e.g. H.265
+  // HD clips: the stream is tried for the rest; it says if it can't.)
+  if ((el._noHls && Date.now() - el._noHls < 60000) || s.kind === 'clip' || hd || !hlsReady()) { leaveHls(el); return false; }
   const h = hlsFor(el, c.camera), q = tlQ(), T = tl.T, now = Date.now();
   const busy = !h.ready && now - (h.reqAt || 0) < 5000;
   // A playlist for this stream and time (a new one past its ends, and
@@ -3124,7 +3134,9 @@ function tlLoop(ts) {
   tl.last = ts;
   if (tl.T > Date.now()) { tl.T = Date.now(); }
   // Scroll the window along.
-  if (tl.T > tl.winStart + tl.zoom * 1000 * 0.9) { tl.winStart = tl.T - tl.zoom * 1000 * 0.1; drawTimeline(); }
+  // (Only while the playhead is in view: moved away with ◀ ▶, it stays put.)
+  const winEnd = tl.winStart + tl.zoom * 1000;
+  if (tl.T > winEnd - tl.zoom * 100 && tl.T <= winEnd + 2000) { tl.winStart = tl.T - tl.zoom * 1000 * 0.1; drawTimeline(); }
   if (!tl.syncAt || ts - tl.syncAt > 400) { tl.syncAt = ts; tlSync(false); } else drawHead();
   requestAnimationFrame(tlLoop);
 }

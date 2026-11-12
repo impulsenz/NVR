@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.40 — November 2026
+- **No more stale pages after an update**: the browser could keep running GAZE's old page code after an update (talking to the new server), so things misbehaved until the browser's cache was cleared. The page now always loads the version that's installed.
+- **◀ ▶ on the Recordings timeline while playing**: pressing back kept snapping back to where it was playing; each press now moves further back (or forward) as before.
+- **Less load with several GAZE windows open**: a window or tab you're not looking at stops loading Recordings and time-lapse pictures in the background, and carries on when you go back to it.
+- **HD clips that play converted** (H.265 the browser can't play) no longer switch the camera's other footage to converted playback too — the sub-stream keeps streaming directly (converting is slow and heavy on the server).
+
 ## 0.6.39 — November 2026
 - **Recordings stays loaded near "now"**: watching recent footage, each camera's stream now keeps growing with the recording instead of being loaded again every so often — which emptied the picture (black) while it reloaded, and is why coming back to Recordings showed black boxes. The picture and what's loaded now stay, and newer footage is added as it's recorded.
 - **Packages must stay a minute**: when the package spot (or an area watching for items) looks different after activity, GAZE waits a minute and looks again. Only a change that's still there — and hasn't moved — counts as a parcel left or taken; something set down for a moment, a shadow or a passing reflection doesn't.

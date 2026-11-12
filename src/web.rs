@@ -39,7 +39,10 @@ pub fn router(mgr: Arc<Manager>) -> Router {
             "/app.js",
             get(|| async {
                 (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    [
+                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                        (header::CACHE_CONTROL, "no-cache"),
+                    ],
                     include_str!("../static/app.js"),
                 )
             }),
@@ -62,7 +65,10 @@ pub fn router(mgr: Arc<Manager>) -> Router {
             "/app.css",
             get(|| async {
                 (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                    [
+                        (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+                        (header::CACHE_CONTROL, "no-cache"),
+                    ],
                     include_str!("../static/app.css"),
                 )
             }),
@@ -242,8 +248,19 @@ macro_rules! camera {
     };
 }
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../static/index.html"))
+/// The page. Its script and styles are asked for with this version in
+/// their address, and none of the three is kept by the browser without
+/// asking: after an update the browser always runs the new page (an old
+/// script kept in its cache, talking to the new server, broke things until
+/// the cache was cleared).
+async fn index() -> Response {
+    static PAGE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let v = env!("CARGO_PKG_VERSION");
+        include_str!("../static/index.html")
+            .replace("href=\"app.css\"", &format!("href=\"app.css?v={v}\""))
+            .replace("src=\"app.js\"", &format!("src=\"app.js?v={v}\""))
+    });
+    ([(header::CACHE_CONTROL, "no-cache")], Html(PAGE.as_str())).into_response()
 }
 
 // ---------- status & system ----------
