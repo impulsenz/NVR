@@ -37,6 +37,7 @@ mod stationary;
 mod storage;
 mod sysmon;
 mod talk;
+mod talkmix;
 mod tray;
 mod update;
 mod users;
@@ -295,6 +296,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));
     tokio::spawn(identify::run(mgr.clone()));
+    tokio::spawn(talkmix::run(mgr.clone()));
     tokio::spawn(notify::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));
     tokio::spawn(infer::run(mgr.clone()));

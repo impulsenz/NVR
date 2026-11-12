@@ -2385,6 +2385,7 @@ async fn delete_all_footage(State(m): App) -> Response {
         };
         for c in m.cameras() {
             alerts += c.events.remove_where(|_| true);
+            let _ = std::fs::remove_dir_all(crate::talkmix::talk_dir(&c.dir));
             for dir in [
                 c.dir.clone(),
                 crate::storage::timeline_dir(&c.dir),
@@ -2792,6 +2793,9 @@ async fn talk_ws(
         tracing::info!("[{}] {} is talking through the camera's speaker ({})", cam.name, if who.is_empty() { "someone" } else { &who }, talk.codec());
         let _ = socket.send(Message::Text(json!({"ok": true, "codec": talk.codec()}).to_string().into())).await;
         let mut tick = tokio::time::interval(Duration::from_secs(1));
+        // What's said is kept, to be mixed into the recordings afterwards.
+        let mut kept: Vec<i16> = Vec::new();
+        let mut kept_from: Option<DateTime<Local>> = None;
         let res: anyhow::Result<()> = async {
             loop {
                 tokio::select! {
@@ -2800,6 +2804,10 @@ async fn talk_ws(
                         match msg {
                             Message::Binary(b) => {
                                 let s: Vec<i16> = b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+                                kept_from.get_or_insert_with(Local::now);
+                                if kept.len() < 8000 * 60 * 30 {
+                                    kept.extend_from_slice(&s);
+                                }
                                 talk.send(&s).await?;
                             }
                             Message::Close(_) => break,
@@ -2817,6 +2825,11 @@ async fn talk_ws(
         }
         talk.stop().await;
         tracing::info!("[{}] talking stopped", cam.name);
+        if let (Some(from), Some(c)) = (kept_from, m.camera(&cam.id))
+            && let Err(e) = crate::talkmix::save(&c.dir, from, &kept)
+        {
+            tracing::warn!("[{}] couldn't keep what was said: {e:#}", cam.name);
+        }
     })
 }
 

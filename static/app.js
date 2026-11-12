@@ -1872,6 +1872,9 @@ async function startTalk(camId, latch) {
     return;
   }
   const t = talk = {cam: camId, latch, ready: false, queue: []};
+  // Hear the camera too, so the conversation goes both ways (the sound
+  // stays on afterwards to hear the answer; the speaker button turns it off).
+  if (soundCam !== camId) startSound(camId);
   // A doorbell chime first (camera's setting): sent ahead of the voice, which
   // starts once the chime has played.
   const camInfo = status && status.cameras.find(x => x.id === camId);
