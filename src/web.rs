@@ -2383,8 +2383,11 @@ async fn delete_all_footage(State(m): App) -> Response {
                 .and_then(|m| m.modified())
                 .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20))
         };
+        // Every camera's alerts, also cameras that aren't running.
+        for store in m.event_stores().values() {
+            alerts += store.remove_where(|_| true);
+        }
         for c in m.cameras() {
-            alerts += c.events.remove_where(|_| true);
             let _ = std::fs::remove_dir_all(crate::talkmix::talk_dir(&c.dir));
             for dir in [
                 c.dir.clone(),

@@ -139,9 +139,49 @@ impl EventStore {
         idx.sort();
         events = idx.into_iter().map(|i| events[i].clone()).collect();
         events.sort_by_key(|e| e.start);
-        Self {
+        // Alerts whose picture and clip are both gone (deleted, while the
+        // list of alerts couldn't be rewritten): left out, and the list
+        // tidied.
+        let before = events.len();
+        events.retain(|e| {
+            let has = |f: &Option<String>| f.as_ref().is_some_and(|f| dir.join(f).is_file());
+            e.thumb.is_none() || has(&e.thumb) || has(&e.clip)
+        });
+        let store = Self {
             dir,
             events: RwLock::new(events),
+        };
+        if store.events.read().unwrap().len() != before {
+            store.rewrite(&store.events.read().unwrap());
+        }
+        store
+    }
+
+    /// Write the whole list of alerts again (after removing some). Written
+    /// to a new file that replaces the old one; if that can't be done (on
+    /// Windows the old file may be held open for a moment by another
+    /// program), written over the old file directly, so a deletion is never
+    /// undone at the next start.
+    fn rewrite(&self, ev: &[Event]) {
+        let text: String = ev
+            .iter()
+            .filter_map(|e| serde_json::to_string(e).ok())
+            .map(|l| l + "\n")
+            .collect();
+        let path = self.dir.join("events.jsonl");
+        let tmp = self.dir.join("events.jsonl.tmp");
+        let swapped = std::fs::write(&tmp, &text).is_ok()
+            && std::fs::File::open(&tmp).and_then(|f| f.sync_all()).is_ok()
+            && std::fs::rename(&tmp, &path).is_ok();
+        if !swapped {
+            let _ = std::fs::remove_file(&tmp);
+            for _ in 0..5 {
+                if std::fs::write(&path, &text).is_ok() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            tracing::warn!("couldn't save the list of alerts in {}", self.dir.display());
         }
     }
 
@@ -278,17 +318,7 @@ impl EventStore {
         });
         let removed = before - ev.len();
         if removed > 0 {
-            let text: String = ev
-                .iter()
-                .filter_map(|e| serde_json::to_string(e).ok())
-                .map(|l| l + "\n")
-                .collect();
-            let tmp = self.dir.join("events.jsonl.tmp");
-            if std::fs::write(&tmp, text).is_ok()
-                && std::fs::File::open(&tmp).and_then(|f| f.sync_all()).is_ok()
-            {
-                let _ = std::fs::rename(&tmp, self.dir.join("events.jsonl"));
-            }
+            self.rewrite(&ev);
         }
         removed
     }
@@ -341,6 +371,20 @@ mod tests {
         assert_eq!(s2.all().len(), 1);
         assert!(s2.get("e1").unwrap().has_label("person"));
         assert_eq!(s2.remove_where(|e| e.has_label("person")), 1);
+        // An alert whose picture was deleted is dropped when loading; one
+        // with its picture is kept.
+        let mut a = e.clone();
+        a.id = "kept".into();
+        a.thumb = Some("kept.jpg".into());
+        let mut b = e.clone();
+        b.id = "gone".into();
+        b.thumb = Some("gone.jpg".into());
+        std::fs::write(s2.dir().join("kept.jpg"), b"jpg").unwrap();
+        s2.save_detected(a);
+        s2.save_detected(b);
+        let s3 = EventStore::open(&dir);
+        assert!(s3.get("kept").is_some() && s3.get("gone").is_none());
+        assert_eq!(s3.remove_where(|x| x.id == "kept"), 1);
         // A background job saving its copy afterwards doesn't bring it back.
         s2.save(e.clone());
         assert!(s2.get("e1").is_none());
