@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.24 — November 2026
+- **Time-lapse stays after a reload**: previews already made show as ready straight away when you open or reload the timeline (GAZE asks for all of them in one go) — only missing ones are made.
+- **No more little gaps in the blue time-lapse bar** between recording files.
+- **Choose how often time-lapse takes a picture**: Settings → Recording & storage → "Time-lapse pictures: one every N seconds" (1–120, default 10). Fewer seconds give smoother scrubbing but more work for the computer; changing it makes the previews again in the background.
+- **The "GAZE is ready to install" bar stays at the top** under the toolbar while you scroll.
+
 ## 0.6.23 — November 2026
 - **Time-lapse task shows its progress**: while you're looking at the timeline, previews are made for the page first; the task in Settings → Tasks now counts those too, instead of staying at "0 of 40".
 - **Time-lapse strip animation fixed**: the striped "being made" piece is now the same thin bar as the blue one and sits exactly under the footage it's for (it was taller and shifted to the left).
