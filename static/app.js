@@ -1820,13 +1820,37 @@ function talkLabel(text, cls) {
 function stopTalk() {
   if (!talk) return;
   const t = talk; talk = null;
-  // Send what's left, then close.
+  // Send what's left, then (with the chime on) a short "goodbye" tune so
+  // whoever is there knows you've stopped talking, then close.
   try { if (t.flush) t.flush(); } catch (_) {}
-  setTimeout(() => { try { t.ws && t.ws.close(); } catch (_) {} }, 150);
+  let wait = 150;
+  if (t.chimeMs && t.ready && t.ws && t.ws.readyState === 1) {
+    const end = goodbyeChime();
+    for (let i = 0; i < end.length; i += 320) t.ws.send(end.slice(i, i + 320).buffer);
+    wait = end.length / 8 + 400;
+  }
+  setTimeout(() => { try { t.ws && t.ws.close(); } catch (_) {} }, wait);
   t.stream && t.stream.getTracks().forEach(tr => tr.stop());
   t.ctx && t.ctx.close().catch(() => {});
   talkLabel('Push to talk');
 }
+// Notes ([Hz, start s]) as a soft bell-like tune: 8 kHz, 16-bit samples,
+// like the voice sent to the camera's speaker.
+function chimeTune(notes, seconds, decay, loud) {
+  const rate = 8000, len = Math.round(rate * seconds), out = new Int16Array(len);
+  for (const [f, start] of notes) {
+    const s0 = Math.round(start * rate);
+    for (let i = 0; s0 + i < len; i++) {
+      const t = i / rate, env = Math.min(1, t / 0.008) * Math.exp(-t * decay);
+      const v = Math.sin(2 * Math.PI * f * t) + 0.3 * Math.sin(2 * Math.PI * f * 2 * t);
+      out[s0 + i] = Math.max(-32767, Math.min(32767, out[s0 + i] + v * env * loud * 32767 / 1.3));
+    }
+  }
+  return out;
+}
+// Talking stopped: three quick falling notes (G, E, C), softer and shorter
+// than the doorbell chime.
+function goodbyeChime() { return chimeTune([[783.99, 0], [659.25, 0.13], [523.25, 0.26]], 0.7, 9, 0.4); }
 // A two-tone "ding-dong" doorbell chime: 8 kHz, 16-bit samples, like the
 // voice sent to the camera's speaker.
 function doorbellChime() {
@@ -3670,7 +3694,7 @@ async function openCameraDialog(id, clone, prof) {
         <label>Two-way audio</label>
         <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker</label>
           <div class="hint">Shows a <b>🎙️ Push to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
-          <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there</label>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there (and a short "goodbye" tune when you stop)</label>
           <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
           <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
       </div>
