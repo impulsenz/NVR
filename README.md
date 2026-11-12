@@ -22,7 +22,7 @@ viewing, finding footage, and managing everything, all from the browser.
   text, and **fullscreen buttons** in any corners.
 - Active alerts are highlighted on the tile ("person", "car", …).
 - **Two-way audio / push to talk**: switch it on per camera (camera settings → General → Two-way audio,
-  with a test that beeps on the camera). The live view then has a **🎙️ Hold to talk** button: hold it and
+  with a test that beeps on the camera). The live view then has a **🎙️ Push to talk** button: hold it and
   speak into your phone's or computer's microphone; a quick tap keeps talking until the next tap. For
   cameras with a speaker and the ONVIF audio back-channel (G.711 — most Dahua, Hikvision, Amcrest, Axis…).
   Browsers only allow the microphone on https:// pages or on http://localhost.

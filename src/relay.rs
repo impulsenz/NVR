@@ -155,12 +155,23 @@ impl Relay {
     /// Receive the stream as MPEG-TS. Starts the camera connection if needed.
     /// The receiver ends when the camera connection drops.
     pub fn subscribe(&self) -> mpsc::Receiver<Bytes> {
+        self.subscribe_with(true)
+    }
+
+    /// Like `subscribe`, but from this moment on: without the last few
+    /// seconds kept for a quick picture (live sound would start that far
+    /// behind and stay there).
+    pub fn subscribe_now(&self) -> mpsc::Receiver<Bytes> {
+        self.subscribe_with(false)
+    }
+
+    fn subscribe_with(&self, gop: bool) -> mpsc::Receiver<Bytes> {
         let (tx, rx) = mpsc::channel(QUEUE_CHUNKS);
         let mut s = self.shared.lock().unwrap();
         s.last_used = Instant::now();
         if s.connected && !s.headers.is_empty() {
             let mut start = s.headers.clone();
-            if s.gop_ok {
+            if gop && s.gop_ok {
                 start.extend_from_slice(&s.gop);
             }
             let _ = tx.try_send(Bytes::from(start));
@@ -615,6 +626,27 @@ pub fn pipe_input_args() -> Vec<String> {
         "1500000",
         "-probesize",
         "4000000",
+        "-f",
+        "mpegts",
+        "-i",
+        "pipe:0",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+/// ffmpeg input from a relay pipe for live sound: as little buffering and
+/// probing as possible.
+pub fn pipe_input_args_low_delay() -> Vec<String> {
+    [
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-analyzeduration",
+        "300000",
+        "-probesize",
+        "200000",
         "-f",
         "mpegts",
         "-i",

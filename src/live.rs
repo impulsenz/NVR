@@ -159,7 +159,9 @@ impl Live {
         Ok(frame.as_ref().unwrap().1.clone())
     }
 
-    /// A full-resolution JPEG from the main stream.
+    /// A full-resolution JPEG from the main stream, of this moment: the
+    /// camera's next full picture (keyframe), not the last one it sent
+    /// (that could be seconds old). Only that one frame is decoded.
     pub async fn snapshot(&self) -> Result<Bytes> {
         // Uses the shared camera connection (no extra session on the camera).
         let mut child = crate::load::cmd(&self.env.ffmpeg_path)

@@ -2595,10 +2595,10 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
     {
         return err(StatusCode::NOT_FOUND, NO_SOUND);
     }
-    let rx = relay.subscribe();
+    let rx = relay.subscribe_now();
     let child = crate::load::cmd(&ffmpeg)
         .args(["-hide_banner", "-loglevel", "error"])
-        .args(crate::relay::pipe_input_args())
+        .args(crate::relay::pipe_input_args_low_delay())
         .args([
             "-vn",
             "-map",
@@ -2611,6 +2611,8 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
             "1",
             "-ar",
             "22050",
+            "-reservoir",
+            "0",
         ])
         .args(["-flush_packets", "1", "-f", "mp3", "pipe:1"])
         .stdin(std::process::Stdio::piped())

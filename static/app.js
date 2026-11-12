@@ -1419,6 +1419,19 @@ function showLive(id) {
   const surf = $('focus-surface');
   bindFocusImage(c);
   $('focus-snap').href = 'snapshot/' + enc(c.id);
+  // Instant: save the picture on screen (the live full-quality picture this
+  // browser already has); the server snapshot only if there isn't one yet.
+  $('focus-snap').onclick = (e) => {
+    const url = Live.urls.get(Live.key(c.id, 'main')) || Live.urls.get(Live.key(c.id, 'sub'));
+    if (!url) return; // server snapshot (the link)
+    e.preventDefault();
+    const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${c.id}_${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}.jpg`;
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('Snapshot saved');
+  };
   setupTalkButton(c);
   $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
@@ -1748,11 +1761,20 @@ function paintSound() {
     b.title = on ? 'Sound on — click to mute' : 'Sound off — click to hear this camera';
   });
 }
+let soundCatchUp = null;
 function startSound(camId) {
   const a = $('focus-audio');
   soundCam = camId;
   a.volume = soundVolume();
   a.src = `live/${enc(camId)}/audio.mp3?t=${Date.now()}`;
+  // Live sound: the player builds up a cushion and falls behind; keep it
+  // within about a third of a second of "now".
+  clearInterval(soundCatchUp);
+  soundCatchUp = setInterval(() => {
+    if (soundCam !== camId || a.paused || !a.buffered.length) return;
+    const end = a.buffered.end(a.buffered.length - 1);
+    if (end - a.currentTime > 0.6) a.currentTime = end - 0.25;
+  }, 500);
   // The browser only says "no supported source"; ask GAZE why.
   const why = async () => {
     if (soundCam !== camId) return;
@@ -1773,7 +1795,7 @@ function startSound(camId) {
 }
 function stopSound() {
   const a = $('focus-audio'); if (!a) return;
-  soundCam = null;
+  soundCam = null; clearInterval(soundCatchUp);
   a.onerror = a.onended = null;
   a.pause(); a.removeAttribute('src'); a.load();
   paintSound();
@@ -1803,7 +1825,7 @@ function stopTalk() {
   setTimeout(() => { try { t.ws && t.ws.close(); } catch (_) {} }, 150);
   t.stream && t.stream.getTracks().forEach(tr => tr.stop());
   t.ctx && t.ctx.close().catch(() => {});
-  talkLabel('Hold to talk');
+  talkLabel('Push to talk');
 }
 // A two-tone "ding-dong" doorbell chime: 8 kHz, 16-bit samples, like the
 // voice sent to the camera's speaker.
@@ -1832,7 +1854,7 @@ async function startTalk(camId, latch) {
   if (!camInfo || camInfo.talk_chime !== false) {
     const chime = doorbellChime();
     for (let i = 0; i < chime.length; i += 320) t.queue.push(chime.slice(i, i + 320).buffer);
-    t.muteUntil = performance.now() + chime.length / 8;
+    t.chimeMs = chime.length / 8;
   }
   talkLabel('Connecting…', 'connecting');
   // Connect to the speaker and open the microphone at the same time.
@@ -1845,6 +1867,8 @@ async function startTalk(camId, latch) {
     t.ready = true;
     for (const b of t.queue) t.ws.send(b);
     t.queue = [];
+    // The microphone joins once the chime has played (it starts now).
+    if (t.chimeMs) t.muteUntil = performance.now() + t.chimeMs;
     talkLabel(t.latch ? 'Talking — tap to stop' : 'Talking… release to stop', 'talking');
   };
   t.ws.onclose = () => { if (talk === t) { if (t.ready) toast('Talking stopped'); else toast('Could not connect to the camera speaker', true); stopTalk(); } };
@@ -1860,13 +1884,14 @@ async function startTalk(camId, latch) {
   const push = () => {
     if (!out.length) return;
     const buf = new Int16Array(out).buffer; out = [];
+    // Speech from before the speaker was ready isn't kept: sent late, it
+    // would stay as a delay for the whole conversation.
     if (t.ready && t.ws.readyState === 1) t.ws.send(buf);
-    else if (t.queue.length < 100) t.queue.push(buf); // up to ~4 s while connecting
   };
   t.flush = push;
   node.port.onmessage = (e2) => {
     // While the chime plays, the microphone isn't sent (the chime goes first).
-    if (t.muteUntil && performance.now() < t.muteUntil) { pos = acc = cnt = 0; return; }
+    if (!t.ready || (t.muteUntil && performance.now() < t.muteUntil)) { pos = acc = cnt = 0; return; }
     // Average the samples that fall into each 1/8000 s (a simple low-pass).
     for (const v of e2.data) {
       acc += v; cnt++; pos += 1;
@@ -1876,13 +1901,13 @@ async function startTalk(camId, latch) {
   };
   src.connect(node);
 }
-// Hold to talk; a quick tap latches (tap again to stop).
+// Push to talk (hold); a quick tap latches (tap again to stop).
 function setupTalkButton(c) {
   const b = $('focus-talk');
   b.hidden = !c.talk;
   if (talk && talk.cam !== c.id) stopTalk();
   if (!c.talk) return;
-  talkLabel(talk ? (talk.latch ? 'Talking — tap to stop' : 'Talking…') : 'Hold to talk', talk ? 'talking' : '');
+  talkLabel(talk ? (talk.latch ? 'Talking — tap to stop' : 'Talking…') : 'Push to talk', talk ? 'talking' : '');
   let downAt = 0;
   b.onclick = null;
   b.oncontextmenu = (e) => e.preventDefault();
@@ -3644,7 +3669,7 @@ async function openCameraDialog(id, clone, prof) {
           <div class="hint">Click 🔇 on the camera's picture (grid, camera view or full screen) to hear it; hover it for the volume. One camera plays at a time.</div></div>
         <label>Two-way audio</label>
         <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker</label>
-          <div class="hint">Shows a <b>🎙️ Hold to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
+          <div class="hint">Shows a <b>🎙️ Push to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
           <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there</label>
           <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
           <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
