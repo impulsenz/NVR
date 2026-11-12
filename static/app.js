@@ -14,7 +14,19 @@ const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehic
 const FILTER_BASE = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],
   ['motorcycle','Motorcycle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken'],
   ['face','Faces'],['plate','Number plates']];
-function filterTypes() { return FILTER_BASE; }
+// Only the kinds some camera can raise: a camera or profile that starts
+// watching for dogs makes the Dog chip appear.
+function filterTypes() {
+  const cams = (status && status.cameras) || [];
+  if (!cams.length) return FILTER_BASE;
+  const on = new Set(cams.flatMap(c => [...(c.alerts_on || []), ...(c.enabled && c.ai ? c.watch || [] : [])]));
+  const named = new Set(FILTER_BASE.map(t => t[0]));
+  const extra = [...on].filter(k => !named.has(k)).sort().map(k => [k, k[0].toUpperCase() + k.slice(1)]);
+  const list = FILTER_BASE.filter(t => on.has(t[0]));
+  const at = list.findIndex(t => t[0] === 'package');
+  list.splice(at < 0 ? list.length : at, 0, ...extra);
+  return list;
+}
 // Every kind of alert, for "all alerts": also objects without a chip.
 function allAlertTypes() {
   const base = FILTER_BASE.map(t => t[0]).filter(t => t !== 'face' && t !== 'plate');
@@ -674,6 +686,9 @@ async function refreshStatus() {
     tl.scrub = TIMELAPSE ? 'timelapse' : 'sub';
     document.documentElement.classList.toggle('no-timelapse', !TIMELAPSE);
   }
+  // A camera or profile now watches for something else: redo the chips.
+  const kinds = filterTypes().map(t => t[0]).join();
+  if (kinds !== refreshStatus.kinds) { const was = refreshStatus.kinds; refreshStatus.kinds = kinds; if (was != null) renderFilters(); }
   ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
   const da = $('f-seen-all');
   if (da) { da.textContent = n ? `✓ Dismiss all new (${n > 999 ? '999+' : n})` : '✓ No new alerts'; da.disabled = !n; da.classList.toggle('primary', !!n); }
@@ -917,8 +932,8 @@ class Player {
         <select class="p-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>
         <span class="timecode p-time"></span>
         <span class="spacer"></span>
-        <button type="button" class="p-in" title="Mark the clip start at the current position">[ Start</button>
-        <button type="button" class="p-out" title="Mark the clip end at the current position">End ]</button>
+        <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button>
+        <button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
         <button type="button" class="p-clip" hidden>⇩ Download clip</button>
         <a class="btn p-dl" title="Download the whole file">⇩ File</a>
         <span class="vol"><button type="button" class="p-mute" title="Mute / unmute">🔊</button><input type="range" class="p-vol" min="0" max="1" step="0.05" value="1" title="Volume"></span>
@@ -1644,7 +1659,7 @@ function setupPtz(c) {
   pad.hidden = !c.ptz;
   surf.classList.toggle('has-ptz', !!c.ptz);
   if (!c.ptz) return;
-  const id = c.id, msg = (t, bad) => { $('ptz-msg').textContent = t; $('ptz-msg').classList.toggle('err', !!bad); };
+  const id = c.id, msg = (t, bad) => { const m = $('ptz-msg'); m.textContent = t; m.classList.toggle('err', !!bad); clearTimeout(m._t); if (!bad) m._t = setTimeout(() => { m.textContent = ''; }, 3000); };
   const move = (v) => api(`api/cameras/${enc(id)}/ptz/move`, {method: 'POST', json: {pan: v[0], tilt: v[1], zoom: v[2]}}).catch(e => msg(e.message, true));
   const stop = () => api(`api/cameras/${enc(id)}/ptz/stop`, {method: 'POST'}).catch(() => {});
   ptzMove = move; ptzStop = stop;
@@ -2374,6 +2389,9 @@ function setRecMode(mode) {
   $('rec-title').textContent = mode === 'list' ? 'Alerts' : 'Recordings';
   $('rec-list').hidden = mode !== 'list';
   $('rec-timeline').hidden = mode !== 'timeline';
+  // Recordings: the title and filters in a column on the left (the video
+  // gets the height); Alerts keep them across the top.
+  $('page-recordings').classList.toggle('tl-mode', mode === 'timeline');
   $('f-types').hidden = mode !== 'list';
   document.querySelectorAll('#page-recordings .list-only').forEach(e => e.hidden = mode !== 'list');
   if (mode === 'list') { tlStop(); loadRecordings(); }
@@ -2485,7 +2503,10 @@ function renderFilters() {
   if (rec.todFrom || rec.todTo) label += `, ${rec.todFrom || '00:00'}–${rec.todTo || '23:59'}`;
   $('f-date-btn').textContent = '📅 ' + label;
   // Types
-  $('f-types').innerHTML = '<span class="muted" style="padding:3px 4px">Show:</span>' + filterTypes().map(([k, v]) =>
+  const types = filterTypes();
+  // A kind no camera raises any more can't stay ticked out of sight.
+  for (const k of [...rec.types]) if (!types.some(t => t[0] === k)) rec.types.delete(k);
+  $('f-types').innerHTML = '<span class="muted" style="padding:3px 4px">Show:</span>' + types.map(([k, v]) =>
     `<label><input type="checkbox" value="${k}" ${rec.types.has(k) ? 'checked' : ''}>${v}</label>`).join('') +
     (rec.types.size ? '<button class="small" id="f-types-clear">All alerts</button>' : '');
   $('f-types').querySelectorAll('input').forEach(i => i.onchange = () => { i.checked ? rec.types.add(i.value) : rec.types.delete(i.value); saveTypes(); renderFilters(); loadRecordings(); });
@@ -2710,6 +2731,42 @@ function groupOf(t, by) {
 }
 $('rec-group').value = recGroup;
 $('rec-group').onchange = (e) => { recGroup = e.target.value; store.set('rec-group', recGroup); renderRecordings(); };
+// Alerts side by side: Auto (as many as fit, 40 % bigger than before) or
+// 2–10 columns — fewer columns, bigger pictures (remembered).
+function applyRecCols() {
+  const n = +store.get('rec-cols', 0) || 0, box = $('rec-cards');
+  box.style.setProperty('--rec-cols', n ? String(n) : 'auto-fill');
+  box.style.setProperty('--rec-min', n ? '0px' : '308px');
+  $('rec-cols').value = n ? String(n) : '';
+}
+// What the badges and symbols on the alert cards mean. Objects: only the
+// kinds these cameras look for. HD AI: only when the HD check is on.
+function renderRecKey() {
+  const cams = (status && status.cameras) || [];
+  const objs = [...new Set(cams.flatMap(c => c.enabled && c.ai ? c.watch || [] : []))];
+  const hd = true;
+  const row = (k, d) => `<div><span class="k">${k}</span><span class="d">${d}</span></div>`;
+  const ex = objs[0] || 'person';
+  $('rec-key').innerHTML = [
+    row('<span class="tag newtag">NEW</span><span class="newk"></span>', '<b>New</b> — an alert you haven\u2019t opened yet. It has a blue outline until you play it.'),
+    row(`<span class="tag ${LABEL_GROUP[ex] || ''}">${labelIcon(ex)} 92%</span>`, '<b>What the AI found</b> and how sure it is (92% sure). Hover over it for the name.'),
+    objs.length ? row(`<span class="sym">${objs.map(labelIcon).join(' ')}</span>`, `<b>Objects</b> these cameras look for: ${objs.map(esc).join(', ')}.`) : '',
+    row(`<span class="tag motion">${labelIcon('motion')}</span>`, '<b>Motion only</b> — something moved, but no object was recognised.'),
+    row('<span class="box"></span>', '<b>Green box</b> — where the object was in the picture.'),
+    hd ? row('<span class="hdai">HD AI ✓</span>', '<b>Confirmed in HD</b> — the find from the smaller stream was checked again in a full-quality picture and is real.') : '',
+    hd ? row('<span class="hdai no">HD AI ?</span>', '<b>Not confirmed in HD</b> — the full-quality picture didn\u2019t show it clearly. Often a shadow, reflection or something far away: worth a quick look.') : '',
+    hd ? row(`<span class="tag unconfirmed">${labelIcon(ex)} 61%</span>`, '<b>Faded, dashed tag</b> — that object wasn\u2019t confirmed in HD.') : '',
+    hd ? row('<span class="muted small">no badge</span>', '<b>Not checked in HD</b> — found in the full-quality stream already, motion only, or the HD check was off.') : '',
+    row('<span class="sym">▶</span>', '<b>Play</b> — the alert\u2019s video is ready.'),
+    row('<span class="sym">⏳</span>', '<b>Still recording</b> — the clip is ready a few seconds after the activity stops.'),
+    row('<span class="sym">⇩ ✕</span>', '<b>Download</b> the clip, or <b>delete</b> the alert (when you hover over a card).'),
+    row('<span class="muted small">07:01:43 · 6s</span>', '<b>When</b> it started and how long the activity lasted.'),
+  ].join('');
+}
+$('rec-key-btn').onclick = () => { const k = $('rec-key'); k.hidden = !k.hidden; store.set('rec-key', !k.hidden); if (!k.hidden) renderRecKey(); };
+if (store.get('rec-key', false)) { $('rec-key').hidden = false; setTimeout(renderRecKey, 1500); }
+$('rec-cols').onchange = (e) => { store.set('rec-cols', +e.target.value || 0); applyRecCols(); };
+applyRecCols();
 $('rec-collapse').onclick = () => {
   const keys = [...new Set(rec.items.map(it => groupOf(it.start, recGroup).key))];
   if (keys.some(k => !recFolded.has(k))) keys.forEach(k => recFolded.add(k)); else keys.forEach(k => recFolded.delete(k));
@@ -3247,7 +3304,8 @@ function drawTimeline() {
   const lanePx = box.clientWidth - (parseFloat(getComputedStyle(box).getPropertyValue('--tl-label')) || 160);
   tl.groups = [];
   let rows = '';
-  for (const c of tl.data) {
+  // In full screen: only the camera shown (more room for the picture).
+  for (const c of tl.data.filter(x => !tl.onlyCam || x.camera === tl.onlyCam)) {
     let lane = '';
     // The newest recording, still being made, reaches up to now (and shows
     // it's still being recorded).
@@ -3264,7 +3322,9 @@ function drawTimeline() {
     rows += `<div class="tl-row"><button type="button" class="label" data-cam="${esc(c.camera)}" title="${esc(c.name)} — show just this camera"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">${esc(c.name)}</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</button><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
       <div class="tlp" data-cam="${esc(c.camera)}" title="Time-lapse previews — blue: ready to scrub · striped: loading · grey: not loaded yet · red: couldn't be made"></div></div></div>`;
   }
-  const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="${selStyle(pct)}"><div class="tl-h in" title="Drag to change the clip start"></div><div class="tl-h out" title="Drag to change the clip end"></div></div>` : '';
+  // A clip mark shows as soon as it's set (one alone: an orange line).
+  const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="${selStyle(pct)}"><div class="tl-h in" title="Drag to change the clip start"></div><div class="tl-h out" title="Drag to change the clip end"></div></div>`
+    : tl.inT != null || tl.outT != null ? `<div class="tl-mark1" style="left:calc(var(--tl-label) + (100% - var(--tl-label)) * ${pct(tl.inT ?? tl.outT) / 100})" title="${tl.inT != null ? 'Clip start' : 'Clip end'}"></div>` : '';
   box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"><em></em></div><div class="tl-hover" id="tl-hover" hidden><em></em></div>`;
   declutterAxis(box.querySelector('.tl-axis'));
   box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
@@ -3303,12 +3363,21 @@ document.addEventListener('fullscreenchange', () => {
     const s = x.parentElement;
     // The Recordings timeline goes back to its place under the videos.
     const tlEl = x.querySelector('#tl');
-    if (tlEl && s._tlHome) { s._tlHome.replaceWith(tlEl); s._tlHome = null; requestAnimationFrame(drawTimeline); }
+    if (tlEl && s._tlHome) { s._tlHome.replaceWith(tlEl); s._tlHome = null; tl.onlyCam = null; requestAnimationFrame(drawTimeline); }
+    const ctl = x.querySelector('#cam-tl');
+    if (ctl && s._ctlHome) { s._ctlHome.replaceWith(ctl); s._ctlHome = null; requestAnimationFrame(() => camTl.draw()); }
     x.remove();
     if (!s.querySelector('.pov')) s.classList.remove('has-pov', 'pov-idle');
   });
   const fe = document.fullscreenElement;
-  if (!fe || !fe.classList.contains('surface') || fe.querySelector('.pov')) return;  // (the alert / recording player has its own)
+  document.querySelectorAll('.surface.fs-panel').forEach(x => { if (x !== fe) x.classList.remove('fs-panel'); });
+  // Left the camera view opened from a grid camera in full screen: out of
+  // the grid camera's full screen too.
+  if (fsFromTile && fe && fe.classList.contains('tile')) { fsFromTile = false; document.exitFullscreen().catch(() => {}); return; }
+  if (!fe) fsFromTile = false;
+  // (The alert player has its own controls; the camera view gets its
+  // timeline also while it plays something back.)
+  if (!fe || !fe.classList.contains('surface') || (fe.querySelector('.pov') && fe.id !== 'focus-surface')) return;
   if (fe.closest('#tl-videos')) tlFsBar(fe);
   else if (fe.classList.contains('tile') || fe.id === 'focus-surface') liveFsBar(fe, fe.dataset.id || focusId);
 });
@@ -3329,7 +3398,7 @@ function tlFsBar(el) {
       <button type="button" class="p-pev" title="Previous alert">⏮ Alert</button><button type="button" class="p-nev" title="Next alert">Alert ⏭</button>
       <select class="p-speed">${[1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === tl.speed ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
-      <button type="button" class="p-in" title="Clip starts here">[ Start</button><button type="button" class="p-out" title="Clip ends here">End ]</button>
+      <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
       <select class="p-zoom" title="Zoom">${[...$('tl-zoom').options].map(o => `<option value="${o.value}" ${o.value === $('tl-zoom').value ? 'selected' : ''}>${o.textContent}</option>`).join('')}</select>
       <button type="button" class="p-left" title="Earlier">◀</button><button type="button" class="p-right" title="Later">▶</button>
@@ -3339,19 +3408,14 @@ function tlFsBar(el) {
   // The Recordings timeline itself (every camera, alert pictures, the
   // time-lapse line, scrubbing) moves into the panel while in full screen.
   const tlEl = $('tl');
+  tl.onlyCam = camId;
   el._tlHome = document.createComment('timeline'); tlEl.before(el._tlHome);
   bar.querySelector('.fs-tlslot').appendChild(tlEl);
   requestAnimationFrame(() => { drawTimeline(); drawHead(); });
   bar.querySelector('.p-zoom').onchange = (e) => { $('tl-zoom').value = e.target.value; $('tl-zoom').dispatchEvent(new Event('change')); };
   bar.querySelector('.p-left').onclick = () => $('tl-left').click();
   bar.querySelector('.p-right').onclick = () => $('tl-right').click();
-  // The panel slides up when the mouse comes to the bottom of the screen
-  // (and stays while it's used), and away otherwise.
-  let hideT = null;
-  const show = (on) => { clearTimeout(hideT); if (on) bar.classList.remove('away'); else hideT = setTimeout(() => { if (!tl.dragging && !bar.matches(':hover')) bar.classList.add('away'); }, 700); };
-  el.addEventListener('pointermove', (e) => { if (document.fullscreenElement !== el) return; show(e.clientY > innerHeight - Math.max(140, bar.offsetHeight + 30) || bar.contains(e.target) || tl.dragging); });
-  bar.addEventListener('pointerleave', () => show(false));
-  show(true); hideT = setTimeout(() => { if (!bar.matches(':hover')) bar.classList.add('away'); }, 2500);
+  slidePanel(el, bar, () => tl.dragging);
   const q = (x) => bar.querySelector(x);
   q('.p-play').onclick = () => $('tl-play').click();
   q('.p-back').onclick = () => tlStep(-1); q('.p-fwd').onclick = () => tlStep(1);
@@ -3364,6 +3428,17 @@ function tlFsBar(el) {
   q('.p-fs').onclick = () => document.exitFullscreen().catch(() => {});
   q('.p-clip').download = '';
   paintMute(); paintTlBar();
+}
+// A full-screen panel that slides up when the mouse comes to the bottom of
+// the screen (and stays while it's used), and away otherwise. Above the
+// recording player's own controls when they're showing.
+function slidePanel(el, bar, busy) {
+  let hideT = null;
+  const place = () => { const pb = el.querySelector('.pov:not(.fspov)'); bar.style.bottom = pb && !pb.hidden && !el.classList.contains('pov-idle') ? pb.offsetHeight + 'px' : '0px'; };
+  const show = (on) => { clearTimeout(hideT); place(); if (on) bar.classList.remove('away'); else hideT = setTimeout(() => { if (!busy() && !bar.matches(':hover')) bar.classList.add('away'); }, 700); };
+  el.addEventListener('pointermove', (e) => { if (document.fullscreenElement !== el) return; show(e.clientY > innerHeight - Math.max(140, bar.offsetHeight + 30) - (parseFloat(bar.style.bottom) || 0) || bar.contains(e.target) || busy()); });
+  bar.addEventListener('pointerleave', () => show(false));
+  show(true); hideT = setTimeout(() => { if (!bar.matches(':hover')) bar.classList.add('away'); }, 2500);
 }
 function paintTlBar() {
   const bar = document.querySelector('.fspov.tlbar'); if (!bar) return;
@@ -3380,18 +3455,54 @@ function paintTlBar() {
 function liveFsBar(el, camId) {
   const c = cam(camId); if (!c) return;
   const bar = document.createElement('div');
-  bar.className = 'pov fspov livebar';
-  bar.innerHTML = `<div class="controls">
-      <span class="p-live">● LIVE</span><span class="timecode p-time"></span><span class="spacer"></span>
-      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button>' : ''}
-      ${c.live_sound !== false ? '<button type="button" class="p-snd" title="Sound">🔇</button>' : ''}
-      <a class="btn p-snap" title="Save a full-quality picture">📷 Snapshot</a>
-      <button type="button" class="p-in" title="Clip starts now">[ Start</button><button type="button" class="p-out" title="Clip ends now">End ]</button>
+  const inView = el.id === 'focus-surface';
+  bar.className = 'pov fspov livebar' + (inView ? ' tl-panel' : '');
+  // Two sets of buttons in the camera view: live (snapshot, talk) and, while
+  // something recorded plays, the player's (its own bar is hidden: one
+  // toolbar for everything).
+  bar.innerHTML = `${inView ? '<div class="fs-tlslot"></div>' : ''}<div class="controls">
+      <span class="p-live live-only">● LIVE</span>
+      <span class="play-only"><button type="button" class="p-pplay primary">❚❚</button></span>
+      <button type="button" class="p-pback play-only" title="Back one frame">−1 frame</button><button type="button" class="p-pfwd play-only" title="Forward one frame">+1 frame</button>
+      <select class="p-pspeed play-only">${[0.5, 1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === 1 ? 'selected' : ''}>${x}×</option>`).join('')}</select>
+      <span class="timecode p-time"></span><span class="spacer"></span>
+      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk live-only" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button>' : ''}
+      ${c.live_sound !== false ? '<button type="button" class="p-snd live-only" title="Sound">🔇</button>' : ''}
+      <a class="btn p-snap live-only" title="Save a full-quality picture">📷 Snapshot</a>
+      <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
+      <a class="btn p-file play-only" title="Download the whole recording file">⇩ File</a>
+      ${inView ? '<button type="button" class="p-golive play-only" title="Back to the live picture">● Back to live</button>' : '<button type="button" class="p-tl" title="Scrub back through this camera\'s footage">⏪ Timeline</button>'}
       <button type="button" class="p-fs" title="Leave full screen">⛶</button>
     </div>`;
   el.appendChild(bar); el.classList.add('has-pov');
   const q = (x) => bar.querySelector(x);
+  const playing = () => inView && !!focusPlayback && !!focusPlayer;
+  const pq = (x) => focusPlayer && focusPlayer.box.querySelector(x);
+  if (inView) {
+    el.classList.add('fs-panel');
+    // The camera's timeline (as under the picture): drag along it to look
+    // back; it plays here, in full screen.
+    const ctl = $('cam-tl');
+    el._ctlHome = document.createComment('camera timeline'); ctl.before(el._ctlHome);
+    q('.fs-tlslot').appendChild(ctl);
+    requestAnimationFrame(() => camTl.draw());
+    q('.p-golive').onclick = () => stopFocusPlayback();
+    q('.p-pplay').onclick = () => { const v = focusPlayer.video; v.paused ? v.play().catch(() => {}) : v.pause(); };
+    q('.p-pback').onclick = () => focusPlayer.stepFrame(-1);
+    q('.p-pfwd').onclick = () => focusPlayer.stepFrame(1);
+    q('.p-pspeed').onchange = (e) => { const s = pq('.p-speed'); if (s) { s.value = e.target.value; s.dispatchEvent(new Event('change')); } };
+    slidePanel(el, bar, () => !!camTl.dragging);
+  } else {
+    // A camera on the grid: its own view in full screen, with the timeline.
+    q('.p-tl').onclick = () => {
+      fsFromTile = true;
+      location.hash = '#live/' + enc(camId); route();
+      const fs = $('focus-surface');
+      (fs.requestFullscreen || fs.webkitRequestFullscreen).call(fs).catch(() => {});
+    };
+    fsIdle(el, bar);
+  }
   const p2 = (n) => String(n).padStart(2, '0'), stamp = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}`;
   const snap = q('.p-snap');
   snap.href = 'snapshot/' + enc(camId);
@@ -3403,21 +3514,43 @@ function liveFsBar(el, camId) {
     paint();
   }
   if (q('.p-talk')) setupTalkButton(c, q('.p-talk'));
-  // Clip of the live picture: from the recording, between the marks.
+  // Clip marks: of what's playing (the player's), or of the live picture
+  // (from the recording, between the marks).
   let a = null, b = null;
   const clip = q('.p-clip');
   const paintClip = () => {
+    if (playing()) {
+      const pc = pq('.p-clip'); clip.hidden = !pc || pc.hidden;
+      if (!clip.hidden) { clip.textContent = pc.textContent; }
+      q('.p-in').classList.toggle('on', focusPlayer.inT != null && focusPlayer.outT == null);
+      return;
+    }
     clip.hidden = !(a && b);
     if (a && b) { clip.href = fsClipHref(camId, a, b); clip.textContent = `⇩ Download clip (${fmtClock((b - a) / 1000)})`; }
     q('.p-in').classList.toggle('on', !!a && !b);
   };
-  q('.p-in').onclick = () => { a = Date.now(); b = null; paintClip(); toast('Clip start marked — press End ] to finish it'); };
-  q('.p-out').onclick = () => { if (!a) a = Date.now() - 30000; b = Date.now(); paintClip(); };
+  q('.p-in').onclick = () => { if (playing()) { pq('.p-in').click(); return paintClip(); } a = Date.now(); b = null; paintClip(); toast(`Clip start marked — press ${CLIP_OUT} to finish it`); };
+  q('.p-out').onclick = () => { if (playing()) { pq('.p-out').click(); return paintClip(); } if (!a) a = Date.now() - 30000; b = Date.now(); paintClip(); };
+  clip.onclick = (e) => { if (playing()) { e.preventDefault(); focusPlayer.downloadClip(); } };
   q('.p-fs').onclick = () => document.exitFullscreen().catch(() => {});
-  const tick = setInterval(() => { if (!bar.isConnected) return clearInterval(tick); q('.p-time').textContent = fmtDate(new Date()); }, 1000);
-  q('.p-time').textContent = fmtDate(new Date());
-  fsIdle(el, bar);
+  const refresh = () => {
+    const pl = playing();
+    bar.classList.toggle('playing', pl);
+    if (pl) {
+      const t = pq('.p-time'); q('.p-time').textContent = t ? t.textContent : '';
+      q('.p-pplay').textContent = focusPlayer.video.paused ? '▶' : '❚❚';
+      const f = pq('.p-dl'); if (f) q('.p-file').href = f.href;
+    } else q('.p-time').textContent = fmtDate(new Date());
+    paintClip();
+  };
+  const tick = setInterval(() => { if (!bar.isConnected) return clearInterval(tick); refresh(); }, 400);
+  refresh();
 }
+// The clip buttons, named the same on every player and timeline.
+const CLIP_IN = '[ Clip start', CLIP_OUT = 'Clip end ]';
+// A grid camera switched to its camera view in full screen (⏪ Timeline):
+// leaving full screen leaves both at once.
+let fsFromTile = false;
 
 // The alert marker of the timeline row under the pointer that is nearest
 // to it (within 8 px), or null: markers can be a few pixels wide and close
@@ -4406,7 +4539,7 @@ async function openCameraDialog(id, clone, prof) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, join_seconds: 30, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   // A profile: its settings on top of a new camera's.
   if (prof) { Object.assign(c, JSON.parse(JSON.stringify(prof.values || {}))); c.detect = {...c.detect, mask: ''}; c.name = prof.name; }
@@ -4525,6 +4658,8 @@ async function openCameraDialog(id, clone, prof) {
         <div class="row"><input type="number" id="d-pre" min="0" max="120" value="${c.detect.pre_seconds}" style="width:110px"><span class="muted">seconds (pre-event buffer, in alert recording modes)</span></div>
         <label for="d-post">Record after activity stops</label>
         <div class="row"><input type="number" id="d-post" min="3" max="600" value="${c.detect.post_seconds}" style="width:110px"><span class="muted">seconds</span></div>
+        <label for="d-join">Join alerts within</label>
+        <div class="row"><input type="number" id="d-join" min="0" max="600" value="${c.detect.join_seconds ?? 30}" style="width:110px"><span class="muted">seconds — if it triggers again within this time, it's added to the same alert: one longer video instead of lots of short ones. The timer starts again with each trigger (an alert is at most 10 minutes).</span></div>
         <label for="d-fps">Analysis frame rate</label>
         <div class="row"><input type="number" id="d-fps" min="1" max="15" value="${c.detect.fps}" style="width:110px"><span class="muted">pictures per second checked for motion</span></div>
       </div>
@@ -5060,7 +5195,7 @@ function collectCamera() {
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
-      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), hd_check: val('d-hdcheck'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
+      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), join_seconds: Math.max(0, Math.round(num('d-join')) || 0), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), hd_check: val('d-hdcheck'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
       parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgCells.some(x => x), package_mask: encodeCells(pkgCells), package_area: []},
   };
 }
@@ -5279,7 +5414,7 @@ function applyProfile(p) {
   set('d-travel', d.min_travel_px); set('d-ai', d.ai); set('d-conf', Math.round(d.min_confidence * 100));
   if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
-  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-hdcheck', d.hd_check || 'mark'); set('d-mask-ai', d.ai_ignores_mask !== false); set('d-parked-s', d.parked_seconds || 60);
+  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-join', d.join_seconds ?? 30); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-hdcheck', d.hd_check || 'mark'); set('d-mask-ai', d.ai_ignores_mask !== false); set('d-parked-s', d.parked_seconds || 60);
   if (d.parked_objects) document.querySelectorAll('#d-parked-objs input').forEach(i => i.checked = d.parked_objects.includes(i.value));
   // Let the form update anything that depends on these (hidden sections, hints).
   for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select, [data-tab=ai] input, [data-tab=ai] select')) el.dispatchEvent(new Event('change', {bubbles: true}));

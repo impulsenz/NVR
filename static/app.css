@@ -174,6 +174,8 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 .cal .days button.today { border-color: var(--border); }
 .cal .days button.has { font-weight: 700; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+/* Alerts: 40 % bigger cards by default, or a chosen number of columns. */
+#rec-cards { grid-template-columns: repeat(var(--rec-cols, auto-fill), minmax(var(--rec-min, 308px), 1fr)); }
 .rc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; }
 .rc:hover { border-color: var(--accent); }
 .rc.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -538,8 +540,8 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 
 /* Pan / tilt / zoom on the picture */
 /* PTZ: one frosted panel — joystick pad, zoom pill, presets */
-.ptz-ov { position: absolute; right: 12px; bottom: 44px; z-index: 4; display: flex; flex-direction: column; gap: 10px; padding: 12px;
-  border-radius: 18px; background: linear-gradient(180deg, rgba(22,26,34,.72), rgba(10,12,17,.78)); border: 1px solid rgba(255,255,255,.12);
+.ptz-ov { position: absolute; right: 12px; bottom: 12px; z-index: 4; display: flex; flex-direction: column; gap: 10px; padding: 12px;
+  border-radius: 18px; background: linear-gradient(180deg, rgba(22,26,34,.5), rgba(10,12,17,.55)); border: 1px solid rgba(255,255,255,.1);
   box-shadow: 0 10px 30px rgba(0,0,0,.45); backdrop-filter: blur(10px); opacity: 0; transition: opacity .2s; }
 #focus-surface:hover .ptz-ov, .ptz-ov:focus-within { opacity: 1; }
 @media (hover: none) { .ptz-ov { opacity: .95; } }
@@ -1058,9 +1060,9 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .g-tip i { width: 8px; height: 8px; border-radius: 50%; }
 .g-tip b { margin-left: auto; font-variant-numeric: tabular-nums; }
 .g-tip small { color: var(--muted); }
-.cap .hdai { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; padding: 1px 6px; border-radius: 4px; margin-left: 6px;
+.hdai { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; padding: 1px 6px; border-radius: 4px; margin-left: 6px;
   background: rgba(34,197,94,.16); color: #4ade80; border: 1px solid rgba(34,197,94,.35); }
-.cap .hdai.no { background: rgba(251,191,36,.12); color: #fbbf24; border-color: rgba(251,191,36,.35); }
+.hdai.no { background: rgba(251,191,36,.12); color: #fbbf24; border-color: rgba(251,191,36,.35); }
 /* full-screen bars */
 .surface:fullscreen .fspov { padding-bottom: 14px; }
 .fspov .p-live { color: #f87171; font-weight: 700; font-size: 12.5px; letter-spacing: .5px; }
@@ -1078,3 +1080,44 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .eye-btn.on { opacity: 1; background: var(--accent); border-color: var(--accent); }
 #c-url, #c-live, #c-talk-url { width: calc(100% - 44px); }
 .ptz-presets select option { color: initial; background: initial; }
+.fspov.tl-panel .fs-tlslot #cam-tl { margin: 0 0 6px; background: transparent; border: 0; padding: 0; box-shadow: none; }
+.fspov.tl-panel .fs-tlslot #cam-tl .hint { display: none; }
+.fspov .p-golive { color: #fca5a5; }
+/* Camera view in full screen with the timeline panel: one toolbar */
+.surface.fs-panel > .pov:not(.fspov) { display: none !important; }
+.surface.fs-panel .ptz-ov { bottom: auto; top: 56px; }
+.surface.fs-panel.pov-idle .fspov { opacity: 1; pointer-events: auto; }
+.fspov.livebar .play-only { display: none; }
+.fspov.livebar.playing .play-only { display: inline-flex; }
+.fspov.livebar.playing .live-only { display: none; }
+.fspov.tl-panel #cam-tl > .row h2 { visibility: hidden; }
+.fspov.tl-panel #cam-tl .legend { display: none; }
+/* a clip mark on its own (start or end set, not yet both) */
+.tl-mark1 { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--amber); box-shadow: 0 0 8px rgba(245,158,11,.7); z-index: 3; pointer-events: none; }
+/* Recordings: filters in a column on the left, the video gets the height */
+@media (min-width: 900px) {
+  #page-recordings.tl-mode { display: grid; grid-template-columns: 180px minmax(0, 1fr); column-gap: 16px; align-items: start; }
+  #page-recordings.tl-mode > .filters { grid-column: 1; grid-row: 1 / span 6; flex-direction: column; align-items: stretch; position: sticky; top: 64px; margin: 0; }
+  #page-recordings.tl-mode > .filters .page-title { margin: 0 0 4px; }
+  #page-recordings.tl-mode > .filters .spacer { display: none; }
+  #page-recordings.tl-mode > .filters .dropdown > button, #page-recordings.tl-mode > .filters > button { width: 100%; text-align: left; }
+  #page-recordings.tl-mode > :not(.filters) { grid-column: 2; }
+}
+
+/* Alerts: what the badges mean */
+.rec-key { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px 18px; padding: 12px 14px; margin-bottom: 12px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.rec-key > div { display: flex; align-items: center; gap: 10px; }
+.rec-key .k { flex: none; min-width: 92px; display: flex; justify-content: flex-end; gap: 4px; }
+.rec-key .k .hdai { margin: 0; }
+.rec-key .k .box { width: 26px; height: 18px; border: 2px solid #22c55e; border-radius: 2px; }
+.rec-key .k .newk { width: 30px; height: 18px; border-radius: 4px; box-shadow: 0 0 0 2px var(--accent); }
+.rec-key .k .sym { font-size: 15px; }
+.rec-key .d { color: var(--muted); } .rec-key .d b { color: var(--text); font-weight: 600; }
+/* Recordings: one camera's picture leaves room for the toolbar and timeline below it */
+@media (min-width: 900px) {
+  #page-recordings.tl-mode .tl-videos:has(> .surface:only-child) { grid-template-columns: min(100%, calc((100vh - 360px) * 16 / 9)); justify-content: center; }
+  #page-recordings.tl-mode .tl-videos.solo .surface.solo { width: min(100%, calc((100vh - 360px) * 16 / 9)); }
+}
+#f-refresh .rf-t { display: none; } #page-recordings.tl-mode #f-refresh .rf-t { display: inline; }
+.ptz-msg:empty { display: none; }

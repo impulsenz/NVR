@@ -1240,7 +1240,10 @@ impl Detector {
         let Some(a) = active.as_ref() else { return };
         let now = Local::now();
         let idle = (now - a.last_activity).num_seconds();
-        let post = self.cam.detect.post_seconds.max(3) as i64;
+        // Kept open while more activity comes within the join time: one
+        // alert and one video, however many times it triggers.
+        let d = &self.cam.detect;
+        let post = d.post_seconds.max(d.join_seconds).max(3) as i64;
         let too_long = (now - a.event.start).num_seconds() > MAX_EVENT_SECONDS;
         if idle >= post || too_long {
             // A watched area changed: wait a minute before deciding (the

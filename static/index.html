@@ -93,7 +93,7 @@
                 <div class="ptz-zoom"><button type="button" data-ptz="0,0,1" title="Zoom in (+ or scroll)">＋</button><span>ZOOM</span><button type="button" data-ptz="0,0,-1" title="Zoom out (− or scroll)">－</button></div>
               </div>
               <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button></div>
-              <div class="ptz-msg" id="ptz-msg">Drag on the picture to move · scroll to zoom</div>
+              <div class="ptz-msg" id="ptz-msg"></div>
             </div>
           </div>
           <div id="focus-player-controls"></div>
@@ -153,15 +153,17 @@
         <button id="f-date-btn">📅 Today</button>
         <div class="popover" id="f-date-pop" hidden></div>
       </div>
-      <button id="f-refresh" title="Refresh">↻</button>
+      <button id="f-refresh" title="Load the list again">↻ <span class="rf-t">Refresh</span></button>
     </div>
     <div class="chips" id="f-types" style="margin-bottom:12px"></div>
 
 
     <div id="rec-list">
-      <div class="row rec-grouping" style="margin-bottom:8px"><span class="muted" id="rec-count"></span><span class="spacer"></span>
+      <div class="row rec-grouping" style="margin-bottom:8px"><span class="muted" id="rec-count"></span><button type="button" class="small" id="rec-key-btn" title="What the badges and symbols on the alerts mean">ⓘ What these mean</button><span class="spacer"></span>
+        <label class="muted small" style="margin:0" title="How many alerts side by side: fewer columns, bigger pictures">Columns <select id="rec-cols" class="small"><option value="">Auto</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></label>
         <label class="muted small" style="margin:0">Group by <select id="rec-group" class="small"><option value="day">Day</option><option value="part">Time of day</option><option value="hour">Hour</option></select></label>
         <button type="button" class="small" id="rec-collapse" title="Fold every group away (−) or open them all (+)">− All</button></div>
+      <div class="rec-key" id="rec-key" hidden></div>
       <div class="cards" id="rec-cards"></div>
     </div>
 
@@ -183,8 +185,8 @@
         <button id="tl-left">◀</button><button id="tl-right">▶</button>
       </div>
       <div class="controls">
-        <button id="tl-in">Set clip start</button>
-        <button id="tl-out">Set clip end</button>
+        <button id="tl-in" title="The clip starts here">[ Clip start</button>
+        <button id="tl-out" title="The clip ends here">Clip end ]</button>
         <button id="tl-clear" hidden>Clear</button>
         <span class="timecode" id="tl-sel-info"></span>
         <span class="spacer"></span>

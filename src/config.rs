@@ -599,6 +599,10 @@ pub struct DetectConfig {
     pub pre_seconds: u64,
     /// Seconds kept after the last activity.
     pub post_seconds: u64,
+    /// More activity within this many seconds of the last joins the same
+    /// alert (one longer video instead of many short ones). The timer
+    /// starts again with each new trigger. 0 = the "record after" time.
+    pub join_seconds: u64,
     /// Frames per second analysed.
     pub fps: u32,
     /// Minimum seconds between AI checks for this camera.
@@ -650,6 +654,7 @@ impl Default for DetectConfig {
             trigger: "motion".into(),
             pre_seconds: 3,
             post_seconds: 15,
+            join_seconds: 30,
             fps: 5,
             ai_interval: 1.0,
             ignore_parked: true,
@@ -1024,6 +1029,9 @@ impl CameraConfig {
         }
         if d.pre_seconds > 120 || d.post_seconds > 600 {
             bail!("pre-event buffer is limited to 120 s and post-event to 600 s");
+        }
+        if d.join_seconds > 600 {
+            bail!("joining alerts is limited to 600 s");
         }
         if d.fps == 0 || d.fps > 15 {
             bail!("detection frame rate must be 1 to 15");

@@ -1,5 +1,17 @@
 # What's new in GAZE
 
+## 0.6.47 — November 2026
+- **One toolbar in full screen, on every video**: the old controls across the bottom of the picture are gone. Play/pause, −1/+1 frame, speed, clip start and end, ⇩ File and Back to live are all in the toolbar under the full-screen timeline.
+- **Timeline in live full screen**: a camera's live view in full screen has its timeline in the slide-up panel — drag back to watch what happened, then Back to live. A full-screen tile on the Live grid has a **⏪ Timeline** button that opens it.
+- **Only that camera's timeline**: with one camera in full screen on Recordings, the panel shows just its row.
+- **Clip start / Clip end everywhere**: the same names on every video, and the orange mark shows as soon as you set either one (it no longer waits for the second).
+- **More room for the picture on Recordings**: the title, camera choice, dates and Refresh moved to a column on the left, and a single camera's picture is sized so the toolbar and timeline fit on the screen without scrolling.
+- **Alerts: bigger pictures and a Columns choice** (Auto, or 2 to 10 side by side).
+- **What these mean**: a key on the Alerts page explains every badge and symbol on an alert — NEW, the object and how sure the AI is, motion only, the green box, HD AI ✓, HD AI ?, play, still recording, download and delete.
+- **Alert filters only show what your cameras look for**: no Dog or Cat chip unless a camera (or its profile) watches for them; Item left/taken, Faces and Number plates appear only when they're turned on. Turn one on and its chip appears.
+- **Join alerts** (camera → Motion & AI, default 30 seconds): if a camera triggers again within this time, it's added to the same alert — one longer video instead of lots of short ones. The timer starts again with each trigger; an alert is at most 10 minutes.
+- **PTZ panel**: tucked evenly into the corner, more see-through, and without the "drag on the picture" text (messages still show briefly, and errors stay).
+
 ## 0.6.46 — November 2026
 - **Time-lapse settings only change new footage**: changing how often pictures are kept, or their size, no longer remakes the time-lapse that's already there. To remake it at the new settings, use the new **Remake time-lapse with these settings** button (it warns first: footage older than a few hours is read again from the recordings, which takes a while).
 - **Time-lapse can be turned off** (Settings → Recording & storage, on by default — one picture every 10 seconds, standard size). Off, nothing is kept or made, and dragging along a timeline moves the video itself.

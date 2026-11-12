@@ -303,14 +303,15 @@ async fn status(
                 "record_mode": c.cfg.record_mode,
                 "has_sub": c.cfg.has_sub(),
                 // What it alerts on (the Alerts filter offers these).
-                "watch": c.cfg.detect.objects,
+                "watch": cur.detect.objects,
+                "alerts_on": alert_kinds(cur, &cfg.ai),
                 "talk": c.cfg.talk,
                 "talk_chime": c.cfg.talk_chime,
                 "sound": c.cfg.live_sound,
                 "url": mask_url(&c.cfg.url),
                 "transcode": c.cfg.reencode(),
                 "detection": c.cfg.detection_enabled(),
-                "ai": c.cfg.detect.ai,
+                "ai": cur.detect.ai,
                 "recorder": c.recorder.as_ref().map(|r| r.status()),
                 "buffer": c.buffer_recorder.as_ref().map(|r| r.status()),
                 "detect": c.detector().map(|d| d.status()),
@@ -696,6 +697,31 @@ async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnR
         }
         Err(e) => bad(e),
     }
+}
+
+/// The kinds of alert a camera can raise, for the Alerts page's filter.
+fn alert_kinds(c: &crate::config::CameraConfig, ai: &crate::config::AiConfig) -> Vec<&'static str> {
+    let d = &c.detect;
+    let mut k = Vec::new();
+    if !c.enabled {
+        return k;
+    }
+    if d.motion && d.trigger == "motion" {
+        k.push("motion");
+    }
+    if d.ai {
+        if d.packages {
+            k.push("package");
+        }
+        if ai.faces && d.objects.iter().any(|o| o == "person") {
+            k.push("face");
+        }
+        let vehicles = ["car", "truck", "bus", "motorcycle"];
+        if ai.plates && d.objects.iter().any(|o| vehicles.contains(&o.as_str())) {
+            k.push("plate");
+        }
+    }
+    k
 }
 
 // ---------- new faces & plates ----------
