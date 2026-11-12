@@ -478,7 +478,16 @@ function switchStream(surface) {
   const ctx = isFocus || (wall && wallSolo === c.id) ? 'focus' : 'grid';
   const q = feedQ(c, ctx) === 'main' ? 'sub' : 'main';
   setFeedQ(c, ctx, q);
-  if (isFocus) bindFocusImage(c); else renderDash();
+  if (isFocus) bindFocusImage(c);
+  else {
+    // Swap the picture's stream in place: rebuilding the tiles would take
+    // the picture out of full screen.
+    const img = surface.querySelector(':scope > img'), u = unbinders.get(c.id);
+    if (u) u();
+    surface.dataset.q = q;
+    if (img) unbinders.set(c.id, Live.bind(img, c.id, q));
+    updateOverlay(surface, c, q);
+  }
   updateSubscriptions();
   toast(`${c.name}: ${q === 'main' ? 'stream 1 (main, full quality)' : 'stream 2 (sub-stream)'}`);
 }
