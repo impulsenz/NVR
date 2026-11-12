@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.21 — November 2026
+- **Bigger alert window that stays put**: on a computer the alert window now fills most of the screen and keeps exactly the same size and place as you step through alerts with ◀ ▶, so the arrows never move under your mouse (longer details scroll inside). Clicking outside the window closes it.
+- **Updating**: the Updates button just shows the ring filling up (no spinning arrows).
+- **Alerts filters start afresh**: coming back to Alerts from another page resets the filters (today, every camera, the usual kinds of alert, anyone).
+
 ## 0.6.20 — November 2026
 - **Deleted alerts really stay gone**: on Windows the list of alerts sometimes couldn't be replaced at the moment of deleting (another program holding the file for a moment), so the old alerts came back — without pictures — when GAZE next started (e.g. after an update). The list is now saved reliably, and when GAZE starts it drops any alert whose picture and clip are both gone, which also clears the black ones already showing.
 - **Delete footage** also clears the alerts of cameras that are switched off.
