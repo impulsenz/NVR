@@ -576,6 +576,7 @@ async function refreshStatus() {
     chip.title = dls.map(x => x.title).join('\n') + '\nClick for details (Settings → Tasks)';
   }
   showUpdateBar(status.update);
+  paintUpdBtn(status.update);
   const gb = $('g-banner');
   if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
     gb.hidden = false;
@@ -2539,6 +2540,18 @@ function buildTimelineVideos() {
   tlSolo(tl.solo);
 }
 const activeVideo = (el) => el._vids[el._active];
+// Make player `i` the active one, showing it once it has a picture (the
+// other one keeps showing its last picture meanwhile).
+function revealWhenReady(el, i) {
+  const v = el._vids[i];
+  el._active = i; el._pending = i;
+  const done = () => { if (el._pending !== i) return; el._pending = null; if (el._active === i) showVideo(el, i); };
+  if (v.readyState >= 2 && !v.seeking) { done(); return; }
+  v.addEventListener('seeked', () => { if (v.readyState >= 2) done(); }, {once: true});
+  v.addEventListener('loadeddata', done, {once: true});
+  v.addEventListener('playing', done, {once: true});
+  setTimeout(done, 4000);
+}
 function showVideo(el, i) {
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
@@ -2596,21 +2609,21 @@ function tlSync(force) {
       continue;
     }
     if (v.dataset.url !== s.url) {
-      const other = el._vids[1 - el._active];
-      if (other.dataset.url === s.url && other.readyState >= 2) {
-        // The next file is already loaded: switch players without a gap.
-        other.currentTime = want; other.playbackRate = tl.speed;
+      // Another file: always in the other (hidden) player — usually already
+      // loading, see below — and shown only once it has a picture; until
+      // then the last picture of the file before stays (no black gap).
+      const oi = 1 - el._active, other = el._vids[oi];
+      if (other.dataset.url !== s.url) { other.dataset.url = s.url; other.preload = 'auto'; other.src = s.url; }
+      const go = () => {
+        other.currentTime = Math.max(0, (tl.T - new Date(s.start).getTime()) / 1000);
+        other.playbackRate = tl.speed;
         if (tl.playing) other.play().catch(() => {});
-        showVideo(el, 1 - el._active);
-        v = other;
-      } else {
-        v.dataset.url = s.url; v.src = s.url;
-        v.addEventListener('loadedmetadata', () => { v.currentTime = want; v.playbackRate = tl.speed; if (tl.playing) v.play().catch(() => {}); }, {once: true});
-        showVideo(el, el._active);
-        continue;
-      }
+      };
+      if (other.readyState >= 1) go(); else other.addEventListener('loadedmetadata', go, {once: true});
+      revealWhenReady(el, oi);
+      continue;
     }
-    showVideo(el, el._active);
+    if (el._pending == null) showVideo(el, el._active);
     // The file still being recorded has grown since it was loaded: load it
     // again to reach the newest part.
     if (isGrowing(s) && isFinite(v.duration) && want > v.duration + 1 && !(v._reloadAt && Date.now() - v._reloadAt < 5000)) {
@@ -3115,9 +3128,8 @@ function showUpdateBar(u) {
   const key = u.latest + '|' + (u.error || '');
   if (!bar.hidden && bar.dataset.v === key) return;
   bar.dataset.v = key;
-  const when = u.published ? ` · released ${esc(ago(u.published))}` : '';
   const sub = u.error ? `<span class="ub-err">The last try didn't work: ${esc(u.error)}</span>`
-    : `<span class="ub-ver">${from} → ${to}</span>${when} · takes a few seconds, recordings carry on after`;
+    : `<span class="ub-ver">${from} → ${to}</span>`;
   bar.innerHTML = head(`GAZE ${to} is ready to install`, sub)
     + `<div class="ub-actions"><button type="button" class="primary small" id="ub-go">${u.error ? 'Try again' : 'Update now'}</button>
        <button type="button" class="small ub-later" id="ub-x" title="Hide until the next version">Later</button></div>`;
@@ -3125,7 +3137,7 @@ function showUpdateBar(u) {
   $('ub-x').onclick = () => { store.set('upd-dismissed', u.latest); hide(); };
   $('ub-go').onclick = async () => {
     const go = $('ub-go'); go.disabled = true; go.textContent = 'Starting…';
-    try { await api('api/update/install', {method: 'POST'}); showUpdateBar({...u, state: 'downloading', done: 0, total: 0, error: null}); }
+    try { await api('api/update/install', {method: 'POST'}); const busy = {...u, state: 'downloading', done: 0, total: 0, error: null}; showUpdateBar(busy); paintUpdBtn(busy); }
     catch (e) { toast(e.message, true); go.disabled = false; go.textContent = 'Update now'; }
   };
 }
@@ -3139,6 +3151,20 @@ function waitForGazeRestart() {
 // Phones: the account menu has System, Logs and the update check.
 if ($('um-upd')) $('um-upd').onclick = () => { $('um-pop').hidden = true; $('upd-btn').click(); };
 document.querySelectorAll('.um-links a').forEach(a => a.addEventListener('click', () => { $('um-pop').hidden = true; }));
+// The header's Updates button: spins while checking; while an update is
+// installing, a ring fills with the download and the label says what it's
+// doing; a dot when a new version is ready.
+function paintUpdBtn(u) {
+  const b = $('upd-btn'); if (!b) return;
+  const busy = u && ['downloading', 'installing', 'restarting'].includes(u.state);
+  const pct = busy && u.state === 'downloading' && u.total ? Math.min(100, Math.round(u.done / u.total * 100)) : busy ? 100 : 0;
+  b.classList.toggle('busy', !!busy);
+  b.classList.toggle('ready', !busy && !!(u && u.available));
+  b.style.setProperty('--upd-pct', pct + '%');
+  const label = b.querySelector('.upd-label');
+  if (label) label.textContent = !busy ? 'Updates' : u.state === 'downloading' ? `Updating ${pct}%` : u.state === 'installing' ? 'Installing…' : 'Restarting…';
+  b.title = !busy ? (u && u.available ? `GAZE ${u.latest} is ready to install` : 'Check for updates') : label ? label.textContent : 'Updating';
+}
 $('upd-btn').onclick = async () => {
   const b = $('upd-btn'); b.disabled = true;
   b.classList.remove('ok'); b.classList.add('checking');

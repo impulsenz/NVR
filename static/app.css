@@ -690,7 +690,18 @@ ol.steps code { user-select: all; }
 .upd-bar .ub-later { background: transparent; border-color: color-mix(in srgb, var(--text) 25%, transparent); }
 .upd-bar .ub-prog { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .upd-bar .ub-prog i { display: block; height: 100%; background: var(--accent); transition: width .5s ease; }
-#upd-btn.checking { opacity: .7; }
+#upd-btn { display: inline-flex; align-items: center; gap: 6px; }
+#upd-btn .upd-ic { position: relative; display: inline-grid; place-items: center; width: 18px; height: 18px; }
+#upd-btn .upd-ic svg { display: block; transition: transform .2s; }
+#upd-btn.checking .upd-ic svg { animation: spin .9s linear infinite; }
+#upd-btn .upd-ring { display: none; position: absolute; inset: -1px; border-radius: 50%;
+  background: conic-gradient(var(--accent) var(--upd-pct, 0%), color-mix(in srgb, var(--accent) 20%, transparent) 0);
+  -webkit-mask: radial-gradient(circle, transparent 6px, #000 6.5px); mask: radial-gradient(circle, transparent 6px, #000 6.5px); }
+#upd-btn.busy { border-color: var(--accent); color: var(--accent); }
+#upd-btn.busy .upd-ring { display: block; }
+#upd-btn.busy .upd-ic svg { transform: scale(.55); animation: spin 1.4s linear infinite; }
+#upd-btn.ready .upd-ic::after { content: ''; position: absolute; top: -2px; right: -3px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--panel); }
 #upd-btn .upd-tick { color: #22c55e; font-weight: 700; margin-left: 5px; }
 #upd-btn.ok { border-color: #22c55e; }
 
