@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 0.6.51 — November 2026
+- **Share alerts**: a **⤴ Share** button on every alert sends it to someone, ready to read on its own: the alert picture with its boxes and a caption (what, which camera, when), and a short message with what was seen.
+  - **Share picture… / Share video…** opens your phone's or computer's own share menu — Messenger, WhatsApp, Facebook, Instagram, email, Teams or any other app you have — with the picture or the alert's video attached. (Browsers only offer this on a secure https address, or when GAZE is opened on the computer it runs on.)
+  - **Email, WhatsApp, Messenger, Facebook, Telegram, Text message**: one click saves the picture and opens the app with the message filled in (or copied, ready to paste), so you just attach the picture.
+  - **Copy picture** and **Copy message** to paste anywhere; **Copy GAZE link** opens the alert for others in your home who have a GAZE account.
+  - **Save picture** and **Save video** (the alert's clip, or its part of the 24/7 recording), named after the camera and time.
+
 ## 0.6.50 — November 2026
 - **ⓘ info cards on settings**: settings that aren't obvious have a small ⓘ next to them — hover over it (or tap it on a phone) for what the setting does and an example. Long explanations under settings moved into these cards, so the pages are shorter and easier to scan.
 - **Plainer names**: technical labels are now everyday words — e.g. Sensitivity (was Min. contrast), Smallest movement, Must move for (was Make time), How sure the AI must be (was Minimum confidence), AI looks every, Connection type (was RTSP transport), Control port and login (was ONVIF), Smoothness in the grid / when opened (was frame rate), Video encoder, and "Sub-stream" everywhere instead of "stream 2" or "Substream".

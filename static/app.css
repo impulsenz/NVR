@@ -1131,3 +1131,11 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .info:hover, .info:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
 #tipcard { position: fixed; z-index: 10000; padding: 9px 12px; border-radius: 8px; background: #1d2230; color: #e6e9f0; border: 1px solid rgba(255,255,255,.14);
   box-shadow: 0 8px 24px rgba(0,0,0,.45); font-size: 13px; line-height: 1.45; pointer-events: none; white-space: pre-line; }
+/* Sharing an alert */
+.share-box { margin: 0 0 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); }
+.share-msg { margin-top: 4px; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.share-main { margin-top: 10px; gap: 8px; flex-wrap: wrap; }
+.share-apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 10px; }
+.share-app { display: flex; align-items: center; gap: 8px; justify-content: flex-start; padding: 8px 10px; }
+.share-app .si { font-size: 17px; }
+.share-more { margin-top: 10px; gap: 6px; flex-wrap: wrap; }

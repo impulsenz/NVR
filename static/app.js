@@ -2825,6 +2825,8 @@ async function playItem(it, card) {
   const dur = (new Date(it.end) - new Date(it.start)) / 1000;
   const e = it.event;
   $('ad-title').textContent = `${it.camera_name} — ${fmtDate(it.start)}`;
+  $('ad-sharebox').hidden = true;
+  $('ad-share').hidden = !it.thumb;
   $('ad-prev').disabled = alertIdx <= 0; $('ad-next').disabled = alertIdx < 0 || alertIdx >= rec.items.length - 1;
   $('rp-info').innerHTML = `
     ${e && e.suspicious ? `<div class="sus">⚠ ${esc(e.suspicious)}</div>` : ''}
@@ -2870,6 +2872,138 @@ async function playItem(it, card) {
     api('api/alerts/seen', {method: 'POST', json: {ids: [e.id]}}).then(refreshStatus).catch(() => {});
   }
 }
+// ---------- sharing an alert ----------
+// The system share sheet (Messenger, WhatsApp, Facebook, email… whatever is
+// on the phone or computer) when the browser offers it with files — it
+// needs a secure address (https, or GAZE opened on this computer). Apps that
+// can't be handed a file from a web page get the picture saved first and
+// open with the message filled in.
+let shareIt = null;
+const SHARE_NAMES = {person: 'Person', car: 'Car', truck: 'Truck', bus: 'Bus', motorcycle: 'Motorbike', bicycle: 'Bicycle', dog: 'Dog', cat: 'Cat', bird: 'Bird', package: 'Parcel'};
+function shareWhat(it) {
+  const e = it.event || {}, kinds = [...new Set((e.labels || []).map(l => l.label))];
+  const names = kinds.map(k => SHARE_NAMES[k] || k[0].toUpperCase() + k.slice(1));
+  const what = names.length ? names.join(' and ') : 'Movement';
+  return {what, icon: kinds.length ? labelIcon(kinds[0]) : labelIcon('motion')};
+}
+function shareText(it) {
+  const e = it.event || {}, {what, icon} = shareWhat(it), dur = (new Date(it.end) - new Date(it.start)) / 1000;
+  const lines = [`${icon} ${what} at ${it.camera_name}`, fmtDate(it.start) + (dur >= 1 ? ` (${fmtDur(dur)})` : '')];
+  for (const n of e.notes || []) lines.push(n);
+  if (e.plates && e.plates.length) lines.push('Number plate: ' + e.plates.join(', '));
+  return lines.join('\n');
+}
+const shareStamp = (d) => { d = new Date(d); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`; };
+const shareFileName = (it, ext) => `${it.camera_name.replace(/[\\/:*?"<>|]+/g, ' ').trim()} ${shareStamp(it.start)}.${ext}`;
+// The alert picture with its boxes and a caption bar: makes sense on its own
+// in a chat.
+async function sharePicture(it) {
+  const img = new Image();
+  img.src = it.thumb;
+  await img.decode();
+  const w = img.naturalWidth, h = img.naturalHeight, bar = Math.max(44, Math.round(h * 0.09));
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h + bar;
+  const g = cv.getContext('2d');
+  g.drawImage(img, 0, 0, w, h);
+  const e = it.event || {};
+  if (showBoxes) for (const b of e.boxes || []) {
+    if (b.label === 'motion') continue;
+    g.strokeStyle = '#22c55e'; g.lineWidth = Math.max(2, w / 400);
+    g.strokeRect(b.x * w, b.y * h, b.w * w, b.h * h);
+  }
+  g.fillStyle = '#0f1218'; g.fillRect(0, h, w, bar);
+  const {what, icon} = shareWhat(it), fs = Math.round(bar * 0.42);
+  g.fillStyle = '#fff'; g.font = `600 ${fs}px system-ui, sans-serif`; g.textBaseline = 'middle';
+  g.fillText(`${icon} ${what} · ${it.camera_name}`, bar * 0.3, h + bar / 2);
+  g.font = `${Math.round(fs * 0.9)}px system-ui, sans-serif`; g.fillStyle = '#c9d1e0'; g.textAlign = 'right';
+  g.fillText(fmtDate(it.start), w - bar * 0.3, h + bar / 2);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9));
+  return new File([blob], shareFileName(it, 'jpg'), {type: 'image/jpeg'});
+}
+// The alert's own clip, or (recorded 24/7) its part of the recording: from
+// a few seconds before to a little after.
+function alertVideoUrl(it) {
+  if (it.download) return it.download;
+  const a = new Date(it.start).getTime(), b = new Date(it.end).getTime();
+  return fsClipHref(it.camera, a - 5000, Math.min(Date.now(), Math.max(b + 5000, a + 15000)));
+}
+async function shareVideo(it) {
+  const r = await fetch(alertVideoUrl(it));
+  if (!r.ok) throw new Error('The video could not be loaded');
+  const blob = await r.blob();
+  return new File([blob], shareFileName(it, 'mp4'), {type: 'video/mp4'});
+}
+const shareLink = (it) => it.event ? `${location.origin}${location.pathname}#alerts?open=${enc(it.camera)}~${enc(it.event.id)}` : '';
+function saveFile(file) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+const canShareFiles = (type) => { try { return !!(navigator.canShare && navigator.canShare({files: [new File([new Blob(['x'])], 'x.' + (type === 'video/mp4' ? 'mp4' : 'jpg'), {type})]})); } catch (_) { return false; } };
+const mobileOS = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+function openShare(it) {
+  shareIt = it;
+  const box = $('ad-sharebox'), text = shareText(it), sheet = canShareFiles('image/jpeg'), sheetVid = !!it.play && canShareFiles('video/mp4');
+  const copyPic = !!(navigator.clipboard && window.ClipboardItem && window.isSecureContext);
+  const app = (k, icon, name, tipText) => `<button type="button" class="share-app" data-app="${k}" title="${esc(tipText)}"><span class="si">${icon}</span>${name}</button>`;
+  box.innerHTML = `<div class="row" style="align-items:flex-start"><div style="flex:1"><b>Share this alert</b><div class="share-msg">${esc(text).replace(/\n/g, '<br>')}</div></div><button type="button" class="small" id="sh-x" title="Close">✕</button></div>
+    ${sheet ? `<div class="row share-main"><button type="button" class="primary" id="sh-pic">📤 Share picture…</button>${sheetVid ? '<button type="button" class="primary" id="sh-vid">🎬 Share video…</button>' : ''}<span class="muted small">Opens this ${mobileOS() ? 'phone' : 'computer'}'s share menu: Messenger, WhatsApp, Facebook, email and any other app you have.</span></div>` : ''}
+    <div class="share-apps">
+      ${app('email', '✉️', 'Email', 'Saves the picture, then opens a new email with the details filled in: attach the picture from your Downloads')}
+      ${app('whatsapp', '🟢', 'WhatsApp', 'Saves the picture, then opens WhatsApp with the message filled in')}
+      ${app('messenger', '💬', 'Messenger', 'Saves the picture, then opens Messenger (the message is copied: paste it)')}
+      ${app('facebook', '📘', 'Facebook', 'Saves the picture, then opens Facebook to post it (the message is copied: paste it)')}
+      ${app('telegram', '✈️', 'Telegram', 'Saves the picture, then opens Telegram with the message filled in')}
+      ${app('sms', '📱', 'Text message', 'Opens a text message with the details filled in (on a phone)')}
+    </div>
+    <div class="row share-more">
+      ${copyPic ? '<button type="button" class="small" id="sh-copypic" title="Then paste it into any chat or email">📋 Copy picture</button>' : ''}
+      <button type="button" class="small" id="sh-copytext">📋 Copy message</button>
+      ${it.event ? `<button type="button" class="small" id="sh-link" title="A link that opens this alert in GAZE — for people in your home who have a GAZE account">🔗 Copy GAZE link</button>` : ''}
+      <span class="spacer"></span>
+      <button type="button" class="small" id="sh-savepic">⇩ Save picture</button>
+      ${it.play ? '<button type="button" class="small" id="sh-savevid">⇩ Save video</button>' : ''}
+    </div>
+    ${sheet ? '' : `<div class="hint" style="margin:6px 0 0">${window.isSecureContext ? 'This browser can\u2019t hand pictures straight to other apps, so the buttons above save the picture first: attach it from your Downloads.' : 'Sending the picture straight into an app (the share menu) only works when GAZE is opened through a secure https address \u2014 the buttons above save it first instead: attach it from your Downloads.'}</div>`}`;
+  box.hidden = false;
+  const busy = async (btn, label, fn) => {
+    const was = btn.innerHTML; btn.disabled = true; btn.textContent = label;
+    try { await fn(); } catch (err) { if (err && err.name !== 'AbortError') toast(err.message || String(err), true); }
+    btn.disabled = false; btn.innerHTML = was;
+  };
+  const copy = async (t) => { try { await navigator.clipboard.writeText(t); return true; } catch (_) {
+    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok; } };
+  $('sh-x').onclick = () => { box.hidden = true; };
+  const q = (id) => $(id);
+  if (q('sh-pic')) q('sh-pic').onclick = (ev) => busy(ev.currentTarget, 'Preparing…', async () => navigator.share({files: [await sharePicture(it)], title: shareWhat(it).what + ' at ' + it.camera_name, text}));
+  if (q('sh-vid')) q('sh-vid').onclick = (ev) => busy(ev.currentTarget, 'Loading video…', async () => navigator.share({files: [await shareVideo(it)], title: shareWhat(it).what + ' at ' + it.camera_name, text}));
+  if (q('sh-copypic')) q('sh-copypic').onclick = (ev) => busy(ev.currentTarget, 'Copying…', async () => {
+    const f = await sharePicture(it);
+    // Clipboards take PNG pictures.
+    const bmp = await createImageBitmap(f), cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height; cv.getContext('2d').drawImage(bmp, 0, 0);
+    const png = await new Promise(r => cv.toBlob(r, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({'image/png': png})]);
+    toast('Picture copied — paste it into any chat or email');
+  });
+  q('sh-copytext').onclick = async () => toast(await copy(text) ? 'Message copied' : 'Could not copy', false);
+  if (q('sh-link')) q('sh-link').onclick = async () => toast(await copy(shareLink(it)) ? 'Link copied — it opens this alert for anyone signed in to GAZE' : 'Could not copy');
+  q('sh-savepic').onclick = (ev) => busy(ev.currentTarget, 'Saving…', async () => { saveFile(await sharePicture(it)); toast('Picture saved to your Downloads'); });
+  if (q('sh-savevid')) q('sh-savevid').onclick = () => { const a = document.createElement('a'); a.href = alertVideoUrl(it); a.download = shareFileName(it, 'mp4'); document.body.appendChild(a); a.click(); a.remove(); };
+  box.querySelectorAll('.share-app').forEach(b => b.onclick = () => busy(b, 'Opening…', async () => {
+    const k = b.dataset.app, subject = `${shareWhat(it).what} at ${it.camera_name} — ${fmtDate(it.start)}`, t = encodeURIComponent(text);
+    // The picture goes along wherever the app can't take it from a web page.
+    if (k !== 'sms') saveFile(await sharePicture(it));
+    const open = (url) => { const w = window.open(url, '_blank', 'noopener'); if (!w && !url.startsWith('http')) location.href = url; };
+    if (k === 'email') { location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text + '\n\n(The picture is attached.)')}`; toast('Picture saved — attach it from your Downloads'); }
+    else if (k === 'whatsapp') { open(`https://wa.me/?text=${t}`); toast('Picture saved — attach it in WhatsApp with 📎'); }
+    else if (k === 'telegram') { open(`https://t.me/share/url?url=${encodeURIComponent(' ')}&text=${t}`); toast('Picture saved — attach it in Telegram with 📎'); }
+    else if (k === 'messenger') { await copy(text); open(mobileOS() ? 'fb-messenger://' : 'https://www.messenger.com/'); toast('Picture saved and message copied — choose a chat, paste, and attach the picture'); }
+    else if (k === 'facebook') { await copy(text); open('https://www.facebook.com/'); toast('Picture saved and message copied — start a post, paste, and add the picture'); }
+    else if (k === 'sms') { location.href = `sms:?&body=${t}`; }
+  }));
+}
+$('ad-share').onclick = () => { const b = $('ad-sharebox'); if (!b.hidden && shareIt === rec.items[alertIdx]) { b.hidden = true; return; } const it = rec.items[alertIdx]; if (it) openShare(it); };
+
 function closeAlert() {
   const dlg = $('alert-dialog');
   if (recPlayer) recPlayer.stop();
