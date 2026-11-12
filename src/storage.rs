@@ -34,7 +34,42 @@ pub fn valid_component(s: &str) -> bool {
 }
 
 /// All continuous recordings in one camera folder, newest first.
+/// The recordings in a folder, newest first. Kept for a few seconds:
+/// reading the details of thousands of files takes a while (on Windows
+/// especially), and pages ask for them often (alerts, timelines).
 pub fn list(dir: &Path) -> Vec<Recording> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    type Cache = HashMap<PathBuf, (std::time::Instant, std::sync::Arc<Vec<Recording>>)>;
+    static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
+    {
+        let mut c = CACHE.lock().unwrap();
+        let map = c.get_or_insert_with(HashMap::new);
+        if FORGET.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            map.clear();
+        }
+        if let Some((t, v)) = map.get(dir)
+            && t.elapsed() < std::time::Duration::from_secs(5)
+        {
+            return (**v).clone();
+        }
+    }
+    let v = list_now(dir);
+    let mut c = CACHE.lock().unwrap();
+    let map = c.get_or_insert_with(HashMap::new);
+    map.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(60));
+    map.insert(dir.to_path_buf(), (std::time::Instant::now(), std::sync::Arc::new(v.clone())));
+    v
+}
+
+/// A recording was deleted: the folders are read afresh next time.
+static FORGET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn forget_lists() {
+    FORGET.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The recordings in a folder, read now.
+fn list_now(dir: &Path) -> Vec<Recording> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -155,6 +190,7 @@ pub fn migrate_flat_files(root: &Path, camera_ids: &[String]) {
 /// Remove a recording and its cached previews.
 pub fn delete_recording(dir: &Path, name: &str) -> std::io::Result<()> {
     std::fs::remove_file(dir.join(name))?;
+    forget_lists();
     // Cached preview pictures: "<name>.jpg", "<name>.sprite-000.jpg", "<name>.sprite.json", ...
     if let Ok(rd) = std::fs::read_dir(dir.join(".thumbs")) {
         let start = format!("{name}.");

@@ -206,10 +206,13 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             continue;
         }
         let id = &rt.cfg.id;
-        let recs = recordings(&rt);
+        // The camera's recordings: read only if needed (listing recordings,
+        // or an alert without its own clip to play).
+        let recs_cell: std::cell::OnceCell<Vec<Recording>> = std::cell::OnceCell::new();
+        let recs = || recs_cell.get_or_init(|| recordings(&rt));
         // Looking for someone only finds alerts.
         if q.who.is_none() && (q.types.is_empty() || q.types.contains("recording")) {
-            for r in recs
+            for r in recs()
                 .iter()
                 .filter(|r| r.end >= q.from && r.start <= q.to && in_tod(r.start, q.tod))
             {
@@ -250,16 +253,17 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             {
                 continue;
             }
-            let play = play_at(&rt, &recs, Some(&e), e.start);
+            let play = if e.clip.is_some() && e.clip_start.is_some() {
+                play_at(&rt, &[], Some(&e), e.start)
+            } else {
+                play_at(&rt, recs(), Some(&e), e.start)
+            };
             let pending = play.is_none()
                 && e.clip.is_none()
                 && rt.cfg.record_mode.event_clips()
                 && (Local::now() - e.end).num_seconds() < 180;
-            let size = e
-                .clip
-                .as_ref()
-                .and_then(|c| std::fs::metadata(rt.events.dir().join(c)).ok())
-                .map(|m| m.len());
+            // (Not read from the disk per alert: that made the list slow.)
+            let size = None;
             items.push(Item {
                 kind: "event",
                 camera: id.clone(),
@@ -270,13 +274,9 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                 name: None,
                 thumb: e.thumb.as_ref().map(|t| {
                     // The picture can be replaced by a better one while the
-                    // alert is in progress: version the URL by its time.
-                    let v = std::fs::metadata(rt.events.dir().join(t))
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
+                    // alert is in progress: versioned by when it was taken
+                    // (no disk read per alert).
+                    let v = e.thumb_at.map(|x| x.timestamp_millis()).unwrap_or(0);
                     format!("{}?v={v}", event_file_url(id, t))
                 }),
                 download: e

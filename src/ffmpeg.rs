@@ -746,7 +746,7 @@ async fn sprite_with(
     use tokio::io::AsyncReadExt;
     const COLS: u32 = SPRITE_COLUMNS;
     const PER_PAGE: u32 = SPRITE_PER_PAGE;
-    let (tw, th) = crate::picturelog::TILE;
+    let (tw, th) = crate::picturelog::tile();
     let duration = duration(ffmpeg, file).await.unwrap_or(0.0);
     // One picture every `interval` seconds (Settings → Recording & storage),
     // from keyframes only (light on the computer).

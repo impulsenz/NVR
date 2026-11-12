@@ -651,7 +651,7 @@ impl Detector {
                 // The time-lapse: one picture per interval, as it's recorded
                 // (see picturelog).
                 let shot = Local::now() - CDuration::from_std(at.elapsed()).unwrap_or_default();
-                let step = self.env.timelapse_seconds.max(1) as i64 * 1000;
+                let step = crate::picturelog::seconds() as i64 * 1000;
                 let slot = shot.timestamp_millis() / step;
                 if last_pic != Some(slot) {
                     last_pic = Some(slot);

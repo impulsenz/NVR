@@ -5310,10 +5310,11 @@ async function renderStorage(body) {
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
     <label for="s-max">Maximum storage</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
     <label for="s-free">Keep free on disk</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
-    <span ${TIMELAPSE ? '' : 'hidden'}></span><div ${TIMELAPSE ? '' : 'hidden'}><label class="check"><input type="checkbox" id="s-tl" ${s.prebuild_timelapse !== false ? 'checked' : ''}> Prepare time-lapse previews for the last 24 hours automatically</label>
-      <div class="hint">The timeline's scrub previews are made in the background (newest first, a little CPU), so they appear instantly. Older days are still made when you open them.</div></div>
-    <label for="s-tlsec" ${TIMELAPSE ? '' : 'hidden'}>Time-lapse pictures</label><div ${TIMELAPSE ? '' : 'hidden'}><div class="row"><span class="muted">one every</span><input type="number" id="s-tlsec" min="1" max="120" value="${s.timelapse_seconds || 10}" style="width:90px"><span class="muted">seconds</span><span class="muted" id="s-tlsec-info"></span></div>
-      <div class="hint">Fewer seconds: smoother scrubbing, more work for the computer and more space for the previews. Changing it makes the previews again at the new rate (in the background, newest first).</div></div>
+    <label for="s-tlsec">Time-lapse pictures</label><div><div class="row">
+        <select id="s-tlsec">${[...new Set([2, 5, 10, 20, 30, 60, s.timelapse_seconds || 10])].sort((a, b) => a - b).map(n => `<option value="${n}" ${n === (s.timelapse_seconds || 10) ? 'selected' : ''}>One every ${n} seconds${n === 2 ? ' — smoothest' : n === 10 ? ' — standard' : n === 60 ? ' — lightest' : ''}</option>`).join('')}</select>
+        <select id="s-tlw">${[[256, 'Standard (256 × 144)'], [384, 'Sharp (384 × 216)'], [512, 'Sharpest (512 × 288)']].map(([w, t]) => `<option value="${w}" ${w === (s.timelapse_width || 256) ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <span class="muted" id="s-tlsec-info"></span></div>
+      <div class="hint">The pictures you see while dragging along a timeline. They're kept as the camera records (from what motion detection already looks at), so more and sharper pictures cost little — mainly some disk space for the previews. Footage from before a change keeps its pictures.</div></div>
   </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>
   <div class="card"><h2>Where each camera saves</h2>
     <table><thead><tr><th>Camera</th><th>Folder</th><th class="hide-sm">Stored</th><th></th></tr></thead><tbody>
@@ -5323,14 +5324,19 @@ async function renderStorage(body) {
     </tbody></table>
     <div class="hint">Changing a folder can move the camera's existing recordings too. Moving to another drive copies the files, which can take a while; the camera pauses recording during the move.</div></div>`;
   $('s-dir').oninput = () => $('s-move-row').hidden = val('s-dir').trim() === s.dir;
-  const tlInfo = () => { const n = Math.min(120, Math.max(1, +val('s-tlsec') || 10)); $('s-tlsec-info').textContent = `— ${Math.ceil(300 / n)} pictures per 5 minutes of video`; };
-  $('s-tlsec').oninput = tlInfo; tlInfo();
+  const tlInfo = () => {
+    const n = +val('s-tlsec') || 10, w = +val('s-tlw') || 256;
+    // About 4 KB a picture at 256 wide, growing with the area.
+    const perDay = 86400 / n * 4000 * (w / 256) ** 2;
+    $('s-tlsec-info').textContent = `${Math.ceil(300 / n)} pictures per 5 minutes · about ${fmtBytes(perDay)} a day per camera`;
+  };
+  $('s-tlsec').onchange = $('s-tlw').onchange = tlInfo; tlInfo();
   $('s-browse').onclick = async () => { const p = await pickFolder(val('s-dir'), 'Default recordings folder'); if (p) { $('s-dir').value = p; $('s-dir').oninput(); } };
   $('f-storage').onsubmit = async (e) => {
     e.preventDefault();
     const moving = !$('s-move-row').hidden && chk('s-move');
     if (moving) toast('Saving and moving recordings… this can take a while for large folders.');
-    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), prebuild_timelapse: chk('s-tl'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10))}});
+    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10)), timelapse_width: +val('s-tlw') || 256}});
     renderStorage(body);
   };
   const changeCam = async (id, dir) => {

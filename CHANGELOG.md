@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.44 — November 2026
+- **Time-lapse quality settings** (Settings → Recording & storage): choose how often a picture is kept (every 2 s for the smoothest scrubbing, up to every 60 s) and how sharp they are — Standard (256 × 144), Sharp (384 × 216) or Sharpest (512 × 288). Since the pictures come from what motion detection already looks at, more and sharper pictures cost little but disk space (shown as you choose). Changes apply straight away, without restarting the cameras.
+- The old "Prepare time-lapse previews automatically" option is gone: it's always done now (it's cheap).
+- **Alerts open faster**: the alert list no longer reads the details of every recording file on every camera (or of each alert's files) each time it loads, and folder listings are reused for a few seconds — a big difference with weeks of recordings, on Windows especially.
+
 ## 0.6.43 — November 2026
 - **Time-lapse made as it's recorded**: motion detection already looks at every camera's stream 2 several times a second; it now keeps one small picture every time-lapse interval, and a recording's time-lapse is put together from those — the recording isn't read and decoded a second time. Much less work for the computer, and time-lapse for new footage is ready straight away. (Footage from before this version, or from a camera without motion detection, is still done the old way.)
 

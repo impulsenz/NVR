@@ -2060,7 +2060,6 @@ async fn ensure_sprite(
         .and_then(|m| m.modified())
         .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(120));
     if growing
-        && m.config().storage.prebuild_timelapse
         && let Some(i) = load()
     {
         return Ok((prefix, i));
@@ -2236,7 +2235,7 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
     loop {
         let mut built = 0usize;
         let force = PREBUILD_FORCE.swap(false, std::sync::atomic::Ordering::SeqCst);
-        if force || m.config().storage.prebuild_timelapse {
+        {
             let now = Local::now();
             let day_ago = now - chrono::Duration::hours(24);
             // Not again too soon after failing: 5 minutes, then longer each
@@ -2295,9 +2294,6 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                 j.total(list.len() as u64);
                 for t in list {
                     let (c, kind, name, start, end) = &t;
-                    if !force && !m.config().storage.prebuild_timelapse {
-                        break;
-                    }
                     j.waiting();
                     if part == 0 {
                         // Room to spare first, but never held up for long: the

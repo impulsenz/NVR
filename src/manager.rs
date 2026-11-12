@@ -34,8 +34,6 @@ pub struct RuntimeEnv {
     pub live: LiveConfig,
     pub hardware: HardwareConfig,
     pub storage_dir: PathBuf,
-    /// Seconds between time-lapse pictures.
-    pub timelapse_seconds: u32,
 }
 
 impl RuntimeEnv {
@@ -46,7 +44,6 @@ impl RuntimeEnv {
             live: cfg.live.clone(),
             hardware: cfg.hardware.clone(),
             storage_dir: cfg.storage.dir.clone(),
-            timelapse_seconds: cfg.storage.timelapse_seconds,
         }
     }
 }
@@ -387,6 +384,7 @@ impl Manager {
 
     pub fn new(cfg_path: PathBuf, data_dir: PathBuf, config: Config) -> Arc<Self> {
         crate::infer::set_use_gpu(config.ai.device != "cpu");
+        crate::picturelog::configure(&config.storage);
         crate::load::set_balance(config.hardware.balance);
         let _ = std::fs::create_dir_all(data_dir.join("tmp"));
         let ai = Arc::new(AiHandle::new(config.ai.clone(), &data_dir));
@@ -471,6 +469,7 @@ impl Manager {
     fn commit(&self, new: Config) -> Result<()> {
         new.validate()?;
         new.save(&self.cfg_path)?;
+        crate::picturelog::configure(&new.storage);
         *self.config.write().unwrap() = new;
         Ok(())
     }

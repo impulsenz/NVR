@@ -14,8 +14,28 @@ use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Size of a time-lapse picture (as the pages made from files).
-pub const TILE: (u32, u32) = (256, 144);
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// The time-lapse settings (Settings → Recording & storage), read by each
+/// camera's motion detection as it goes: changed without restarting them.
+static SECONDS: AtomicU32 = AtomicU32::new(10);
+static WIDTH: AtomicU32 = AtomicU32::new(256);
+
+pub fn configure(s: &crate::config::StorageConfig) {
+    SECONDS.store(s.timelapse_seconds.max(1), Ordering::Relaxed);
+    WIDTH.store(s.timelapse_width, Ordering::Relaxed);
+}
+
+/// Seconds between time-lapse pictures.
+pub fn seconds() -> u32 {
+    SECONDS.load(Ordering::Relaxed).max(1)
+}
+
+/// Size of a time-lapse picture (16:9; bigger is sharper).
+pub fn tile() -> (u32, u32) {
+    let w = WIDTH.load(Ordering::Relaxed).clamp(128, 1024) & !1;
+    (w, (w * 9 / 16) & !1)
+}
 /// Pictures are kept this long (a recording's pages are made well before).
 const KEEP: Duration = Duration::from_secs(6 * 3600);
 
@@ -25,7 +45,8 @@ pub fn dir(camera_dir: &Path) -> PathBuf {
 
 /// Keep a picture taken at `t`.
 pub fn save(camera_dir: &Path, t: DateTime<Local>, f: &Frame) -> Result<()> {
-    let small = crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, TILE.0, TILE.1);
+    let (tw, th) = tile();
+    let small = crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, tw, th);
     // One flat colour (a frame that couldn't be decoded): not kept (the
     // pages use the picture before it).
     if crate::ffmpeg::flat_picture(&small) {
@@ -33,7 +54,7 @@ pub fn save(camera_dir: &Path, t: DateTime<Local>, f: &Frame) -> Result<()> {
     }
     let d = dir(camera_dir);
     std::fs::create_dir_all(&d)?;
-    let jpg = crate::imgutil::encode_jpeg(&small, TILE.0, TILE.1, 75)?;
+    let jpg = crate::imgutil::encode_jpeg(&small, tw, th, 80)?;
     let p = d.join(format!("{}.jpg", t.timestamp_millis()));
     let tmp = p.with_extension("tmp");
     std::fs::write(&tmp, jpg)?;
@@ -115,28 +136,29 @@ pub fn sprite(
     prefix: &Path,
 ) -> Option<SpriteInfo> {
     let interval = interval.max(1.0);
+    let t = tile();
     let kept = list(camera_dir);
     let pics = pick(&kept, start.timestamp_millis(), end.timestamp_millis(), interval)?;
     let tiles: Vec<Vec<u8>> = pics
         .iter()
         .map(|p| {
             let f = crate::imgutil::decode_jpeg(&std::fs::read(p).ok()?).ok()?;
-            Some(if (f.width, f.height) == TILE {
+            Some(if (f.width, f.height) == t {
                 (*f.rgb).clone()
             } else {
-                crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, TILE.0, TILE.1)
+                crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, t.0, t.1)
             })
         })
         .collect::<Option<_>>()?;
-    let (count, pages) = crate::ffmpeg::write_sprite_pages(prefix, tiles, TILE).ok()?;
+    let (count, pages) = crate::ffmpeg::write_sprite_pages(prefix, tiles, t).ok()?;
     Some(SpriteInfo {
         interval,
         count,
         columns: crate::ffmpeg::SPRITE_COLUMNS,
         per_page: crate::ffmpeg::SPRITE_PER_PAGE,
         pages,
-        tile_width: TILE.0,
-        tile_height: TILE.1,
+        tile_width: t.0,
+        tile_height: t.1,
         aspect,
         duration: (end - start).num_milliseconds() as f64 / 1000.0,
         version: Local::now().timestamp() as u64,
