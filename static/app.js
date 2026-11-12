@@ -529,7 +529,7 @@ function updateOverlay(surface, c, q) {
 // ======================================================================
 const PAGES = ['live', 'recordings', 'system', 'settings'];
 // A notification link: #alerts?open=<camera>~<alert id> opens that alert.
-let openAlertId = null;
+let openAlertId = null, lastNavPage = null;
 function route() {
   const [h, q] = (location.hash.slice(1) || 'live').split('?');
   const want = q && new URLSearchParams(q).get('open');
@@ -541,6 +541,9 @@ function route() {
   const p = p0 === 'alerts' ? 'recordings' : p0;
   page = PAGES.includes(p) ? p : 'live';
   const navPage = p0 === 'alerts' ? 'alerts' : page;
+  // Coming back to Alerts from anywhere else: the filters start afresh.
+  if (navPage === 'alerts' && lastNavPage && lastNavPage !== 'alerts') resetAlertFilters();
+  lastNavPage = navPage;
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
@@ -2084,6 +2087,16 @@ const DEFAULT_TYPES = ['person', 'car', 'truck', 'motorcycle', 'package', 'face'
 const rec = {mode: 'list', cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '',
   types: new Set(store.get('alert-types', DEFAULT_TYPES)), items: [], who: ''};
 const saveTypes = () => store.set('alert-types', [...rec.types]);
+// The Alerts filters as they start: today, every camera, the usual kinds,
+// new and viewed, anyone.
+function resetAlertFilters() {
+  rec.cameras = new Set(); rec.prevCameras = null;
+  rec.from = startOfDay(new Date()); rec.to = endOfDay(new Date()); rec.todFrom = ''; rec.todTo = '';
+  rec.types = new Set(DEFAULT_TYPES); saveTypes();
+  rec.seen = ''; rec.who = '';
+  if ($('f-seen')) $('f-seen').value = '';
+  if ($('f-who')) $('f-who').value = '';
+}
 let recPlayer = null;
 
 function showRecordings(camId, mode) {
