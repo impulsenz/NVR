@@ -1139,3 +1139,19 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .share-app { display: flex; align-items: center; gap: 8px; justify-content: flex-start; padding: 8px 10px; }
 .share-app .si { font-size: 17px; }
 .share-more { margin-top: 10px; gap: 6px; flex-wrap: wrap; }
+/* Live view as real video, over the picture it replaces */
+.surface > video.live-v { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; background: transparent; pointer-events: none; opacity: 0; transition: opacity .25s; }
+.surface.mse > video.live-v { opacity: 1; }
+.surface.mse > img { visibility: hidden; }
+#focus-surface.pb > video.live-v { display: none; }
+#focus-surface.pb.mse > img { visibility: visible; }
+/* Home / Away / Night */
+.mode-menu .popover { right: 0; left: auto; min-width: 280px; display: flex; flex-direction: column; gap: 4px; padding: 8px; }
+.mode-menu .popover button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; }
+.mode-menu .popover button small { color: var(--muted); font-weight: 400; white-space: normal; }
+.mode-menu .popover button.on { border-color: var(--accent); background: rgba(59,130,246,.14); }
+#mode-btn.mode-home { color: var(--muted); }
+table.modes { width: auto; border-collapse: collapse; }
+table.modes th, table.modes td { padding: 6px 14px; text-align: center; }
+table.modes td:first-child, table.modes th:first-child { text-align: left; }
+table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }

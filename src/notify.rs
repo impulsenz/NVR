@@ -51,6 +51,81 @@ pub struct Message<'a> {
     pub priority: u8,
     pub click: Option<String>,
     pub picture: Option<Vec<u8>>,
+    /// ntfy action buttons ("http, Snooze 1 hour, https://…, method=POST; …").
+    pub actions: Option<String>,
+}
+
+// ---------- snoozing a camera's notifications ----------
+
+static SNOOZE: std::sync::Mutex<Option<HashMap<String, DateTime<Local>>>> = std::sync::Mutex::new(None);
+
+/// Until when this camera's notifications are snoozed.
+pub fn snoozed_until(camera: &str) -> Option<DateTime<Local>> {
+    let s = SNOOZE.lock().unwrap();
+    s.as_ref()?.get(camera).copied().filter(|t| *t > Local::now())
+}
+
+/// Snooze a camera's notifications for some minutes (0 = notify again now).
+pub fn snooze(camera: &str, minutes: i64) {
+    let mut s = SNOOZE.lock().unwrap();
+    let m = s.get_or_insert_with(HashMap::new);
+    if minutes <= 0 {
+        m.remove(camera);
+    } else {
+        m.insert(camera.to_string(), Local::now() + chrono::Duration::minutes(minutes));
+    }
+}
+
+/// Minutes from now until tomorrow morning (07:00).
+pub fn until_morning() -> i64 {
+    let now = Local::now();
+    let t = (now + chrono::Duration::days(1)).date_naive().and_hms_opt(7, 0, 0).unwrap();
+    let t = t.and_local_timezone(Local).single().unwrap_or(now + chrono::Duration::hours(12));
+    ((t - now).num_minutes()).max(1)
+}
+
+/// The key that signs snooze links in notifications (made once, kept in
+/// GAZE's data folder): a tap on the phone works without signing in, and
+/// nobody can make such a link for another camera or time.
+fn key(data_dir: &std::path::Path) -> Vec<u8> {
+    let p = data_dir.join("notify.key");
+    if let Ok(k) = std::fs::read(&p)
+        && k.len() >= 32
+    {
+        return k;
+    }
+    use rand_core::RngCore;
+    let mut k = vec![0u8; 32];
+    rand_core::OsRng.fill_bytes(&mut k);
+    let _ = std::fs::write(&p, &k);
+    k
+}
+
+fn hmac(key: &[u8], msg: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut k = [0u8; 64];
+    k[..key.len().min(64)].copy_from_slice(&key[..key.len().min(64)]);
+    let (mut ipad, mut opad) = ([0x36u8; 64], [0x5cu8; 64]);
+    for i in 0..64 {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let inner = Sha256::new().chain_update(ipad).chain_update(msg.as_bytes()).finalize();
+    let outer = Sha256::new().chain_update(opad).chain_update(inner).finalize();
+    outer.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A signed link that snoozes `camera` for `minutes` (valid for 2 days).
+pub fn snooze_link(data_dir: &std::path::Path, base: &str, camera: &str, minutes: i64) -> String {
+    let exp = (Local::now() + chrono::Duration::days(2)).timestamp();
+    let sig = hmac(&key(data_dir), &format!("{camera}|{minutes}|{exp}"));
+    format!("{base}/api/snooze?c={}&m={minutes}&e={exp}&s={sig}", crate::library::enc(camera))
+}
+
+/// Check a snooze link's signature.
+pub fn snooze_ok(data_dir: &std::path::Path, camera: &str, minutes: i64, exp: i64, sig: &str) -> bool {
+    let want = hmac(&key(data_dir), &format!("{camera}|{minutes}|{exp}"));
+    exp > Local::now().timestamp() && want.len() == sig.len() && want.bytes().zip(sig.bytes()).fold(0, |a, (x, y)| a | (x ^ y)) == 0
 }
 
 /// Send one notification.
@@ -73,6 +148,9 @@ pub async fn send(cfg: &NotifyConfig, m: Message<'_>) -> Result<()> {
         .header("Priority", m.priority.to_string());
     if let Some(c) = &m.click {
         req = req.header("Click", header(c));
+    }
+    if let Some(a) = &m.actions {
+        req = req.header("Actions", header(a));
     }
     if !cfg.token.trim().is_empty() {
         req = req.header("Authorization", format!("Bearer {}", cfg.token.trim()));
@@ -188,15 +266,19 @@ fn tags(e: &Event, sus: bool) -> &'static str {
 
 /// Where tapping the notification goes: that alert in GAZE. Without an
 /// address in the settings, this computer's address on the home network.
-fn link(cfg: &NotifyConfig, listen: &str, e: &Event) -> Option<String> {
-    let base = match cfg.link.trim().trim_end_matches('/') {
+/// The address the phone opens GAZE at.
+fn base(cfg: &NotifyConfig, listen: &str) -> Option<String> {
+    Some(match cfg.link.trim().trim_end_matches('/') {
         "" => {
             let port = listen.rsplit(':').next().unwrap_or("8080");
             format!("http://{}:{port}", lan_ip()?)
         }
         b => b.to_string(),
-    };
-    Some(format!("{base}/#alerts?open={}~{}", e.camera, e.id))
+    })
+}
+
+fn link(cfg: &NotifyConfig, listen: &str, e: &Event) -> Option<String> {
+    Some(format!("{}/#alerts?open={}~{}", base(cfg, listen)?, e.camera, e.id))
 }
 
 /// This computer's address on the local network.
@@ -309,14 +391,26 @@ impl Notifier {
         let cfg = mgr.config();
         let n = &cfg.notify;
         let now = Local::now();
+        // Home / Away / Night.
+        let mode = cfg.modes.effective(is_night(n, now)).to_string();
         for rt in mgr.cameras() {
             if !n.cameras.is_empty() && !n.cameras.contains(&rt.cfg.id) {
+                continue;
+            }
+            if !cfg.modes.notifies(&mode, &rt.cfg.id) || snoozed_until(&rt.cfg.id).is_some() {
+                // Not wanted in this mode: these alerts are never sent later.
+                for mut e in rt.events.between(now - chrono::Duration::minutes(15), now) {
+                    if e.notified != DONE {
+                        e.notified = DONE;
+                        rt.events.save(e);
+                    }
+                }
                 continue;
             }
             for mut e in rt.events.between(now - chrono::Duration::minutes(15), now) {
                 // Only what the full-quality check didn't turn down.
                 if e.notified == DONE
-                    || !e.labels.iter().any(|l| n.objects.contains(&l.label) && l.hd != Some(false))
+                    || !e.labels.iter().any(|l| (n.objects.contains(&l.label) || l.label == "doorbell") && l.hd != Some(false))
                 {
                     continue;
                 }
@@ -355,6 +449,11 @@ impl Notifier {
                         priority: if sus.is_some() { 4 } else { 3 },
                         click: link(n, &cfg.server.listen, &e),
                         picture: alert_picture(&rt, &e).or(Some(pic)),
+                        // Snooze this camera straight from the notification.
+                        actions: base(n, &cfg.server.listen).map(|b| {
+                            let l = |m| snooze_link(&mgr.data_dir, &b, &rt.cfg.id, m);
+                            format!("http, Snooze 1 hour, {}, method=POST, clear=true; http, Snooze until tomorrow, {}, method=POST, clear=true", l(60), l(until_morning()))
+                        }),
                     };
                     if self.report(send(n, msg).await) {
                         info!("[{}] notification sent: {}", rt.cfg.name, what(&e));
@@ -427,6 +526,7 @@ impl Notifier {
                     priority: if sus.is_some() { 5 } else { 2 },
                     click: link(n, &cfg.server.listen, &e),
                     picture: alert_picture(&rt, &e),
+                    actions: None,
                 };
                 if self.report(send(n, msg).await) {
                     self.last.insert(rt.cfg.id.clone(), now);
@@ -472,6 +572,25 @@ pub async fn run(mgr: Arc<Manager>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snooze_links_are_signed() {
+        let dir = std::env::temp_dir().join(format!("nvr-sn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let l = snooze_link(&dir, "http://x", "front", 60);
+        let q: HashMap<&str, &str> = l.split_once('?').unwrap().1.split('&').filter_map(|kv| kv.split_once('=')).collect();
+        let (e, s) = (q["e"].parse::<i64>().unwrap(), q["s"]);
+        assert!(snooze_ok(&dir, "front", 60, e, s));
+        assert!(!snooze_ok(&dir, "garage", 60, e, s)); // another camera
+        assert!(!snooze_ok(&dir, "front", 6000, e, s)); // longer
+        assert!(!snooze_ok(&dir, "front", 60, e + 99999, s)); // later expiry
+        assert!(!snooze_ok(&dir, "front", 60, Local::now().timestamp() - 5, &hmac(&key(&dir), &format!("front|60|{}", Local::now().timestamp() - 5)))); // expired
+        snooze("front", 30);
+        assert!(snoozed_until("front").is_some());
+        snooze("front", 0);
+        assert!(snoozed_until("front").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn night_hours_wrap_midnight() {

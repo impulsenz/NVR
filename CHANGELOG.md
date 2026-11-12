@@ -1,5 +1,17 @@
 # What's new in GAZE
 
+## 0.6.52 — November 2026
+- **Smooth live video**: live pictures are now the camera's own video, played by your browser at the camera's full frame rate with half a second of buffer to smooth out Wi-Fi hiccups — much smoother (Tapo cameras especially) and far less work for the computer. The old picture stream is still used as the first picture, for data saver, and for browsers that can't play the camera's format. Settings → Live view & display → Live pictures switches it per browser.
+- **Secure address (https)**: GAZE also answers on https (port 8443). It makes its own certificate (browsers warn once), or gets a trusted one from Tailscale with one button — trusted everywhere, renewed by itself, and the easy way in from away from home. Settings → System.
+- **Health warnings**: a phone notification when a camera is offline for more than 2 minutes (and when it's back), when a camera stops recording, and when the recordings drive is nearly full. On by default (Settings → Notifications).
+- **Home, Away and Night**: a mode button at the top of every page, like an alarm system. Each mode chooses which cameras send phone notifications — e.g. none at Home, everything when Away. Night can come on by itself at night while you're Home. Recording and alerts carry on in every mode.
+- **Keep alerts longer than recordings**: Settings → Recording & storage → Keep alerts for. An alert's clip, picture and the stretch of 24/7 recording it plays from are kept that long; when space runs out, ordinary footage goes first.
+- **Install GAZE as an app**: on a secure address, GAZE can be installed on phones and computers (👤 menu → Install GAZE as an app, or Add to Home Screen on iPhone); it opens full screen like an app and shows a friendly message when GAZE can't be reached.
+- **Home Assistant (MQTT)**: Settings → Smart home. Every camera appears in Home Assistant by itself: motion and each object as sensors, online status, the last alert picture, an alert event, and a Home / Away / Night switch.
+- **Webhooks**: each new alert can be sent as JSON to IFTTT, Node-RED, Zapier, a smart plug or your own script — limited to some cameras and kinds of alert, with the picture if wanted.
+- **The camera's own detection**: camera → AI → "Use what the camera itself detects". Person, vehicle, line-crossing, tampering and doorbell-press events from the camera (ONVIF) become alerts in GAZE; a doorbell press always notifies.
+- **Snooze**: alert notifications have "Snooze 1 hour" and "Snooze until tomorrow" buttons, and the camera view has a 🔕 menu — no notifications from that camera for a while; it still records and keeps alerts.
+
 ## 0.6.51 — November 2026
 - **Share alerts**: a **⤴ Share** button on every alert sends it to someone, ready to read on its own: the alert picture with its boxes and a caption (what, which camera, when), and a short message with what was seen.
   - **Share picture… / Share video…** opens your phone's or computer's own share menu — Messenger, WhatsApp, Facebook, Instagram, email, Teams or any other app you have — with the picture or the alert's video attached. (Browsers only offer this on a secure https address, or when GAZE is opened on the computer it runs on.)

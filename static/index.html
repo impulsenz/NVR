@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>GAZE</title>
 <link rel="icon" type="image/png" href="favicon.png">
-<link rel="apple-touch-icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GAZE">
 <meta name="theme-color" content="#14161c">
 <link rel="stylesheet" href="app.css">
 </head>
@@ -23,6 +27,10 @@
   <span id="bw" class="bw"></span>
   <a id="dl-chip" class="dl-chip admin-only" href="#settings/tasks" hidden></a>
   <span id="clock"></span>
+  <div class="dropdown mode-menu" id="mode-menu" hidden>
+    <button type="button" id="mode-btn" class="small" title="Home / Away / Night: which cameras send phone notifications"><span id="mode-ic">🚶</span> <span class="hide-sm" id="mode-name">Away</span></button>
+    <div class="popover" id="mode-pop" hidden></div>
+  </div>
   <button type="button" id="app-fs" class="small" title="Full screen (any page)"><i class="ni">⛶</i><span class="fs-label"> Full screen</span></button>
   <button type="button" id="wipe-btn" class="small admin-only danger" title="Delete all saved footage (recordings, alerts and clips) — for testing">🗑 <span class="hide-sm">Delete footage</span></button>
   <button type="button" id="upd-btn" class="small admin-only" title="Check for updates"><span class="upd-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 3v5h5"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 21v-5h-5"/></svg><i class="upd-ring"></i></span> <span class="hide-sm upd-label">Updates</span></button>
@@ -36,6 +44,7 @@
       </div>
       <label class="small muted" style="display:block;margin:6px 0 2px">Data saver on this device</label>
       <select id="um-ds"><option value="auto">Automatic (on for phones)</option><option value="on">Always on</option><option value="off">Off</option></select>
+      <button type="button" id="um-install" hidden title="Add GAZE to this device's home screen or Start menu, like an app">📲 Install GAZE as an app</button>
       <button type="button" id="um-pass">Change password</button>
       <button type="button" id="um-out">Sign out</button>
     </div>
@@ -123,6 +132,7 @@
         <div>
           <div class="card">
             <div class="row" style="margin-bottom:6px"><h2 id="focus-title" style="margin:0;flex:1;text-transform:none;letter-spacing:0;font-size:16px;color:var(--text, inherit)">Camera</h2>
+              <select id="focus-snooze" class="small op-only" title="Pause this camera's phone notifications for a while (it still records and keeps alerts)"></select>
               <button id="focus-edit" class="small admin-only" title="Change this camera's settings">✎ Edit</button></div>
             <dl id="focus-info"></dl>
             <div class="err" id="focus-err" style="margin-top:8px" hidden></div>
@@ -260,6 +270,7 @@
         <a href="#settings/known" data-s="known">People &amp; vehicles</a>
         <a href="#settings/hardware" data-s="hardware">GPU acceleration</a>
         <a href="#settings/notify" data-s="notify">Notifications</a>
+        <a href="#settings/smarthome" data-s="smarthome">Smart home</a>
         <a href="#settings/tasks" data-s="tasks">Tasks</a>
         <a href="#settings/cloud" data-s="cloud">Backup (cloud / NAS)</a>
         <a href="#settings/backup" data-s="backup">Export / import setup</a>

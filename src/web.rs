@@ -109,6 +109,12 @@ pub fn router(mgr: Arc<Manager>) -> Router {
                 )
             }),
         )
+        // Installing GAZE as an app (phones, Windows, Mac).
+        .route("/manifest.webmanifest", get(|| async { ([(header::CONTENT_TYPE, "application/manifest+json"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/manifest.webmanifest")) }))
+        .route("/sw.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/sw.js")) }))
+        .route("/icon-192.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-192.png").as_slice()) }))
+        .route("/icon-512.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-512.png").as_slice()) }))
+        .route("/icon-maskable.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-maskable.png").as_slice()) }))
         .route("/api/auth/state", get(auth_state))
         .route("/api/auth/setup", post(auth_setup))
         .route("/api/auth/login", post(auth_login))
@@ -170,6 +176,13 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/jobs", get(jobs_list))
         .route("/api/jobs/pause", post(jobs_pause))
         .route("/api/where", get(where_work_runs))
+        .route("/api/https", get(https_status))
+        .route("/api/mode", post(set_mode))
+        .route("/api/snooze", get(snooze_link).post(snooze_link))
+        .route("/api/cameras/{id}/snooze", post(snooze_camera))
+        .route("/api/webhooks/test", post(webhook_test))
+        .route("/api/modes", put(put_modes))
+        .route("/api/https/tailscale", post(https_tailscale))
         .route("/api/update", get(update_status))
         .route("/api/update/check", post(update_check))
         .route("/api/update/install", post(update_install))
@@ -224,6 +237,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/live/{id}/stream.mjpeg", get(live_mjpeg))
         .route("/live/{id}/audio.mp3", get(live_audio))
         .route("/live/{id}/frame.jpg", get(live_frame))
+        .route("/live/{id}/video", get(live_video_ws))
         .route("/snapshot/{id}", get(snapshot))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(mgr.clone(), auth))
@@ -304,6 +318,8 @@ async fn status(
                 "has_sub": c.cfg.has_sub(),
                 // What it alerts on (the Alerts filter offers these).
                 "watch": cur.detect.objects,
+                "snoozed_until": crate::notify::snoozed_until(&c.cfg.id),
+                "camera_events": crate::onvif_events::status(&c.cfg.id),
                 "alerts_on": alert_kinds(cur, &cfg.ai),
                 "talk": c.cfg.talk,
                 "talk_chime": c.cfg.talk_chime,
@@ -335,6 +351,7 @@ async fn status(
         "display": cfg.display,
         "live": cfg.live,
         // The user's own layout for this kind of device (else the shared one).
+        "mode": { "current": cfg.modes.current, "effective": cfg.modes.effective(crate::notify::is_night(&cfg.notify, Local::now())), "modes": cfg.modes },
         "dashboard": user.as_ref().and_then(|u| m.users.layout(&u.0.0.username, device_kind(&dq.device))).unwrap_or(cfg.dashboard.clone()),
         "me": user.as_ref().map(|u| crate::users::Me { username: u.0.0.username.clone(), role: u.0.0.role, cameras: u.0.0.cameras.clone() }),
         "cameras": cameras,
@@ -457,12 +474,16 @@ async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_token = !cfg.notify.token.is_empty();
     let has_cloud_password = !cfg.cloud.password.is_empty();
+    let has_mqtt_password = !cfg.mqtt.password.is_empty();
+    cfg.mqtt.password.clear();
     cfg.server.password.clear();
     cfg.notify.token.clear();
     cfg.cloud.password.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["notify"]["has_token"] = json!(has_token);
     v["cloud"]["has_password"] = json!(has_cloud_password);
+    v["mqtt"]["has_password"] = json!(has_mqtt_password);
+    v["mqtt"]["status"] = json!(crate::mqtt::status());
     v.as_object_mut().unwrap().remove("cameras");
     Json(v).into_response()
 }
@@ -2518,6 +2539,7 @@ async fn notify_test(State(m): App, Json(mut n): Json<crate::config::NotifyConfi
         priority: 3,
         click: (!n.link.trim().is_empty()).then(|| n.link.trim().to_string()),
         picture,
+        actions: None,
     };
     match crate::notify::send(&n, msg).await {
         Ok(()) => Json(json!({"ok": true, "message": "Sent — check your phone"})).into_response(),
@@ -3152,6 +3174,181 @@ async fn live_ws(
     ws.on_upgrade(move |socket| live_socket(socket, m, vis))
 }
 
+/// Send a made-up alert to a webhook, to try it.
+async fn webhook_test(State(m): App, Json(h): Json<crate::config::Webhook>) -> Response {
+    let cam = m.config().cameras.first().map(|c| (c.id.clone(), c.name.clone())).unwrap_or_default();
+    let body = json!({"event": "test", "id": "test", "camera": cam.0, "camera_name": cam.1, "start": Local::now(), "end": Local::now(),
+        "labels": [{"label": "person", "score": 0.9}], "what": "person", "notes": ["A test from GAZE"], "plates": [], "faces": [], "mode": m.config().modes.current});
+    match crate::hooks::send(&h, &body).await {
+        Ok(()) => Json(json!({"ok": true, "message": "Sent — the address accepted it"})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct SnoozeLink {
+    c: String,
+    m: i64,
+    e: i64,
+    s: String,
+}
+
+/// A snooze button in a notification: signed, so it works without signing in.
+async fn snooze_link(State(m): App, Query(q): Query<SnoozeLink>) -> Response {
+    if !crate::notify::snooze_ok(&m.data_dir, &q.c, q.m, q.e, &q.s) || m.camera(&q.c).is_none() {
+        return err(StatusCode::FORBIDDEN, "this snooze link isn't valid (or is more than 2 days old)");
+    }
+    crate::notify::snooze(&q.c, q.m);
+    let name = m.camera(&q.c).map(|c| c.cfg.name.clone()).unwrap_or_default();
+    tracing::info!("[{name}] notifications snoozed for {} min (from a notification)", q.m);
+    Html(format!("<!doctype html><meta name=viewport content=\"width=device-width\"><body style=\"font:16px system-ui;background:#0f1218;color:#e6e9f0;text-align:center;padding:40px\"><h2>🔕 {} snoozed</h2><p>No notifications from this camera until {}. It still records and keeps alerts.</p>",
+        html_escape(&name), crate::notify::snoozed_until(&q.c).map(|t| t.format("%H:%M on %a %-d %b").to_string()).unwrap_or_default())).into_response()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+#[derive(Deserialize)]
+struct SnoozeReq {
+    /// 0 = notify again now; -1 = until tomorrow morning.
+    minutes: i64,
+}
+
+async fn snooze_camera(State(m): App, Path(id): Path<String>, Json(r): Json<SnoozeReq>) -> Response {
+    let c = camera!(m, id);
+    let minutes = if r.minutes < 0 { crate::notify::until_morning() } else { r.minutes.min(7 * 24 * 60) };
+    crate::notify::snooze(&c.cfg.id, minutes);
+    Json(json!({"ok": true, "until": crate::notify::snoozed_until(&c.cfg.id)})).into_response()
+}
+
+#[derive(Deserialize)]
+struct ModeReq {
+    mode: String,
+}
+
+/// Switch Home / Away / Night.
+async fn set_mode(State(m): App, user: Option<axum::Extension<CurrentUser>>, Json(r): Json<ModeReq>) -> Response {
+    match m.set_mode(&r.mode).await {
+        Ok(()) => {
+            let who = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
+            tracing::info!("mode: {} ({})", r.mode, if who.is_empty() { "API" } else { &who });
+            Json(json!({ "ok": true, "mode": r.mode })).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn put_modes(State(m): App, Json(c): Json<crate::config::ModesConfig>) -> Response {
+    match m.update_modes(c).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// The secure address: on or not, and with which certificate.
+async fn https_status(State(m): App) -> Response {
+    let s = crate::tls::status();
+    Json(json!({ "status": s, "port": m.config().server.https_port, "cert": m.config().server.https_cert })).into_response()
+}
+
+/// Get a trusted certificate from Tailscale and use it (after a restart).
+async fn https_tailscale(State(m): App) -> Response {
+    match crate::tls::from_tailscale(&m.data_dir).await {
+        Ok((cert, key, name)) => {
+            let sv = m.config().server;
+            let up = SettingsUpdate {
+                server: Some(crate::manager::ServerUpdate {
+                    name: sv.name,
+                    listen: sv.listen,
+                    ffmpeg_path: sv.ffmpeg_path,
+                    https_port: None,
+                    https_cert: Some(cert),
+                    https_key: Some(key),
+                }),
+                ..Default::default()
+            };
+            match m.update_settings(up).await {
+                Ok(_) => Json(json!({ "ok": true, "name": name, "message": format!("Certificate for {name} saved. Restart GAZE to use it, then open https://{name}:{}/", m.config().server.https_port) })).into_response(),
+                Err(e) => bad(e),
+            }
+        }
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct LiveVideoQuery {
+    #[serde(default)]
+    q: Option<Quality>,
+}
+
+/// Live view as real video: the camera's own stream, repackaged (not
+/// re-encoded) into small MP4 fragments the browser plays with Media Source
+/// Extensions. Smooth at the camera's full frame rate, decoded by the
+/// viewer's own graphics hardware, and almost no work for this computer.
+/// The first message is the MP4 header; the browser reads the codec from
+/// it. A text message {"error": ..} means: use the picture stream instead.
+async fn live_video_ws(
+    State(m): App,
+    Path(id): Path<String>,
+    Query(lq): Query<LiveVideoQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let c = camera!(m, id);
+    let main = !matches!(lq.q, Some(Quality::Sub)) || !c.cfg.has_sub();
+    let relay = if main { c.relay_main.clone() } else { c.relay_sub.clone() };
+    let ffmpeg_path = m.config().server.ffmpeg_path.clone();
+    let rotated = c.cfg.rotate % 360 != 0;
+    ws.on_upgrade(move |mut socket| async move {
+        // Rotation is applied while decoding: those cameras keep the picture stream.
+        if rotated {
+            let _ = socket.send(Message::Text(json!({"error": "rotated"}).to_string().into())).await;
+            return;
+        }
+        let child = crate::load::cmd(&ffmpeg_path)
+            .args(["-hide_banner", "-loglevel", "error", "-fflags", "+genpts"])
+            .args(relay.input_args())
+            .args(["-map", "0:v:0", "-c:v", "copy", "-tag:v", if relay.info().is_some_and(|i| i.codec.contains("265") || i.codec.contains("hevc")) { "hvc1" } else { "avc1" }, "-an"])
+            .args([
+                "-f", "mp4", "-movflags", "empty_moov+default_base_moof+frag_keyframe",
+                "-frag_duration", "100000", "pipe:1",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn();
+        let Ok(mut child) = child else {
+            let _ = socket.send(Message::Text(json!({"error": "ffmpeg"}).to_string().into())).await;
+            return;
+        };
+        let stop = tokio_util::sync::CancellationToken::new();
+        let _feed = crate::relay::feed(relay.subscribe(), child.stdin.take().unwrap(), stop.clone());
+        let _stop = stop.drop_guard();
+        let mut out = child.stdout.take().unwrap();
+        let mut buf = vec![0u8; 256 * 1024];
+        use tokio::io::AsyncReadExt;
+        loop {
+            tokio::select! {
+                n = out.read(&mut buf) => {
+                    let Ok(n) = n else { break };
+                    if n == 0 { break; }
+                    if socket.send(Message::Binary(bytes::Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                        break;
+                    }
+                }
+                msg = socket.recv() => {
+                    match msg {
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// Two-way audio: the browser sends 16-bit mono PCM at 8 kHz (binary
 /// messages); GAZE plays it on the camera's speaker. The first text message
 /// from the server says whether it worked: {"ok":true,"codec":".."} or
@@ -3406,6 +3603,10 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
 // ---------- users & sign-in ----------
 
 const COOKIE: &str = "gaze_session";
+/// The sign-in cookie on the secure (https) address. Browsers share
+/// cookies between ports, and a secure-only cookie would stop signing in on
+/// the plain address: the two keep their own.
+const COOKIE_SECURE: &str = "gaze_session_s";
 
 fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
@@ -3414,13 +3615,19 @@ fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|kv| kv.trim().split_once('='))
-        .find(|(k, _)| *k == COOKIE)
+        .filter(|(k, _)| *k == if secure_request(headers) { COOKIE_SECURE } else { COOKIE })
         .map(|(_, v)| v.to_string())
+        .next()
 }
 
 /// Reached over HTTPS (e.g. through `tailscale serve` or another proxy)?
+/// Came in on GAZE's own https port.
+fn secure_request(headers: &axum::http::HeaderMap) -> bool {
+    headers.contains_key("x-gaze-https")
+}
 fn https(headers: &axum::http::HeaderMap) -> bool {
-    headers
+    secure_request(headers)
+        || headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("https"))
@@ -3430,7 +3637,8 @@ fn session_cookie(token: &str, remember: bool, secure: bool) -> HeaderValue {
     let age = if remember { "; Max-Age=2592000" } else { "" };
     let sec = if secure { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(
-        "{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax{age}{sec}"
+        "{}={token}; Path=/; HttpOnly; SameSite=Lax{age}{sec}",
+        if secure { COOKIE_SECURE } else { COOKIE }
     ))
     .unwrap()
 }
@@ -3504,6 +3712,9 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/system",
         "/api/where",
         "/api/jobs/pause",
+        "/api/https",
+        "/api/modes",
+        "/api/webhooks",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"
@@ -3531,9 +3742,12 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
     {
         return true;
     }
-    // Operators: move cameras, pause recording, remove alerts/recordings.
+    // Operators: move cameras, pause recording, remove alerts/recordings,
+    // switch Home / Away / Night.
     role == Operator
         && (path.contains("/ptz/")
+            || path == "/api/mode"
+            || path.ends_with("/snooze")
             || path.ends_with("/pause")
             || path.ends_with("/resume")
             || (method == axum::http::Method::DELETE
@@ -3558,12 +3772,15 @@ fn foreign_origin(req: &Request) -> bool {
     let Some((scheme, origin_host)) = origin.split_once("://") else {
         return true;
     };
+    // HTTP/2 (https) gives the address in the request line, not a Host header.
     let host = h
         .get("x-forwarded-host")
         .or_else(|| h.get(header::HOST))
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    origin == "null" || authority(origin_host, scheme) != authority(host, scheme)
+        .map(str::to_string)
+        .or_else(|| req.uri().authority().map(|a| a.to_string()))
+        .unwrap_or_default();
+    origin == "null" || authority(origin_host, scheme) != authority(&host, scheme)
 }
 
 /// "host:port" in lower case, without the scheme's default port. The port
@@ -3610,6 +3827,12 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
             | "/logo.png"
             | "/icon.png"
             | "/favicon.png"
+            | "/manifest.webmanifest"
+            | "/api/snooze"
+            | "/sw.js"
+            | "/icon-192.png"
+            | "/icon-512.png"
+            | "/icon-maskable.png"
             | "/api/auth/state"
             | "/api/auth/login"
             | "/api/auth/setup"
@@ -3726,7 +3949,11 @@ async fn auth_logout(State(m): App, headers: axum::http::HeaderMap) -> Response 
     (
         [(
             header::SET_COOKIE,
-            HeaderValue::from_static("gaze_session=; Path=/; Max-Age=0"),
+            if secure_request(&headers) {
+                HeaderValue::from_static("gaze_session_s=; Path=/; Max-Age=0; Secure")
+            } else {
+                HeaderValue::from_static("gaze_session=; Path=/; Max-Age=0")
+            },
         )],
         Json(json!({ "ok": true })),
     )
@@ -3849,6 +4076,9 @@ mod tests {
         // Another program's page on another port of the same computer.
         assert!(foreign_origin(&req("POST", Some("http://192.168.1.5:3000"), "192.168.1.5:8080")));
         assert!(foreign_origin(&req("POST", Some("http://evil.example"), "192.168.1.5:8080")));
+        // HTTP/2: the address is in the request line.
+        let h2 = axum::http::Request::builder().method("POST").uri("https://192.168.1.5:8443/api/x").header(header::ORIGIN, "https://192.168.1.5:8443").body(Body::empty()).unwrap();
+        assert!(!foreign_origin(&h2));
         assert!(foreign_origin(&req("POST", Some("null"), "192.168.1.5:8080")));
         // Reading is fine; tools without a browser send no Origin.
         assert!(!foreign_origin(&req("GET", Some("http://evil.example"), "192.168.1.5:8080")));

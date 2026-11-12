@@ -338,6 +338,161 @@ const Live = {
 };
 document.addEventListener('visibilitychange', () => Live.send());
 
+// Installing GAZE as an app (home screen / Start menu). Browsers allow it on
+// a secure (https) address; on iPhone it's Share → Add to Home Screen.
+if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+let installPrompt = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; $('um-install').hidden = false; });
+addEventListener('appinstalled', () => { installPrompt = null; $('um-install').hidden = true; toast('GAZE is installed — open it from your home screen or Start menu'); });
+$('um-install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice.catch(() => {}); installPrompt = null; $('um-install').hidden = true; };
+
+// Home / Away / Night: which cameras send phone notifications (recording
+// and alerts carry on in every mode).
+const MODE_INFO = {home: ['🏠', 'Home', 'Only the cameras chosen for Home notify — usually none, or the outside ones.'],
+  away: ['🚶', 'Away', 'Every chosen camera notifies.'], night: ['🌙', 'Night', 'The cameras chosen for Night notify.']};
+function paintMode() {
+  const mm = $('mode-menu'); if (!status || !status.mode) return;
+  mm.hidden = false;
+  const m = status.mode, eff = m.effective, [ic, name] = MODE_INFO[eff] || MODE_INFO.away;
+  $('mode-ic').textContent = ic;
+  $('mode-name').textContent = name + (eff !== m.current ? ' (auto)' : '');
+  $('mode-btn').classList.toggle('mode-home', eff === 'home');
+  const can = me && me.role !== 'viewer';
+  $('mode-btn').disabled = !can;
+  $('mode-pop').innerHTML = Object.entries(MODE_INFO).map(([k, [i, t, d]]) => `<button type="button" data-mode="${k}" class="${k === m.current ? 'on' : ''}"><b>${i} ${t}</b><small>${d}</small></button>`).join('')
+    + (me && me.role === 'admin' ? '<a href="#settings/notify" class="small muted" style="padding:6px 10px;display:block">Choose the cameras for each mode…</a>' : '');
+  $('mode-pop').querySelectorAll('[data-mode]').forEach(b => b.onclick = async () => {
+    $('mode-pop').hidden = true;
+    try { await api('api/mode', {method: 'POST', json: {mode: b.dataset.mode}}); toast(`${MODE_INFO[b.dataset.mode][0]} ${MODE_INFO[b.dataset.mode][1]} mode`); await refreshStatus(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+$('mode-btn').onclick = (e) => { e.stopPropagation(); $('mode-pop').hidden = !$('mode-pop').hidden; };
+document.addEventListener('click', (e) => { if (!e.target.closest('#mode-menu')) $('mode-pop').hidden = true; });
+
+// Snoozing a camera's notifications (from here or the notification itself).
+function paintSnooze(c) {
+  const sel = $('focus-snooze'); if (!sel || !c) return;
+  const until = c.snoozed_until && new Date(c.snoozed_until) > new Date() ? new Date(c.snoozed_until) : null;
+  sel.innerHTML = (until ? `<option value="" selected>🔕 Snoozed until ${fmtTime(until).slice(0, 5)}</option><option value="0">🔔 Notify again now</option>` : '<option value="" selected>🔔 Notifications on</option>')
+    + [[30, '30 minutes'], [60, '1 hour'], [240, '4 hours'], [-1, 'Until tomorrow morning']].map(([m, t]) => `<option value="${m}">🔕 Snooze ${t}</option>`).join('');
+}
+
+// Live view as real video: the camera's own stream, repackaged by GAZE and
+// played by the browser (Media Source Extensions) behind a half-second
+// buffer that smooths out Wi-Fi gaps. The picture (JPEG) stream shows first
+// and stays as the fallback; while the video plays it isn't sent at all.
+const MSE = window.ManagedMediaSource || window.MediaSource;
+const liveVideoOn = () => !!MSE && !dataSaver && store.get('live-video', true) !== false;
+Live.mse = new Set();
+Live.noMse = new Set();
+class LiveVideo {
+  constructor(img, id, q) {
+    this.img = img; this.id = id; this.q = q; this.key = Live.key(id, q); this.fails = 0; this.dead = false;
+    const v = this.video = document.createElement('video');
+    v.className = 'live-v'; v.muted = true; v.playsInline = true; v.autoplay = true; v.disableRemotePlayback = true;
+    img.after(v);
+    this.open();
+  }
+  open() {
+    if (this.dead) return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = this.ws = new WebSocket(`${proto}//${location.host}${location.pathname.replace(/[^/]*$/, '')}live/${enc(this.id)}/video?q=${this.q}`);
+    ws.binaryType = 'arraybuffer';
+    this.queue = []; this.sb = null; this.head = new Uint8Array(0);
+    ws.onmessage = (e) => {
+      if (typeof e.data === 'string') { this.giveUp(); return; }
+      const b = new Uint8Array(e.data);
+      if (!this.sb) { this.head = concatBytes(this.head, b); if (!this.ms) this.setup(); return; }
+      this.queue.push(b); this.pump();
+    };
+    ws.onclose = () => { if (this.dead) return; this.stopPlaying(); if (++this.fails > 3) return this.giveUp(); setTimeout(() => this.open(), 2000 * this.fails); };
+  }
+  setup() {
+    // The codec, from the MP4 header (avcC / hvcC box).
+    const codec = mp4Codec(this.head);
+    if (!codec) { if (this.head.length > 200000) this.giveUp(); this.ms = null; return; }
+    const mime = `video/mp4; codecs="${codec}"`;
+    if (!MSE.isTypeSupported(mime)) { this.giveUp(); return; }
+    const ms = this.ms = new MSE();
+    this.video.disableRemotePlayback = true;
+    this.video.src = URL.createObjectURL(ms);
+    ms.addEventListener('sourceopen', () => {
+      try { this.sb = ms.addSourceBuffer(mime); } catch (_) { this.giveUp(); return; }
+      this.sb.addEventListener('updateend', () => this.pump());
+      this.queue.unshift(this.head); this.pump();
+    }, {once: true});
+    const v = this.video;
+    v.addEventListener('playing', () => {
+      if (this.dead || Live.mse.has(this.key)) return;
+      this.fails = 0;
+      Live.mse.add(this.key); this.img.parentElement && this.img.parentElement.classList.add('mse');
+      const m = this.img.parentElement && this.img.parentElement.querySelector(':scope > .msg'); if (m) m.hidden = true;
+      if (this.q === 'main' && this.id === focusId && typeof hideFocusLoading === 'function') hideFocusLoading();
+      updateSubscriptions();
+    });
+    // Frames shown, for the frame-rate readout.
+    if (v.requestVideoFrameCallback) {
+      const tick = () => { if (this.dead) return; const st = Live.stats.get(this.key) || {n: 0, t: performance.now(), fps: 0, last: 0};
+        st.n++; st.last = performance.now(); if (st.last - st.t > 2000) { st.fps = st.n * 1000 / (st.last - st.t); st.n = 0; st.t = st.last; }
+        Live.stats.set(this.key, st); v.requestVideoFrameCallback(tick); };
+      v.requestVideoFrameCallback(tick);
+    }
+    // Stay close to live: a little faster when behind, a jump when far behind.
+    this.timer = setInterval(() => {
+      if (!this.sb || !v.buffered.length) return;
+      const end = v.buffered.end(v.buffered.length - 1), lag = end - v.currentTime;
+      if (lag > 1.5) v.currentTime = end - 0.4;
+      v.playbackRate = lag > 0.8 ? 1.08 : 1;
+      if (v.paused) v.play().catch(() => {});
+      if (!this.sb.updating && v.currentTime - v.buffered.start(0) > 20) try { this.sb.remove(0, v.currentTime - 10); } catch (_) {}
+    }, 500);
+  }
+  pump() {
+    if (!this.sb || this.sb.updating || !this.queue.length) return;
+    // Far behind (a hidden tab): drop the backlog and start again from the next fragment.
+    if (this.queue.length > 120) this.queue.splice(0, this.queue.length - 30);
+    const b = this.queue.length > 1 ? concatBytes(...this.queue.splice(0)) : this.queue.shift();
+    try { this.sb.appendBuffer(b); } catch (e) { if (e.name === 'QuotaExceededError') { try { this.sb.remove(0, this.video.currentTime - 2); } catch (_) {} } else this.ws.close(); }
+  }
+  stopPlaying() {
+    clearInterval(this.timer); this.timer = null;
+    if (this.ms) { try { URL.revokeObjectURL(this.video.src); } catch (_) {} this.video.removeAttribute('src'); this.video.load(); }
+    this.ms = null; this.sb = null;
+    if (Live.mse.delete(this.key)) { this.img.parentElement && this.img.parentElement.classList.remove('mse'); updateSubscriptions(); }
+  }
+  giveUp() { Live.noMse.add(this.key); this.close(); }
+  close() { this.dead = true; if (this.ws) { this.ws.onclose = null; this.ws.close(); } this.stopPlaying(); this.video.remove(); }
+}
+function concatBytes(...parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+// "avc1.64001f" / "hvc1.1.6.L120.90" from an MP4 header, or null until the
+// whole sample description has arrived.
+function mp4Codec(b) {
+  const find = (tag) => { for (let i = 4; i + 4 < b.length; i++) if (b[i] === tag.charCodeAt(0) && b[i + 1] === tag.charCodeAt(1) && b[i + 2] === tag.charCodeAt(2) && b[i + 3] === tag.charCodeAt(3)) return i + 4; return -1; };
+  const hex = (n) => n.toString(16).padStart(2, '0');
+  let i = find('avcC');
+  if (i > 0 && i + 4 <= b.length) return `avc1.${hex(b[i + 1])}${hex(b[i + 2])}${hex(b[i + 3])}`;
+  i = find('hvcC');
+  if (i > 0 && i + 13 <= b.length) {
+    const p = b[i + 1], space = ['', 'A', 'B', 'C'][p >> 6], tier = (p >> 5) & 1 ? 'H' : 'L', prof = p & 31;
+    let compat = (b[i + 2] << 24 | b[i + 3] << 16 | b[i + 4] << 8 | b[i + 5]) >>> 0, rev = 0;
+    for (let k = 0; k < 32; k++) { rev = (rev << 1) | (compat & 1); compat >>>= 1; }
+    return `hvc1.${space}${prof}.${(rev >>> 0).toString(16)}.${tier}${b[i + 12]}.${hex(b[i + 6])}`;
+  }
+  return null;
+}
+// A live picture: the picture stream, with smooth video on top when the
+// browser can play it. Returns the unbind function.
+function bindLive(img, id, q) {
+  const un = Live.bind(img, id, q);
+  const lv = liveVideoOn() && !Live.noMse.has(Live.key(id, q)) ? new LiveVideo(img, id, q) : null;
+  return () => { un(); if (lv) lv.close(); };
+}
+
 // Which streams the page needs right now. The dashboard keeps running in the
 // background on every page so switching back or opening a camera is instant.
 // Which stream a picture shows: Stream 1 (main, full quality) or Stream 2
@@ -400,7 +555,8 @@ function updateSubscriptions() {
     for (const [q, fps] of want) subs.push({camera: c.id, q, fps});
   }
   if (dataSaver) subs.forEach(x => x.lite = true);
-  Live.setWanted(subs);
+  // Pictures that play as video don't need the picture stream.
+  Live.setWanted(subs.filter(x => !Live.mse.has(Live.key(x.camera, x.q))));
 }
 
 // Overlays (name, clock, fps, status, fullscreen) for a live surface.
@@ -545,7 +701,7 @@ function switchStream(surface) {
     const img = surface.querySelector(':scope > img'), u = unbinders.get(c.id);
     if (u) u();
     surface.dataset.q = q;
-    if (img) unbinders.set(c.id, Live.bind(img, c.id, q));
+    if (img) unbinders.set(c.id, bindLive(img, c.id, q));
     updateOverlay(surface, c, q);
   }
   updateSubscriptions();
@@ -719,6 +875,7 @@ async function refreshStatus() {
     tl.scrub = TIMELAPSE ? 'timelapse' : 'sub';
     document.documentElement.classList.toggle('no-timelapse', !TIMELAPSE);
   }
+  paintMode();
   // A camera or profile now watches for something else: redo the chips.
   const kinds = filterTypes().map(t => t[0]).join();
   if (kinds !== refreshStatus.kinds) { const was = refreshStatus.kinds; refreshStatus.kinds = kinds; if (was != null) renderFilters(); }
@@ -1395,7 +1552,7 @@ function renderDash() {
     el.innerHTML = `<img alt=""><div class="msg">${c.enabled ? 'Connecting…' : 'Camera disabled'}</div>${overlayHtml(c, q)}${editing ? '<div class="rz"></div>' : ''}`;
     const img = el.querySelector('img');
     img.onload = () => { el.querySelector('.msg').hidden = true; };
-    unbinders.set(c.id, Live.bind(img, c.id, q));
+    unbinders.set(c.id, bindLive(img, c.id, q));
     offlineAfter(el.querySelector('.msg'), img);
     wireOverlay(el);
     el.onclick = singleClick(() => {
@@ -1642,6 +1799,13 @@ function showLive(id) {
   setupTalkButton(c);
   $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
+  paintSnooze(c);
+  $('focus-snooze').onchange = async () => {
+    const m = +val('focus-snooze');
+    try { const r = await api(`api/cameras/${enc(c.id)}/snooze`, {method: 'POST', json: {minutes: m}});
+      toast(m ? `🔕 ${c.name}: no notifications until ${fmtTime(r.until)}` : `🔔 ${c.name}: notifications on again`); await refreshStatus(); paintSnooze(cam(c.id)); }
+    catch (e) { toast(e.message, true); }
+  };
   $('focus-title').textContent = c.name;
   if (soundCam && soundCam !== c.id) stopSound();
   setupPtz(c);
@@ -1663,7 +1827,7 @@ function bindFocusImage(c) {
   img.removeAttribute('src');
   $('focus-msg').hidden = false; $('focus-msg').textContent = 'Connecting…';
   img.onload = () => { $('focus-msg').hidden = true; };
-  focusUnbind = Live.bind(img, c.id, q);
+  focusUnbind = bindLive(img, c.id, q);
   offlineAfter($('focus-msg'), img);
   // Stream 2 is often another shape (4:3): fill the box like stream 1.
   img.classList.toggle('fill', q === 'sub');
@@ -2339,6 +2503,7 @@ function playInFocus(it) {
   focusPlayback = it;
   updateSubscriptions();
   $('focus-img').hidden = true;
+  $('focus-surface').classList.add('pb');
   $('focus-surface').querySelectorAll('.ov:not(.pov-osd)').forEach(o => o.hidden = true);
   if (!focusPlayer) focusPlayer = new Player($('focus-video'), $('focus-player-controls'), $('focus-msg'));
   focusPlayer.setHidden(false);
@@ -2352,6 +2517,7 @@ function stopFocusPlayback(resub = true) {
   if (focusPlayer) focusPlayer.stop();
   if (focusPlayer) focusPlayer.setHidden(true);
   $('focus-img').hidden = false;
+  $('focus-surface').classList.remove('pb');
   $('focus-player-controls').hidden = true;
   $('focus-surface').querySelectorAll('.ov:not(.pov-osd)').forEach(o => o.hidden = false);
   $('focus-live').hidden = true;
@@ -4480,7 +4646,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'profiles', 'storage', 'display', 'ai', 'known', 'notify', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'logs', 'info'];
+const SECTIONS = ['cameras', 'profiles', 'storage', 'display', 'ai', 'known', 'notify', 'smarthome', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'logs', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -4508,7 +4674,7 @@ function drawSettings() {
   // The log view is kept, and lent to the Logs section while it's open.
   const lb = $('logs-box'); if (lb.parentElement !== $('page-logs')) $('page-logs').appendChild(lb);
   ({cameras: renderCameras, profiles: renderProfiles, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, tasks: renderTasks, system: renderSystemSettings, info: renderInfo,
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, smarthome: renderSmartHome, tasks: renderTasks, system: renderSystemSettings, info: renderInfo,
     logs: (b) => { b.innerHTML = ''; b.appendChild($('logs-box')); showLogs(); }})[section](body);
 }
 function settingsTick() {
@@ -4529,7 +4695,7 @@ function camErr(c) {
 async function saveSettings(part, msg) {
   try {
     const r = await api('api/settings', {method: 'PUT', json: part});
-    toast(r.restart_required ? 'Saved. Restart the NVR to use the new web address.' : (msg || 'Settings saved'));
+    toast(r.restart_required ? 'Saved. Restart GAZE to use the new address or secure (https) settings.' : (msg || 'Settings saved'));
     await loadSettings(); await refreshStatus();
     return true;
   } catch (e) { toast(e.message, true); return false; }
@@ -4876,6 +5042,10 @@ async function openCameraDialog(id, clone, prof) {
             <label class="muted small" style="margin:0">Brush <select id="d-pkg-brush" class="small"><option value="1">Fine</option><option value="3">Small</option><option value="7" selected>Medium</option><option value="15">Large</option></select></label>
             <button type="button" class="small" id="d-pkg-clear">Clear</button></div>
           <div class="hint" style="margin:4px 0 0" id="d-pkg-hint">Paint over where parcels are left (doorstep, porch) — just that spot. After each visit GAZE compares it with how it looked before, and notes a parcel left or taken, with before and after pictures in the alert. It must stay a minute to count.</div></div>
+        <label>Camera's own detection</label>
+        <div><label class="check"><input type="checkbox" id="c-onvif-ev" ${c.onvif_events ? 'checked' : ''}> Use what the camera itself detects${tip('Many cameras detect people, vehicles, line crossings or a doorbell press themselves (Tapo, Hikvision, Dahua, Reolink, Amcrest\u2026). With this on, those become alerts in GAZE too \u2014 a doorbell press always notifies. Uses ONVIF events, with the Control address, port and login on the Pan / tilt / zoom tab (the same as the video, unless you changed them).')}</label>
+          <label class="check" style="margin-top:4px"><input type="checkbox" id="c-onvif-mo" ${c.onvif_motion ? 'checked' : ''}> Also the camera's plain motion detection${tip('Usually not needed: GAZE does its own motion detection. Turn on for a camera whose own motion detection works better (e.g. a battery or PIR camera).')}</label>
+          <div class="hint" id="c-onvif-st">${(() => { const st = id && cam(id) && cam(id).camera_events; return !st ? 'Person, vehicle, line crossing, doorbell press and tampering become alerts.' : st.connected ? `<span class="okc">● Listening</span>${st.last ? ` — last: ${esc(st.last.split('/').pop())}, ${fmtAgo(st.last_at)}` : ''}` : `<span class="errc">● ${esc(st.error || 'Not connected')}</span>`; })()}</div></div>
       </div>
       <div data-tab="osd" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="o-custom" ${c.osd.custom ? 'checked' : ''}> Use settings just for this camera</label>
@@ -5340,7 +5510,7 @@ function collectCamera() {
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
-    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true,
+    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true, onvif_events: chk('c-onvif-ev'), onvif_motion: chk('c-onvif-mo'),
     osd: readOsd(),
     view: {grid_quality: val('c-vq') || 'auto', grid_fps: +val('c-vg') || 0, hd_fps: +val('c-vh') || 0},
     ptz: {enabled: chk('p-on'), host: val('p-host').trim(), port: Math.round(num('p-port')) || 80, username: val('p-user').trim(), password: $('p-pass').value,
@@ -5660,6 +5830,7 @@ async function renderStorage(body) {
     <label for="s-seg">Default file length</label><div><select id="s-seg">${segs.map(([v, t]) => `<option value="${v}" ${v === s.segment_seconds ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <div class="hint">Recordings are split into files of this length. Cameras can override it.</div></div>
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
+    <label for="s-aret">Keep alerts for${tip('Alerts are what you look back at, so they can be kept longer than ordinary footage. An alert’s clip, picture and the stretch of 24/7 recording it plays from are kept this long; everything else goes after “Keep recordings for”. When space runs out, ordinary footage is deleted first. Example: recordings 7 days, alerts 60 days.')}</label><div class="row"><input type="number" id="s-aret" min="0" value="${s.alert_retention_days || 0}" style="width:110px"><span class="muted">days (0 = as long as recordings)</span></div>
     <label for="s-max">Maximum storage${tip('The most space all recordings together may use. When it’s reached, the oldest recordings are deleted to make room. Example: 1000 on a 2 TB drive leaves the other half for your own files.')}</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
     <label for="s-free">Keep free on disk${tip('GAZE never fills the disk past this: the oldest recordings are deleted to keep this much space free, so Windows and other programs keep working. Example: 20 GB.')}</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
     <span></span><div><label class="check"><input type="checkbox" id="s-tlon" ${s.timelapse !== false ? 'checked' : ''}> Time-lapse previews</label>
@@ -5699,7 +5870,7 @@ async function renderStorage(body) {
     e.preventDefault();
     const moving = !$('s-move-row').hidden && chk('s-move');
     if (moving) toast('Saving and moving recordings… this can take a while for large folders.');
-    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), timelapse: chk('s-tlon'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10)), timelapse_width: +val('s-tlw') || 256}});
+    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), alert_retention_days: Math.max(0, Math.round(num('s-aret')) || 0), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), timelapse: chk('s-tlon'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10)), timelapse_width: +val('s-tlw') || 256}});
     renderStorage(body);
   };
   const changeCam = async (id, dir) => {
@@ -5734,6 +5905,8 @@ function renderDisplay(body) {
         <option value="auto" ${dsMode === 'auto' ? 'selected' : ''}>Automatic — on for phones (mobile data), off on computers</option>
         <option value="on" ${dsMode === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${dsMode === 'off' ? 'selected' : ''}>Off</option></select>
       <div class="hint">Smaller live pictures, fewer frames per second and light video for recordings. Saved in this browser only; now ${dataSaver ? '<b>on</b>' : 'off'} here.</div></div>
+    <label for="l-video">Live pictures (this browser)${tip('Smooth video plays the camera\u2019s own video at its full frame rate, with half a second of buffer to smooth out Wi-Fi hiccups \u2014 and uses much less of this computer. Pictures is the older way: a series of still images, a few per second. Data saver always uses pictures.')}</label><div><select id="l-video">
+        <option value="1" ${store.get('live-video', true) !== false ? 'selected' : ''}>Smooth video (recommended)</option><option value="0" ${store.get('live-video', true) === false ? 'selected' : ''}>Pictures</option></select></div>
     <span></span><div><label class="check"><input type="checkbox" id="l-pre" ${l.preload_hd_streams ? 'checked' : ''}> Keep HD streams ready in the background${tip('Off (recommended): a camera’s full-quality picture is only prepared while you have it open — for a second you see the lighter picture. On: opening a camera shows full quality instantly, but every camera’s full-quality video is processed all the time, which uses a lot of the computer.')}</label>
       <div class="hint">Opens cameras in full quality instantly, at the cost of much more work for the computer.</div></div>
     <h3>Overlays on live video</h3>
@@ -5746,6 +5919,7 @@ function renderDisplay(body) {
       <input type="text" id="g-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
       <div class="hint">Preview: <b id="g-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
+  $('l-video').onchange = () => { store.set('live-video', val('l-video') === '1'); Live.noMse.clear(); toast('Saved for this browser — reloading the live view'); setTimeout(() => location.reload(), 600); };
   const fmt = () => val('g-fmt') === 'custom' ? val('g-custom') : val('g-fmt');
   const prev = () => $('g-prev').textContent = fmtDate(new Date(), fmt());
   $('g-fmt').onchange = () => { $('g-custom').hidden = val('g-fmt') !== 'custom'; prev(); };
@@ -6035,6 +6209,14 @@ async function renderSystemSettings(body) {
     <label for="y-port">Port${tip('The number after the colon in GAZE’s web address, e.g. http://192.168.1.10:8080. Only change it if another program already uses 8080.')}</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px"><span class="muted">1–65535 (default 8080)</span></div>
     <label for="y-bind">Reachable from${tip('Who can open GAZE. “Every device on my network” lets your phone and other computers at home use it. “Only this computer” keeps it private to this PC.')}</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
       ${addrs.map(a => `<option value="${esc(a)}">Only via ${esc(a)}</option>`).join('')}</select><div class="hint">Changing the port or this setting takes effect after the NVR restarts.</div></div>
+    <h3>Secure address (https)</h3>
+    <label for="y-hport">Secure port${tip('GAZE also answers on a secure https address. Phones need it for the share menu and to install GAZE as an app, and it keeps passwords and video private on the way. 0 turns it off.')}</label><div class="row"><input type="number" id="y-hport" min="0" max="65535" value="${s.https_port ?? 8443}" style="width:110px"><span class="muted">0 = off (default 8443)</span></div>
+    <label>Certificate${tip('Proves to browsers that this really is your GAZE. GAZE\u2019s own works straight away, but each browser warns once (\u201cAdvanced \u2192 Continue\u201d). A Tailscale certificate is trusted everywhere with no warning, and is also the easy, safe way to reach GAZE away from home.')}</label><div>
+      <select id="y-cert"><option value="own">GAZE's own — browsers warn once</option><option value="tailscale">From Tailscale — trusted, works away from home</option><option value="files">My own certificate files</option></select>
+      <div id="y-cert-files" class="row" style="margin-top:6px" hidden><input type="text" id="y-hcert" placeholder="Certificate file (.crt / .pem)" value="${esc(s.https_cert || '')}" style="flex:1"><input type="text" id="y-hkey" placeholder="Key file (.key / .pem)" value="${esc(s.https_key || '')}" style="flex:1"></div>
+      <div id="y-cert-ts" style="margin-top:6px" hidden><button type="button" id="y-ts">Get a certificate from Tailscale</button>
+        <div class="hint">Needs Tailscale installed and signed in on this computer, with MagicDNS and HTTPS certificates turned on in the Tailscale admin page (DNS tab). Renewed by itself.</div></div>
+      <div class="hint" id="y-https-st"></div></div>
     <label for="y-ffmpeg">ffmpeg program${tip('ffmpeg is the free video tool GAZE uses to record and convert. Leave as “ffmpeg” unless it’s somewhere unusual; then give its full path, e.g. C:\\ffmpeg\\bin\\ffmpeg.exe (ffprobe must be in the same folder).')}</label><div><input type="text" id="y-ffmpeg" required value="${esc(s.ffmpeg_path)}"><div class="hint">The video tool GAZE uses. Leave as it is unless you were told otherwise.</div></div>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
   if (![...$('y-bind').options].some(o => o.value === bind)) $('y-bind').add(new Option('Only via ' + bind, bind));
@@ -6048,10 +6230,30 @@ async function renderSystemSettings(body) {
   };
   $('y-port').oninput = $('y-bind').onchange = showAddr;
   showAddr();
+  // https: which certificate, and how it's going.
+  const certKind = () => !s.https_cert ? 'own' : /tailscale\.crt$/.test(s.https_cert) ? 'tailscale' : 'files';
+  $('y-cert').value = certKind();
+  const certShow = () => { $('y-cert-files').hidden = val('y-cert') !== 'files'; $('y-cert-ts').hidden = val('y-cert') !== 'tailscale'; };
+  $('y-cert').onchange = certShow; certShow();
+  api('api/https').then(h => {
+    const st = h.status || {}, hosts = val('y-bind') === '0.0.0.0' ? (addrs.length ? addrs : ['this-computer']) : [val('y-bind') === '127.0.0.1' ? 'localhost' : val('y-bind')];
+    $('y-https-st').innerHTML = st.on ? `On (${esc(st.source)}): ${hosts.map(x => `<a href="https://${esc(x)}:${st.port}/" target="_blank" rel="noopener">https://${esc(x)}:${st.port}</a>`).join(' · ')}`
+      : st.error ? `<span class="errc">Not working: ${esc(st.error)}</span>` : h.port ? 'Starts when GAZE restarts.' : 'Off.';
+  }).catch(() => {});
+  $('y-ts').onclick = async () => {
+    const b = $('y-ts'); b.disabled = true; b.textContent = 'Asking Tailscale…';
+    try { const r = await api('api/https/tailscale', {method: 'POST'}); toast(r.message); s.https_cert = 'tailscale.crt'; $('y-https-st').textContent = r.message; }
+    catch (err) { toast(err.message, true); }
+    b.disabled = false; b.textContent = 'Get a certificate from Tailscale';
+  };
   $('f-sys').onsubmit = async (e) => {
     e.preventDefault();
     const listen = `${val('y-bind')}:${Math.round(num('y-port'))}`;
-    if (await saveSettings({server: {name: val('y-name'), listen, ffmpeg_path: val('y-ffmpeg')}})) { sysinfo = null; renderSystemSettings(body); }
+    const kind = val('y-cert'), files = kind === 'files';
+    const server = {name: val('y-name'), listen, ffmpeg_path: val('y-ffmpeg'), https_port: Math.max(0, Math.round(num('y-hport')) || 0)};
+    if (kind === 'own') { server.https_cert = ''; server.https_key = ''; }
+    if (files) { server.https_cert = val('y-hcert'); server.https_key = val('y-hkey'); }
+    if (await saveSettings({server})) { sysinfo = null; renderSystemSettings(body); }
   };
 }
 
@@ -6315,6 +6517,52 @@ function randomTopic() {
   const a = new Uint8Array(16); crypto.getRandomValues(a);
   return 'gaze-' + Array.from(a, b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
 }
+// Home Assistant (MQTT) and webhooks.
+function renderSmartHome(body) {
+  const q = settings.mqtt || {}, st = q.status || {};
+  const hooks = JSON.parse(JSON.stringify(settings.webhooks || []));
+  const objs = [...new Set(['person', 'car', 'truck', 'motorcycle', 'bicycle', 'dog', 'cat', 'package', ...status.cameras.flatMap(c => c.watch || [])]), 'motion'];
+  body.innerHTML = `<form class="card" id="f-mqtt"><h2>Home Assistant (MQTT)${tip('MQTT is how home automation systems talk to each other. Home Assistant gets a sensor for motion and for each object on every camera, the last alert picture, an \u201calert\u201d event, whether each camera is online, and a Home / Away / Night switch. Example automation: turn the porch light on when Front Door sees a person after dark.')}</h2>
+    <p class="muted" style="margin-top:0">${st.connected ? '<span class="okc">● Connected</span>' : q.enabled ? `<span class="errc">● Not connected${st.error ? ': ' + esc(st.error) : ''}</span>` : 'Off.'} In Home Assistant, install the <b>Mosquitto broker</b> add-on and the MQTT integration, then enter its address here.</p>
+    <div class="form">
+      <span></span><label class="check"><input type="checkbox" id="q-on" ${q.enabled ? 'checked' : ''}> Connect to an MQTT broker</label>
+      <label for="q-host">Broker address${tip('The computer running the MQTT broker \u2014 usually your Home Assistant box. Example: 192.168.1.20 or homeassistant.local. Port 1883 is the usual one.')}</label><div class="row"><input type="text" id="q-host" value="${esc(q.host || '')}" placeholder="e.g. homeassistant.local" style="flex:3"><input type="number" id="q-port" value="${q.port || 1883}" min="1" max="65535" style="flex:1" title="Port (1883)"></div>
+      <label for="q-user">Login</label><div class="row"><input type="text" id="q-user" value="${esc(q.username || '')}" placeholder="user name" style="flex:1" autocomplete="off"><input type="password" id="q-pass" placeholder="${q.has_password ? 'Saved – leave empty to keep' : 'password'}" style="flex:1" autocomplete="new-password"></div>
+      <label for="q-prefix">Topic prefix${tip('Every message GAZE sends starts with this, e.g. gaze/front_door/person. Only change it if you run more than one GAZE.')}</label><div><input type="text" id="q-prefix" value="${esc(q.prefix || 'gaze')}" style="width:160px"></div>
+      <span></span><label class="check"><input type="checkbox" id="q-disc" ${q.discovery !== false ? 'checked' : ''}> Add everything to Home Assistant automatically${tip('Home Assistant \u201cdiscovery\u201d: each camera appears as a device with its sensors, without writing any YAML.')}</label>
+    </div><div class="actions"><button class="primary">Save</button></div></form>
+  <div class="card"><h2>Webhooks${tip('A webhook sends each new alert to a web address as JSON, so other services can act on it: IFTTT, Node-RED, Zapier, Make, a smart plug, or your own script. Example: an IFTTT applet that flashes your smart lights when a person is at the door.')}</h2>
+    <p class="muted" style="margin-top:0">Each new alert is sent to these addresses (POST, JSON: camera, what was seen, time, notes, plates, names).</p>
+    <div id="wh-list"></div>
+    <div class="actions"><button type="button" id="wh-add">＋ Add a webhook</button><span class="spacer"></span><button type="button" class="primary" id="wh-save">Save webhooks</button></div></div>`;
+  const draw = () => {
+    $('wh-list').innerHTML = hooks.length ? hooks.map((h, i) => `<div class="wh card" data-i="${i}" style="margin:0 0 10px;padding:12px">
+      <div class="row"><label class="check" style="margin:0"><input type="checkbox" class="wh-on" ${h.enabled ? 'checked' : ''}></label><input type="text" class="wh-name" value="${esc(h.name)}" placeholder="Name, e.g. Porch light" style="width:200px"><input type="text" class="wh-url" inputmode="url" value="${esc(h.url)}" placeholder="https://…" style="flex:1"><button type="button" class="small wh-test">Test</button><button type="button" class="small danger wh-del">Delete</button></div>
+      <div class="chips" style="margin-top:8px"><span class="muted small">Cameras:</span>${status.cameras.map(c => `<label><input type="checkbox" class="wh-cam" value="${esc(c.id)}" ${!h.cameras.length || h.cameras.includes(c.id) ? 'checked' : ''}>${esc(c.name)}</label>`).join('')}</div>
+      <div class="chips" style="margin-top:6px"><span class="muted small">For:</span>${objs.map(o => `<label><input type="checkbox" class="wh-obj" value="${o}" ${!h.objects.length || h.objects.includes(o) ? 'checked' : ''}>${labelIcon(o)} ${o}</label>`).join('')}</div>
+      <label class="check" style="margin-top:6px"><input type="checkbox" class="wh-pic" ${h.picture ? 'checked' : ''}> Include the alert picture</label></div>`).join('') : '<div class="hint">No webhooks yet.</div>';
+    $('wh-list').querySelectorAll('.wh').forEach(el => {
+      const h = hooks[+el.dataset.i];
+      const read = () => {
+        const cams = [...el.querySelectorAll('.wh-cam')], os = [...el.querySelectorAll('.wh-obj')];
+        Object.assign(h, {enabled: el.querySelector('.wh-on').checked, name: el.querySelector('.wh-name').value.trim(), url: el.querySelector('.wh-url').value.trim(), picture: el.querySelector('.wh-pic').checked,
+          cameras: cams.every(x => x.checked) ? [] : cams.filter(x => x.checked).map(x => x.value), objects: os.every(x => x.checked) ? [] : os.filter(x => x.checked).map(x => x.value)});
+      };
+      el.addEventListener('change', read); el.addEventListener('input', read);
+      el.querySelector('.wh-del').onclick = () => { hooks.splice(+el.dataset.i, 1); draw(); };
+      el.querySelector('.wh-test').onclick = async () => { read(); try { const r = await api('api/webhooks/test', {method: 'POST', json: h}); toast(r.message); } catch (e) { toast(e.message, true); } };
+    });
+  };
+  draw();
+  $('wh-add').onclick = () => { hooks.push({name: '', enabled: true, url: '', cameras: [], objects: [], picture: false}); draw(); };
+  $('wh-save').onclick = () => saveSettings({webhooks: hooks}, 'Webhooks saved');
+  $('f-mqtt').onsubmit = async (e) => {
+    e.preventDefault();
+    await saveSettings({mqtt: {enabled: chk('q-on'), host: val('q-host').trim(), port: Math.round(num('q-port')) || 1883, username: val('q-user').trim(), password: val('q-pass'), prefix: val('q-prefix').trim() || 'gaze', discovery: chk('q-disc')}}, 'Saved — connecting');
+    setTimeout(async () => { await loadSettings().catch(() => {}); if (section === 'smarthome') renderSmartHome(body); }, 2500);
+  };
+}
+
 async function renderNotify(body) {
   const n = settings.notify, st = await api('api/notify/status').catch(() => ({}));
   const sub = () => `${(val('n-server') || 'https://ntfy.sh').replace(/\/$/, '')}/${val('n-topic')}`;
@@ -6336,6 +6584,8 @@ async function renderNotify(body) {
       <label>Cameras</label><div class="checks">${status.cameras.map(c => `<label class="check"><input type="checkbox" class="n-cam" value="${esc(c.id)}" ${!n.cameras.length || n.cameras.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('')}</div>
       <label for="n-gap">How often${tip('So your phone doesn’t buzz constantly: after a notification, the same camera waits this long before sending another. 0 = every alert. Example: 5 minutes.')}</label><div class="row"><span class="muted">at most one every</span><input type="number" id="n-gap" min="0" max="240" value="${n.gap_minutes}" style="width:80px"><span class="muted">minutes per camera</span></div>
       <label for="n-nfrom">At night${tip('A different limit for night time, usually shorter, since someone outside at night matters more. Example: 23:00 to 06:00, one every 0 minutes = every alert at night.')}</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
+      <span></span><div><label class="check"><input type="checkbox" id="n-health" ${n.health !== false ? 'checked' : ''}> Warn me when something's wrong${tip('A notification when a camera goes offline for more than 2 minutes (and when it\u2019s back), when a camera stops recording, and when the recordings drive is nearly full \u2014 so a dead camera never goes unnoticed.')}</label>
+        <div class="hint">Camera offline, recording stopped, drive nearly full.</div></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
         <div class="hint">What was seen and for how long, who was recognised, number plates, zones and parcels.</div></div>
       <label for="n-link">Open GAZE at${tip('The address your phone uses to open GAZE when you tap a notification. Empty works on your home Wi-Fi. For away from home, use a remote-access address, e.g. your computer’s Tailscale name.')}</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
@@ -6343,6 +6593,30 @@ async function renderNotify(body) {
     </div></div>
     <div class="card"><div class="actions" style="margin:0"><button type="button" class="primary" id="n-save">Save</button><button type="button" id="n-test">Send a test</button>
       <span class="muted" style="margin-left:auto">${st.sent ? `${st.sent} sent since GAZE started${st.last_sent ? ', last ' + fmtDate(st.last_sent) : ''}` : ''}${st.last_error ? ` <span class="errc">· ${esc(st.last_error)}</span>` : ''}</span></div></div>`;
+  // Home / Away / Night: which cameras notify in each.
+  const md = JSON.parse(JSON.stringify((status.mode && status.mode.modes) || {}));
+  const modeKeys = ['home', 'away', 'night'];
+  const camOn = (k, id) => !md[k] || !md[k].cameras || !md[k].cameras.length || md[k].cameras.includes(id);
+  body.insertAdjacentHTML('beforeend', `<div class="card"><h2>Home, Away and Night${tip('Like an alarm system: switch modes with the button at the top of every page. Each mode chooses which cameras send phone notifications. Recording and alerts carry on in every mode \u2014 only the notifications change. Example: Home = only the driveway; Away = everything; Night = everything outside.')}</h2>
+    <p class="muted" style="margin-top:0">Choose which cameras send notifications in each mode, then switch with the mode button at the top (now: <b>${esc((MODE_INFO[status.mode.current] || MODE_INFO.away)[1])}</b>).</p>
+    <table class="modes"><thead><tr><th></th>${modeKeys.map(k => `<th>${MODE_INFO[k][0]} ${MODE_INFO[k][1]}</th>`).join('')}</tr></thead><tbody>
+      <tr class="mode-on"><td><b>Notifications</b></td>${modeKeys.map(k => `<td><label class="check"><input type="checkbox" class="md-on" data-m="${k}" ${md[k] && md[k].notify ? 'checked' : ''}> On</label></td>`).join('')}</tr>
+      ${status.cameras.map(c => `<tr><td>${esc(c.name)}</td>${modeKeys.map(k => `<td><input type="checkbox" class="md-cam" data-m="${k}" value="${esc(c.id)}" ${camOn(k, c.id) ? 'checked' : ''}></td>`).join('')}</tr>`).join('')}
+    </tbody></table>
+    <label class="check" style="margin-top:10px"><input type="checkbox" id="md-auto" ${md.auto_night ? 'checked' : ''}> While at Home, switch to Night by itself during the night hours above${tip('Uses the \u201cAt night\u201d hours set above. Example: Home all day, then Night from 23:00 to 06:00 without touching anything. Away stays Away.')}</label>
+    <div class="actions"><button type="button" class="primary" id="md-save">Save modes</button></div></div>`);
+  const syncOn = () => modeKeys.forEach(k => body.querySelectorAll(`.md-cam[data-m="${k}"]`).forEach(i => i.disabled = !body.querySelector(`.md-on[data-m="${k}"]`).checked));
+  body.querySelectorAll('.md-on').forEach(i => i.onchange = syncOn); syncOn();
+  $('md-save').onclick = async () => {
+    const out = {current: status.mode.current, auto_night: chk('md-auto')};
+    for (const k of modeKeys) {
+      const all = [...body.querySelectorAll(`.md-cam[data-m="${k}"]`)], picked = all.filter(i => i.checked).map(i => i.value);
+      // Every camera ticked = all cameras (also ones added later).
+      out[k] = {notify: body.querySelector(`.md-on[data-m="${k}"]`).checked, cameras: picked.length === all.length ? [] : picked};
+      if (out[k].notify && !picked.length) out[k].notify = false;
+    }
+    try { await api('api/modes', {method: 'PUT', json: out}); toast('Modes saved'); await refreshStatus(); } catch (e) { toast(e.message, true); }
+  };
   const upd = () => { $('n-sub').textContent = sub(); };
   upd(); $('n-topic').oninput = upd; $('n-server').oninput = upd;
   $('n-new').onclick = () => { $('n-topic').value = randomTopic(); upd(); };
@@ -6352,7 +6626,7 @@ async function renderNotify(body) {
     return {enabled: chk('n-on'), server: val('n-server').trim() || 'https://ntfy.sh', topic: val('n-topic').trim(), token: val('n-token'),
       objects: [...body.querySelectorAll('.n-obj:checked')].map(c => c.value), cameras: picked.length === cams.length ? [] : picked,
       gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
-      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), link: val('n-link').trim()};
+      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), health: chk('n-health'), link: val('n-link').trim()};
   };
   $('n-save').onclick = async () => {
     const f = form();

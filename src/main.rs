@@ -14,6 +14,8 @@ mod ffmpeg;
 mod finalize;
 mod fsbrowse;
 mod ftp;
+mod health;
+mod hooks;
 mod hls;
 mod identify;
 mod imgutil;
@@ -27,10 +29,12 @@ mod load;
 mod logs;
 mod manager;
 mod mp4fix;
+mod mqtt;
 mod notify;
 mod onvif;
 mod picturelog;
 mod onvif_device;
+mod onvif_events;
 mod recog;
 mod recorder;
 mod relay;
@@ -40,6 +44,7 @@ mod storage;
 mod sysmon;
 mod talk;
 mod talkmix;
+mod tls;
 mod tray;
 mod update;
 mod users;
@@ -298,9 +303,18 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(identify::run(mgr.clone()));
     tokio::spawn(talkmix::run(mgr.clone()));
     tokio::spawn(notify::run(mgr.clone()));
+    tokio::spawn(health::run(mgr.clone()));
+    tokio::spawn(mqtt::run(mgr.clone()));
+    tokio::spawn(hooks::run(mgr.clone()));
+    tokio::spawn(onvif_events::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));
     tokio::spawn(infer::run(mgr.clone()));
 
+    let https_port = mgr.config().server.https_port;
+    if https_port > 0 {
+        let bind = listen.rsplit_once(':').map(|(h, _)| h.to_string()).unwrap_or_else(|| "0.0.0.0".into());
+        tokio::spawn(tls::serve(mgr.clone(), bind, https_port));
+    }
     let listener = tokio::net::TcpListener::bind(&listen)
         .await
         .with_context(|| format!("can't use {listen} for the web interface — is GAZE already running? (change [server] listen in the settings file to use another port)"))?;

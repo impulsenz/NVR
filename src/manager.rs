@@ -292,6 +292,8 @@ pub struct SettingsUpdate {
     pub cloud: Option<CloudConfig>,
     pub notify: Option<crate::config::NotifyConfig>,
     pub update: Option<crate::config::UpdateConfig>,
+    pub mqtt: Option<crate::config::MqttConfig>,
+    pub webhooks: Option<Vec<crate::config::Webhook>>,
     /// When the recordings folder changes, move existing recordings there.
     #[serde(default)]
     pub move_recordings: bool,
@@ -302,6 +304,12 @@ pub struct ServerUpdate {
     pub name: String,
     pub listen: String,
     pub ffmpeg_path: String,
+    #[serde(default)]
+    pub https_port: Option<u16>,
+    #[serde(default)]
+    pub https_cert: Option<String>,
+    #[serde(default)]
+    pub https_key: Option<String>,
 }
 
 /// Disk space and how long recordings will fit.
@@ -354,6 +362,8 @@ pub struct Manager {
     pub started: Instant,
     /// The address actually bound at startup (listen changes need a restart).
     pub bound_listen: String,
+    /// The https settings GAZE started with (changes need a restart).
+    pub bound_https: (u16, String, String),
     pub ai: Arc<AiHandle>,
     /// Smart search (CLIP) model and index.
     /// Which alerts have been viewed.
@@ -392,6 +402,7 @@ impl Manager {
         let m = Arc::new(Self {
             cfg_path,
             bound_listen: config.server.listen.clone(),
+            bound_https: (config.server.https_port, config.server.https_cert.clone(), config.server.https_key.clone()),
             monitor: Arc::new(Monitor::new(&data_dir)),
             data_dir,
             config: RwLock::new(config.clone()),
@@ -582,6 +593,28 @@ impl Manager {
         self.commit(cfg)
     }
 
+    /// Switch Home / Away / Night.
+    pub async fn set_mode(&self, mode: &str) -> Result<()> {
+        if !crate::config::MODES.contains(&mode) {
+            anyhow::bail!("unknown mode {mode:?}");
+        }
+        let _g = self.edit.lock().await;
+        let mut cfg = self.config();
+        cfg.modes.current = mode.to_string();
+        self.commit(cfg)
+    }
+
+    /// Save what each mode does.
+    pub async fn update_modes(&self, m: crate::config::ModesConfig) -> Result<()> {
+        if !crate::config::MODES.contains(&m.current.as_str()) {
+            anyhow::bail!("unknown mode {:?}", m.current);
+        }
+        let _g = self.edit.lock().await;
+        let mut cfg = self.config();
+        cfg.modes = m;
+        self.commit(cfg)
+    }
+
     /// Save the profiles. `rename` (old name, new name): cameras following
     /// the old name follow the new one.
     pub async fn update_profiles(
@@ -654,6 +687,15 @@ impl Manager {
             if cfg.server.ffmpeg_path.is_empty() {
                 cfg.server.ffmpeg_path = "ffmpeg".into();
             }
+            if let Some(p) = s.https_port {
+                cfg.server.https_port = p;
+            }
+            if let Some(c) = s.https_cert {
+                cfg.server.https_cert = c.trim().to_string();
+            }
+            if let Some(k) = s.https_key {
+                cfg.server.https_key = k.trim().to_string();
+            }
         }
         if let Some(s) = up.storage {
             cfg.storage = s;
@@ -690,6 +732,21 @@ impl Manager {
                 n.token = old.notify.token.clone();
             }
             cfg.notify = n;
+        }
+        if let Some(w) = up.webhooks {
+            for h in &w {
+                if !h.url.trim().is_empty() && !(h.url.trim().starts_with("http://") || h.url.trim().starts_with("https://")) {
+                    anyhow::bail!("webhook \"{}\": the address must start with http:// or https://", h.name);
+                }
+            }
+            cfg.webhooks = w;
+        }
+        if let Some(mut q) = up.mqtt {
+            // The form never receives the saved password; empty means "keep".
+            if q.password.is_empty() {
+                q.password = old.mqtt.password.clone();
+            }
+            cfg.mqtt = q;
         }
         if let Some(mut c) = up.cloud {
             // The form never receives the saved password; empty means "keep".
@@ -805,7 +862,8 @@ impl Manager {
             tokio::task::spawn_blocking(move || storage::cleanup(&cfg, &stores));
         }
         moved?;
-        Ok(self.config().server.listen != self.bound_listen)
+        let sv = self.config().server;
+        Ok(sv.listen != self.bound_listen || (sv.https_port, sv.https_cert, sv.https_key) != self.bound_https)
     }
 
     pub async fn shutdown(&self) {

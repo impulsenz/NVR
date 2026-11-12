@@ -68,6 +68,105 @@ pub fn decode_mask(s: &str) -> Option<Vec<bool>> {
     }
     (out.len() == MASK_W * MASK_H).then_some(out)
 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct Webhook {
+    pub name: String,
+    pub enabled: bool,
+    pub url: String,
+    /// Only these cameras (empty = all).
+    pub cameras: Vec<String>,
+    /// Only alerts with these (person, car, …, "motion"; empty = all).
+    pub objects: Vec<String>,
+    /// Include the alert picture (base64 JPEG).
+    pub picture: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MqttConfig {
+    pub enabled: bool,
+    /// The MQTT broker (e.g. Home Assistant's Mosquitto add-on).
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    /// Start of every topic GAZE uses.
+    pub prefix: String,
+    /// Announce everything to Home Assistant, so it appears by itself.
+    pub discovery: bool,
+}
+
+impl Default for MqttConfig {
+    fn default() -> Self {
+        Self { enabled: false, host: String::new(), port: 1883, username: String::new(), password: String::new(), prefix: "gaze".into(), discovery: true }
+    }
+}
+
+/// Home, Away and Night (like an alarm system): each says which cameras
+/// send phone notifications. Recording and alerts carry on in every mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ModesConfig {
+    /// "home", "away" or "night".
+    pub current: String,
+    /// While Home, Night comes on by itself in the night hours
+    /// (Settings → Notifications → At night).
+    pub auto_night: bool,
+    pub home: ModeConfig,
+    pub away: ModeConfig,
+    pub night: ModeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ModeConfig {
+    /// Phone notifications in this mode.
+    pub notify: bool,
+    /// The cameras that notify (empty = every camera).
+    pub cameras: Vec<String>,
+}
+
+impl Default for ModeConfig {
+    fn default() -> Self {
+        Self { notify: true, cameras: Vec::new() }
+    }
+}
+
+impl Default for ModesConfig {
+    fn default() -> Self {
+        Self {
+            // Away = everything notifies, as before modes existed.
+            current: "away".into(),
+            auto_night: false,
+            home: ModeConfig { notify: false, cameras: Vec::new() },
+            away: ModeConfig::default(),
+            night: ModeConfig::default(),
+        }
+    }
+}
+
+pub const MODES: &[&str] = &["home", "away", "night"];
+
+impl ModesConfig {
+    /// The mode in force now (Home turns into Night at night, if set).
+    pub fn effective(&self, night: bool) -> &str {
+        if self.current == "home" && self.auto_night && night { "night" } else { self.current.as_str() }
+    }
+    pub fn mode(&self, name: &str) -> &ModeConfig {
+        match name {
+            "home" => &self.home,
+            "night" => &self.night,
+            _ => &self.away,
+        }
+    }
+    /// Does this camera send notifications in this mode?
+    pub fn notifies(&self, mode: &str, camera: &str) -> bool {
+        let m = self.mode(mode);
+        m.notify && (m.cameras.is_empty() || m.cameras.iter().any(|c| c == camera))
+    }
+}
+
 /// Write a mask in the "160x90:" run-length form `decode_mask` reads.
 pub fn encode_mask(cells: &[bool]) -> String {
     let mut runs = Vec::new();
@@ -117,6 +216,12 @@ pub struct Config {
     pub dashboard: DashboardConfig,
     /// Saved recording / motion / AI settings to apply to cameras.
     pub profiles: Vec<Profile>,
+    /// Home / Away / Night: which cameras send phone notifications.
+    pub modes: ModesConfig,
+    /// MQTT (Home Assistant and other home automation).
+    pub mqtt: MqttConfig,
+    /// Addresses each new alert is sent to (JSON).
+    pub webhooks: Vec<Webhook>,
     pub cameras: Vec<CameraConfig>,
 
 }
@@ -135,6 +240,14 @@ pub struct ServerConfig {
     #[serde(skip_serializing)]
     pub password: String,
     pub ffmpeg_path: String,
+    /// Secure (https) web interface on this port, next to the plain one
+    /// (0 = off). Phones' share menu, the installable app and access from
+    /// outside need it.
+    pub https_port: u16,
+    /// Certificate and key files (PEM). Empty: GAZE makes its own
+    /// (browsers warn about it once).
+    pub https_cert: String,
+    pub https_key: String,
 }
 
 impl Default for ServerConfig {
@@ -145,6 +258,9 @@ impl Default for ServerConfig {
             username: String::new(),
             password: String::new(),
             ffmpeg_path: "ffmpeg".into(),
+            https_port: 8443,
+            https_cert: String::new(),
+            https_key: String::new(),
         }
     }
 }
@@ -159,6 +275,9 @@ pub struct StorageConfig {
     pub segment_seconds: u64,
     /// Delete recordings older than this (0 = keep forever).
     pub retention_days: u64,
+    /// Keep alerts (their clips, pictures and the recordings they play
+    /// from) this long (0 = as long as the recordings).
+    pub alert_retention_days: u64,
     /// Delete the oldest recordings above this total size (0 = unlimited).
     pub max_storage_gb: f64,
     /// Delete the oldest recordings when free disk space drops below this (0 = off).
@@ -178,6 +297,7 @@ impl Default for StorageConfig {
             dir: PathBuf::from("recordings"),
             segment_seconds: 300,
             retention_days: 14,
+            alert_retention_days: 0,
             max_storage_gb: 0.0,
             min_free_gb: 5.0,
             timelapse: true,
@@ -372,6 +492,9 @@ pub struct NotifyConfig {
     pub summary: bool,
     /// Address that opens GAZE from the phone (e.g. your Tailscale name).
     pub link: String,
+    /// Also tell when a camera goes offline or stops recording, and when
+    /// the recordings drive is nearly full.
+    pub health: bool,
 }
 
 impl Default for NotifyConfig {
@@ -397,6 +520,7 @@ impl Default for NotifyConfig {
             night_gap_minutes: 1,
             summary: true,
             link: String::new(),
+            health: true,
         }
     }
 }
@@ -940,6 +1064,11 @@ pub struct CameraConfig {
     /// When recording the main stream 24/7: also keep a light sub-stream copy
     /// for fast timeline browsing and previews.
     pub timeline_copy: bool,
+    /// Use the camera's own detection (ONVIF events): its person / vehicle
+    /// detection, line crossing, doorbell, tampering become alerts.
+    pub onvif_events: bool,
+    /// …and also the camera's own (plain) motion detection.
+    pub onvif_motion: bool,
     /// Turn the picture, degrees clockwise: 0, 90, 180 or 270.
     pub rotate: u16,
     /// Name of the recording profile this camera follows ("" = none). When
@@ -977,6 +1106,8 @@ impl Default for CameraConfig {
             retention_days: 0,
             max_storage_gb: 0.0,
             timeline_copy: true,
+            onvif_events: false,
+            onvif_motion: false,
             rotate: 0,
             profile: String::new(),
             zones: Vec::new(),

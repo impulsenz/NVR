@@ -213,6 +213,9 @@ struct Candidate {
     start: DateTime<Local>,
     size: u64,
     item: Item,
+    /// Part of an alert still within the alerts' keep time: kept past the
+    /// recordings' own, and deleted last when space runs out.
+    alert: bool,
 }
 
 impl Candidate {
@@ -255,6 +258,8 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
     let mut all: Vec<Candidate> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
 
+    // Alerts may be kept longer (or shorter) than ordinary recordings.
+    let alert_days_for = |days: u64| if cfg.storage.alert_retention_days > 0 { cfg.storage.alert_retention_days } else { days };
     let mut cams: Vec<(String, PathBuf, u64, f64, Option<Arc<EventStore>>)> = cfg
         .cameras
         .iter()
@@ -286,15 +291,28 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
 
     for (id, dir, days, max_gb, store) in cams {
         dirs.push(dir.clone());
+        let alert_days = alert_days_for(days);
+        let alert_cutoff = (alert_days > 0).then(|| now - CDuration::days(alert_days as i64));
+        // The alerts still kept (their times).
+        let alerts: Vec<(DateTime<Local>, DateTime<Local>)> = store
+            .as_ref()
+            .map(|s| s.all().iter().filter(|e| alert_cutoff.is_none_or(|c| e.end >= c)).map(|e| (e.start, e.end)).collect())
+            .unwrap_or_default();
+        let in_alert = |a: DateTime<Local>, b: DateTime<Local>| alerts.iter().any(|(s, e)| *s <= b && *e >= a);
         let mut recs = list(&dir);
+        // A file ends at the latest where the next one starts (its last
+        // write can be much later: files are tidied up afterwards).
+        let ends: Vec<DateTime<Local>> = (0..recs.len()).map(|i| if i == 0 { recs[0].end } else { recs[i].end.min(recs[i - 1].start) }).collect();
         if !recs.is_empty() {
             recs.remove(0); // keep newest
         }
         let mut cands: Vec<Candidate> = recs
             .into_iter()
-            .map(|r| Candidate {
+            .zip(ends.into_iter().skip(1))
+            .map(|(r, end)| Candidate {
                 start: r.start,
                 size: r.size,
+                alert: in_alert(r.start, end),
                 item: Item::File {
                     dir: dir.clone(),
                     name: r.name,
@@ -310,6 +328,7 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
         cands.extend(trecs.into_iter().map(|r| Candidate {
             start: r.start,
             size: r.size,
+            alert: false,
             item: Item::File {
                 dir: tdir.clone(),
                 name: r.name,
@@ -324,6 +343,7 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
                     cands.push(Candidate {
                         start: e.start,
                         size,
+                        alert: alert_cutoff.is_none_or(|c| e.end >= c),
                         item: Item::Clip {
                             store: store.clone(),
                             id: e.id.clone(),
@@ -331,9 +351,8 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
                     });
                 }
             }
-            // Events (thumbnails) past the retention period.
-            if days > 0 {
-                let cutoff = now - CDuration::days(days as i64);
+            // Alerts (pictures, details) past the alerts' keep time.
+            if let Some(cutoff) = alert_cutoff {
                 removed += store.remove_where(|e| e.end < cutoff);
             }
         }
@@ -342,12 +361,16 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
         let mut kept = Vec::new();
         let cutoff = now - CDuration::days(days as i64);
         for c in cands {
-            if days > 0 && c.start < cutoff && c.delete("older than retention period") {
+            // An alert's footage goes with the alert; the rest with the recordings.
+            let old = if c.alert { false } else if matches!(c.item, Item::Clip { .. }) { alert_cutoff.is_some_and(|a| c.start < a) } else { days > 0 && c.start < cutoff };
+            if old && c.delete("older than retention period") {
                 removed += 1;
                 continue;
             }
             kept.push(c);
         }
+        // Space limits take plain footage first, alerts last.
+        kept.sort_by_key(|c| (c.alert, c.start));
         if max_gb > 0.0 {
             let limit = gb(max_gb);
             let mut used = camera_usage(&id, &dir).used_bytes;
@@ -365,7 +388,7 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
         all.extend(kept);
     }
 
-    all.sort_by_key(|c| c.start);
+    all.sort_by_key(|c| (c.alert, c.start));
     let mut all = all.into_iter().peekable();
     if cfg.storage.max_storage_gb > 0.0 {
         let limit = gb(cfg.storage.max_storage_gb);
@@ -435,6 +458,40 @@ mod tests {
         assert!(resolve(&dir, "../etc/passwd.mp4").is_err());
         assert!(resolve(&dir, "a/b.mp4").is_err());
         assert!(resolve(&dir, ".hidden").is_err());
+    }
+
+    #[test]
+    fn alerts_outlive_ordinary_recordings() {
+        let root = std::env::temp_dir().join(format!("nvr-al-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut cfg = Config::default();
+        cfg.storage.dir = root.clone();
+        cfg.storage.min_free_gb = 0.0;
+        cfg.storage.retention_days = 1;
+        cfg.storage.alert_retention_days = 30;
+        cfg.cameras.push(CameraConfig { id: "a".into(), url: "x".into(), ..Default::default() });
+        let d = cfg.camera_dir(&cfg.cameras[0]);
+        std::fs::create_dir_all(&d).unwrap();
+        // Three 5-minute files five days ago, and one now.
+        let day = Local::now() - CDuration::days(5);
+        let base = day.date_naive().and_hms_opt(10, 0, 0).unwrap().and_local_timezone(Local).unwrap();
+        for m in [0, 5, 10] {
+            let t = base + CDuration::minutes(m);
+            std::fs::write(d.join(format!("a_{}.mp4", t.format("%Y-%m-%d_%H-%M-%S"))), b"x").unwrap();
+        }
+        std::fs::write(d.join(format!("a_{}.mp4", Local::now().format("%Y-%m-%d_%H-%M-%S"))), b"x").unwrap();
+        // An alert in the middle file.
+        let store = Arc::new(EventStore::open(&d));
+        let e: crate::events::Event = serde_json::from_value(serde_json::json!({"id": "ev1", "camera": "a",
+            "start": base + CDuration::minutes(6), "end": base + CDuration::minutes(7)})).unwrap();
+        store.save_detected(e);
+        let stores = HashMap::from([("a".to_string(), store.clone())]);
+        cleanup(&cfg, &stores);
+        let left: Vec<String> = list(&d).into_iter().map(|r| r.name).collect();
+        assert_eq!(left.len(), 2, "{left:?}"); // today's, and the alert's
+        assert!(left.iter().any(|n| n.contains("10-05-00")));
+        assert_eq!(store.all().len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

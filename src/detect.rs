@@ -212,6 +212,9 @@ pub struct Detector {
     /// Things the full-quality check didn't confirm: (label, box, when).
     /// The same thing at the same spot isn't alerted on again for a while.
     rejected: Mutex<Vec<(String, [f32; 4], Instant)>>,
+    /// What the camera itself reported (ONVIF events): (label, note), to
+    /// start or extend an alert on the next analysed frame.
+    external: Mutex<Vec<(String, String)>>,
 }
 
 /// What the full-quality picture showed for an object the AI found.
@@ -358,7 +361,17 @@ impl Detector {
             ))),
             relay_main,
             rejected: Mutex::new(Vec::new()),
+            external: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The camera itself detected something (its own motion, person or
+    /// vehicle detection, a doorbell press): an alert, as if GAZE had seen it.
+    pub fn external(&self, label: &str, note: &str) {
+        let mut q = self.external.lock().unwrap();
+        if q.len() < 20 {
+            q.push((label.to_string(), note.to_string()));
+        }
     }
 
     pub fn status(&self) -> DetectStatus {
@@ -672,6 +685,28 @@ impl Detector {
                             a.touch(o.x, o.y, o.w, o.h);
                         }
                     }
+                }
+
+                // What the camera itself reported.
+                let ext: Vec<(String, String)> = std::mem::take(&mut *self.external.lock().unwrap());
+                for (label, note) in ext {
+                    if active.is_none() || active.as_ref().is_some_and(|a| a.thumb_score < 0.0) {
+                        self.on_motion(active, now, &frame, (0.0, 0.0, 1.0, 1.0), 0.0);
+                    }
+                    let a = active.get_or_insert_with(|| self.new_event(now));
+                    a.last_activity = now;
+                    if label != "motion" && !a.event.labels.iter().any(|l| l.label == label) {
+                        a.event.labels.push(Label { label: label.clone(), score: 1.0, color: None, hd: None });
+                    }
+                    if !note.is_empty() && !a.event.notes.contains(&note) {
+                        a.event.notes.push(note.clone());
+                    }
+                    if !a.qualified {
+                        a.qualified = true;
+                        info!(target: "event", "[{}] {}", self.cam.name, if note.is_empty() { "the camera detected motion" } else { &note });
+                    }
+                    self.store.save_detected(a.event.clone());
+                    self.mark_active(a);
                 }
 
                 // Object recognition only while motion is happening: no motion,
