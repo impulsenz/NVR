@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## 0.6.12 — November 2026
+- **Settings → Profiles**: profiles now have their own place in Settings. Create one (from scratch or from a camera's settings), edit its Recording, Motion and AI settings, rename or delete it, and see which cameras follow it. In a camera's settings you just choose which profile it follows. Each camera keeps its own ignore areas, package spot and zones.
+- **Doorbell chime when you talk**: pressing 🎙️ Hold to talk rings a "ding-dong" through the camera's speaker straight away, to get the attention of whoever is there; your voice follows right after. It can be turned off per camera (Audio tab).
+- **No alert for a cat**: "Check motion with AI first" (camera → Motion) now has the AI look at the motion's frames at least twice before it becomes an alert, and if it sees a cat — or another animal you don't watch for — at any point (and nothing you do watch for), the motion isn't kept on the Alerts page.
+- **Record before alert** is 3 seconds for new cameras (was 30).
+- Camera pictures always stretch to fill their box (the setting is gone).
+- Notifications: the "Only suspicious activity" option is gone.
+
 ## 0.6.11 — November 2026
 - **Camera settings close straight away**: the window closes as soon as you press **Save camera**, and the camera is saved (and its video restarted) in the background — "Camera updated" appears when done. If the settings are refused, the window comes back with what you typed and the reason. Moving recordings to a new folder still waits until it's done.
 
