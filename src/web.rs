@@ -1910,7 +1910,9 @@ async fn ensure_sprite(
     let before = load();
     let staging = dir.join(format!("{name}.sprite-new"));
     let page = |p: &std::path::Path, n: u32| PathBuf::from(format!("{}-{n:03}.jpg", p.display()));
-    let made = ffmpeg::sprite(&m.config().server.ffmpeg_path, &src, &staging, kind == "tl").await;
+    let cfg = m.config();
+    let hw = ffmpeg::decode_args(&cfg.hardware, false);
+    let made = ffmpeg::sprite(&cfg.server.ffmpeg_path, &src, &staging, kind == "tl", &hw).await;
     let info = match (made, before) {
         // Fewer pictures than before (the end of a file being written
         // couldn't be read this time), or none at all: keep the older one.
@@ -1949,6 +1951,20 @@ async fn ensure_sprite(
 /// preparing previews in advance is off.
 static PREBUILD_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static PREBUILD_FORCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A file's time-lapse preview is made and up to date.
+fn preview_ready(c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> bool {
+    let Ok(src) = media_path(c, kind, name) else {
+        return false;
+    };
+    let first = src
+        .parent()
+        .unwrap()
+        .join(".thumbs")
+        .join(format!("{name}.sprite-000.jpg"));
+    let meta = first.with_file_name(format!("{name}.sprite.json"));
+    fresh(&first, &src) && sprite_meta_current(&meta)
+}
 
 type PreviewTodo = (
     Arc<crate::manager::CameraRuntime>,
@@ -1991,18 +2007,7 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
             }
         }
     }
-    todo.retain(|(c, kind, name, ..)| {
-        let Ok(src) = media_path(c, kind, name) else {
-            return false;
-        };
-        let first = src
-            .parent()
-            .unwrap()
-            .join(".thumbs")
-            .join(format!("{name}.sprite-000.jpg"));
-        let meta = first.with_file_name(format!("{name}.sprite.json"));
-        !(fresh(&first, &src) && sprite_meta_current(&meta))
-    });
+    todo.retain(|(c, kind, name, ..)| media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name));
     todo.sort_by(|a, b| b.3.cmp(&a.3));
     todo
 }
@@ -2101,9 +2106,16 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                         },
                         end.format("%H:%M:%S")
                     ));
-                    // Let people scrubbing the timeline go first.
-                    while THUMB_JOBS.available_permits() < 3 {
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    // Let people scrubbing the timeline go first — the preview
+                    // may be made for them meanwhile: then it counts as done.
+                    let ready = || preview_ready(c, kind, name);
+                    while THUMB_JOBS.available_permits() < 3 && !ready() {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                    if ready() {
+                        built += 1;
+                        j.done_one();
+                        continue;
                     }
                     if !announced {
                         tracing::info!("preparing time-lapse previews in the background");

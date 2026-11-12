@@ -208,10 +208,10 @@ button.dayhead.fold.shut { opacity: .85; }
 /* Time-lapse previews loaded under each lane */
 .tlp { position: relative; height: 13px; background: var(--panel2); border-top: 1px solid var(--border); cursor: crosshair; }
 .tlp i { position: absolute; top: 3px; bottom: 3px; }
-.tlp i.ready { background: #38bdf8; opacity: .85; }
-.tlp i.loading { background: repeating-linear-gradient(45deg, rgba(56,189,248,.65) 0 4px, rgba(56,189,248,.18) 4px 8px); background-size: 11px 11px; animation: tlp-load 0.8s linear infinite; }
-.tlp i.wait { background: rgba(255,255,255,.08); }
-.tlp i.none { background: rgba(239,68,68,.35); }
+.tlp i.s-ready { background: #38bdf8; opacity: .85; }
+.tlp i.s-loading { background: repeating-linear-gradient(45deg, rgba(56,189,248,.65) 0 4px, rgba(56,189,248,.18) 4px 8px); background-size: 11px 11px; animation: tlp-load 0.8s linear infinite; }
+.tlp i.s-wait { background: rgba(255,255,255,.08); }
+.tlp i.s-none { background: rgba(239,68,68,.35); }
 @keyframes tlp-load { to { background-position: 11px 0; } }
 .tl-row .label { width: var(--tl-label); flex: none; padding-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .tl-row .lane { position: relative; flex: 1; height: 100%; background: var(--panel); cursor: crosshair; }

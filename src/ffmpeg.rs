@@ -723,6 +723,25 @@ pub async fn sprite(
     file: &std::path::Path,
     prefix: &std::path::Path,
     dense: bool,
+    hw: &[String],
+) -> Result<SpriteInfo> {
+    // On the graphics card when one is set up (Settings → GPU acceleration);
+    // the processor if that fails for this file.
+    if !hw.is_empty() {
+        match sprite_with(ffmpeg, file, prefix, dense, hw).await {
+            Ok(i) => return Ok(i),
+            Err(e) => tracing::debug!("preview on the GPU failed ({e:#}); using the processor"),
+        }
+    }
+    sprite_with(ffmpeg, file, prefix, dense, &[]).await
+}
+
+async fn sprite_with(
+    ffmpeg: &str,
+    file: &std::path::Path,
+    prefix: &std::path::Path,
+    dense: bool,
+    hw: &[String],
 ) -> Result<SpriteInfo> {
     use tokio::io::AsyncReadExt;
     const COLS: u32 = 10;
@@ -738,6 +757,7 @@ pub async fn sprite(
     let mut command = crate::load::cmd(ffmpeg);
     let cmd = crate::load::background(&mut command);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
+    cmd.args(hw);
     cmd.args(["-skip_frame", "nokey"]);
     let mut child = cmd
         .arg("-i")

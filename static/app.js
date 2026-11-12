@@ -1635,7 +1635,7 @@ const camTl = {
       const st = this.pv.get(sg.url) || {state: 'wait'};
       const end = st.state === 'ready' && st.secs ? Math.min(Math.max(s1, isGrowing(sg) ? Date.now() : s1), s0 + st.secs * 1000) : s1;
       const x0 = Math.max(0, pct(s0)), x1 = Math.min(100, pct(end));
-      if (x1 > 0 && x0 < 100 && x1 > x0) h += `<i class="${st.state}" style="left:${x0}%;width:${Math.max(x1 - x0, 0.15)}%"></i>`;
+      if (x1 > 0 && x0 < 100 && x1 > x0) h += `<i class="s-${st.state}" style="left:${x0}%;width:${Math.max(x1 - x0, 0.15)}%"></i>`;
     }
     el.innerHTML = h;
   },
@@ -2978,7 +2978,7 @@ function paintPreviewStrips() {
       const end = st.state === 'ready' && st.secs ? Math.min(Math.max(s1, isGrowing(sg) ? Date.now() : s1), s0 + st.secs * 1000) : s1;
       const a = Math.max(0, pct(s0)), b = Math.min(100, pct(end));
       if (b <= 0 || a >= 100 || b <= a) continue;
-      h += `<i class="${st.state}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"></i>`;
+      h += `<i class="s-${st.state}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"></i>`;
     }
     el.innerHTML = h;
   }
