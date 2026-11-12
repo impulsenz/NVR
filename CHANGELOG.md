@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.41 — November 2026
+- **Controls on the picture in full screen**: a Recordings camera in full screen now has the same on-screen controls as the alert player — a scrub bar (with the time-lapse while dragging), play, ±1 frame, previous / next alert, speed, clip start / end with download, and sound. A live camera in full screen has sound, push to talk (two-way audio cameras), snapshot, and clip start / end with download (from the recording). They fade while the mouse is still.
+- **Alerts**: the "HD" tag on every alert is gone; an alert whose AI find was confirmed in full quality shows **HD AI ✓** next to the camera's name (or **HD AI ?** when it wasn't).
+- **Downloads are named after the camera and time**: clips, files and snapshots download as e.g. "Front Door 2026-11-12 09-34-36.mp4".
+
 ## 0.6.40 — November 2026
 - **No more stale pages after an update**: the browser could keep running GAZE's old page code after an update (talking to the new server), so things misbehaved until the browser's cache was cleared. The page now always loads the version that's installed.
 - **◀ ▶ on the Recordings timeline while playing**: pressing back kept snapping back to where it was playing; each press now moves further back (or forward) as before.

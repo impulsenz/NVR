@@ -1750,9 +1750,9 @@ async fn export_clip(
         return err(StatusCode::NOT_FOUND, "no recordings in that time range");
     }
     let name = format!(
-        "{}_{}_to_{}.mp4",
-        c.cfg.id,
-        from.format("%Y-%m-%d_%H-%M-%S"),
+        "{} {} to {}.mp4",
+        file_safe(&c.cfg.name),
+        from.format("%Y-%m-%d %H-%M-%S"),
         to.format("%H-%M-%S")
     );
     let out = m.data_dir.join("tmp").join(&name);
@@ -1787,6 +1787,35 @@ async fn delete_event(State(m): App, Path((id, eid)): Path<(String, String)>) ->
     }
 }
 
+/// Content-Disposition for a download: a plain-ASCII name for old browsers
+/// and the exact (UTF-8) name for the rest.
+fn attachment(name: &str) -> String {
+    let ascii: String = name.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { if c == '"' { '\'' } else { c } } else { '_' }).collect();
+    let enc: String = name
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{enc}")
+}
+
+/// A name without characters Windows doesn't allow in file names.
+fn file_safe(s: &str) -> String {
+    let t: String = s.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) || c.is_control() { '-' } else { c }).collect();
+    let t = t.trim().trim_end_matches('.').to_string();
+    if t.is_empty() { "camera".into() } else { t }
+}
+
+/// What a downloaded file is called: the camera's name and the time of the
+/// footage, e.g. "Front Door 2026-11-12 09-01-40.mp4" (the file's own name
+/// when the time isn't known).
+fn download_name(camera: &str, when: Option<DateTime<Local>>, file: &str) -> String {
+    let ext = std::path::Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    match when {
+        Some(t) => format!("{} {}.{ext}", file_safe(camera), t.format("%Y-%m-%d %H-%M-%S")),
+        None => file.to_string(),
+    }
+}
+
 /// Serve a file with range support. It is sent as a download when `name` is
 /// given and either `force` is set or the URL has `?download`.
 async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bool) -> Response {
@@ -1795,7 +1824,7 @@ async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bo
         Ok(res) => {
             let mut res = res.map(Body::new);
             if let Some(name) = name.filter(|_| download)
-                && let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
+                && let Ok(v) = HeaderValue::from_str(&attachment(&name))
             {
                 res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
             }
@@ -1813,7 +1842,8 @@ async fn serve_recording(
     let c = camera!(m, id);
     match storage::resolve(&c.dir, &name) {
         Ok(p) => {
-            serve_file(p, req, Some(name), false).await
+            let dl = download_name(&c.cfg.name, storage::parse_start(&name), &name);
+            serve_file(p, req, Some(dl), false).await
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
@@ -1827,7 +1857,8 @@ async fn serve_timeline_file(
     let c = camera!(m, id);
     match storage::resolve(&storage::timeline_dir(&c.dir), &name) {
         Ok(p) => {
-            serve_file(p, req, Some(name), false).await
+            let dl = download_name(&c.cfg.name, storage::parse_start(&name), &name);
+            serve_file(p, req, Some(dl), false).await
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
@@ -1840,7 +1871,12 @@ async fn serve_event_file(
 ) -> Response {
     let c = camera!(m, id);
     match storage::resolve(c.events.dir(), &name) {
-        Ok(p) => serve_file(p, req, Some(name), false).await,
+        Ok(p) => {
+            // The alert's file: named after the camera and the alert's time.
+            let when = c.events.all().into_iter().find(|e| name.starts_with(&e.id)).map(|e| e.clip_start.unwrap_or(e.start));
+            let dl = download_name(&c.cfg.name, when, &name);
+            serve_file(p, req, Some(dl), false).await
+        }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
 }
@@ -2995,11 +3031,7 @@ async fn snapshot(State(m): App, Path(id): Path<String>) -> Response {
     let c = camera!(m, id);
     match c.live_main.snapshot().await {
         Ok(jpg) => {
-            let name = format!(
-                "attachment; filename=\"{}_{}.jpg\"",
-                c.cfg.id,
-                Local::now().format("%Y-%m-%d_%H-%M-%S")
-            );
+            let name = attachment(&download_name(&c.cfg.name, Some(Local::now()), "snapshot.jpg"));
             let mut res = (
                 [
                     (header::CONTENT_TYPE, "image/jpeg"),
