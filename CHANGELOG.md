@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## 0.6.28 — November 2026
+- **New look for the timelines**: the Recordings timeline and the camera view's timeline now look the same, with much more detail:
+  - alerts coloured by kind — **people blue, vehicles amber, animals green, packages pink, motion orange** — each with a round symbol badge;
+  - shaded recording bars (purple for full-quality alert clips) and a glowing time-lapse line that shimmers while it's being made;
+  - alternating hour bands, bold hours, a line and date at midnight, and a red **NOW** line;
+  - the playhead has a knob and shows its time, and a guide line follows the mouse with the time under it;
+  - each camera shows whether it's recording (red dot) and how many alerts are in view.
+
 ## 0.6.27 — November 2026
 - **No black blink after scrubbing**: when you let go of the timeline, the time-lapse picture stays until each camera's video has really loaded its picture — however long that takes — and then fades smoothly into the video.
 - **What's new after an update**: when GAZE has been updated, a window shows which version you're now running and what changed in it (once).
