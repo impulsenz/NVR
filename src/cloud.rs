@@ -367,7 +367,7 @@ mod tests {
             notified: 0,
             suspicious: String::new(),
         };
-        store.save(ev(
+        store.save_detected(ev(
             "ev-person",
             vec![Label {
                 label: "person".into(),
@@ -375,7 +375,7 @@ mod tests {
                 color: None,
             }],
         ));
-        store.save(ev("ev-motion", vec![]));
+        store.save_detected(ev("ev-motion", vec![]));
         for f in [
             "ev-person.jpg",
             "ev-person.mp4",

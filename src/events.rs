@@ -211,17 +211,31 @@ impl EventStore {
                 e.thumb = old.thumb;
             }
         }
-        self.save(e);
+        self.insert_or_update(e);
     }
 
-    pub fn save(&self, e: Event) {
-        self.append_line(&e);
+    /// Add a new event, or update it.
+    fn insert_or_update(&self, e: Event) {
         let mut ev = self.events.write().unwrap();
+        self.append_line(&e);
         if let Some(slot) = ev.iter_mut().find(|x| x.id == e.id) {
             *slot = e;
         } else {
             ev.push(e);
             ev.sort_by_key(|e| e.start);
+        }
+    }
+
+    /// Update an event that's still there. Background jobs (faces, clips,
+    /// notifications, pictures) work on a copy for a while: if the event
+    /// was deleted meanwhile (one alert, or "Delete footage"), their save
+    /// mustn't bring it back. New events come from the detector
+    /// (`save_detected`).
+    pub fn save(&self, e: Event) {
+        let mut ev = self.events.write().unwrap();
+        if let Some(slot) = ev.iter_mut().find(|x| x.id == e.id) {
+            self.append_line(&e);
+            *slot = e;
         }
     }
 
@@ -316,7 +330,7 @@ mod tests {
             notified: 0,
             suspicious: String::new(),
         };
-        s.save(e.clone());
+        s.save_detected(e.clone());
         e.labels.push(Label {
             label: "person".into(),
             score: 0.9,
@@ -327,6 +341,9 @@ mod tests {
         assert_eq!(s2.all().len(), 1);
         assert!(s2.get("e1").unwrap().has_label("person"));
         assert_eq!(s2.remove_where(|e| e.has_label("person")), 1);
+        // A background job saving its copy afterwards doesn't bring it back.
+        s2.save(e.clone());
+        assert!(s2.get("e1").is_none());
         assert_eq!(EventStore::open(&dir).all().len(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
