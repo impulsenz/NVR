@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.50 — November 2026
+- **ⓘ info cards on settings**: settings that aren't obvious have a small ⓘ next to them — hover over it (or tap it on a phone) for what the setting does and an example. Long explanations under settings moved into these cards, so the pages are shorter and easier to scan.
+- **Plainer names**: technical labels are now everyday words — e.g. Sensitivity (was Min. contrast), Smallest movement, Must move for (was Make time), How sure the AI must be (was Minimum confidence), AI looks every, Connection type (was RTSP transport), Control port and login (was ONVIF), Smoothness in the grid / when opened (was frame rate), Video encoder, and "Sub-stream" everywhere instead of "stream 2" or "Substream".
+- **One place for package delivery**: the old "Package delivery" tick box on zones is gone — the painted package spot (camera → AI) does this. Zones that had it ticked, and package boxes drawn by older versions, are turned into the painted spot automatically, so nothing stops working.
+- **Fixes**: saving GPU acceleration settings no longer says cameras are restarting when nothing changed; the AI setting no longer shows the internal name "builtin"; removed outdated text (smart search, "the AI always runs on the CPU"); the zone loitering setting reads "Alert if something stays longer than … seconds".
+
 ## 0.6.49 — November 2026
 Security fixes:
 - **Other web pages on the same computer can't make changes any more**: GAZE checked that a change came from its own page by the address only, not the port, so a web page served by another program on the same computer (or the same router address) could make changes while you were signed in. The port is now checked too.

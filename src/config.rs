@@ -68,6 +68,23 @@ pub fn decode_mask(s: &str) -> Option<Vec<bool>> {
     }
     (out.len() == MASK_W * MASK_H).then_some(out)
 }
+/// Write a mask in the "160x90:" run-length form `decode_mask` reads.
+pub fn encode_mask(cells: &[bool]) -> String {
+    let mut runs = Vec::new();
+    let (mut on, mut n) = (false, 0usize);
+    for &c in cells {
+        if c == on {
+            n += 1;
+        } else {
+            runs.push(n.to_string());
+            on = c;
+            n = 1;
+        }
+    }
+    runs.push(n.to_string());
+    format!("{MASK_W}x{MASK_H}:{}", runs.join(","))
+}
+
 /// Places on the picture: top/middle/bottom × left/centre/right.
 pub const CORNERS: &[&str] = &["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
 
@@ -1158,6 +1175,34 @@ impl Config {
                 c.detect.motion = true;
                 changed = true;
             }
+            // 0.6.50: one place to watch for parcels — the painted package
+            // spot. Zones marked for packages and the older drawn box are
+            // painted into it.
+            let areas: Vec<Vec<[f32; 2]>> = c
+                .zones
+                .iter()
+                .filter(|z| z.watch_items && z.kind == "area" && z.points.len() >= 3)
+                .map(|z| z.points.clone())
+                .chain((c.detect.package_area.len() >= 3).then(|| c.detect.package_area.clone()))
+                .collect();
+            if !areas.is_empty() || c.zones.iter().any(|z| z.watch_items) {
+                let mut cells = decode_mask(&c.detect.package_mask).unwrap_or_else(|| vec![false; MASK_W * MASK_H]);
+                for (i, cell) in cells.iter_mut().enumerate() {
+                    let p = [((i % MASK_W) as f32 + 0.5) / MASK_W as f32, ((i / MASK_W) as f32 + 0.5) / MASK_H as f32];
+                    if areas.iter().any(|a| crate::zones::inside(a, p)) {
+                        *cell = true;
+                    }
+                }
+                if cells.iter().any(|x| *x) {
+                    c.detect.package_mask = encode_mask(&cells);
+                    c.detect.packages = true;
+                }
+                c.detect.package_area.clear();
+                for z in &mut c.zones {
+                    z.watch_items = false;
+                }
+                changed = true;
+            }
             if c.record_mode == RecordMode::Scheduled {
                 c.record_mode = RecordMode::Continuous;
                 c.schedule_enabled = true;
@@ -1414,6 +1459,27 @@ mod tests {
             super::Config::from_toml("[ai]\nprovider = \"gemini\"\napi_key = \"x\"\n").unwrap();
         assert!(changed);
         assert_eq!(c.ai.provider, "builtin");
+    }
+
+    #[test]
+    fn package_zones_become_the_painted_spot() {
+        let mut cfg = Config::default();
+        let mut c = CameraConfig { id: "door".into(), name: "Door".into(), url: "rtsp://x".into(), ..Default::default() };
+        c.zones.push(ZoneConfig {
+            name: "Step".into(),
+            kind: "area".into(),
+            points: vec![[0.0, 0.5], [0.5, 0.5], [0.5, 1.0], [0.0, 1.0]],
+            watch_items: true,
+            ..Default::default()
+        });
+        cfg.cameras.push(c);
+        assert!(cfg.migrate());
+        let d = &cfg.cameras[0].detect;
+        assert!(d.packages && !cfg.cameras[0].zones[0].watch_items);
+        let cells = decode_mask(&d.package_mask).unwrap();
+        assert!(cells[(MASK_H * 3 / 4) * MASK_W + MASK_W / 4]); // inside the old zone
+        assert!(!cells[(MASK_H / 4) * MASK_W + MASK_W * 3 / 4]); // outside it
+        assert!(!cfg.migrate()); // only once
     }
 
     #[test]

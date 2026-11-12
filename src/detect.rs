@@ -331,32 +331,6 @@ impl Active {
     }
 }
 
-/// Whether a box (normalized x, y, w, h), grown by a tenth on each side,
-/// reaches into an area.
-fn box_reaches(poly: &[[f32; 2]], x: f32, y: f32, w: f32, h: f32) -> bool {
-    let (mx, my) = (w * 0.1, h * 0.1);
-    let (x0, y0, x1, y1) = (x - mx, y - my, x + w + mx, y + h + my);
-    // A corner of the area inside the box…
-    if poly
-        .iter()
-        .any(|p| p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1)
-    {
-        return true;
-    }
-    // …or a point of the box inside the area.
-    (0..=6).any(|i| {
-        (0..=6).any(|j| {
-            crate::zones::inside(
-                poly,
-                [
-                    x0 + (x1 - x0) * i as f32 / 6.0,
-                    y0 + (y1 - y0) * j as f32 / 6.0,
-                ],
-            )
-        })
-    })
-}
-
 impl Detector {
     pub fn new(
         cam: CameraConfig,
@@ -1392,12 +1366,11 @@ impl Detector {
     }
 }
 
-/// An area watched for items left or taken: a polygon (zones), or painted
-/// cells (the package spot: the same grid as the ignore areas).
+/// The package spot (camera → AI): cells painted on the picture, the same
+/// grid as the ignore areas.
 struct Watched {
     name: String,
-    points: Vec<[f32; 2]>,
-    cells: Option<Vec<bool>>,
+    cells: Vec<bool>,
 }
 
 impl Watched {
@@ -1408,108 +1381,68 @@ impl Watched {
         y * MASK_W + x
     }
     fn contains(&self, p: [f32; 2]) -> bool {
-        match &self.cells {
-            Some(m) => m[Self::cell(p)],
-            None => crate::zones::inside(&self.points, p),
-        }
+        self.cells[Self::cell(p)]
     }
     /// Its box (x0, y0, x1, y1), 0..1 of the picture.
     fn bounds(&self) -> (f32, f32, f32, f32) {
         use crate::config::{MASK_H, MASK_W};
         let (mut x0, mut y0, mut x1, mut y1) = (1f32, 1f32, 0f32, 0f32);
-        match &self.cells {
-            Some(m) => {
-                for (i, _) in m.iter().enumerate().filter(|(_, v)| **v) {
-                    let (cx, cy) = ((i % MASK_W) as f32, (i / MASK_W) as f32);
-                    x0 = x0.min(cx / MASK_W as f32);
-                    y0 = y0.min(cy / MASK_H as f32);
-                    x1 = x1.max((cx + 1.0) / MASK_W as f32);
-                    y1 = y1.max((cy + 1.0) / MASK_H as f32);
-                }
-            }
-            None => {
-                for p in &self.points {
-                    x0 = x0.min(p[0]);
-                    y0 = y0.min(p[1]);
-                    x1 = x1.max(p[0]);
-                    y1 = y1.max(p[1]);
-                }
-            }
+        for (i, _) in self.cells.iter().enumerate().filter(|(_, v)| **v) {
+            let (cx, cy) = ((i % MASK_W) as f32, (i / MASK_W) as f32);
+            x0 = x0.min(cx / MASK_W as f32);
+            y0 = y0.min(cy / MASK_H as f32);
+            x1 = x1.max((cx + 1.0) / MASK_W as f32);
+            y1 = y1.max((cy + 1.0) / MASK_H as f32);
         }
         (x0, y0, x1.max(x0), y1.max(y0))
     }
     /// Does an object's box (with a little margin) reach the area?
     fn reaches(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
-        match &self.cells {
-            None => box_reaches(&self.points, x, y, w, h),
-            Some(_) => {
-                let (mx, my) = (w * 0.1, h * 0.1);
-                let (x0, y0, x1, y1) = (x - mx, y - my, x + w + mx, y + h + my);
-                (0..=12).any(|i| {
-                    (0..=12).any(|j| {
-                        self.contains([x0 + (x1 - x0) * i as f32 / 12.0, y0 + (y1 - y0) * j as f32 / 12.0])
-                    })
-                })
-            }
-        }
+        let (mx, my) = (w * 0.1, h * 0.1);
+        let (x0, y0, x1, y1) = (x - mx, y - my, x + w + mx, y + h + my);
+        (0..=12).any(|i| {
+            (0..=12).any(|j| self.contains([x0 + (x1 - x0) * i as f32 / 12.0, y0 + (y1 - y0) * j as f32 / 12.0]))
+        })
     }
     /// What the area looks like, for comparing before and after.
     fn signature(&self, f: &Frame) -> Vec<f32> {
         crate::zones::area_signature_by(f, self.bounds(), |p| self.contains(p))
     }
-    /// The picture of the area for the alert: a painted spot exactly (the
-    /// rest blacked out), a zone with a little of its surroundings.
+    /// The picture of the area for the alert: just the painted spot (the
+    /// rest blacked out).
     fn picture(&self, f: &Frame) -> Frame {
         let (x0, y0, x1, y1) = self.bounds();
         let (fw, fh) = (f.width as f32, f.height as f32);
-        let (mx, my) = if self.cells.is_some() { (0.0, 0.0) } else { ((x1 - x0) * 0.1, (y1 - y0) * 0.1) };
-        let (px, py) = (((x0 - mx).max(0.0) * fw).floor(), ((y0 - my).max(0.0) * fh).floor());
-        let crop = crate::recog::crop(f, px, py, ((x1 + mx).min(1.0) * fw).ceil() - px, ((y1 + my).min(1.0) * fh).ceil() - py);
-        let crop = if self.cells.is_some() {
-            let mut rgb = (*crop.rgb).clone();
-            for yy in 0..crop.height {
-                for xx in 0..crop.width {
-                    let p = [(px + xx as f32 + 0.5) / fw, (py + yy as f32 + 0.5) / fh];
-                    if !self.contains(p) {
-                        let i = ((yy * crop.width + xx) * 3) as usize;
-                        rgb[i..i + 3].copy_from_slice(&[0, 0, 0]);
-                    }
+        let (px, py) = ((x0 * fw).floor(), (y0 * fh).floor());
+        let crop = crate::recog::crop(f, px, py, (x1.min(1.0) * fw).ceil() - px, (y1.min(1.0) * fh).ceil() - py);
+        let mut rgb = (*crop.rgb).clone();
+        for yy in 0..crop.height {
+            for xx in 0..crop.width {
+                let p = [(px + xx as f32 + 0.5) / fw, (py + yy as f32 + 0.5) / fh];
+                if !self.contains(p) {
+                    let i = ((yy * crop.width + xx) * 3) as usize;
+                    rgb[i..i + 3].copy_from_slice(&[0, 0, 0]);
                 }
             }
-            Frame { width: crop.width, height: crop.height, rgb: std::sync::Arc::new(rgb) }
-        } else {
-            crop
-        };
+        }
+        let crop = Frame { width: crop.width, height: crop.height, rgb: std::sync::Arc::new(rgb) };
         crop.fit(640)
     }
 }
 
 impl Detector {
-    /// The package spot (camera → AI) and zones set to watch for items.
+    /// The package spot (camera → AI), if painted.
     fn watched_areas(&self) -> Vec<Watched> {
         let d = &self.cam.detect;
         let mut v: Vec<Watched> = Vec::new();
-        if d.packages {
-            let cells = crate::config::decode_mask(&d.package_mask).filter(|m| m.iter().any(|x| *x));
-            if cells.is_some() || d.package_area.len() >= 3 {
-                v.push(Watched {
-                    name: "the package spot".into(),
-                    points: d.package_area.clone(),
-                    cells,
-                });
-            }
+        if d.packages
+            && let Some(cells) = crate::config::decode_mask(&d.package_mask).filter(|m| m.iter().any(|x| *x))
+        {
+            v.push(Watched {
+                name: "the package spot".into(),
+                cells,
+            });
         }
-        v.extend(
-            self.cam
-                .zones
-                .iter()
-                .filter(|z| z.kind == "area" && z.watch_items && z.points.len() >= 3)
-                .map(|z| Watched {
-                    name: z.name.clone(),
-                    points: z.points.clone(),
-                    cells: None,
-                }),
-        );
         v
     }
 }
@@ -1936,11 +1869,18 @@ mod tests {
     #[test]
     fn only_activity_at_the_package_spot_counts() {
         // The doorstep: bottom-left corner of the picture.
-        let spot = [[0.05, 0.7], [0.3, 0.7], [0.3, 0.95], [0.05, 0.95]];
-        assert!(super::box_reaches(&spot, 0.1, 0.4, 0.15, 0.45)); // someone at the door
-        assert!(super::box_reaches(&spot, 0.0, 0.0, 1.0, 1.0)); // covers it all
-        assert!(!super::box_reaches(&spot, 0.6, 0.1, 0.2, 0.3)); // a tree, top right
-        assert!(!super::box_reaches(&spot, 0.32, 0.2, 0.1, 0.3)); // close, but above and beside
+        use crate::config::{MASK_H, MASK_W};
+        let cells = (0..MASK_W * MASK_H)
+            .map(|i| {
+                let (x, y) = ((i % MASK_W) as f32 / MASK_W as f32, (i / MASK_W) as f32 / MASK_H as f32);
+                (0.05..0.3).contains(&x) && (0.7..0.95).contains(&y)
+            })
+            .collect();
+        let spot = super::Watched { name: "spot".into(), cells };
+        assert!(spot.reaches(0.1, 0.4, 0.15, 0.45)); // someone at the door
+        assert!(spot.reaches(0.0, 0.0, 1.0, 1.0)); // covers it all
+        assert!(!spot.reaches(0.6, 0.1, 0.2, 0.3)); // a tree, top right
+        assert!(!spot.reaches(0.32, 0.2, 0.1, 0.3)); // close, but above and beside
     }
 
     #[test]
@@ -1966,7 +1906,7 @@ mod tests {
                 cells[y * MASK_W + x] = true;
             }
         }
-        let spot = super::Watched { name: "spot".into(), points: vec![], cells: Some(cells) };
+        let spot = super::Watched { name: "spot".into(), cells };
         let frame = |parcel: bool, beside: bool| {
             let (w, h) = (320u32, 180u32);
             let mut rgb = vec![90u8; (w * h * 3) as usize];

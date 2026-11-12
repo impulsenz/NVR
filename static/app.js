@@ -5,6 +5,28 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const enc = encodeURIComponent;
+// A little ⓘ next to a setting: hover (or tap) it for what the setting does,
+// with an example when one helps. One card for the whole page.
+const tip = (text) => `<span class="info" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}">i</span>`;
+(() => {
+  let card = null, at = null;
+  const hide = () => { if (card) card.hidden = true; at = null; };
+  const show = (el) => {
+    if (!card) { card = document.createElement('div'); card.id = 'tipcard'; card.setAttribute('role', 'tooltip'); document.body.appendChild(card); }
+    at = el; card.textContent = el.dataset.tip; card.hidden = false;
+    const r = el.getBoundingClientRect(), w = Math.min(320, innerWidth - 24);
+    card.style.maxWidth = w + 'px';
+    const cw = card.offsetWidth, ch = card.offsetHeight;
+    card.style.left = Math.max(12, Math.min(r.left + r.width / 2 - cw / 2, innerWidth - cw - 12)) + 'px';
+    card.style.top = (r.top - ch - 8 > 8 ? r.top - ch - 8 : r.bottom + 8) + 'px';
+  };
+  document.addEventListener('mouseover', (e) => { const el = e.target.closest && e.target.closest('.info'); if (el) show(el); else if (at) hide(); });
+  document.addEventListener('focusin', (e) => { if (e.target.classList && e.target.classList.contains('info')) show(e.target); });
+  document.addEventListener('focusout', (e) => { if (e.target === at) hide(); });
+  // Touch: a tap shows it (and keeps the click from ticking a box it's in).
+  document.addEventListener('click', (e) => { const el = e.target.closest && e.target.closest('.info'); if (el) { e.preventDefault(); e.stopPropagation(); show(el); } else hide(); }, true);
+  addEventListener('scroll', hide, true);
+})();
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehicle', motorcycle:'vehicle', bicycle:'vehicle',
   dog:'animal', cat:'animal', bird:'animal', horse:'animal', cow:'animal', sheep:'animal', bear:'animal'};
@@ -258,7 +280,7 @@ function camState(c) {
   return {cls: 'idle', text: 'Idle'};
 }
 const pillHtml = (c) => { const s = camState(c); return `<span class="pill st-${s.cls}"><span class="dot"></span>${esc(s.text)}</span>`; };
-const MODE_TEXT = {continuous: 'HD 24/7', continuous_sub: 'Sub-stream 24/7', sub_plus_events: 'Substream 24/7 plus HD AI alerts', events: 'HD on alerts only', off: 'Not recording'};
+const MODE_TEXT = {continuous: 'HD 24/7', continuous_sub: 'Sub-stream 24/7', sub_plus_events: 'Sub-stream 24/7 plus HD alerts', events: 'HD on alerts only', off: 'Not recording'};
 
 // ======================================================================
 // Live video over one WebSocket
@@ -392,7 +414,7 @@ const hdMark = (l) => l.hd === true ? ' <b class="hdc">HD✓</b>' : l.hd === fal
 const hdAi = (e) => !e || !e.labels ? '' : e.labels.some(l => l.hd === true) ? '<span class="hdai" title="What the AI found was confirmed in a full-quality picture">HD AI ✓</span>'
   : e.labels.some(l => l.hd === false) ? '<span class="hdai no" title="Not confirmed in a full-quality picture">HD AI ?</span>' : '';
 const hdClass = (l) => l.hd === false ? 'unconfirmed' : '';
-const hdTip = (l) => l.hd === true ? 'confirmed in a full-quality picture' : l.hd === false ? 'not confirmed in a full-quality picture' : 'found in stream 2';
+const hdTip = (l) => l.hd === true ? 'confirmed in a full-quality picture' : l.hd === false ? 'not confirmed in a full-quality picture' : 'found in the sub-stream';
 // What the timeline colours and symbols mean.
 // What the marks on a timeline mean: only what's on it — the kinds of
 // footage shown and the objects these cameras look for.
@@ -4580,23 +4602,23 @@ async function openCameraDialog(id, clone, prof) {
         <label for="q-ip">IP address</label><div class="row"><input type="text" id="q-ip" value="${esc(q.ip || '')}" placeholder="192.168.1.100" style="flex:2"></div>
         <label for="q-user">Camera login</label><div class="row"><input type="text" id="q-user" value="${esc(q.user || '')}" placeholder="username" style="flex:1" autocomplete="off"><input type="password" id="q-pass" value="${esc(q.pass || '')}" placeholder="password" style="flex:1" autocomplete="new-password"></div>
         <h3>Streams</h3>
-        <label for="c-url">Main stream (HD)</label>
+        <label for="c-url">Main stream (HD)${tip('The camera’s full-quality video address, usually starting rtsp://. Example: rtsp://admin:password@192.168.1.50:554/stream1 — the brand list fills it in for you.')}</label>
         <div><input type="text" id="c-url" required value="${esc(c.url)}" placeholder="rtsp://user:password@192.168.1.50:554/stream1">
           <div class="row" style="margin-top:6px"><select id="c-url-fmt">${brandOpts}</select><span class="hint" style="margin:0">Pick a format to fill this field from the quick setup above.</span></div></div>
-        <label for="c-live">Sub-stream (low resolution)</label>
+        <label for="c-live">Sub-stream (low resolution)${tip('A second, smaller video most cameras also send (often …/stream2 or subtype=1). GAZE uses it for the camera grid, motion detection and AI, so the computer works much less. Optional, but recommended.')}</label>
         <div><input type="text" id="c-live" value="${esc(c.live_url)}" placeholder="Optional – e.g. …/stream2">
           <div class="row" style="margin-top:6px"><select id="c-live-fmt">${brandOpts}</select><span class="hint" style="margin:0">Used for the live grid, motion detection and AI. Saves a lot of CPU.</span></div></div>
         <label for="c-rotate">Rotate picture</label>
         <div><select id="c-rotate">${[[0, 'No rotation'], [90, '90° clockwise'], [180, '180° (upside down)'], [270, '90° anticlockwise']].map(([v, t]) => `<option value="${v}" ${(c.rotate || 0) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <div class="hint">For cameras mounted sideways or upside down: live view, alerts and new recordings are turned the right way.</div></div>
-        <label for="c-transport">RTSP transport</label>
-        <div><select id="c-transport"><option value="tcp">TCP (recommended)</option><option value="udp">UDP</option></select></div>
+        <label for="c-transport">Connection type${tip('How the video travels from the camera. TCP is reliable and right for almost every camera, especially on Wi-Fi. Only try UDP if a camera won’t connect with TCP.')}</label>
+        <div><select id="c-transport"><option value="tcp">TCP — reliable (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
         <h3>Live view</h3>
         ${(() => { const v = c.view || {}, l = status.live, fpsOpts = (cur, def) => [0, 1, 2, 5, 10, 15, 20, 25, 30].map(f => `<option value="${f}" ${f === (cur || 0) ? 'selected' : ''}>${f ? f + ' fps' : 'Default (' + def + ')'}</option>`).join('');
-          return `<label for="c-vq">Grid picture</label><div><select id="c-vq"><option value="auto" ${v.grid_quality !== 'main' ? 'selected' : ''}>Sub-stream (light)</option><option value="main" ${v.grid_quality === 'main' ? 'selected' : ''}>Full quality</option></select></div>
-        <label for="c-vg">Grid frame rate</label><div><select id="c-vg">${fpsOpts(v.grid_fps, l.fps)}</select></div>
-        <label for="c-vh">Full-screen frame rate</label><div><select id="c-vh">${fpsOpts(v.hd_fps, l.hd_fps)}</select>
+          return `<label for="c-vq">Picture in the grid${tip('Which stream this camera shows in the Live grid. The sub-stream is light on the computer and the network; full quality is sharper but much heavier with several cameras.')}</label><div><select id="c-vq"><option value="auto" ${v.grid_quality !== 'main' ? 'selected' : ''}>Sub-stream (light)</option><option value="main" ${v.grid_quality === 'main' ? 'selected' : ''}>Full quality</option></select></div>
+        <label for="c-vg">Smoothness in the grid${tip('Pictures per second (fps) in the Live grid. Higher is smoother but uses more of the computer. Default follows Settings → Live view & display.')}</label><div><select id="c-vg">${fpsOpts(v.grid_fps, l.fps)}</select></div>
+        <label for="c-vh">Smoothness when opened${tip('Pictures per second (fps) when you open this camera or watch it full screen.')}</label><div><select id="c-vh">${fpsOpts(v.hd_fps, l.hd_fps)}</select>
           <div class="hint">“Default” follows Settings → Live view &amp; display.</div></div>`; })()}
       </div>
 
@@ -4605,7 +4627,7 @@ async function openCameraDialog(id, clone, prof) {
         <div class="radio-cards" style="grid-template-columns:1fr">
           ${[['continuous', 'HD 24/7', 'Records the main stream around the clock.'],
              ['continuous_sub', 'Sub-stream 24/7', 'Records the low-resolution stream around the clock. Uses much less space.'],
-             ['sub_plus_events', 'Substream 24/7 plus HD AI alerts', 'Low-res around the clock, plus full-quality clips around motion/AI alerts.'],
+             ['sub_plus_events', 'Sub-stream 24/7 plus HD alerts', 'Low-res around the clock, plus full-quality clips around motion/AI alerts.'],
              ['events', 'HD on alerts only', 'Only full-quality clips around motion/AI alerts. Uses the least space.'],
              ['off', 'Off', 'Live view (and alerts) only, nothing recorded.']]
             .map(([v, t, d]) => `<label><input type="radio" name="c-mode" value="${v}" ${c.record_mode === v ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}
@@ -4617,16 +4639,15 @@ async function openCameraDialog(id, clone, prof) {
           <div class="row" style="margin-top:8px"><input type="time" id="c-start" value="${esc(c.schedule.start)}" style="width:auto"><span class="muted">to</span><input type="time" id="c-end" value="${esc(c.schedule.end)}" style="width:auto"></div>
           <div class="hint">If the end is earlier than the start, recording runs overnight. Same start and end = all day.</div></div>
         <h3>Video</h3>
-        <span></span><div><label class="check"><input type="checkbox" id="c-tlcopy" ${c.timeline_copy !== false ? 'checked' : ''}> Keep a light stream 2 copy for the timeline</label>
+        <span></span><div><label class="check"><input type="checkbox" id="c-tlcopy" ${c.timeline_copy !== false ? 'checked' : ''}> Also record the sub-stream, for a quick timeline</label>
           <div class="hint">With “HD 24/7”: the sub-stream is recorded too, so the timeline opens and scrubs instantly (alerts and downloads still use HD). Uses roughly 5–15% extra space.</div></div>
-        <label for="c-fps">Recording frame rate</label>
+        <label for="c-fps">Recording frame rate${tip('Pictures per second saved in recordings. Fewer saves space (10 fps uses about a third of 30 fps) but the computer has to re-encode the video. “Camera’s own” keeps it exactly as sent.')}</label>
         <div><select id="c-fps">${[0, 1, 2, 5, 10, 12, 15, 20, 25, 30].map(f => `<option value="${f}" ${c.record_fps === f ? 'selected' : ''}>${f ? f + ' fps' : "Camera's own (no re-encoding)"}</option>`).join('')}</select>
           <div class="hint">A lower frame rate saves space but re-encodes the video (uses the GPU encoder if set up).</div></div>
-        <span></span><div><label class="check"><input type="checkbox" id="c-transcode" ${c.transcode ? 'checked' : ''}> Convert recordings to H.264</label>
+        <span></span><div><label class="check"><input type="checkbox" id="c-transcode" ${c.transcode ? 'checked' : ''}> Convert recordings to H.264${tip('H.265 (HEVC) is a newer video format some cameras use; not every browser or phone can play it. Converting to H.264 makes recordings play everywhere, but uses more of the computer while recording.')}</label>
           <div class="hint">For H.265 cameras, so recordings play in every browser.</div></div>
-        <label for="c-seg">File length</label>
-        <div><select id="c-seg">${segOpts.map(([v, t]) => `<option value="${v}" ${c.segment_seconds === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
-          <div class="hint">How long each recording file is.</div></div>
+        <label for="c-seg">File length${tip('Recordings are saved as a series of files of this length. Shorter files are quicker to open and download; it doesn’t change how much is kept. 5 minutes suits most cameras.')}</label>
+        <div><select id="c-seg">${segOpts.map(([v, t]) => `<option value="${v}" ${c.segment_seconds === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <h3>Storage</h3>
         <label for="c-dir">Storage folder</label>
         <div><div class="row"><input type="text" id="c-dir" value="${esc(c.storage_dir)}" placeholder="Default: ${esc(settings ? settings.storage.dir : 'recordings')}" style="flex:1"><button type="button" id="c-browse">Browse…</button></div>
@@ -4634,21 +4655,21 @@ async function openCameraDialog(id, clone, prof) {
           <div class="hint">Any folder this computer can write to: another drive (<code>D:\\NVR</code>), a NAS (<code>\\\\NAS\\cameras</code> or <code>/mnt/nas</code>), or a synced cloud folder (<code>G:\\My Drive\\NVR</code> with Google Drive for desktop). A sub-folder named after the camera is created.</div></div>
         <label for="c-ret">Keep recordings for</label>
         <div class="row"><input type="number" id="c-ret" min="0" value="${c.retention_days}" style="width:110px"><span class="muted">days (0 = use the default, ${settings ? settings.storage.retention_days : 14})</span></div>
-        <label for="c-max">Space for this camera</label>
+        <label for="c-max">Space for this camera${tip('The most disk space this camera’s recordings may use. When it’s full, the oldest recordings are deleted. Example: 200 GB keeps roughly 2 weeks of a 4 MP camera recording 24/7.')}</label>
         <div class="row"><input type="number" id="c-max" min="0" step="0.5" value="${c.max_storage_gb}" style="width:110px"><span class="muted">GB (0 = no limit; oldest recordings are deleted above it)</span></div>
       </div>
 
       <div data-tab="detection" class="form" hidden>
         <span></span><label class="check"><input type="checkbox" id="d-motion" ${c.detect.motion ? 'checked' : ''}> Motion detection</label>
-        <label for="d-contrast">Min. contrast</label>
+        <label for="d-contrast">Sensitivity</label>
         <div><div class="row"><input type="range" id="d-contrast" min="4" max="100" value="${c.detect.min_contrast}" style="flex:1"><span id="d-contrast-v" class="muted" style="width:40px">${c.detect.min_contrast}</span></div>
-          <div class="hint">How different a pixel must be from the background to count as changed. Lower = more sensitive (night/IR may need lower); higher ignores noise and small light changes.</div></div>
-        <label for="d-objpx">Min. object size</label>
+          <div class="hint">How big a change in brightness counts as movement. Lower = more sensitive (night and infrared pictures may need lower); higher ignores noise, shadows and small light changes.</div></div>
+        <label for="d-objpx">Smallest movement${tip('Moving things smaller than this are ignored. Example: rain and insects are under 50 px; a person far away about 200 px; a person close up 2,000 px or more. Watch the live readout below while someone walks past to choose.')}</label>
         <div><div class="row"><input type="number" id="d-objpx" step="any" min="0" max="230400" value="${c.detect.min_object_px}" style="width:120px"><span class="muted">pixels (of a 640×360 picture)</span></div>
           <div class="hint">Moving areas smaller than this are ignored (rain, insects, noise). For scale: a person filling a quarter of the picture height ≈ 2,000 px; far away ≈ 200 px. Use the live readout below to choose.</div></div>
-        <label for="d-make">Make time</label>
+        <label for="d-make">Must move for${tip('Movement has to last this long before it counts. Example: 0.5 s ignores a flash of headlights or a bird flying past.')}</label>
         <div class="row"><input type="number" id="d-make" min="0" max="30" step="0.1" value="${c.detect.make_time_ms / 1000}" style="width:120px"><span class="muted">seconds of motion before it triggers</span></div>
-        <label for="d-travel">Object must travel</label>
+        <label for="d-travel">Must move at least${tip('Something has to move this far across the picture to count. Ignores trees, bushes and flags that sway in place. 0 = off.')}</label>
         <div class="row"><input type="number" id="d-travel" min="0" max="640" step="10" value="${c.detect.min_travel_px}" style="width:120px"><span class="muted">pixels (0 = off). Ignores trees and flags moving in place. <span style="color:#22c55e">Green ring</span> on the picture below: how far something must move.</span></div>
         <label>Ignore areas</label>
         <div><div class="surface" id="d-mask" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair">
@@ -4679,39 +4700,38 @@ async function openCameraDialog(id, clone, prof) {
         <div><label class="check"><input type="checkbox" id="c-sound" ${c.live_sound !== false ? 'checked' : ''}> Speaker button on the live picture</label>
           <div class="hint">Click 🔇 on the camera's picture (grid, camera view or full screen) to hear it; hover it for the volume. One camera plays at a time.</div></div>
         <label>Two-way audio</label>
-        <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker</label>
-          <div class="hint">Shows a <b>🎙️ Push to talk</b> button on the camera's live view: hold it and speak into this phone's or computer's microphone; the visitor hears you through the camera. For cameras with a speaker that support the ONVIF audio back-channel (most Dahua, Hikvision, Amcrest, Axis… doorbells and cameras).</div>
+        <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker${tip('Adds a 🎙️ Push to talk button to the camera’s live view: hold it and speak into this phone’s or computer’s microphone, and whoever is there hears you. Works with cameras and doorbells that have a speaker and support two-way audio over ONVIF (most Dahua, Hikvision, Amcrest and Axis).')}</label>
+          <div class="hint">Shows a <b>🎙️ Push to talk</b> button on the camera's live view.</div>
           <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there (and a short "goodbye" tune when you stop)</label>
           <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
           <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
       </div>
       <div data-tab="ai" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="d-ai" ${c.detect.ai ? 'checked' : ''}> Object recognition (AI)</label>
-          <div class="hint">${aiOn ? `Uses <b>${esc(settings.ai.provider)}</b>. Pictures are only sent to the AI while motion is seen (needs motion detection).` : '<span class="warnc">No AI is set up yet.</span> Choose one in Settings → Object recognition.'}</div></div>
+          <div class="hint">${aiOn ? `Uses the AI on this computer, only while motion is seen (so motion detection stays on).` : '<span class="warnc">No AI is set up yet.</span> Choose one in Settings → Object recognition.'}</div></div>
         <label>Alert on</label>
         <div><div class="chips" id="d-objs">${objs.map(o => `<label><input type="checkbox" value="${o}" ${c.detect.objects.includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
           ${more.length ? `<details class="more-objs"><summary>More things to watch for…</summary><div class="chips" id="d-more">${more.map(o => `<label><input type="checkbox" value="${o}">${o}</label>`).join('')}</div>
             <div class="hint">Tick one to add it to the list above.</div></details>` : ''}</div>
-        <label for="d-conf">Minimum confidence</label>
+        <label for="d-conf">How sure the AI must be${tip('The AI gives each thing it finds a score: how sure it is. Lower finds more (and more mistakes); higher is stricter. Example: at 50% a person it’s 70% sure about alerts; a shadow it’s 30% sure about doesn’t.')}</label>
         <div class="row"><input type="range" id="d-conf" min="5" max="95" value="${Math.round(c.detect.min_confidence * 100)}" style="flex:1"><span id="d-conf-v" class="muted" style="width:40px">${Math.round(c.detect.min_confidence * 100)}%</span></div>
         <label for="d-trig">What makes an alert</label>
-        <div><select id="d-trig"><option value="motion">Any motion</option><option value="objects">Only recognized objects (ignores trees, shadows, rain)</option></select>
-          <label class="check" style="margin-top:6px"><input type="checkbox" id="d-animals" ${c.detect.ignore_animals !== false ? 'checked' : ''}> Check motion with AI first — no alert when it's a cat (or another animal you don't watch for)</label>
-          <label for="d-hdcheck" style="margin-top:10px">Check in full quality (HD)</label>
+        <div><select id="d-trig"><option value="motion">Any motion</option><option value="objects">Only recognized objects (ignores trees, shadows, rain)</option></select>${tip('Any motion: every movement can become an alert, and the AI adds what it saw. Only recognized objects: an alert only when the AI finds something ticked above — far fewer alerts from wind, rain and headlights.')}
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="d-animals" ${c.detect.ignore_animals !== false ? 'checked' : ''}> Check motion with AI first — no alert when it's a cat (or another animal you don't watch for)${tip('With “Any motion”, the AI looks at each movement before it becomes an alert. If it’s an animal that isn’t ticked above (and nothing you do watch for), it isn’t kept. Tick “cat” above to get alerts for cats.')}</label>
+          <label for="d-hdcheck" style="margin-top:10px">Double-check in full quality (HD)${tip('The AI normally watches the light sub-stream. With this on, when it finds something, GAZE takes one full-quality picture and the AI looks again at that spot: confirmed (HD AI ✓), corrected (a cat, not a dog), or not confirmed (HD AI ?). “Leave out” drops unconfirmed finds and sends no notification for them. Needs a sub-stream.')}</label>
           <select id="d-hdcheck">
             <option value="mark" ${(c.detect.hd_check || 'mark') === 'mark' ? 'selected' : ''}>On — mark what HD doesn't confirm</option>
             <option value="drop" ${c.detect.hd_check === 'drop' ? 'selected' : ''}>On — leave out what HD doesn't confirm</option>
             <option value="off" ${c.detect.hd_check === 'off' ? 'selected' : ''}>Off</option>
           </select>
-          <div class="hint" style="margin-top:4px">The AI watches stream 2 (light on the computer). When it finds something new, one full-quality picture from the main stream is taken and the AI looks closely at that spot: confirmed ✓, corrected (a cat, not a dog), or not confirmed — marked, or left out of the alert (no notification for it either). Needs a separate stream 2.</div>
-          <div class="hint">With “Any motion”, the frames of each motion are sent to the AI before it becomes an alert. If the AI sees a cat, dog, bird… that isn't ticked above, and nothing you do watch for, the motion isn't kept on the Alerts page. Tick “cat” above to get alerts for cats.</div></div>
-        <label for="d-int">AI check interval</label>
-        <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks while there's motion (lower = quicker to recognise, more work for the computer)</span></div>
+</div>
+        <label for="d-int">AI looks every${tip('How often the AI checks the picture while something is moving. Lower recognises things quicker but works the computer harder. Example: 1 second suits most cameras; 0.5 for a busy street.')}</label>
+        <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds while there's motion</span></div>
         <label>Stationary objects</label>
-        <div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Stop alerting for objects that stay in one place</label>
+        <div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Stop alerting for objects that stay in one place${tip('A car parked in the driveway alerts when it arrives, then stays quiet while it stands still (people walking past still alert). It alerts again as soon as it moves or drives off.')}</label>
           <div class="row" style="margin-top:4px"><span class="muted">after</span><input type="number" id="d-parked-s" min="10" max="3600" value="${c.detect.parked_seconds || 60}" style="width:90px"><span class="muted">seconds without moving, for:</span></div>
           <div class="chips" id="d-parked-objs" style="margin-top:4px">${[...new Set([...objs, ...(c.detect.parked_objects || [])])].map(o => `<label><input type="checkbox" value="${o}" ${(c.detect.parked_objects || ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'boat']).includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
-          <div class="hint">A car parked in the driveway alerts when it arrives, then stays quiet while it stands still (people walking past still alert). It alerts again as soon as it moves or drives off.</div></div>
+</div>
         <label>Package delivery</label>
         <div><label class="check"><input type="checkbox" id="d-pkg" ${c.detect.packages ? 'checked' : ''}> Notice parcels delivered or picked up</label>
           <div class="surface" id="d-pkg-area" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair;margin-top:6px">
@@ -4721,8 +4741,7 @@ async function openCameraDialog(id, clone, prof) {
             <div class="seg" id="d-pkg-tool"><button type="button" class="small on" data-v="paint">🖌 Paint</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
             <label class="muted small" style="margin:0">Brush <select id="d-pkg-brush" class="small"><option value="1">Fine</option><option value="3">Small</option><option value="7" selected>Medium</option><option value="15">Large</option></select></label>
             <button type="button" class="small" id="d-pkg-clear">Clear</button></div>
-          <div class="hint" style="margin:4px 0 0" id="d-pkg-hint">Paint over where parcels are left (doorstep, porch) — just that spot. When an alert ends, only the painted part is compared with how it looked before, and the alert shows that part before and after.</div>
-          <div class="hint">GAZE compares this spot before and after each visit and notes when something was left or taken, with before/after pictures in the alert.</div></div>
+          <div class="hint" style="margin:4px 0 0" id="d-pkg-hint">Paint over where parcels are left (doorstep, porch) — just that spot. After each visit GAZE compares it with how it looked before, and notes a parcel left or taken, with before and after pictures in the alert. It must stay a minute to count.</div></div>
       </div>
       <div data-tab="osd" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="o-custom" ${c.osd.custom ? 'checked' : ''}> Use settings just for this camera</label>
@@ -4737,18 +4756,18 @@ async function openCameraDialog(id, clone, prof) {
 
       <div data-tab="ptz" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="p-on" ${c.ptz.enabled ? 'checked' : ''}> This camera can pan, tilt or zoom</label>
-          <div class="hint">Uses ONVIF, which most PTZ cameras support (you may need to turn ONVIF on in the camera's own settings, and some brands need a separate ONVIF user).</div></div>
+          <div class="hint">Turns on the joystick on the camera's picture.</div>${tip('Moves the camera using ONVIF, a standard most moving cameras support. You may need to turn ONVIF on in the camera’s own app or web page; some brands (e.g. Tapo, Reolink) need a separate ONVIF user made there.')}</div>
         <label for="p-host">Camera address</label><div><input type="text" id="p-host" value="${esc(c.ptz.host)}" placeholder="Same as the stream (${esc((parseUrl(c.url) || {}).ip || 'from the URL')})"></div>
-        <label for="p-port">ONVIF port</label><div class="row"><input type="number" id="p-port" min="1" max="65535" value="${c.ptz.port}" style="width:110px">
+        <label for="p-port">Control port${tip('The network port the camera listens on for control (ONVIF). Usually 80; Reolink uses 8000, Tapo 2020. Check the camera’s manual or app if it doesn’t connect.')}</label><div class="row"><input type="number" id="p-port" min="1" max="65535" value="${c.ptz.port}" style="width:110px">
           <span class="muted">80 for most cameras, 8000 Reolink, 2020 Tapo</span></div>
-        <label for="p-user">ONVIF login</label><div class="row"><input type="text" id="p-user" value="${esc(c.ptz.username)}" placeholder="Same as stream" style="flex:1" autocomplete="off"><input type="password" id="p-pass" value="${esc(c.ptz.password)}" placeholder="Same as stream" style="flex:1" autocomplete="new-password"></div>
+        <label for="p-user">Control login${tip('Usually the same user name and password as the video. Leave empty to use those. Tapo cameras: the camera account made in the Tapo app (Advanced settings → Camera account).')}</label><div class="row"><input type="text" id="p-user" value="${esc(c.ptz.username)}" placeholder="Same as stream" style="flex:1" autocomplete="off"><input type="password" id="p-pass" value="${esc(c.ptz.password)}" placeholder="Same as stream" style="flex:1" autocomplete="new-password"></div>
         <label for="p-speed">Speed</label><div class="row"><input type="range" id="p-speed" min="10" max="100" value="${Math.round(c.ptz.speed * 100)}" style="flex:1"><span class="muted" id="p-speed-v" style="width:44px">${Math.round(c.ptz.speed * 100)}%</span></div>
         <span></span><div class="row"><label class="check"><input type="checkbox" id="p-inv-pan" ${c.ptz.invert_pan ? 'checked' : ''}> Reverse left/right</label><label class="check"><input type="checkbox" id="p-inv-tilt" ${c.ptz.invert_tilt ? 'checked' : ''}> Reverse up/down</label></div>
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
       <div data-tab="zones" hidden>
         <div class="row" style="margin-bottom:8px"><button type="button" id="z-add-area">＋ Area</button><button type="button" id="z-add-line">＋ Line</button>
-          <span class="muted" id="z-msg">Click on the picture to place the corners; click the first corner (or Done) to finish.</span><button type="button" id="z-done" hidden class="primary">Done</button></div>
+          <span class="muted" id="z-msg">Click on the picture to place the corners; click the first corner (or Done) to finish.</span>${tip('Areas: alert only for things inside them, or when something stays too long (loitering). Lines: alert when something crosses, in one or both directions — e.g. a line across your gate. Each can be limited to some kinds of objects.')}<button type="button" id="z-done" hidden class="primary">Done</button></div>
         <div class="surface zone-ed" id="z-prev"><img alt=""><svg id="z-svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
         <div id="z-list"></div>
       </div>
@@ -4952,19 +4971,10 @@ function setupMaskEditor(mask, camId) {
   }
 }
 // Package delivery spot (camera → AI): painted on the camera picture like
-// the ignore areas. A box drawn by an older version becomes painted cells.
+// the ignore areas.
 let pkgCells = [], pkgUnbind = null;
 function setupPackageArea(c, camId) {
   pkgCells = decodeMask(c.detect.package_mask);
-  const box = c.detect.package_area || [];
-  if (!pkgCells.some(x => x) && box.length >= 3) {
-    const xs = box.map(p => p[0]), ys = box.map(p => p[1]);
-    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-    for (let i = 0; i < pkgCells.length; i++) {
-      const x = (i % MASK_W + 0.5) / MASK_W, y = (Math.floor(i / MASK_W) + 0.5) / MASK_H;
-      pkgCells[i] = x >= x0 && x <= x1 && y >= y0 && y <= y1;
-    }
-  }
   const paint = wirePainter({cv: $('d-pkg-grid'), cells: () => pkgCells, rgba: [255, 176, 32, 120], tools: $('d-pkg-tool'), brush: $('d-pkg-brush'), brushKey: 'pkgBrush', brushDefault: '7',
     changed: () => { if (pkgCells.some(x => x)) $('d-pkg').checked = true; }});
   $('d-pkg-clear').onclick = () => { pkgCells.fill(false); paint(); };
@@ -5263,7 +5273,7 @@ function finishDraft() {
   $('z-done').hidden = true; $('z-msg').textContent = 'Drag the corners to adjust.';
   if (!d || d.points.length < (d.kind === 'line' ? 2 : 3)) { drawZones(); return; }
   const n = dlgZones.filter(z => z.kind === d.kind).length + 1;
-  dlgZones.push({name: d.kind === 'line' ? `Line ${n}` : `Area ${n}`, kind: d.kind, points: d.points, objects: [], required: false, loiter_seconds: 0, direction: 'any', watch_items: false});
+  dlgZones.push({name: d.kind === 'line' ? `Line ${n}` : `Area ${n}`, kind: d.kind, points: d.points, objects: [], required: false, loiter_seconds: 0, direction: 'any'});
   drawZones(); renderZoneList();
 }
 function drawZones() {
@@ -5305,14 +5315,13 @@ function renderZoneList() {
       <div class="chips z-objs"><span class="muted small">Objects:</span>${ZONE_OBJECTS.map(o => `<label><input type="checkbox" value="${o}" ${z.objects.includes(o) ? 'checked' : ''}>${labelIcon(o)} ${o}</label>`).join('')}<span class="muted small">(none ticked = any)</span></div>
       ${z.kind === 'line' ? `<div class="row"><span class="muted">Report crossings</span><select class="z-dir"><option value="any">both ways</option><option value="ab">only A → B</option><option value="ba">only B → A</option></select></div>`
         : `<div class="row" style="flex-wrap:wrap;gap:14px">
-            <label class="check"><input type="checkbox" class="z-req" ${z.required ? 'checked' : ''}> Only alert for objects inside this area</label>
-            <label class="check">Loitering after <input type="number" class="z-loiter" min="0" max="3600" value="${z.loiter_seconds}" style="width:80px"> s <span class="muted">(0 = off)</span></label>
-            <label class="check"><input type="checkbox" class="z-items" ${z.watch_items ? 'checked' : ''}> Package delivery: notice parcels left or taken</label><div class="hint">Draw the area around your doorstep. With smart search on, GAZE tells “Package delivered” from “Package picked up”.</div></div>`}`;
+            <label class="check"><input type="checkbox" class="z-req" ${z.required ? 'checked' : ''}> Only alert for objects inside this area${tip('Objects outside this area don\u2019t raise an alert. Example: draw your driveway so cars driving past on the street are ignored.')}</label>
+            <label class="check">Alert if something stays longer than <input type="number" class="z-loiter" min="0" max="3600" value="${z.loiter_seconds}" style="width:80px"> seconds${tip('Loitering: someone (or something) staying in this area longer than this raises an alert. 0 = off. Example: 60 for a person hanging around your front gate.')}</label></div>`}`;
     const upd = () => {
       z.name = el.querySelector('.z-name').value.trim() || z.name;
       z.objects = [...el.querySelectorAll('.z-objs input:checked')].map(i => i.value);
       if (z.kind === 'line') z.direction = el.querySelector('.z-dir').value;
-      else { z.required = el.querySelector('.z-req').checked; z.loiter_seconds = Math.max(0, Math.round(+el.querySelector('.z-loiter').value || 0)); z.watch_items = el.querySelector('.z-items').checked; }
+      else { z.required = el.querySelector('.z-req').checked; z.loiter_seconds = Math.max(0, Math.round(+el.querySelector('.z-loiter').value || 0)); }
       drawZones();
     };
     if (z.kind === 'line') el.querySelector('.z-dir').value = z.direction || 'any';
@@ -5517,11 +5526,11 @@ async function renderStorage(body) {
     <label for="s-seg">Default file length</label><div><select id="s-seg">${segs.map(([v, t]) => `<option value="${v}" ${v === s.segment_seconds ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <div class="hint">Recordings are split into files of this length. Cameras can override it.</div></div>
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
-    <label for="s-max">Maximum storage</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
-    <label for="s-free">Keep free on disk</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
+    <label for="s-max">Maximum storage${tip('The most space all recordings together may use. When it’s reached, the oldest recordings are deleted to make room. Example: 1000 on a 2 TB drive leaves the other half for your own files.')}</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
+    <label for="s-free">Keep free on disk${tip('GAZE never fills the disk past this: the oldest recordings are deleted to keep this much space free, so Windows and other programs keep working. Example: 20 GB.')}</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
     <span></span><div><label class="check"><input type="checkbox" id="s-tlon" ${s.timelapse !== false ? 'checked' : ''}> Time-lapse previews</label>
       <div class="hint">The pictures shown while dragging along a timeline. Off: dragging moves the video itself, and nothing is kept or made.</div></div>
-    <label for="s-tlsec">Time-lapse pictures</label><div><div class="row">
+    <label for="s-tlsec">Time-lapse pictures${tip('How often a small picture is kept for the time-lapse, and how big. More often is smoother when you drag along the timeline; sharper is clearer. Example: one every 10 seconds at standard size uses about 35 MB a day per camera.')}</label><div><div class="row">
         <select id="s-tlsec">${[...new Set([2, 5, 10, 20, 30, 60, s.timelapse_seconds || 10])].sort((a, b) => a - b).map(n => `<option value="${n}" ${n === (s.timelapse_seconds || 10) ? 'selected' : ''}>One every ${n} seconds${n === 2 ? ' — smoothest' : n === 10 ? ' — standard' : n === 60 ? ' — lightest' : ''}</option>`).join('')}</select>
         <select id="s-tlw">${[[256, 'Standard (256 × 144)'], [384, 'Sharp (384 × 216)'], [512, 'Sharpest (512 × 288)']].map(([w, t]) => `<option value="${w}" ${w === (s.timelapse_width || 256) ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <span class="muted" id="s-tlsec-info"></span></div>
@@ -5583,18 +5592,18 @@ function renderDisplay(body) {
   const corners = SPOTS;
   const custom = !CLOCK_FORMATS.includes(d.clock_format);
   body.innerHTML = `<form class="card" id="f-display"><h2>Live view</h2><div class="form">
-    <label for="l-fps">Grid frame rate</label><div class="row"><input type="number" id="l-fps" min="1" max="30" value="${l.fps}" style="width:110px"><span class="muted">fps for the camera grid (sub-streams)</span></div>
-    <label for="l-width">Grid picture width</label><div><select id="l-width">${[[480, '480 (low)'], [640, '640'], [960, '960'], [1280, '1280 (HD)'], [1920, '1920'], [0, 'Native']].map(([v, t]) => `<option value="${v}" ${v === l.width ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <label for="l-hd">Full-screen frame rate</label><div class="row"><input type="number" id="l-hd" min="1" max="30" value="${l.hd_fps}" style="width:110px"><span class="muted">fps when a camera is opened (main stream)</span></div>
-    <label for="l-q">Picture quality</label><div><select id="l-q">${[[3, 'Very high'], [6, 'High'], [10, 'Medium'], [16, 'Low (saves bandwidth)']].map(([v, t]) => `<option value="${v}" ${v === l.quality ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <label for="l-ds">Data saver (this browser)</label><div><select id="l-ds">
+    <label for="l-fps">Smoothness in the grid${tip('Pictures per second (fps) for each camera in the Live grid. Higher is smoother but uses more of the computer and network. 5 is plenty for watching several cameras at once.')}</label><div class="row"><input type="number" id="l-fps" min="1" max="30" value="${l.fps}" style="width:110px"><span class="muted">pictures per second</span></div>
+    <label for="l-width">Picture size in the grid${tip('How wide (in pixels) each camera’s picture in the Live grid is made. Bigger is sharper on a large screen, but uses more of the computer and network. 640 suits most screens.')}</label><div><select id="l-width">${[[480, '480 (low)'], [640, '640'], [960, '960'], [1280, '1280 (HD)'], [1920, '1920'], [0, 'Native']].map(([v, t]) => `<option value="${v}" ${v === l.width ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <label for="l-hd">Smoothness when opened${tip('Pictures per second when you open a camera or watch it full screen (full quality). Example: 15 looks smooth; 25–30 is as smooth as the camera.')}</label><div class="row"><input type="number" id="l-hd" min="1" max="30" value="${l.hd_fps}" style="width:110px"><span class="muted">pictures per second</span></div>
+    <label for="l-q">Picture quality${tip('How much the live pictures are compressed to send to your browser. Higher looks cleaner but uses more network — choose Low for watching over mobile data. Recordings are not affected.')}</label><div><select id="l-q">${[[3, 'Very high'], [6, 'High'], [10, 'Medium'], [16, 'Low (saves bandwidth)']].map(([v, t]) => `<option value="${v}" ${v === l.quality ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <label for="l-ds">Data saver (this browser)${tip('For phones on mobile data: smaller live pictures, fewer per second, and lighter video when playing recordings. Set separately on each phone or computer.')}</label><div><select id="l-ds">
         <option value="auto" ${dsMode === 'auto' ? 'selected' : ''}>Automatic — on for phones (mobile data), off on computers</option>
         <option value="on" ${dsMode === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${dsMode === 'off' ? 'selected' : ''}>Off</option></select>
       <div class="hint">Smaller live pictures, fewer frames per second and light video for recordings. Saved in this browser only; now ${dataSaver ? '<b>on</b>' : 'off'} here.</div></div>
-    <span></span><div><label class="check"><input type="checkbox" id="l-pre" ${l.preload_hd_streams ? 'checked' : ''}> Keep HD streams ready in the background</label>
-      <div class="hint">Off (recommended): a camera's full-quality stream is only decoded while you have it open; until it arrives you see the sub-stream picture. On: opening a camera shows HD instantly, but every camera's HD stream is decoded all the time — a lot of GPU/CPU.</div></div>
+    <span></span><div><label class="check"><input type="checkbox" id="l-pre" ${l.preload_hd_streams ? 'checked' : ''}> Keep HD streams ready in the background${tip('Off (recommended): a camera’s full-quality picture is only prepared while you have it open — for a second you see the lighter picture. On: opening a camera shows full quality instantly, but every camera’s full-quality video is processed all the time, which uses a lot of the computer.')}</label>
+      <div class="hint">Opens cameras in full quality instantly, at the cost of much more work for the computer.</div></div>
     <h3>Overlays on live video</h3>
-    <label>Fullscreen button</label><div class="chips" id="g-fs">${corners.map(([k, t]) => `<label><input type="checkbox" value="${k}" ${d.fullscreen_corners.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
+    <label>Full-screen button${tip('Where the ⛶ full-screen button sits on each camera’s picture. Tick more than one to have it in several corners.')}</label><div class="chips" id="g-fs">${corners.map(([k, t]) => `<label><input type="checkbox" value="${k}" ${d.fullscreen_corners.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
     <label>Preview</label>
     <div class="surface" id="go-prev" style="aspect-ratio:16/9;max-width:560px">${status.cameras[0] ? `<img alt="" style="object-fit:fill" src="live/${enc(status.cameras[0].id)}/frame.jpg">` : ''}</div>
     <span></span><div class="hint" style="margin-top:-4px">For every camera without its own on-screen display (camera settings → On-screen display).</div>
@@ -5652,24 +5661,24 @@ function renderAi(body) {
     <p class="muted" style="margin-top:0">When a camera sees motion, a picture is checked for people, vehicles and animals. Turn it on per camera under <i>Motion &amp; AI</i>.</p>
     <div class="radio-cards">${PROVIDERS.map(([k, t, dsc]) => `<label><input type="radio" name="ai-p" value="${k}" ${a.provider === k ? 'checked' : ''}><b>${t}</b><small>${dsc}</small></label>`).join('')}</div>
     <div class="form" style="margin-top:14px">
-      <label for="ai-device">Run AI on</label><div><select id="ai-device">
+      <label for="ai-device">Run AI on${tip('The graphics card (GPU) is much faster and leaves the processor free for video. It works with any recent NVIDIA, AMD or Intel graphics on Windows (DirectX 12). The GPU add-on (about 25 MB) downloads by itself the first time; until then, or if the graphics card can’t be used, the processor takes over.')}</label><div><select id="ai-device">
         <option value="gpu" ${a.device !== 'cpu' ? 'selected' : ''}>Graphics card (GPU) — recommended</option>
         <option value="cpu" ${a.device === 'cpu' ? 'selected' : ''}>Processor (CPU)</option></select>
-        <div class="hint">For the built-in object recognition and faces &amp; plates. The graphics card is much faster and leaves the processor free for video; it works with any recent NVIDIA, AMD or Intel graphics on Windows (DirectX 12). The GPU runtime (about 25 MB) downloads by itself the first time; until then, or if the graphics card can't be used, the processor takes over.</div>
+        <div class="hint">For object recognition and faces &amp; plates.</div>
         <div class="hint" id="ai-device-st"></div></div>
-      <label class="p-builtin" for="ai-model">Model</label><div class="p-builtin"><select id="ai-model">
+      <label class="p-builtin" for="ai-model">AI model${tip('Bigger models recognise more, from further away, but take longer for each picture. Small or Medium suits most computers; Nano for an older PC with many cameras.')}</label><div class="p-builtin"><select id="ai-model">
         <option value="yolox_nano" ${a.builtin_model === 'yolox_nano' ? 'selected' : ''}>Nano — fastest (≈30 ms), good for small PCs</option>
         <option value="yolox_tiny" ${a.builtin_model === 'yolox_tiny' ? 'selected' : ''}>Tiny — balanced (≈90 ms), recommended</option>
         <option value="yolox_s" ${a.builtin_model === 'yolox_s' ? 'selected' : ''}>Small — more accurate (≈350 ms)</option>
         <option value="yolox_m" ${a.builtin_model === 'yolox_m' ? 'selected' : ''}>Medium — for bigger PCs (≈0.9 s, 100 MB)</option>
         <option value="yolox_l" ${a.builtin_model === 'yolox_l' ? 'selected' : ''}>Large — most accurate, powerful PCs only (≈2 s, 220 MB)</option></select>
         <div class="hint">Times are per picture on a 4-core PC; the AI only runs while there is motion.</div></div>
-      <label class="p-builtin" for="ai-verify">Double-check alerts</label><div class="p-builtin"><select id="ai-verify">
+      <label class="p-builtin" for="ai-verify">Double-check alerts${tip('When the AI thinks it sees something that would raise an alert, a bigger model looks at the same picture and has the final say: fewer false alerts and fewer mix-ups (a cat called a person). It only runs on those few pictures, so it suits normal PCs too.')}</label><div class="p-builtin"><select id="ai-verify">
         <option value="">Off</option>
         ${[['yolox_s', 'Small model (≈350 ms)'], ['yolox_m', 'Medium model (≈0.9 s) — recommended'], ['yolox_l', 'Large model (≈2 s)']].map(([k, t]) => `<option value="${k}" ${a.verify_model === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
-        <div class="hint">When the model above thinks it sees something that would raise an alert, a bigger model looks at the same picture and has the final say: fewer false alerts and fewer mix-ups (a cat called a person). It only runs on those few pictures, so it suits normal PCs too.</div></div>
-      <span class="p-builtin"></span><div class="p-builtin"><label class="check"><input type="checkbox" id="ai-night" ${a.night_boost !== false ? 'checked' : ''}> Night boost</label>
-        <div class="hint">Dark and infrared (black &amp; white) pictures are brightened and their contrast stretched before the AI looks at them, so people and animals are recognized better at night.</div></div>
+        <div class="hint">A bigger model confirms each find before it alerts: fewer false alerts.</div></div>
+      <span class="p-builtin"></span><div class="p-builtin"><label class="check"><input type="checkbox" id="ai-night" ${a.night_boost !== false ? 'checked' : ''}> Night boost${tip('Dark and infrared (black & white) pictures are brightened and their contrast stretched before the AI looks at them, so people and animals are recognised better at night. Recordings aren’t changed.')}</label>
+        <div class="hint">Better recognition in dark and infrared pictures.</div></div>
     </div>
     <div class="hint" id="ai-status" style="margin-top:10px"></div>
     <div class="actions"><button class="primary">Save</button>
@@ -5736,17 +5745,16 @@ async function renderHardware(body) {
     <form class="card" id="f-hw"><h2>GPU acceleration</h2>
     <p class="muted" style="margin-top:0">The GPU decodes video for the live view and motion detection, and encodes when a camera converts or lowers the frame rate of recordings. Normal recording copies the camera's video and needs no GPU. If the GPU fails, the NVR switches to the CPU automatically.</p>
     <div class="form">
-      <span></span><div><label class="check"><input type="checkbox" id="h-auto" ${h.auto !== false ? 'checked' : ''}> Choose automatically (recommended)</label>
-        <div class="hint">At every start GAZE tries the graphics card's video decoder and encoder and uses the first that works — for every stream, so the processor stays free. Untick to choose below yourself.</div></div>
-      <label for="h-dec">Video decoding</label><div><select id="h-dec">${Object.entries(DEC_LABELS).map(([k, v]) => { const ok = k === 'none' || k === 'auto' || caps.hwaccels.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
+      <span></span><div><label class="check"><input type="checkbox" id="h-auto" ${h.auto !== false ? 'checked' : ''}> Choose automatically (recommended)${tip('At every start GAZE tries the graphics card’s video features and uses the first that works, so the processor stays free. Untick only if you want to choose below yourself.')}</label>
+        <div class="hint">GAZE finds the fastest way this computer can handle video.</div></div>
+      <label for="h-dec">Video decoding${tip('Turning the camera’s compressed video into pictures (for live view and motion detection). A graphics card (NVIDIA, Intel Quick Sync, AMD) does this far more efficiently than the processor. Use Test to check it works.')}</label><div><select id="h-dec">${Object.entries(DEC_LABELS).map(([k, v]) => { const ok = k === 'none' || k === 'auto' || caps.hwaccels.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
         <div class="hint">${caps.hwaccels.length ? 'Your ffmpeg supports: ' + esc(caps.hwaccels.join(', ')) + '. Use Test to check the hardware is really there.' : 'Your ffmpeg reports no GPU support.'}</div></div>
-      <label for="h-enc">H.264 encoder</label><div><select id="h-enc">${Object.entries(ENC_LABELS).map(([k, v]) => { const ok = k === 'auto' || caps.encoders.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
+      <label for="h-enc">Video encoder${tip('Making video in the common H.264 format: used when recordings are converted, slowed to a lower frame rate, exported or played on a browser that can’t play the camera’s own format. “Automatic” picks the one that matches the decoder.')}</label><div><select id="h-enc">${Object.entries(ENC_LABELS).map(([k, v]) => { const ok = k === 'auto' || caps.encoders.includes(k); return `<option value="${k}" ${ok ? '' : 'disabled'}>${v}${ok ? '' : ' – not in this ffmpeg'}</option>`; }).join('')}</select>
         <div class="hint">“Automatic” picks the encoder that matches the decoder.</div></div>
-      <span></span><div><label class="check"><input type="checkbox" id="h-sub" ${h.gpu_substreams ? 'checked' : ''}> Also use the GPU for sub-streams</label>
-        <div class="hint">Off (recommended): the GPU only decodes full-quality streams you are watching. Small sub-streams (grid, motion detection) are cheaper on the CPU than on the GPU plus copying the pictures back.</div></div>
-      <span></span><div><label class="check"><input type="checkbox" id="h-bal" ${h.balance !== false ? 'checked' : ''}> Smart load balancing</label>
-        <div class="hint">When the GPU is busy (85% or more, e.g. a game or another program) and the processor has room, new live views, conversions and exports run on the CPU instead, and motion detection moves its decoding to whichever has capacity — and back when the GPU is free again. The AI always runs on the CPU.</div></div>
-      <label for="h-dev" class="vaapi">GPU device</label><div class="vaapi"><input type="text" id="h-dev" value="${esc(h.device)}" placeholder="/dev/dri/renderD128"><div class="hint">VAAPI only. Empty = default.</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="h-sub" ${h.gpu_substreams ? 'checked' : ''}> Also use the graphics card for sub-streams${tip('Off (recommended): the graphics card only handles full-quality video you’re watching. The small sub-streams (grid, motion detection) are actually cheaper on the processor than sending them to the graphics card and back.')}</label></div>
+      <span></span><div><label class="check"><input type="checkbox" id="h-bal" ${h.balance !== false ? 'checked' : ''}> Share the work between graphics card and processor${tip('When the graphics card is busy (85% or more, e.g. a game) and the processor has room, new live views, conversions and exports run on the processor instead, and motion detection moves to whichever has room — and back when the graphics card is free again.')}</label>
+        <div class="hint">Keeps GAZE smooth while you game or edit video on this computer.</div></div>
+      <label for="h-dev" class="vaapi">Graphics card device</label><div class="vaapi"><input type="text" id="h-dev" value="${esc(h.device)}" placeholder="/dev/dri/renderD128"><div class="hint">Linux only, for computers with more than one graphics card. Leave empty to use the default.</div></div>
     </div>
     <div class="actions"><button class="primary">Save</button><button type="button" id="h-test">Test selected options</button></div>
     <div id="h-result" style="margin-top:12px"></div></form>`;
@@ -5756,7 +5764,11 @@ async function renderHardware(body) {
   const form = () => ({auto: chk('h-auto'), hwaccel: val('h-dec'), encoder: val('h-enc'), device: val('h-dev').trim(), gpu_substreams: chk('h-sub'), balance: chk('h-bal')});
   // Choosing by hand switches "automatically" off.
   ['h-dec', 'h-enc', 'h-sub'].forEach(id => $(id).addEventListener('change', () => { $('h-auto').checked = false; }));
-  $('f-hw').onsubmit = (e) => { e.preventDefault(); saveSettings({hardware: form()}, 'Saved. Cameras are restarting with the new settings.'); };
+  $('f-hw').onsubmit = (e) => {
+    e.preventDefault();
+    const h = form(), same = Object.keys(h).every(k => JSON.stringify(h[k]) === JSON.stringify(settings.hardware[k]));
+    saveSettings({hardware: h}, same ? 'Saved' : 'Saved. Cameras are restarting with the new settings.');
+  };
   $('h-test').onclick = async () => {
     const btn = $('h-test'), out = $('h-result');
     btn.disabled = true; btn.textContent = 'Testing…'; out.innerHTML = '<span class="muted">Running a short test clip through the GPU…</span>';
@@ -5810,7 +5822,7 @@ function renderCloud(body) {
         <option value="events" ${c.upload === 'events' ? 'selected' : ''}>All alerts, including motion-only</option>
         <option value="all" ${c.upload === 'all' ? 'selected' : ''}>Everything, including 24/7 recordings (needs a fast upload and lots of cloud space)</option></select></div></div>
     <h3>3. Turn it on</h3>
-    <div class="form"><span></span><label class="check"><input type="checkbox" id="cl-on" ${c.enabled ? 'checked' : ''}> Back up</label></div>
+    <div class="form"><span></span><label class="check"><input type="checkbox" id="cl-on" ${c.enabled ? 'checked' : ''}> Copy new recordings there automatically</label></div>
     <div class="actions"><button type="button" id="cl-test">Test</button><button class="primary">Save</button></div><div id="cl-result" style="margin-top:10px"></div></form>`;
   const sync = () => {
     method = document.querySelector('input[name=cl-m]:checked').value;
@@ -5884,12 +5896,12 @@ async function renderSystemSettings(body) {
   const addrs = (sysinfo && sysinfo.addresses) || [];
   const [bind, port] = (() => { const i = s.listen.lastIndexOf(':'); return [s.listen.slice(0, i), s.listen.slice(i + 1)]; })();
   body.innerHTML = `<form class="card" id="f-sys"><h2>System</h2><div class="form">
-    <label for="y-name">Name of this system</label><div><input type="text" id="y-name" required value="${esc(s.name)}"></div>
+    <label for="y-name">Name of this system${tip('Shown in the browser tab and on notifications — handy with more than one GAZE. Example: Home, or Shop.')}</label><div><input type="text" id="y-name" required value="${esc(s.name)}"></div>
     <label>Web address</label><div id="y-addr"></div>
-    <label for="y-port">Port</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px"><span class="muted">1–65535 (default 8080)</span></div>
-    <label for="y-bind">Reachable from</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
+    <label for="y-port">Port${tip('The number after the colon in GAZE’s web address, e.g. http://192.168.1.10:8080. Only change it if another program already uses 8080.')}</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px"><span class="muted">1–65535 (default 8080)</span></div>
+    <label for="y-bind">Reachable from${tip('Who can open GAZE. “Every device on my network” lets your phone and other computers at home use it. “Only this computer” keeps it private to this PC.')}</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
       ${addrs.map(a => `<option value="${esc(a)}">Only via ${esc(a)}</option>`).join('')}</select><div class="hint">Changing the port or this setting takes effect after the NVR restarts.</div></div>
-    <label for="y-ffmpeg">ffmpeg program</label><div><input type="text" id="y-ffmpeg" required value="${esc(s.ffmpeg_path)}"><div class="hint">Name or full path of ffmpeg (ffprobe must be next to it).</div></div>
+    <label for="y-ffmpeg">ffmpeg program${tip('ffmpeg is the free video tool GAZE uses to record and convert. Leave as “ffmpeg” unless it’s somewhere unusual; then give its full path, e.g. C:\\ffmpeg\\bin\\ffmpeg.exe (ffprobe must be in the same folder).')}</label><div><input type="text" id="y-ffmpeg" required value="${esc(s.ffmpeg_path)}"><div class="hint">The video tool GAZE uses. Leave as it is unless you were told otherwise.</div></div>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
   if (![...$('y-bind').options].some(o => o.value === bind)) $('y-bind').add(new Option('Only via ' + bind, bind));
   $('y-bind').value = bind;
@@ -5921,9 +5933,9 @@ async function renderInfo(body) {
     <dt>Config file</dt><dd>${esc(sysinfo.config_path)}</dd><dt>Data folder</dt><dd>${esc(sysinfo.data_dir)}</dd>
     <dt>Log file</dt><dd>${esc(sysinfo.log_file || '–')}</dd><dt>Recordings folder</dt><dd>${esc(sysinfo.storage_dir)}</dd></dl></div>
     <div class="card admin-only"><h2>Updates</h2><div id="upd"></div>
-      <div class="form" style="margin-top:8px"><span></span><div><label class="check"><input type="checkbox" id="upd-auto" ${settings.update && settings.update.auto ? 'checked' : ''}> Install updates automatically</label>
-        <div class="hint">GAZE checks for a new version once a day. Off: a bar at the top tells you, and you choose when (⟳ Updates next to your name checks right away). On: it installs as soon as it's found, when no alert is going on — downloads, checks it, swaps it in and restarts in a few seconds (also as a Windows service).</div></div>
-        <label for="upd-repo">Update from</label><div><div class="row"><span class="muted">github.com/</span><input type="text" id="upd-repo" value="${esc((settings.update && settings.update.repo) || '')}" placeholder="owner/repository" style="flex:1"><button type="button" id="upd-repo-save">Save</button></div>
+      <div class="form" style="margin-top:8px"><span></span><div><label class="check"><input type="checkbox" id="upd-auto" ${settings.update && settings.update.auto ? 'checked' : ''}> Install updates automatically${tip('GAZE checks for a new version once a day. Off: a bar at the top tells you, and you choose when (⟳ Updates checks right away). On: it installs as soon as one is found, when no alert is going on, and restarts in a few seconds.')}</label>
+        <div class="hint">Off: you're told when there's a new version and choose when to install it.</div></div>
+        <label for="upd-repo">Update from${tip('Where new versions come from. Leave empty for the normal GAZE releases. Only change it if you build your own copy of GAZE.')}</label><div><div class="row"><span class="muted">github.com/</span><input type="text" id="upd-repo" value="${esc((settings.update && settings.update.repo) || '')}" placeholder="owner/repository" style="flex:1"><button type="button" id="upd-repo-save">Save</button></div>
           <div class="hint">Empty: the GitHub repository this copy of GAZE was built from. Enter your own (e.g. <code>you/NVR</code>) to get updates from your fork's releases — see UPDATES.md.</div></div></div></div>
     <div class="card changelog"><h2>What's new</h2><div id="chlog" class="muted">Loading…</div></div>`;
   try { $('chlog').innerHTML = mdLite(await (await fetch('api/changelog')).text()); } catch (e) {}
@@ -6074,10 +6086,10 @@ async function renderKnown(body) {
   body.innerHTML = `<div class="card"><h2>People &amp; vehicles</h2>
     <p class="muted" style="margin-top:0">Teach GAZE who and what it sees. Alerts then say “Recognized Mum” or “Plate ABC123 — Dad's car”, and you can search for them. Everything runs on this computer.</p>
     <div class="form">
-      <span></span><div><label class="check"><input type="checkbox" id="k-faces" ${a.faces ? 'checked' : ''}> Look for faces in alerts and name the people below</label>
-        <div class="hint">Uses OpenCV's YuNet (finds faces) and SFace (recognises them), about 40 MB downloaded once. Faces need to be reasonably large and facing the camera; it works best on door and entrance cameras.</div></div>
-      <span></span><div><label class="check"><input type="checkbox" id="k-plates" ${a.plates ? 'checked' : ''}> Read number plates of vehicles in alerts</label>
-        <div class="hint">Uses fast-alpr's plate finder and reader (about 10 MB). Plates must be readable in the full-quality recording.</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="k-faces" ${a.faces ? 'checked' : ''}> Look for faces in alerts and name the people below${tip('Runs on this computer (about 40 MB downloaded once; nothing is sent anywhere). Faces need to be fairly large and facing the camera, so it works best on door and entrance cameras. Example: alerts say “Recognized Sam”, and you can filter alerts by person.')}</label>
+        <div class="hint">Works best on door and entrance cameras, where faces are close.</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="k-plates" ${a.plates ? 'checked' : ''}> Read number plates of vehicles in alerts${tip('Runs on this computer (about 10 MB downloaded once). The plate must be readable in the full-quality video, so it suits a driveway or gate camera. Name a plate (e.g. “Sam’s car”) and alerts say whose car arrived.')}</label>
+        <div class="hint">The plate must be readable in the full-quality video.</div></div>
     </div><div class="actions"><button type="button" class="primary" id="k-save-ai">Save</button></div></div>
     ${inboxCard}
     <div class="card"><div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:1">Known people and vehicles</h2>
@@ -6181,19 +6193,19 @@ async function renderNotify(body) {
     </ol>
     <div class="form">
       <span></span><div><label class="check"><input type="checkbox" id="n-on" ${n.enabled ? 'checked' : ''}> Send notifications</label></div>
-      <label for="n-topic">Topic</label><div><div class="row"><input type="text" id="n-topic" value="${esc(n.topic || randomTopic())}" style="flex:1"><button type="button" id="n-new">New private topic</button></div>
+      <label for="n-topic">Topic${tip('Like a private channel name: your phone listens to it and GAZE posts to it. Anyone who knows the name can read it, so keep the long random one GAZE made.')}</label><div><div class="row"><input type="text" id="n-topic" value="${esc(n.topic || randomTopic())}" style="flex:1"><button type="button" id="n-new">New private topic</button></div>
         <div class="hint">On the public ntfy.sh server anyone who knows the topic name can read it, so keep this long random name.</div></div>
-      <label for="n-server">ntfy server</label><div><input type="text" id="n-server" value="${esc(n.server)}" placeholder="https://ntfy.sh">
+      <label for="n-server">ntfy server${tip('The service that passes notifications to your phone. Leave empty for the free public one (ntfy.sh). For full privacy you can run your own and put its address here.')}</label><div><input type="text" id="n-server" value="${esc(n.server)}" placeholder="https://ntfy.sh">
         <div class="hint">Pictures pass through this server. For full privacy run your own ntfy server and enter its address (and an access token below).</div></div>
-      <label for="n-token">Access token</label><div><input type="password" id="n-token" autocomplete="new-password" placeholder="${n.has_token ? 'Saved – leave empty to keep' : 'Only for a protected topic or your own server'}"></div>
+      <label for="n-token">Access token${tip('A password for a protected topic, or for your own ntfy server. Not needed with the public server.')}</label><div><input type="password" id="n-token" autocomplete="new-password" placeholder="${n.has_token ? 'Saved – leave empty to keep' : 'Only for a protected topic or your own server'}"></div>
       <label>Notify for</label><div class="checks">${NOTIFY_OBJECTS.map(([k, t]) => `<label class="check"><input type="checkbox" class="n-obj" value="${k}" ${n.objects.includes(k) ? 'checked' : ''}> ${t}</label>`).join('')}</div>
       <label>Cameras</label><div class="checks">${status.cameras.map(c => `<label class="check"><input type="checkbox" class="n-cam" value="${esc(c.id)}" ${!n.cameras.length || n.cameras.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('')}</div>
-      <label for="n-gap">How often</label><div class="row"><span class="muted">at most one every</span><input type="number" id="n-gap" min="0" max="240" value="${n.gap_minutes}" style="width:80px"><span class="muted">minutes per camera</span></div>
-      <label for="n-nfrom">At night</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
+      <label for="n-gap">How often${tip('So your phone doesn’t buzz constantly: after a notification, the same camera waits this long before sending another. 0 = every alert. Example: 5 minutes.')}</label><div class="row"><span class="muted">at most one every</span><input type="number" id="n-gap" min="0" max="240" value="${n.gap_minutes}" style="width:80px"><span class="muted">minutes per camera</span></div>
+      <label for="n-nfrom">At night${tip('A different limit for night time, usually shorter, since someone outside at night matters more. Example: 23:00 to 06:00, one every 0 minutes = every alert at night.')}</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
         <div class="hint">What was seen and for how long, who was recognised, number plates, zones and parcels.</div></div>
-      <label for="n-link">Open GAZE at</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
-        <div class="hint">Tapping a notification opens that alert in GAZE. Left empty, this computer's address on your home network is used (works on your Wi-Fi); for away from home use e.g. your computer's Tailscale name.</div></div>
+      <label for="n-link">Open GAZE at${tip('The address your phone uses to open GAZE when you tap a notification. Empty works on your home Wi-Fi. For away from home, use a remote-access address, e.g. your computer’s Tailscale name.')}</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
+        <div class="hint">Tapping a notification opens that alert here. Empty: your home network address.</div></div>
     </div></div>
     <div class="card"><div class="actions" style="margin:0"><button type="button" class="primary" id="n-save">Save</button><button type="button" id="n-test">Send a test</button>
       <span class="muted" style="margin-left:auto">${st.sent ? `${st.sent} sent since GAZE started${st.last_sent ? ', last ' + fmtDate(st.last_sent) : ''}` : ''}${st.last_error ? ` <span class="errc">· ${esc(st.last_error)}</span>` : ''}</span></div></div>`;
