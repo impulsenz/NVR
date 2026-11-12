@@ -91,7 +91,7 @@ fn has_who(e: &Event, w: &Who) -> bool {
         })
 }
 
-fn enc(s: &str) -> String {
+pub fn enc(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || "-_.".contains(c) {

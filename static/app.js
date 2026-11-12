@@ -584,6 +584,8 @@ document.querySelector('nav a[data-page="recordings"]').addEventListener('click'
 let lastPage = null, pageNet = new AbortController();
 function cutPageDownloads() {
   cutSpriteDownloads();
+  // Recordings' continuous players stop fetching (they carry on when shown).
+  document.querySelectorAll('#tl-videos .surface').forEach(el => { if (el._h) { el._h.hls.stopLoad(); el._h.started = false; } });
   for (const s of PAGES) if (s !== page) parkVideos($('page-' + s));
 }
 // Stop time-lapse pictures still being made or downloaded (asked again
@@ -597,7 +599,7 @@ function cutSpriteDownloads() {
 // A paused video that's still downloading keeps its connection: let go of
 // it (where it was is kept, and it's put back when the page is shown).
 function parkVideos(root) {
-  for (const v of root.querySelectorAll('video')) {
+  for (const v of root.querySelectorAll('video:not([data-hls])')) {
     if (v.dataset.parked || v.networkState !== HTMLMediaElement.NETWORK_LOADING || !v.getAttribute('src')) continue;
     v.dataset.parked = v.getAttribute('src'); v.dataset.parkedAt = v.currentTime;
     v.pause(); v.removeAttribute('src'); v.load();
@@ -929,10 +931,12 @@ class Player {
     if (this.tc) {
       this.seekTo(start, autoplay);
     } else {
-      this.video.src = item.url;
-      this.video.playbackRate = +this.box.querySelector('.p-speed').value;
-      const seek = () => { this.video.currentTime = start; if (autoplay) this.video.play().catch(() => {}); };
-      if (this.video.readyState >= 1) seek(); else this.video.addEventListener('loadedmetadata', seek, {once: true});
+      this.dropHls();
+      // A recording: streamed in pieces (opens and jumps without reading
+      // the file through, see hls.rs); otherwise the file itself.
+      const hu = item.kind !== 'clip' && hlsReady() && /^media\/[^/]+\/(rec|tl)\//.test(item.url) && item.url.replace(/^media\//, 'api/hls-file/');
+      if (hu) this.openHls(hu, item, start, autoplay);
+      else this.openFile(item, start, autoplay);
     }
     this.dl.href = item.url + '?download=1';
     this.marks = item.marks || [];
@@ -943,6 +947,33 @@ class Player {
     const kind = item.kind === 'clip' ? 'clip' : 'rec';
     if (TIMELAPSE) try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
   }
+  openFile(item, start, autoplay) {
+    const v = this.video;
+    v.src = item.url;
+    v.playbackRate = +this.box.querySelector('.p-speed').value;
+    const seek = () => { v.currentTime = start; if (autoplay) v.play().catch(() => {}); };
+    if (v.readyState >= 1) seek(); else v.addEventListener('loadedmetadata', seek, {once: true});
+  }
+  openHls(url, item, start, autoplay) {
+    const v = this.video;
+    const h = this._hls = new hlsLib({autoStartLoad: false, maxBufferLength: 20, backBufferLength: 30, startFragPrefetch: true,
+      manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1, fragLoadingMaxRetry: 2});
+    h.attachMedia(v);
+    h.on(hlsLib.Events.MANIFEST_PARSED, () => {
+      if (this._hls !== h) return;
+      h.startLoad(start);
+      v.currentTime = start; v.playbackRate = +this.box.querySelector('.p-speed').value;
+      if (autoplay) v.play().catch(() => {});
+    });
+    h.on(hlsLib.Events.ERROR, (_, d) => {
+      if (!d.fatal || this._hls !== h) return;
+      // Can't be streamed in pieces here: the file itself.
+      this.dropHls();
+      if (this.item === item) this.openFile(item, start, autoplay);
+    });
+    h.loadSource(url);
+  }
+  dropHls() { if (this._hls) { const h = this._hls; this._hls = null; h.destroy(); } }
   // The light timeline copies around this file: their time-lapse has a
   // picture every second, shown full size while dragging along the bar.
   async findLightCopies(item) {
@@ -982,6 +1013,7 @@ class Player {
     this.paint();
   }
   stop() {
+    this.dropHls();
     for (const v of [this.video, this.alt]) { v.pause(); v.removeAttribute('src'); v.load(); }
     this.item = null; this.nextSeg = null;
     if (this.tlap) this.tlap.hidden = true;
@@ -1068,6 +1100,7 @@ class Player {
     const pre = this.nextSeg && this.nextSeg.after === this.item.name && this.nextSeg.seg;
     if (pre && !this.tc && this.alt.dataset.url === pre.url && this.alt.readyState >= 2) {
       const old = this.video;
+      this.dropHls();  // the player left behind
       [this.video, this.alt] = [this.alt, old];
       this.video.style.visibility = ''; old.style.visibility = 'hidden';
       this.video.playbackRate = old.playbackRate; this.video.muted = old.muted;
@@ -1728,6 +1761,7 @@ function openAlertPicker(anchor, g, pick) {
 const camTl = {
   id: null, data: null, zoom: 21600, end: null, loadedAt: 0, pv: new Map(), pfGen: 0,
   open(id) {
+    hlsReady();  // for playing recordings (see Player.openHls)
     this.id = id; this.zoom = +$('ctl-zoom').value; this.end = null; this.pv = new Map();
     this.load();
   },
@@ -2194,6 +2228,7 @@ function noVideo(it) {
 }
 function playInFocus(it) {
   if (!it.play) return noVideo(it);
+  hlsReady();
   focusPlayback = it;
   updateSubscriptions();
   $('focus-img').hidden = true;
@@ -2266,6 +2301,7 @@ function resetAlertFilters() {
 let recPlayer = null;
 
 function showRecordings(camId, mode) {
+  hlsReady();  // the continuous player, ready by the time it's needed
   if (camId && cam(camId)) rec.cameras = new Set([camId]);
   renderFilters();
   setRecMode(mode || 'timeline');
@@ -2704,6 +2740,7 @@ function centerWindow() { tl.winStart = tl.T - tl.zoom / 2 * 1000; }
 
 function buildTimelineVideos() {
   const box = $('tl-videos');
+  box.querySelectorAll('.surface').forEach(el => { if (el._h) { el._h.hls.destroy(); el._h = null; } });
   box.innerHTML = tl.data.length ? '' : '<div class="empty">No cameras selected.</div>';
   for (const c of tl.data) {
     const el = document.createElement('div');
@@ -2711,13 +2748,18 @@ function buildTimelineVideos() {
     el.dataset.cam = c.camera;
     // Two players per camera: one plays while the next file loads in the
     // other, so moving from file to file doesn't blank the picture.
-    el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video>
+    el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video><video playsinline muted class="vid" data-hls style="position:absolute;inset:0;visibility:hidden"></video>
       <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div>
       <div class="ov tl"><span class="ovtext name">${esc(c.name)}</span><span class="ovtext tl-t"></span></div>
       <div class="ov tr"><button type="button" class="small solo-off" hidden>▦ All cameras</button><button type="button" class="fsbtn">⛶</button></div>`;
     el.querySelector('.fsbtn').onclick = () => fullscreen(el);
     el.querySelector('.solo-off').onclick = (e) => { e.stopPropagation(); tlSolo(null); };
-    el._vids = [...el.querySelectorAll('video')]; el._vids.forEach(watchFps);
+    el._vids = [...el.querySelectorAll('video:not([data-hls])')]; el._vids.forEach(watchFps);
+    el._hlsV = el.querySelector('video[data-hls]'); watchFps(el._hlsV);
+    // The continuous player is shown once it has the picture (until then
+    // the last picture stays).
+    for (const ev of ['seeked', 'loadeddata', 'playing', 'canplay'])
+      el._hlsV.addEventListener(ev, () => { if (el._mode === 'hls' && el._hlsV.readyState >= 2 && !el._hlsV.seeking) showHls(el); });
     el._active = 0;
     el._tc = dataSaver || noNativePlayback.has(c.camera);
     // Fall back to converted playback if this browser can't play the files.
@@ -2731,7 +2773,98 @@ function buildTimelineVideos() {
   if (tl.solo && !tl.data.some(c => c.camera === tl.solo)) tl.solo = null;
   tlSolo(tl.solo);
 }
-const activeVideo = (el) => el._vids[el._active];
+// ---------- Continuous playback (HLS) ----------
+// Each camera's recordings are played as one stream (the server indexes
+// the pieces of every file, see hls.rs): only the part needed is fetched,
+// the player buffers ahead, and it goes from one file to the next without
+// a break. The file-by-file players are kept for HD alert clips, converted
+// playback, and browsers that can't play the stream.
+let hlsLib;  // undefined: not loaded yet; 0: loading; false: not usable
+function hlsReady() {
+  if (hlsLib === undefined) {
+    hlsLib = 0;
+    const sc = document.createElement('script'); sc.src = 'hls.min.js';
+    sc.onload = () => { hlsLib = window.Hls && Hls.isSupported() ? Hls : false; if (hlsLib && page === 'recordings') tlSync(true); };
+    sc.onerror = () => { hlsLib = false; };
+    document.head.appendChild(sc);
+  }
+  return hlsLib || null;
+}
+const HLS_WIN = 90 * 60000;  // a playlist covers 1½ h either side
+function hlsFor(el, cam) {
+  if (el._h) return el._h;
+  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: 20, maxMaxBufferLength: 60, backBufferLength: 30,
+    startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1});
+  hls.attachMedia(el._hlsV);
+  const h = el._h = {hls, cam, frags: [], ready: false};
+  hls.on(hlsLib.Events.LEVEL_LOADED, (_, d) => {
+    h.frags = d.details.fragments.map(f => ({w: f.programDateTime, d: f.duration * 1000, m: f.start}));
+    h.ready = true; h.loadedAt = Date.now(); h.started = false;
+    tlSync(true);
+  });
+  hls.on(hlsLib.Events.ERROR, (_, d) => {
+    if (!d.fatal) return;
+    // Can't be played this way (e.g. a picture or sound format the browser
+    // can't stream): this camera goes back to playing the files.
+    console.warn('continuous playback off for', cam, d.details);
+    hls.destroy(); el._h = null; el._noHls = true; leaveHls(el); tlSync(true);
+  });
+  return h;
+}
+function hlsLoad(h, T, stream) {
+  const now = Date.now();
+  h.from = T - HLS_WIN; h.to = Math.min(now, T + HLS_WIN); h.live = now - h.to < 5000;
+  h.stream = stream; h.ready = false; h.frags = []; h.reqAt = now; h.started = false;
+  h.hls.stopLoad();
+  h.hls.loadSource(`api/hls/${enc(h.cam)}/${stream}.m3u8?from=${new Date(h.from).toISOString()}&to=${new Date(h.to + 60000).toISOString()}`);
+}
+// Wall time → time in the stream (a moment between two files: the start of
+// the next one, if it's close; null when it's not in the stream).
+function hlsAt(h, W) {
+  const f = h.frags; let lo = 0, hi = f.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (f[mid].w + f[mid].d <= W) lo = mid + 1; else if (f[mid].w > W) hi = mid - 1; else return {m: f[mid].m + (W - f[mid].w) / 1000};
+  }
+  const nx = f[lo];
+  return nx && nx.w - W < 15000 && lo > 0 ? {m: nx.m, gap: true} : null;
+}
+function showHls(el) {
+  el._hlsV.style.visibility = '';
+  el._vids.forEach(v => { v.style.visibility = 'hidden'; if (!v.paused) v.pause(); });
+}
+function leaveHls(el) {
+  if (el._mode !== 'hls') return;
+  el._mode = 'file';
+  el._hlsV.pause(); el._hlsV.style.visibility = 'hidden';
+  if (el._h) { el._h.hls.stopLoad(); el._h.started = false; }
+  el._vids.forEach(v => delete v.dataset.url);  // the files load afresh at the right time
+}
+// Play camera `el` at tl.T with the continuous stream; false: play the file.
+function tlHls(el, c, s, force) {
+  const hd = tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
+  if (el._tc || el._noHls || s.kind === 'clip' || hd || !hlsReady()) { leaveHls(el); return false; }
+  const h = hlsFor(el, c.camera), q = tlQ(), T = tl.T, now = Date.now();
+  const busy = !h.ready && now - (h.reqAt || 0) < 5000;
+  // A playlist for this stream and time (a new one past its ends, and
+  // every so often near now, where the recording keeps growing).
+  if (h.stream !== q || ((T < h.from || T > h.to || (h.live && T > h.to - 15000 && now - (h.loadedAt || 0) > 15000)) && !busy)) hlsLoad(h, T, q);
+  // Playlist on its way (a moment): the picture on screen stays.
+  if (!h.ready) { el._vids.forEach(v => { if (!v.paused) v.pause(); }); return true; }
+  const at = hlsAt(h, T);
+  if (!at) { leaveHls(el); return false; }
+  el._mode = 'hls';
+  const v = el._hlsV;
+  if (!h.started) { h.hls.startLoad(at.m); h.started = true; force = true; }
+  v.playbackRate = tl.speed;
+  if (force || Math.abs(v.currentTime - at.m) > Math.max(0.8, tl.speed * 0.5)) v.currentTime = at.m;
+  // Between two files: wait at the start of the next one.
+  if (tl.playing && !at.gap && v.paused) v.play().catch(() => {});
+  if ((!tl.playing || at.gap) && !v.paused) v.pause();
+  if (v.style.visibility === 'hidden' && v.readyState >= 2 && !v.seeking) showHls(el);
+  return true;
+}
+const activeVideo = (el) => el._mode === 'hls' ? el._hlsV : el._vids[el._active];
 // Make player `i` the active one, showing it once it has a picture (the
 // other one keeps showing its last picture meanwhile).
 function revealWhenReady(el, i) {
@@ -2753,6 +2886,7 @@ function revealWhenReady(el, i) {
   setTimeout(done, 15000);
 }
 function showVideo(el, i) {
+  if (el._hlsV) { el._hlsV.style.visibility = 'hidden'; if (!el._hlsV.paused) el._hlsV.pause(); }
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
 }
@@ -2829,8 +2963,11 @@ function tlSync(force) {
     let v = activeVideo(el);
     el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
     const s = c && segAt(c, tl.T);
-    if (!s) { msg.hidden = false; el._vids.forEach(x => { x.pause(); x.style.visibility = 'hidden'; }); continue; }
+    if (!s) { msg.hidden = false; el.querySelector('.sprite').hidden = true; [...el._vids, el._hlsV].forEach(x => { x.pause(); x.style.visibility = 'hidden'; }); continue; }
     msg.hidden = true;
+    // Played as one continuous stream where it can be (see tlHls).
+    if (tlHls(el, c, s, force)) continue;
+    v = activeVideo(el);
     const want = (tl.T - new Date(s.start).getTime()) / 1000;
     if (el._tc) {
       // Converted stream: restart it at the wanted time when needed.
@@ -3312,12 +3449,17 @@ function previewAll() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
     el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
-    const s = c && segAt(c, tl.T), sp = el.querySelector('.sprite');
+    const T = tl.T;
+    // The time-lapse is of the 24/7 recording (the blue line), whichever
+    // stream is chosen: dragging shows it even where the chosen stream (say
+    // Main stream, recorded only for alerts) has no footage; letting go
+    // there says so.
+    const ps = c && previewSources(c.segments).find(x => new Date(x.start).getTime() <= T && T < (isGrowing(x) ? Date.now() : new Date(x.end).getTime()) + 1000);
+    const s = (c && segAt(c, T)) || (tl.scrub === 'timelapse' && !el._tc ? ps : null), sp = el.querySelector('.sprite');
     if (sp.classList.contains('fading')) { sp._gen = (sp._gen || 0) + 1; sp.classList.remove('fading'); }
     el.querySelector('.msg').hidden = !!s;
-    if (!s) el._vids.forEach(x => x.style.visibility = 'hidden');
+    if (!s) [...el._vids, el._hlsV].forEach(x => x.style.visibility = 'hidden');
     if (!s) { sp.hidden = true; continue; }
-    const T = tl.T;
     // Scrubbing with the video itself (sub-stream or main stream): seek it.
     if (tl.scrub !== 'timelapse' && !el._tc) {
       const vs = segAt(c, T, tl.scrub) || s;
@@ -3327,13 +3469,10 @@ function previewAll() {
     }
     // The last moments (newer than the preview): the live picture.
     if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; continue; }
-    // The time-lapse is of the 24/7 recording (the blue line), whichever
-    // stream is chosen: on Main stream the HD alert clips have none of their
-    // own, so their moments show the 24/7 recording's pictures.
-    const ps = previewSources(c.segments).find(x => new Date(x.start).getTime() <= T && T < (isGrowing(x) ? Date.now() : new Date(x.end).getTime()) + 1000) || s;
-    spriteFor(c.camera, ps).then(info => {
+    const src = ps || s;
+    spriteFor(c.camera, src).then(info => {
       if (!info || tl.T !== T) return;
-      const off = (T - new Date(ps.start).getTime()) / 1000;
+      const off = (T - new Date(src.start).getTime()) / 1000;
       if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) sp.hidden = false;
     });
   }

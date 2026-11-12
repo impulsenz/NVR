@@ -14,6 +14,7 @@ mod ffmpeg;
 mod finalize;
 mod fsbrowse;
 mod ftp;
+mod hls;
 mod identify;
 mod imgutil;
 mod inbox;

@@ -45,6 +45,20 @@ pub fn router(mgr: Arc<Manager>) -> Router {
             }),
         )
         .route(
+            "/hls.min.js",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                        (header::CACHE_CONTROL, "public, max-age=86400"),
+                    ],
+                    // hls.js 1.5.20 (Apache-2.0, see static/vendor/hls.js-LICENSE.txt):
+                    // plays the recordings as one continuous stream.
+                    include_str!("../static/vendor/hls.min.js"),
+                )
+            }),
+        )
+        .route(
             "/app.css",
             get(|| async {
                 (
@@ -193,6 +207,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/motion", get(camera_motion))
         .route("/api/cloud/test", post(cloud_test))
         .route("/api/live/ws", get(live_ws))
+        .route("/api/hls/{id}/{stream}", get(hls_playlist))
+        .route("/api/hls-file/{id}/{kind}/{name}", get(hls_file_playlist))
         .route("/media/{id}/rec/{name}", get(serve_recording))
         .route("/media/{id}/events/{name}", get(serve_event_file))
         .route("/media/{id}/tl/{name}", get(serve_timeline_file))
@@ -1572,6 +1588,96 @@ async fn timeline(
 }
 
 #[derive(Deserialize)]
+struct HlsQuery {
+    from: DateTime<chrono::FixedOffset>,
+    to: DateTime<chrono::FixedOffset>,
+}
+
+/// A camera's recordings of one stream ("sub" or "main", path ends in
+/// `.m3u8`) between two times, as one continuous HLS playlist (see hls.rs).
+/// HD alert clips aren't in it (they're played as files).
+async fn hls_playlist(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Path((id, stream)): Path<(String, String)>,
+    Query(q): Query<HlsQuery>,
+) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&id)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let c = camera!(m, id);
+    let stream = stream.trim_end_matches(".m3u8").to_string();
+    let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
+    if to <= from || (to - from).num_hours() > 26 {
+        return err(StatusCode::BAD_REQUEST, "bad time range");
+    }
+    let text = tokio::task::spawn_blocking(move || {
+        let t = library::timeline(&m, std::slice::from_ref(&c.cfg.id), from, to);
+        let mut segs: Vec<_> = t
+            .into_iter()
+            .flat_map(|x| x.segments)
+            .filter(|s| s.kind != "clip" && s.stream == stream)
+            .collect();
+        segs.sort_by_key(|s| s.start);
+        let mut files = Vec::new();
+        for s in segs {
+            let path = if s.kind == "sub" {
+                storage::timeline_dir(&c.dir).join(&s.name)
+            } else {
+                c.dir.join(&s.name)
+            };
+            files.push(crate::hls::PlaylistFile { path, url: s.url, start: s.start });
+        }
+        crate::hls::playlist(&files, 4.0, "../../../")
+    })
+    .await
+    .unwrap_or_default();
+    (
+        [
+            (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        text,
+    )
+        .into_response()
+}
+
+/// One recording as an HLS playlist of its pieces (see hls.rs): the camera
+/// view's player opens and jumps within a file without reading it through.
+async fn hls_file_playlist(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Path((id, kind, name)): Path<(String, String, String)>,
+) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&id)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let c = camera!(m, id);
+    let name = name.trim_end_matches(".m3u8").to_string();
+    let (path, url) = match kind.as_str() {
+        "rec" => (storage::resolve(&c.dir, &name), library::rec_url(&c.cfg.id, &name)),
+        "tl" => (
+            storage::resolve(&storage::timeline_dir(&c.dir), &name),
+            format!("media/{}/tl/{}", library::enc(&c.cfg.id), library::enc(&name)),
+        ),
+        _ => return err(StatusCode::NOT_FOUND, "not found"),
+    };
+    let Ok(path) = path else { return err(StatusCode::NOT_FOUND, "not found") };
+    let start = Local::now();
+    let text = tokio::task::spawn_blocking(move || {
+        crate::hls::index_cached(&path)?;
+        Some(crate::hls::playlist(&[crate::hls::PlaylistFile { path, url, start }], 4.0, "../../../../"))
+    })
+    .await
+    .ok()
+    .flatten();
+    match text {
+        Some(t) => ([(header::CONTENT_TYPE, "application/vnd.apple.mpegurl"), (header::CACHE_CONTROL, "no-store")], t).into_response(),
+        None => err(StatusCode::NOT_FOUND, "this recording can't be streamed in pieces"),
+    }
+}
+
+#[derive(Deserialize)]
 struct ExportQuery {
     camera: String,
     from: DateTime<chrono::FixedOffset>,
@@ -1666,13 +1772,6 @@ async fn serve_recording(
     let c = camera!(m, id);
     match storage::resolve(&c.dir, &name) {
         Ok(p) => {
-            // First time this recording is opened: make it quick to seek.
-            crate::finalize::prepare_for_viewing(
-                &m.config().server.ffmpeg_path,
-                &p,
-                std::time::Duration::from_secs(20),
-            )
-            .await;
             serve_file(p, req, Some(name), false).await
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
@@ -1687,13 +1786,6 @@ async fn serve_timeline_file(
     let c = camera!(m, id);
     match storage::resolve(&storage::timeline_dir(&c.dir), &name) {
         Ok(p) => {
-            // First time this recording is opened: make it quick to seek.
-            crate::finalize::prepare_for_viewing(
-                &m.config().server.ffmpeg_path,
-                &p,
-                std::time::Duration::from_secs(20),
-            )
-            .await;
             serve_file(p, req, Some(name), false).await
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
@@ -1954,6 +2046,9 @@ async fn ensure_sprite(
     for n in 0..info.pages {
         std::fs::rename(page(&staging, n), page(&prefix, n))?;
     }
+    // What the pages hold (how many pictures, where): without it the
+    // preview isn't known to be there, and would be made again each time.
+    std::fs::write(&meta, serde_json::to_vec(&info)?)?;
     // Pages beyond the new end (from an older, longer version).
     if let Ok(rd) = std::fs::read_dir(&dir) {
         let start = format!("{name}.sprite-");
@@ -3334,6 +3429,7 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
     let open = matches!(
         path.as_str(),
         "/" | "/app.js"
+            | "/hls.min.js"
             | "/app.css"
             | "/logo.png"
             | "/icon.png"

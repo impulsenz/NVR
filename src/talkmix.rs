@@ -203,7 +203,9 @@ async fn mix(ffmpeg: &str, target: &Path, talk: &Path, offset: f64) -> Result<()
     if !audio {
         cmd.arg("-shortest");
     }
+    // Fragmented like the recordings (the continuous player streams it in pieces).
     let out = cmd
+        .args(crate::finalize::FRAGMENTED)
         .args(["-f", "mp4"])
         .arg(&tmp)
         .stdin(std::process::Stdio::null())

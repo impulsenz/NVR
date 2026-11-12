@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 0.6.33 — November 2026
+- **Smooth, continuous playback in Recordings**: each camera's recordings now play as one continuous stream instead of 5-minute files one after another. GAZE indexes the small pieces every recording is already made of, so the player fetches only the part it needs, buffers ahead, and goes from one file to the next with no reload and no black blink. Jumping to any moment shows video in a fraction of a second. Nothing is converted or re-encoded. (HD alert clips, and browsers that can't stream it, still play the files.)
+- **Camera view playback opens instantly too**: opening a recording at a moment, or jumping within it, fetches just that part.
+- **No more waiting for a recording to be "prepared"**: the first time a recording was opened it used to be copied into another format first (up to 20 seconds). That's gone; recordings an earlier version copied are turned back, once, in the background (System → Tasks: "Preparing recordings for smooth playback").
+- **Time-lapse previews are kept for good**: a fault since 0.6.1 meant previews weren't recognised as made, so they were made again after a refresh (and in the background, over and over). They're now kept and come back straight away after a refresh. Previews made before this version are made once more, then kept.
+- **Main stream (HD) time-lapse**: with Main stream chosen you can drag through the whole timeline with the time-lapse, even where only the sub-stream is recorded; letting go there says there's no HD footage at that time.
+
 ## 0.6.32 — November 2026
 - **Time-lapse scrubbing on Main stream (HD)**: dragging through Recordings with Main stream chosen now shows the time-lapse pictures, as it does on Sub-stream. The HD alert clips have no time-lapse of their own, so their moments show the 24/7 recording's pictures (the blue line).
 
