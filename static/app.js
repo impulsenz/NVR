@@ -3587,12 +3587,11 @@ function scrubVideo(el, seg, at) {
 // System monitor
 // ======================================================================
 let sysRange = 3600, sysTimer = null, sysHist = [];
+// The computer's load over time: [key, name, colour, key of its peaks].
 const SERIES = [
-  ['cpu', 'CPU (whole computer)', '#4f8cff'],
-  ['nvr_cpu', 'CPU used by NVR', '#22c55e'],
-  ['gpu', 'GPU', '#a78bfa'],
-  ['ram', 'Memory (whole computer)', '#f59e0b'],
-  ['nvr_ram', 'Memory used by NVR', '#ef4444'],
+  ['cpu', 'CPU', '#4f8cff', 'cpu_max'],
+  ['gpu', 'GPU', '#a78bfa', 'gpu_max'],
+  ['ram', 'Memory', '#f59e0b', null],
 ];
 // Graph lines switched off by the viewer (remembered).
 const graphHidden = new Set(store.get('graph-hidden', []));
@@ -3848,7 +3847,7 @@ async function loadSystem() {
     card('Recording rate', fmtBytes(usage.bytes_per_hour) + '/h', `${fmtBytes(usage.bytes_per_day)} per 24 hours`, null) +
     card('Days of recording', usage.days_capacity != null ? (usage.days_capacity < 2 ? usage.days_capacity.toFixed(1) + ' days' : Math.floor(usage.days_capacity) + ' days') : '–',
       usage.days_capacity != null ? `fit at the current rate (limited by ${esc(usage.limited_by)}). Retention is set to ${usage.retention_days ? usage.retention_days + ' days' : 'forever'}${usage.retention_days && usage.days_capacity < usage.retention_days ? ' — <span class="warnc">not enough space, oldest recordings will be deleted sooner</span>' : ''}.` : 'Shown once some recordings exist.', null);
-  sysHist = mon.history;
+  sysHist = mon.history; sysSpan = mon.range || sysRange;
   drawGraph();
   // Storage locations
   $('sys-storage').innerHTML = usage.locations.length ? `<table><thead><tr><th>Location</th><th>Cameras</th><th>Used by NVR</th><th>Free</th><th class="hide-sm">Per day</th><th>Full in</th></tr></thead><tbody>` +
@@ -3879,46 +3878,92 @@ async function loadKinds() {
     ${list.map(u => `<tr><td>${esc(u.name)}${bar(u)}</td>${KINDS.map(([k]) => k === 'other' ? `<td class="hide-sm">${u[k] ? fmtBytes(u[k]) : '–'}</td>` : cell(u, k)).join('')}<td><b>${fmtBytes(sum(u))}</b></td></tr>`).join('')}
     </tbody></table><div class="hint">Counted every few minutes. “Sub-stream” includes the light copies kept for the timeline; time-lapse previews are deleted along with their recordings.</div>`;
 }
+let sysSpan = 3600;
+// Time marks at round times for the range shown: [step in s, label].
+function graphTicks(t0, t1) {
+  const span = t1 - t0, p2 = (n) => String(n).padStart(2, '0');
+  const hm = (d) => `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const day = (d) => d.toLocaleDateString(undefined, {weekday: 'short', day: 'numeric'});
+  const date = (d) => d.toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+  const [step, fmt] = span <= 3600 ? [600, hm] : span <= 6 * 3600 ? [3600, hm] : span <= 86400 ? [3 * 3600, hm]
+    : span <= 7 * 86400 ? [86400, day] : [5 * 86400, date];
+  const out = [];
+  // From local midnight, so marks fall on round local times.
+  const m = new Date(t0 * 1000); m.setHours(0, 0, 0, 0);
+  for (let t = m.getTime() / 1000; t <= t1; t += step) if (t >= t0) out.push([t, fmt(new Date(t * 1000))]);
+  return out;
+}
 function drawGraph() {
-  const svg = $('sys-graph'), W = svg.clientWidth || 800, H = 220, h = sysHist;
+  const svg = $('sys-graph'), W = svg.clientWidth || 800, H = 260, h = sysHist;
+  const L = 40, R = 10, T = 12, B = 26;  // margins
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  if (h.length < 2) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" fill="#8b93a3" text-anchor="middle" font-size="13">Collecting data… (a point every few seconds)</text>`; $('sys-legend').innerHTML = ''; return; }
-  const t0 = h[0].t, t1 = h[h.length - 1].t, X = (t) => (t - t0) / Math.max(1, t1 - t0) * (W - 40) + 36, Y = (v) => H - 18 - v / 100 * (H - 28);
-  let g = '';
-  for (const v of [0, 25, 50, 75, 100]) g += `<line x1="36" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" stroke="#2a2f3a"/><text x="30" y="${Y(v) + 4}" fill="#8b93a3" font-size="10" text-anchor="end">${v}%</text>`;
-  const ticks = 6;
-  for (let i = 0; i <= ticks; i++) {
-    const t = t0 + (t1 - t0) * i / ticks, d = new Date(t * 1000);
-    const p2 = (n) => String(n).padStart(2, '0');
-    const lab = t1 - t0 > 86400 ? `${d.getDate()}/${d.getMonth() + 1} ${p2(d.getHours())}:00` : t1 - t0 < 900 ? `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}` : `${p2(d.getHours())}:${p2(d.getMinutes())}`;
-    g += `<text x="${X(t)}" y="${H - 3}" fill="#8b93a3" font-size="10" text-anchor="middle">${lab}</text>`;
+  const live = h.filter(p => !p.gap);
+  if (live.length < 2) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" fill="#8b93a3" text-anchor="middle" font-size="13">Collecting data… (a reading every few seconds)</text>`; $('sys-legend').innerHTML = ''; return; }
+  // The whole range asked for (not just where there's data).
+  const t1 = h[h.length - 1].t, t0 = t1 - sysSpan;
+  const X = (t) => L + (t - t0) / Math.max(1, t1 - t0) * (W - L - R), Y = (v) => T + (1 - Math.min(100, Math.max(0, v)) / 100) * (H - T - B);
+  let g = '<defs>' + SERIES.map(([k, , c]) => `<linearGradient id="gg-${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".38"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient>`).join('')
+    + '<pattern id="gg-gap" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="3" height="6" fill="rgba(255,255,255,.05)"/></pattern></defs>';
+  for (const v of [0, 25, 50, 75, 100]) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="rgba(255,255,255,${v ? .06 : .14})" ${v ? 'stroke-dasharray="3 4"' : ''}/><text x="${L - 8}" y="${Y(v) + 3.5}" fill="#8b93a3" font-size="10.5" text-anchor="end">${v}%</text>`;
+  for (const [t, lab] of graphTicks(t0, t1)) g += `<line x1="${X(t)}" x2="${X(t)}" y1="${T}" y2="${H - B}" stroke="rgba(255,255,255,.05)"/><text x="${X(t)}" y="${H - 8}" fill="#8b93a3" font-size="10.5" text-anchor="middle">${lab}</text>`;
+  // Runs of readings between gaps (no line drawn across a gap).
+  const runs = []; let cur = [];
+  for (const p of h) { if (p.gap) { if (cur.length) runs.push(cur); cur = []; } else cur.push(p); }
+  if (cur.length) runs.push(cur);
+  // Gaps: hatched (GAZE wasn't running or the computer was off).
+  let gs = null;
+  const w1 = h.length > 1 ? (h[1].t - h[0].t) : 60;
+  h.forEach((p, i) => { if (p.gap && gs == null) gs = p.t - w1; if ((!p.gap || i === h.length - 1) && gs != null) { const e = p.gap ? p.t : p.t - w1; g += `<rect x="${X(gs)}" y="${T}" width="${Math.max(0, X(e) - X(gs))}" height="${H - T - B}" fill="url(#gg-gap)"><title>No readings (GAZE wasn't running)</title></rect>`; gs = null; } });
+  // Smooth line through the points (curves through the midpoints).
+  const line = (pts) => pts.map((q, i) => i === 0 ? `M${q[0].toFixed(1)},${q[1].toFixed(1)}` : `Q${pts[i - 1][0].toFixed(1)},${pts[i - 1][1].toFixed(1)} ${((pts[i - 1][0] + q[0]) / 2).toFixed(1)},${((pts[i - 1][1] + q[1]) / 2).toFixed(1)}`).join('') + (pts.length > 1 ? `T${pts[pts.length - 1][0].toFixed(1)},${pts[pts.length - 1][1].toFixed(1)}` : '');
+  const shown = SERIES.filter(([k]) => !graphHidden.has(k) && live.some(p => p[k] != null));
+  for (const [k, , c, peak] of shown) {
+    for (const run of runs) {
+      const pts = run.filter(p => p[k] != null).map(p => [X(p.t), Y(p[k])]);
+      if (pts.length < 2) continue;
+      // Peaks as a faint band above the average.
+      if (peak) { const top = run.filter(p => p[peak] != null).map(p => [X(p.t), Y(p[peak])]); if (top.length > 1) g += `<path d="${line(top)}L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}${pts.slice().reverse().map(q => `L${q[0].toFixed(1)},${q[1].toFixed(1)}`).join('')}Z" fill="${c}" fill-opacity=".10"/>`; }
+      const d = line(pts);
+      g += `<path d="${d}L${pts[pts.length - 1][0]},${Y(0)}L${pts[0][0]},${Y(0)}Z" fill="url(#gg-${k})"/>`;
+      g += `<path d="${d}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" style="filter:drop-shadow(0 0 3px ${c}66)"/>`;
+    }
   }
-  // CPU peaks as a shaded band
-  if (!graphHidden.has('cpu_max')) g += `<path d="${h.map((p, i) => (i ? 'L' : 'M') + X(p.t) + ',' + Y(p.cpu_max)).join('')}L${X(t1)},${Y(0)}L${X(t0)},${Y(0)}Z" fill="rgba(79,140,255,.12)"/>`;
-  for (const [k, , color] of SERIES) {
-    if (graphHidden.has(k)) continue;
-    const pts = h.filter(p => p[k] != null);
-    if (pts.length < 2) continue;
-    g += `<path d="${pts.map((p, i) => (i ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Y(p[k]).toFixed(1)).join('')}" fill="none" stroke="${color}" stroke-width="1.6"/>`;
-  }
-  g += '<line id="g-cursor" y1="0" y2="' + (H - 18) + '" stroke="#fff" stroke-opacity=".4" hidden/>';
+  // Now: the latest readings.
+  const last = live[live.length - 1];
+  for (const [k, , c] of shown) if (last[k] != null) g += `<circle cx="${X(last.t)}" cy="${Y(last[k])}" r="3.5" fill="${c}" stroke="#0f1218" stroke-width="2"/>`;
+  g += `<g id="g-cursor" visibility="hidden"><line y1="${T}" y2="${H - B}" stroke="#fff" stroke-opacity=".35"/>${shown.map(([k, , c]) => `<circle data-k="${k}" r="4.5" fill="${c}" stroke="#fff" stroke-width="1.5"/>`).join('')}</g>`;
   svg.innerHTML = g;
-  // Click a legend entry to show or hide that line.
-  $('sys-legend').innerHTML = SERIES.filter(([k]) => h.some(p => p[k] != null)).concat([['cpu_max', 'CPU peaks', 'rgba(79,140,255,.3)']])
-    .map(([k, n, c]) => `<span data-k="${k}" class="${graphHidden.has(k) ? 'off' : ''}" title="Click to show or hide"><i style="background:${c}"></i>${n}</span>`).join('');
+  // Legend: now, the average and the peak over the range shown.
+  const stat = (k, peak) => { const v = live.map(p => p[k]).filter(x => x != null); if (!v.length) return null;
+    return {now: last[k], avg: v.reduce((a, b) => a + b, 0) / v.length, max: Math.max(...live.map(p => p[peak || k]).filter(x => x != null))}; };
+  $('sys-legend').innerHTML = SERIES.filter(([k]) => live.some(p => p[k] != null)).map(([k, n, c, peak]) => {
+    const st = stat(k, peak);
+    return `<span data-k="${k}" class="gl ${graphHidden.has(k) ? 'off' : ''}" title="Click to show or hide" style="--c:${c}"><i></i><b>${n}</b><em>${st.now != null ? st.now.toFixed(0) + '%' : '–'}</em><small>avg ${st.avg.toFixed(0)}% · peak ${st.max.toFixed(0)}%</small></span>`;
+  }).join('');
   $('sys-legend').querySelectorAll('span').forEach(el => el.onclick = () => {
     const k = el.dataset.k;
     if (graphHidden.has(k)) graphHidden.delete(k); else graphHidden.add(k);
     store.set('graph-hidden', [...graphHidden]);
     drawGraph();
   });
+  // Hover: a line, a dot on each line and the readings of that moment.
+  const wrap = svg.parentElement; wrap.style.position = 'relative';
+  let tip = wrap.querySelector('.g-tip'); if (!tip) { tip = document.createElement('div'); tip.className = 'g-tip'; tip.hidden = true; wrap.appendChild(tip); }
   svg.onmousemove = (e) => {
     const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W;
-    const t = t0 + (x - 36) / (W - 40) * (t1 - t0);
+    const t = t0 + (x - L) / (W - L - R) * (t1 - t0);
     const p = h.reduce((a, b) => Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a);
-    const cur = svg.querySelector('#g-cursor'); cur.removeAttribute('hidden'); cur.setAttribute('x1', X(p.t)); cur.setAttribute('x2', X(p.t));
-    $('sys-hover').textContent = `${fmtDate(new Date(p.t * 1000))} — CPU ${p.cpu.toFixed(0)}% (peak ${p.cpu_max.toFixed(0)}%), NVR ${p.nvr_cpu.toFixed(1)}%, memory ${p.ram.toFixed(0)}% (NVR ${(p.nvr_ram || 0).toFixed(1)}%)` + (p.gpu != null ? `, GPU ${p.gpu.toFixed(0)}%` : '');
+    const cur = svg.querySelector('#g-cursor'); cur.setAttribute('visibility', 'visible');
+    cur.querySelector('line').setAttribute('x1', X(p.t)); cur.querySelector('line').setAttribute('x2', X(p.t));
+    cur.querySelectorAll('circle').forEach(c => { const v = p[c.dataset.k]; c.setAttribute('cx', X(p.t)); c.setAttribute('cy', Y(v || 0)); c.setAttribute('visibility', p.gap || v == null ? 'hidden' : 'visible'); });
+    tip.innerHTML = `<div class="tt">${fmtDate(new Date(p.t * 1000))}</div>` + (p.gap ? '<div class="muted">No readings</div>'
+      : shown.filter(([k]) => p[k] != null).map(([k, n, c, peak]) => `<div><i style="background:${c}"></i>${n}<b>${p[k].toFixed(0)}%</b>${peak && p[peak] != null && p[peak] > p[k] + 1 ? `<small>peak ${p[peak].toFixed(0)}%</small>` : ''}</div>`).join(''));
+    tip.hidden = false;
+    const px = X(p.t) / W * r.width, tw = tip.offsetWidth;
+    tip.style.left = Math.min(r.width - tw - 4, Math.max(4, px + 14 > r.width - tw ? px - tw - 14 : px + 14)) + 'px';
+    tip.style.top = '14px';
   };
+  svg.onmouseleave = () => { svg.querySelector('#g-cursor').setAttribute('visibility', 'hidden'); tip.hidden = true; };
 }
 window.addEventListener('resize', () => { if (page === 'system') drawGraph(); });
 

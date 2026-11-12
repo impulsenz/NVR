@@ -62,6 +62,9 @@ pub struct Point {
     pub gpu: Option<f32>,
     pub gpu_max: Option<f32>,
     pub gpu_mem: Option<f32>,
+    /// No readings for this time (GAZE wasn't running, or the computer was off).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub gap: bool,
 }
 
 pub struct Monitor {
@@ -106,7 +109,9 @@ impl Monitor {
     pub fn history(&self, seconds: i64, points: usize) -> Vec<Point> {
         let now = chrono::Utc::now().timestamp();
         let from = now - seconds;
-        let raw: Vec<Point> = if seconds <= 6 * 3600 {
+        // The fine samples (every 5 s) are only kept since GAZE started:
+        // before them, the per-minute history (kept on disk) fills in.
+        let fine: Vec<Point> = if seconds <= 6 * 3600 {
             self.fine
                 .lock()
                 .unwrap()
@@ -122,20 +127,23 @@ impl Monitor {
                     gpu: s.gpu,
                     gpu_max: s.gpu,
                     gpu_mem: s.gpu_mem,
+                    gap: false,
                 })
                 .collect()
         } else {
-            self.minutes
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|p| p.t >= from)
-                .copied()
-                .collect()
+            Vec::new()
         };
-        // Fine samples every 5 s, minute samples every 60 s.
-        let step = if seconds <= 6 * 3600 { FINE_SECS } else { 60 };
-        bucketize(&raw, from, now, points, step)
+        let until = fine.first().map(|p| p.t).unwrap_or(i64::MAX);
+        let mut raw: Vec<Point> = self
+            .minutes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.t >= from && p.t < until)
+            .copied()
+            .collect();
+        raw.extend(fine);
+        bucketize(&raw, from, now, points, 60)
     }
 
     /// Sampling loop; runs for the life of the program.
@@ -315,6 +323,7 @@ fn load_history(file: &std::path::Path) -> VecDeque<Point> {
                 gpu: num(f[5]),
                 gpu_max: num(f[6]),
                 gpu_mem: num(f[7]),
+                gap: false,
             })
         })
         .filter(|p| p.t >= cutoff)
@@ -336,21 +345,35 @@ fn aggregate(s: &[Sample]) -> Point {
         gpu: (!gpus.is_empty()).then(|| gpus.iter().sum::<f32>() / gpus.len() as f32),
         gpu_max: gpus.iter().copied().reduce(f32::max),
         gpu_mem: (!mems.is_empty()).then(|| mems.iter().sum::<f32>() / mems.len() as f32),
+        gap: false,
     }
 }
 
 /// Group samples into equal time buckets from `from` to `now` (averages and
-/// peaks). Buckets without data (NVR not running, computer off) are zero, so
-/// the graph drops to 0 instead of drawing a line across the gap.
+/// peaks). A bucket without data takes the reading next to it when that's
+/// within `step` seconds (per-minute history in buckets smaller than a
+/// minute); otherwise it's a gap (GAZE not running, computer off), drawn as
+/// a break rather than as 0 %.
 fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Vec<Point> {
     let span = (now - from).max(1);
-    let width = (span / points.max(1) as i64).max(step);
+    let width = (span / points.max(1) as i64).max(1);
     let n = (span / width).max(1) as usize;
     let has_gpu = raw.iter().any(|p| p.gpu.is_some());
     let mut buckets: Vec<Vec<&Point>> = vec![Vec::new(); n];
     for p in raw {
         let i = ((p.t - from) / width).clamp(0, n as i64 - 1) as usize;
         buckets[i].push(p);
+    }
+    // Empty buckets close to a reading (within `step`): that reading.
+    let reach = (step / width) as usize;
+    let filled: Vec<usize> = (0..n).filter(|&i| !buckets[i].is_empty()).collect();
+    for i in 0..n {
+        if buckets[i].is_empty()
+            && let Some(&j) = filled.iter().min_by_key(|&&j| j.abs_diff(i))
+            && j.abs_diff(i) <= reach
+        {
+            buckets[i] = buckets[j].clone();
+        }
     }
     buckets
         .iter()
@@ -369,6 +392,7 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
                     gpu: zero,
                     gpu_max: zero,
                     gpu_mem: zero,
+                    gap: true,
                 };
             }
             let k = c.len() as f32;
@@ -385,6 +409,7 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
                     .or(has_gpu.then_some(0.0)),
                 gpu_max: c.iter().filter_map(|p| p.gpu_max).reduce(f32::max),
                 gpu_mem: c.iter().filter_map(|p| p.gpu_mem).reduce(f32::max),
+                gap: false,
             }
         })
         .collect()
@@ -628,7 +653,7 @@ The command completed successfully."#;
     }
 
     #[test]
-    fn buckets_with_peaks_and_zero_gaps() {
+    fn buckets_with_peaks_and_gaps() {
         let p = |t: i64, cpu: f32| Point {
             t,
             cpu,
@@ -639,15 +664,19 @@ The command completed successfully."#;
             gpu: None,
             gpu_max: None,
             gpu_mem: None,
+            gap: false,
         };
         // Data in the first and last 10 s of a 40 s window; nothing in between.
         let raw = vec![p(1, 10.0), p(6, 30.0), p(31, 50.0), p(36, 70.0)];
         let b = bucketize(&raw, 0, 40, 4, 5);
         assert_eq!(b.len(), 4);
         assert_eq!((b[0].cpu, b[0].cpu_max), (20.0, 30.0));
-        assert_eq!((b[1].cpu, b[1].ram), (0.0, 0.0)); // gap drops to zero
-        assert_eq!(b[2].cpu, 0.0);
+        assert!(b[1].gap && b[2].gap); // no readings: a gap (not 0 %)
         assert_eq!(b[3].cpu_max, 70.0);
+        // Per-minute readings in 10 s buckets: no gaps between them.
+        let mins = vec![p(60, 10.0), p(120, 20.0), p(180, 30.0)];
+        let b = bucketize(&mins, 60, 180, 12, 60);
+        assert!(b.iter().all(|x| !x.gap));
     }
 
     #[test]

@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.38 — November 2026
+- **New server load graph** (System): CPU, GPU and memory over time as smooth, filled lines, with a faint band for the peaks. Cards above it show each one now, its average and its peak over the range; hover anywhere for that moment's readings, click a card to hide or show its line.
+- **The time ranges match the data**: each range (1 h, 6 h, 24 h, 7 days, 30 days) now spans its full length with round time marks. After GAZE restarts, the 1 h and 6 h views use the saved per-minute history for the time before (they showed nothing but zero there). Times without readings (GAZE not running, computer off) are shown hatched instead of as 0 %.
+
 ## 0.6.37 — November 2026
 - **AI finds are checked in HD**: the AI keeps watching stream 2 (light on the computer), and when it finds something new, GAZE takes one full-quality picture from the main stream and has the AI look closely at that spot. It's either confirmed (**HD✓** on the alert), corrected (say a cat, not a dog), or not confirmed. Settings → camera → AI → **Check in full quality (HD)**: *mark* what HD doesn't confirm (shown as **HD?**, and no notification for it), *leave it out* of the alert (an alert with nothing confirmed is dropped), or *off*. Notifications wait a few seconds for the check. Needs a separate stream 2.
 

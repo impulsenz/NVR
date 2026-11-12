@@ -1025,3 +1025,22 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .tag .hdc { font-size: 10px; font-weight: 700; margin-left: 3px; opacity: .85; }
 .tag .hdc.no { color: #fbbf24; }
 .tag.unconfirmed { opacity: .65; border-style: dashed; }
+/* Server load graph */
+#sys-graph { width: 100%; height: 260px; display: block; }
+.g-wrap { position: relative; margin-top: 6px; border-radius: 10px; background: linear-gradient(180deg, rgba(79,140,255,.04), transparent 60%); }
+#sys-legend { display: flex; flex-wrap: wrap; gap: 10px; }
+#sys-legend span.gl { display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 8px 14px 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); cursor: pointer; text-decoration: none; min-width: 150px; }
+#sys-legend span.gl i { grid-row: 1 / span 2; width: 4px; height: 34px; border-radius: 2px; background: var(--c); box-shadow: 0 0 8px var(--c); }
+#sys-legend span.gl b { font-weight: 600; font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; }
+#sys-legend span.gl em { grid-column: 2; grid-row: 1; justify-self: end; font-style: normal; font-size: 18px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+#sys-legend span.gl small { grid-column: 2; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#sys-legend span.gl.off { opacity: .4; }
+#sys-legend span.gl:hover { border-color: var(--c); }
+.g-tip { position: absolute; pointer-events: none; z-index: 5; min-width: 150px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px;
+  background: rgba(15,18,24,.94); border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0,0,0,.5); backdrop-filter: blur(4px); }
+.g-tip .tt { font-weight: 600; margin-bottom: 4px; }
+.g-tip div { display: flex; align-items: center; gap: 6px; line-height: 1.7; }
+.g-tip i { width: 8px; height: 8px; border-radius: 50%; }
+.g-tip b { margin-left: auto; font-variant-numeric: tabular-nums; }
+.g-tip small { color: var(--muted); }
