@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.17 — November 2026
+- **"Goodbye" tune when you stop talking**: letting go of 🎙️ Push to talk (or tapping it off) plays three quick, soft falling notes through the camera's speaker, so whoever is there knows you've finished. It follows the camera's chime setting (Audio tab).
+
 ## 0.6.16 — November 2026
 - **Much less delay when talking**: what you say no longer builds up while the camera's speaker connects (it stayed as a delay for the whole conversation); your voice goes straight after the doorbell chime.
 - **Live sound closer to real time**: the camera's sound starts from this moment (not a few seconds back), and the player keeps itself within about a third of a second of live instead of falling behind.
