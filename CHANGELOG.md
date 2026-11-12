@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.23 — November 2026
+- **Time-lapse task shows its progress**: while you're looking at the timeline, previews are made for the page first; the task in Settings → Tasks now counts those too, instead of staying at "0 of 40".
+- **Time-lapse strip animation fixed**: the striped "being made" piece is now the same thin bar as the blue one and sits exactly under the footage it's for (it was taller and shifted to the left).
+- **Previews made on the graphics card**: with GPU acceleration set up (Settings → GPU acceleration), time-lapse pictures are decoded on the graphics card, and on the processor if that doesn't work for a file.
+
 ## 0.6.22 — November 2026
 - **New alerts appear straight away**: the Alerts page updates as soon as a new alert comes in, without refreshing — also when you've had the page open a long time (and "Today" moves on to the new day at midnight).
 - **Easier to pick alerts on the timeline**: the alert nearest the mouse (even a few pixels off) lights up with a white outline, and that's the one a click opens — no more jiggling to hit thin or close-together markers.
