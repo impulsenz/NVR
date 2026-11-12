@@ -560,7 +560,7 @@ async function refreshStatus() {
   document.title = status.name && status.name !== 'GAZE' ? `GAZE — ${status.name}` : 'GAZE';
   // How live pictures fill their boxes, everywhere (stream 2 is often a
   // squeezed 4:3 picture: stretched, it fills the box like the main stream).
-  document.body.dataset.fit = status.display.tile_fit || 'stretch';
+  document.body.dataset.fit = 'stretch';
   // New alerts.
   const ab = $('alert-badge'), n = status.alerts_unseen || 0;
   ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
@@ -1169,8 +1169,8 @@ function renderDash() {
   dash.innerHTML = '';
   dash.classList.toggle('editing', editing);
   $('live-grid').classList.toggle('editing-wall', editing && wall);
-  dash.classList.remove('fit-stretch', 'fit-crop', 'fit-fit');
-  dash.classList.add('fit-' + (status.display.tile_fit || 'stretch'));
+  // Camera pictures always stretch to fill their box.
+  dash.classList.add('fit-stretch');
   // Phones: a simple list to order and show/hide cameras instead of
   // dragging tiles around (which doesn't work well with a finger).
   if (editing && !wall && phoneGrid()) { renderPhoneEditor(); $('dash-info').textContent = ''; toggleEditButtons(); return; }
@@ -3485,7 +3485,7 @@ async function openCameraDialog(id, clone) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 30, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, parked_seconds: 60}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   const q = parseUrl(c.url) || {};
   // The usual objects, plus any this camera already watches for.
@@ -3629,8 +3629,8 @@ async function openCameraDialog(id, clone) {
         <div class="row"><input type="range" id="d-conf" min="5" max="95" value="${Math.round(c.detect.min_confidence * 100)}" style="flex:1"><span id="d-conf-v" class="muted" style="width:40px">${Math.round(c.detect.min_confidence * 100)}%</span></div>
         <label for="d-trig">What makes an alert</label>
         <div><select id="d-trig"><option value="motion">Any motion</option><option value="objects">Only recognized objects (ignores trees, shadows, rain)</option></select>
-          <label class="check" style="margin-top:6px"><input type="checkbox" id="d-animals" ${c.detect.ignore_animals !== false ? 'checked' : ''}> Ignore motion set off by animals you don't watch for (cats, dogs, birds…)</label>
-          <div class="hint">With “Any motion”, the AI has a look first: if all it sees is an animal that isn't ticked above, no alert. Tick “cat” above to get alerts for cats.</div></div>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="d-animals" ${c.detect.ignore_animals !== false ? 'checked' : ''}> Check motion with AI first — no alert when it's a cat (or another animal you don't watch for)</label>
+          <div class="hint">With “Any motion”, the frames of each motion are sent to the AI before it becomes an alert. If the AI sees a cat, dog, bird… that isn't ticked above, and nothing you do watch for, the motion isn't kept on the Alerts page. Tick “cat” above to get alerts for cats.</div></div>
         <label for="d-int">AI check interval</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks during motion (raise this for cloud AI)</span></div>
         <label>Stationary objects</label>
@@ -4400,11 +4400,6 @@ function renderDisplay(body) {
     <label for="g-fmt">Date &amp; time format</label><div><select id="g-fmt">${CLOCK_FORMATS.map(f => `<option ${f === d.clock_format ? 'selected' : ''}>${f}</option>`).join('')}<option value="custom" ${custom ? 'selected' : ''}>Custom…</option></select>
       <input type="text" id="g-custom" value="${esc(d.clock_format)}" style="margin-top:6px" ${custom ? '' : 'hidden'}>
       <div class="hint">Preview: <b id="g-prev"></b><br>Codes: YYYY YY · MMMM MMM MM M · DD D · dddd ddd · HH H (24 h) hh h (12 h) · mm ss · A a (AM/PM)</div></div>
-    <label for="g-tilefit">Camera pictures</label><div><select id="g-tilefit">
-      <option value="stretch" ${d.tile_fit === 'stretch' ? 'selected' : ''}>Stretch to fill the box</option>
-      <option value="crop" ${d.tile_fit === 'crop' ? 'selected' : ''}>Zoom to fill (trims the edges)</option>
-      <option value="fit" ${d.tile_fit === 'fit' ? 'selected' : ''}>Show the whole picture (black bars)</option></select>
-      <div class="hint">For cameras whose picture shape differs from the box (e.g. 4:3 sub-streams): in the grid, the camera view and the previews in Settings.</div></div>
   </div><div class="actions"><button class="primary">Save</button></div></form>`;
   const fmt = () => val('g-fmt') === 'custom' ? val('g-custom') : val('g-fmt');
   const prev = () => $('g-prev').textContent = fmtDate(new Date(), fmt());
@@ -4431,7 +4426,7 @@ function renderDisplay(body) {
     saveSettings({
       live: {fps: num('l-fps'), width: num('l-width'), quality: num('l-q'), hd_fps: num('l-hd'), preload_hd_streams: chk('l-pre')},
       display: {fullscreen_corners: [...document.querySelectorAll('#g-fs input:checked')].map(i => i.value), clock_format: fmt() || 'DD/MM/YYYY HH:mm:ss',
-        tile_fit: val('g-tilefit'), osd: {...readOsdItems('go'), custom: false, clock_format: ''}},
+        osd: {...readOsdItems('go'), custom: false, clock_format: ''}},
     }, 'Saved').then(() => renderDash());
   };
 }
@@ -4990,8 +4985,6 @@ async function renderNotify(body) {
       <label>Cameras</label><div class="checks">${status.cameras.map(c => `<label class="check"><input type="checkbox" class="n-cam" value="${esc(c.id)}" ${!n.cameras.length || n.cameras.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('')}</div>
       <label for="n-gap">How often</label><div class="row"><span class="muted">at most one every</span><input type="number" id="n-gap" min="0" max="240" value="${n.gap_minutes}" style="width:80px"><span class="muted">minutes per camera</span></div>
       <label for="n-nfrom">At night</label><div class="row"><input type="time" id="n-nfrom" value="${esc(n.night_from)}" style="width:130px"><span class="muted">to</span><input type="time" id="n-nto" value="${esc(n.night_to)}" style="width:130px"><span class="muted">: one every</span><input type="number" id="n-ngap" min="0" max="240" value="${n.night_gap_minutes}" style="width:80px"><span class="muted">minutes — people at night count as suspicious</span></div>
-      <span></span><div><label class="check"><input type="checkbox" id="n-sus" ${n.only_suspicious ? 'checked' : ''}> Only suspicious activity</label>
-        <div class="hint">Suspicious: lines crossed, someone lingering, a parcel picked up, a person at night. Suspicious activity is always sent, even within the time between notifications, with high priority.</div></div>
       <span></span><div><label class="check"><input type="checkbox" id="n-sum" ${n.summary ? 'checked' : ''}> Send a summary when the alert is over</label>
         <div class="hint">What was seen and for how long, who was recognised, number plates, zones and parcels.</div></div>
       <label for="n-link">Open GAZE at</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
@@ -5007,7 +5000,7 @@ async function renderNotify(body) {
     const cams = [...body.querySelectorAll('.n-cam')], picked = cams.filter(c => c.checked).map(c => c.value);
     return {enabled: chk('n-on'), server: val('n-server').trim() || 'https://ntfy.sh', topic: val('n-topic').trim(), token: val('n-token'),
       objects: [...body.querySelectorAll('.n-obj:checked')].map(c => c.value), cameras: picked.length === cams.length ? [] : picked,
-      only_suspicious: chk('n-sus'), gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
+      gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
       night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), link: val('n-link').trim()};
   };
   $('n-save').onclick = async () => {

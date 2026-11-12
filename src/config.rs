@@ -217,8 +217,6 @@ pub struct DisplayConfig {
     pub show_name: Option<bool>,
     #[serde(default, skip_serializing)]
     pub show_fps: Option<bool>,
-    /// How video fills the dashboard tiles: "stretch", "crop" (zoom) or "fit" (black bars).
-    pub tile_fit: String,
 }
 
 impl Default for DisplayConfig {
@@ -231,7 +229,6 @@ impl Default for DisplayConfig {
             clock_corner: None,
             show_name: None,
             show_fps: None,
-            tile_fit: "stretch".into(),
         }
     }
 }
@@ -360,8 +357,6 @@ pub struct NotifyConfig {
     pub objects: Vec<String>,
     /// Cameras that notify (empty = all).
     pub cameras: Vec<String>,
-    /// Only for suspicious activity (AI judgement, zones, lingering, people at night).
-    pub only_suspicious: bool,
     /// Minutes between notifications from one camera.
     pub gap_minutes: u32,
     /// At night: shorter gap (more watchful).
@@ -397,7 +392,6 @@ impl Default for NotifyConfig {
                 "package".into(),
             ],
             cameras: Vec::new(),
-            only_suspicious: false,
             gap_minutes: 5,
             night_from: "22:00".into(),
             night_to: "06:00".into(),
@@ -663,7 +657,7 @@ impl Default for DetectConfig {
             ],
             min_confidence: 0.5,
             trigger: "motion".into(),
-            pre_seconds: 30,
+            pre_seconds: 3,
             post_seconds: 15,
             fps: 5,
             ai_interval: 1.0,
@@ -1299,9 +1293,6 @@ impl Config {
         }
         if d.clock_format.trim().is_empty() {
             bail!("clock format cannot be empty");
-        }
-        if !["stretch", "crop", "fit"].contains(&d.tile_fit.as_str()) {
-            bail!("tile fit must be stretch, crop or fit");
         }
         if !HWACCELS.contains(&self.hardware.hwaccel.as_str()) {
             bail!("unknown hardware decoder \"{}\"", self.hardware.hwaccel);

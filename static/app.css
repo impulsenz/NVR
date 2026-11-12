@@ -118,7 +118,6 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 /* dashboard */
 #dash { position: relative; width: 100%; user-select: none; }
 #dash.fit-stretch .tile > img { object-fit: fill; }
-#dash.fit-crop .tile > img { object-fit: cover; }
 .tile { position: absolute; cursor: pointer; transition: box-shadow .15s; }
 .tile:hover { border-color: var(--accent); }
 .tile.event { box-shadow: 0 0 0 2px var(--purple); }
@@ -845,9 +844,8 @@ table.where td:first-child { width: 44px; }
   #app-fs[hidden] { display: none; }
 }
 
-/* Live pictures fill their boxes as chosen (Settings → Live view & display). */
-body[data-fit=stretch] .surface > img { object-fit: fill; }
-body[data-fit=crop] .surface > img { object-fit: cover; }
+/* Live pictures always stretch to fill their boxes. */
+.surface > img { object-fit: fill; }
 
 /* Time-lapse switched off for now: no preview strips or time-lapse choice. */
 .no-timelapse .tlp, .no-timelapse #ctl-tlp, .no-timelapse #tl-scrub [data-v=timelapse] { display: none !important; }

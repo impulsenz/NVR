@@ -217,8 +217,9 @@ struct Active {
     /// has had a look).
     began: Instant,
     ai_looks: u32,
-    /// The AI's latest look found only an animal that isn't watched for.
-    animal_only: bool,
+    /// The AI saw an animal that isn't watched for (a cat, a dog …) at some
+    /// point during this event.
+    animal_seen: bool,
     /// Score of the AI detection in the thumbnail (0 = motion picture, -1 = none).
     thumb_score: f32,
     thumb_at: Instant,
@@ -679,7 +680,7 @@ impl Detector {
             qualified: false,
             began: Instant::now(),
             ai_looks: 0,
-            animal_only: false,
+            animal_seen: false,
             thumb_score: -1.0,
             thumb_at: Instant::now() - Duration::from_secs(10),
             motion_best: 0.0,
@@ -719,13 +720,15 @@ impl Detector {
             }];
             self.save_thumb(a, frame, bbox, 0.0, boxes);
         }
-        // "Ignore animals": wait for the AI's look (up to 4 s, in case it's
-        // busy) and don't alert for motion that is only an animal.
+        // "Check motion with AI first": the AI looks at the frames of the
+        // motion (at least twice, or up to 4 s in case it's busy) before it
+        // becomes an alert; motion with an animal that isn't watched for
+        // never does (and is dropped when it ends, see finish()).
         let d = &self.cam.detect;
         let wait_for_ai = d.ignore_animals
             && d.ai
             && self.ai.get().enabled()
-            && (a.animal_only || (a.ai_looks == 0 && a.began.elapsed() < Duration::from_secs(4)));
+            && (a.animal_seen || (a.ai_looks < 2 && a.began.elapsed() < Duration::from_secs(4)));
         if d.trigger == "motion" && !a.qualified && !wait_for_ai {
             a.qualified = true;
             info!(target: "event", "[{}] motion detected", self.cam.name);
@@ -776,9 +779,9 @@ impl Detector {
                     && crate::ai::ANIMALS.contains(&x.label.as_str())
                     && !d.objects.contains(&x.label)
             });
-            a.animal_only = animal && hits.is_empty();
-            if a.animal_only && !a.qualified {
-                tracing::debug!("[{}] motion from an animal that isn't watched for: ignored", self.cam.name);
+            if animal && !a.animal_seen {
+                a.animal_seen = true;
+                tracing::debug!("[{}] an animal that isn't watched for is moving: no motion alert", self.cam.name);
             }
         }
         // Parked vehicles don't alert until they move.
@@ -978,6 +981,15 @@ impl Detector {
             s.active_labels.clear();
         }
         let d = &self.cam.detect;
+        // Motion that turned out to be a cat (or another animal that isn't
+        // watched for), with nothing watched for seen: not kept as an alert.
+        if d.ignore_animals && a.animal_seen && a.event.labels.is_empty() && a.event.items.is_empty() {
+            if a.qualified {
+                info!(target: "event", "[{}] motion was an animal that isn't watched for: alert dropped", self.cam.name);
+                self.store.delete(&a.event.id);
+                a.qualified = false;
+            }
+        }
         if !a.qualified {
             if let Some(b) = &self.buffer {
                 b.release(&a.event.id);

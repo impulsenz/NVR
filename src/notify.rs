@@ -336,11 +336,6 @@ impl Notifier {
                         rt.events.save(e);
                         continue;
                     }
-                    if sus.is_none() && n.only_suspicious {
-                        e.notified = HELD;
-                        rt.events.save(e);
-                        continue;
-                    }
                     let time = e.start.format("%H:%M:%S");
                     let msg = Message {
                         title: format!("{}: {}", rt.cfg.name, what(&e)),
