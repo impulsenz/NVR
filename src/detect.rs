@@ -786,12 +786,27 @@ impl Detector {
         }
         // Parked vehicles don't alert until they move.
         if d.ignore_parked && !d.parked_objects.is_empty() {
+            // Tracked from every sighting (from 30%), not only those strong
+            // enough to alert: a parked car that comes and goes around the
+            // minimum confidence would otherwise be forgotten and alert again.
+            let kinds = &d.parked_objects;
+            let mut others: Vec<Detection> =
+                hits.into_iter().filter(|h| !kinds.contains(&h.label)).collect();
+            let candidates: Vec<Detection> = best
+                .iter()
+                .filter(|x| x.score >= 0.3 && kinds.contains(&x.label))
+                .cloned()
+                .collect();
             let (keep, notes) = self.parked.lock().unwrap().filter(
-                hits,
-                &d.parked_objects,
+                candidates,
+                kinds,
                 Duration::from_secs(d.parked_seconds.max(10) as u64),
             );
-            hits = keep;
+            others.extend(
+                keep.into_iter()
+                    .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label)),
+            );
+            hits = others;
             let parked = self.parked.lock().unwrap().parked();
             self.status.lock().unwrap().parked = parked;
             for n in notes {
