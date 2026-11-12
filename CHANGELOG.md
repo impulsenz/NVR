@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.14 — November 2026
+- **Parked cars stay quiet**: "Stop alerting for objects that stay in one place" now works for cars that are only partly in the picture or recognised with a varying score. GAZE follows every sighting of a parked vehicle (not just those strong enough to alert), allows for the box around it jumping about, and only treats it as moving off once it's seen somewhere else twice in a row.
+
 ## 0.6.13 — November 2026
 - **Profiles save in the background**: the window closes as soon as you press **Save profile**; the profile is saved and the cameras following it updated in the background ("Profile saved" appears when done). If it's refused, the window comes back with the reason.
 - The hint next to "AI check interval" (camera → AI) no longer mentions cloud AI.
