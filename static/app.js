@@ -3469,7 +3469,10 @@ let editingId = null, cloneMode = false;
 const previewImgs = [];
 function stopPreviews() { previewImgs.splice(0).forEach(i => i.removeAttribute('src')); }
 
+// Changes each time a camera's settings window is opened.
+let camDlgGen = 0;
 async function openCameraDialog(id, clone) {
+  camDlgGen++;
   if (!settings) await loadSettings().catch(() => {});
   if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
   editingId = clone ? null : (id || null); cloneMode = !!clone;
@@ -4246,18 +4249,36 @@ function applyProfile(p) {
 }
 async function finishSave(body) {
   const err = (m) => { $('c-err').hidden = false; $('c-err').textContent = m; };
-  const btn = $('c-save'); btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    const move = $('c-move-row') && !$('c-move-row').hidden && chk('c-move');
-    if (move) btn.textContent = 'Moving recordings…';
-    if (editingId) await api(`api/cameras/${enc(editingId)}?move_recordings=${!!move}`, {method: 'PUT', json: body});
-    else await api('api/cameras', {method: 'POST', json: body});
-    closeCameraDialog();
-    toast(editingId ? 'Camera updated' : cloneMode ? 'Camera cloned' : 'Camera added');
+  const btn = $('c-save');
+  const move = $('c-move-row') && !$('c-move-row').hidden && chk('c-move');
+  const id = editingId, clone = cloneMode;
+  const send = () => id ? api(`api/cameras/${enc(id)}?move_recordings=${!!move}`, {method: 'PUT', json: body}) : api('api/cameras', {method: 'POST', json: body});
+  const after = async () => {
     await loadSettings(); await refreshStatus();
     if (page === 'settings') showSettings(section); else route();
-  } catch (e) { err(e.message); }
-  finally { btn.disabled = false; btn.textContent = 'Save camera'; }
+  };
+  // Moving recordings to a new folder can take a while: wait for it here.
+  if (move) {
+    btn.disabled = true; btn.textContent = 'Moving recordings…';
+    try { await send(); closeCameraDialog(); toast('Camera updated'); await after(); }
+    catch (e) { err(e.message); }
+    finally { btn.disabled = false; btn.textContent = 'Save camera'; }
+    return;
+  }
+  // Otherwise the window closes at once and the camera is saved (and its
+  // video restarted) in the background. If it's refused, the window comes
+  // back with what was typed and why, unless another camera was opened since.
+  const gen = camDlgGen;
+  closeCameraDialog();
+  toast('Saving camera…');
+  try {
+    await send();
+    toast(id ? 'Camera updated' : clone ? 'Camera cloned' : 'Camera added');
+    await after();
+  } catch (e) {
+    if (camDlgGen === gen && !$('cam-dialog').open) { $('cam-dialog').showModal(); err(e.message); }
+    else toast('Camera not saved: ' + e.message, true);
+  }
 }
 
 // ---------- folder picker ----------
