@@ -112,7 +112,8 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 .fsbtn { background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.18); color: #fff; border-radius: 5px;
   width: 28px; height: 26px; padding: 0; justify-content: center; font-size: 14px; }
 .sbtn { width: auto; padding: 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .3px; }
-.alertbadge { background: rgba(167,139,250,.85); color: #fff; font-weight: 700; padding: 1px 8px; border-radius: 4px; font-size: 12px; }
+.alertbadge { background: rgba(167,139,250,.85); color: #fff; font-weight: 700; padding: 1px 8px; border-radius: 4px; font-size: 12px;
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .surface:fullscreen, .surface:-webkit-full-screen { border-radius: 0; border: 0; }
 
 /* dashboard */
@@ -774,6 +775,7 @@ table.where td:first-child { width: 44px; }
 
 /* On-screen display placed anywhere ("p:X,Y") */
 .ov.free { position: absolute; padding: 0; }
+.ov.free > * { white-space: nowrap; }
 
 /* ===================== Phones: touch first ===================== */
 .phone-only { display: none; }
