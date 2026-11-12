@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 0.6.46 — November 2026
+- **Time-lapse settings only change new footage**: changing how often pictures are kept, or their size, no longer remakes the time-lapse that's already there. To remake it at the new settings, use the new **Remake time-lapse with these settings** button (it warns first: footage older than a few hours is read again from the recordings, which takes a while).
+- **Time-lapse can be turned off** (Settings → Recording & storage, on by default — one picture every 10 seconds, standard size). Off, nothing is kept or made, and dragging along a timeline moves the video itself.
+- **Alerts open on the last 24 hours** instead of today; Today is still in the date picker.
+- **Quick setup**: the channel and port boxes are gone — the stream addresses say those.
+- **New look for the PTZ controls**: one frosted panel with a round joystick pad, a zoom pill and the presets.
+
 ## 0.6.45 — November 2026
 - **The whole timeline in full screen**: a Recordings camera in full screen now has the real Recordings timeline — every camera, alert pictures, the time-lapse line, scrubbing, zoom and ◀ ▶ — in a panel that slides up when the mouse comes to the bottom of the screen and away when it leaves, with the play, frame, alert, speed and clip controls under it.
 - **Passwords hidden in stream addresses**: in a camera's settings, the password inside the main, sub-stream and speaker addresses shows as dots; an 👁 button next to each shows it. Editing the rest of the address keeps the password. The camera and ONVIF login passwords have the 👁 too.

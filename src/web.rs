@@ -349,6 +349,7 @@ async fn status(
             .map(|j| json!({"title": j.title, "done": j.done, "total": j.total}))
             .collect::<Vec<_>>(),
         "alerts_unseen": library::unseen_count(&m),
+        "timelapse": crate::picturelog::enabled(),
         "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.lock().unwrap().len() } else { 0 },
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
@@ -1996,10 +1997,6 @@ fn media_path(
     }
 }
 
-/// Time-lapse previews are switched off for now: making them (in the
-/// background and while scrubbing) kept the computer too busy. Nothing is
-/// made or served while this is false.
-pub const TIMELAPSE: bool = true;
 
 /// Only a couple of preview jobs at a time.
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
@@ -2011,7 +2008,9 @@ fn sprite_meta_current(meta: &std::path::Path, interval: u32) -> bool {
     std::fs::read(meta)
         .ok()
         .and_then(|b| serde_json::from_slice::<ffmpeg::SpriteInfo>(&b).ok())
-        .is_some_and(|i| i.aspect > 0.0 && (i.interval - interval as f64).abs() < 0.01)
+        // Made at an earlier picture interval: still used (only new footage
+        // follows a changed setting, unless it's remade on purpose).
+        .is_some_and(|i| i.aspect > 0.0 && i.interval > 0.0 && interval > 0)
 }
 
 fn fresh(cache: &std::path::Path, src: &std::path::Path) -> bool {
@@ -2250,6 +2249,14 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
     let mut last_sweep: Option<std::time::Instant> = None;
     loop {
         let mut built = 0usize;
+        // Switched off (Settings → Recording & storage): nothing is made.
+        if !crate::picturelog::enabled() {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+                _ = PREBUILD_NOW.notified() => {}
+            }
+            continue;
+        }
         let force = PREBUILD_FORCE.swap(false, std::sync::atomic::Ordering::SeqCst);
         {
             let now = Local::now();
@@ -2594,7 +2601,7 @@ async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
 /// Throw away all scrub / time-lapse previews and make those of the last
 /// 24 hours again (older ones are made when looked at).
 async fn rebuild_previews(State(m): App) -> Response {
-    if !TIMELAPSE {
+    if !crate::picturelog::enabled() {
         return err(
             StatusCode::BAD_REQUEST,
             "time-lapse previews are switched off",
@@ -2734,7 +2741,7 @@ struct ReadyReq {
 /// its details), in one go — nothing is made here. The timeline asks this
 /// when it opens, so previews made before show at once after a reload.
 async fn sprites_ready(State(m): App, Json(r): Json<ReadyReq>) -> Response {
-    if !TIMELAPSE {
+    if !crate::picturelog::enabled() {
         return Json(json!({})).into_response();
     }
     let c = camera!(m, r.camera);
@@ -2770,7 +2777,7 @@ async fn sprite_info(
     State(m): App,
     Path((id, kind, name)): Path<(String, String, String)>,
 ) -> Response {
-    if !TIMELAPSE {
+    if !crate::picturelog::enabled() {
         return err(
             StatusCode::NOT_FOUND,
             "time-lapse previews are switched off",
@@ -2799,7 +2806,7 @@ async fn sprite_image(
     Query(q): Query<PageQuery>,
     req: Request,
 ) -> Response {
-    if !TIMELAPSE {
+    if !crate::picturelog::enabled() {
         return err(
             StatusCode::NOT_FOUND,
             "time-lapse previews are switched off",

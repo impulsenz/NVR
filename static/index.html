@@ -82,14 +82,16 @@
             <svg id="focus-boxes" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute;pointer-events:none;z-index:1" hidden></svg>
             <div id="focus-motion-info" class="ovtext" style="position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:2" hidden></div>
             <div class="ptz-ov op-only" id="ptz-pad" hidden>
-              <div class="ptz-ring">
-                <button type="button" class="u" data-ptz="0,1,0" title="Tilt up (↑)">▲</button>
-                <button type="button" class="l" data-ptz="-1,0,0" title="Pan left (←)">◀</button>
-                <button type="button" class="c" data-ptz-home title="Stop">■</button>
-                <button type="button" class="r" data-ptz="1,0,0" title="Pan right (→)">▶</button>
-                <button type="button" class="d" data-ptz="0,-1,0" title="Tilt down (↓)">▼</button>
+              <div class="ptz-main">
+                <div class="ptz-ring">
+                  <button type="button" class="u" data-ptz="0,1,0" title="Tilt up (↑)"><svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(0deg)"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                  <button type="button" class="l" data-ptz="-1,0,0" title="Pan left (←)"><svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(-90deg)"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                  <button type="button" class="c" data-ptz-home title="Stop"><i></i></button>
+                  <button type="button" class="r" data-ptz="1,0,0" title="Pan right (→)"><svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(90deg)"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                  <button type="button" class="d" data-ptz="0,-1,0" title="Tilt down (↓)"><svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(180deg)"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                </div>
+                <div class="ptz-zoom"><button type="button" data-ptz="0,0,1" title="Zoom in (+ or scroll)">＋</button><span>ZOOM</span><button type="button" data-ptz="0,0,-1" title="Zoom out (− or scroll)">－</button></div>
               </div>
-              <div class="ptz-zoom"><button type="button" data-ptz="0,0,1" title="Zoom in (+ or scroll)">＋</button><button type="button" data-ptz="0,0,-1" title="Zoom out (− or scroll)">－</button></div>
               <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button></div>
               <div class="ptz-msg" id="ptz-msg">Drag on the picture to move · scroll to zoom</div>
             </div>

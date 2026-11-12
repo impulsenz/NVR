@@ -98,7 +98,8 @@ function watchFps(v) {
 }
 // Time-lapse previews are switched off for now (making them kept the
 // computer busy): scrubbing moves the video itself instead.
-const TIMELAPSE = true;
+// Time-lapse previews on (Settings → Recording & storage; from the status).
+let TIMELAPSE = true;
 if (!TIMELAPSE) document.documentElement.classList.add('no-timelapse');
 async function api(path, opts = {}) {
   if (opts.json !== undefined) {
@@ -668,6 +669,11 @@ async function refreshStatus() {
   document.body.dataset.fit = 'stretch';
   // New alerts.
   const ab = $('alert-badge'), n = status.alerts_unseen || 0;
+  if (status.timelapse != null && status.timelapse !== TIMELAPSE) {
+    TIMELAPSE = status.timelapse;
+    tl.scrub = TIMELAPSE ? 'timelapse' : 'sub';
+    document.documentElement.classList.toggle('no-timelapse', !TIMELAPSE);
+  }
   ab.hidden = !n; ab.textContent = n > 99 ? '99+' : n; ab.title = `${n} new alert${n === 1 ? '' : 's'}`;
   const da = $('f-seen-all');
   if (da) { da.textContent = n ? `✓ Dismiss all new (${n > 999 ? '999+' : n})` : '✓ No new alerts'; da.disabled = !n; da.classList.toggle('primary', !!n); }
@@ -2338,14 +2344,17 @@ const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); retur
 const endOfDay = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
 // The Alerts filter starts on the usual things (remembered per browser).
 const DEFAULT_TYPES = ['person', 'car', 'truck', 'motorcycle', 'package', 'face', 'plate'];
-const rec = {mode: 'list', today: true, cameras: new Set(), from: startOfDay(new Date()), to: endOfDay(new Date()), todFrom: '', todTo: '',
+// "Last 24 hours" (the default): from the start of the hour a day ago
+// (so it only moves once an hour), up to the end of today.
+const last24From = () => { const h = new Date(); h.setMinutes(0, 0, 0); return new Date(h.getTime() - 86400000); };
+const rec = {mode: 'list', today: false, last24: true, cameras: new Set(), from: last24From(), to: endOfDay(new Date()), todFrom: '', todTo: '',
   types: new Set(store.get('alert-types', DEFAULT_TYPES)), items: [], who: ''};
 const saveTypes = () => store.set('alert-types', [...rec.types]);
-// The Alerts filters as they start: today, every camera, the usual kinds,
+// The Alerts filters as they start: the last 24 hours, every camera, the usual kinds,
 // new and viewed, anyone.
 function resetAlertFilters() {
   rec.cameras = new Set(); rec.prevCameras = null;
-  rec.from = startOfDay(new Date()); rec.to = endOfDay(new Date()); rec.todFrom = ''; rec.todTo = ''; rec.today = true;
+  rec.from = last24From(); rec.to = endOfDay(new Date()); rec.todFrom = ''; rec.todTo = ''; rec.today = false; rec.last24 = true;
   rec.types = new Set(DEFAULT_TYPES); saveTypes();
   rec.seen = ''; rec.who = '';
   if ($('f-seen')) $('f-seen').value = '';
@@ -2421,6 +2430,8 @@ async function refreshAlertList() {
   if (page !== 'recordings' || rec.mode !== 'list' || rec.loading || rec.who === '__new' || refreshAlertList.busy) return;
   // "Today" moves on at midnight on a page left open.
   if (rec.today && rec.to.getTime() < Date.now()) { rec.from = startOfDay(new Date()); rec.to = endOfDay(new Date()); renderFilters(); }
+  // ("Last 24 hours" moves on with the clock.)
+  if (rec.last24 && last24From().getTime() !== rec.from.getTime()) { rec.from = last24From(); rec.to = endOfDay(new Date()); renderFilters(); }
   refreshAlertList.busy = true;
   try {
     const before = rec.items.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen + (i.thumb || '') : i.name).join();
@@ -2470,7 +2481,7 @@ function renderFilters() {
   // Dates
   const same = startOfDay(rec.from).getTime() === startOfDay(rec.to).getTime();
   const today = startOfDay(new Date()).getTime(), f0 = startOfDay(rec.from).getTime();
-  let label = rec.from.getFullYear() <= 2000 ? 'All time' : same ? (f0 === today ? 'Today' : f0 === today - 86400000 ? 'Yesterday' : fmtDay(rec.from)) : `${fmtDay(rec.from)} – ${fmtDay(rec.to)}`;
+  let label = rec.last24 ? 'Last 24 hours' : rec.from.getFullYear() <= 2000 ? 'All time' : same ? (f0 === today ? 'Today' : f0 === today - 86400000 ? 'Yesterday' : fmtDay(rec.from)) : `${fmtDay(rec.from)} – ${fmtDay(rec.to)}`;
   if (rec.todFrom || rec.todTo) label += `, ${rec.todFrom || '00:00'}–${rec.todTo || '23:59'}`;
   $('f-date-btn').textContent = '📅 ' + label;
   // Types
@@ -2494,6 +2505,7 @@ const Calendar = {
     const lo = Math.min(this.a, this.b ?? this.a), hi = Math.max(this.a, this.b ?? this.a);
     rec.from = startOfDay(new Date(lo)); rec.to = endOfDay(new Date(hi));
     rec.today = rec.from.getTime() === startOfDay(new Date()).getTime() && rec.to.getTime() === endOfDay(new Date()).getTime();
+    rec.last24 = false;
     if ($('cal-tf')) { rec.todFrom = $('cal-tf').value; rec.todTo = $('cal-tt').value; }
     if (close) $('f-date-pop').hidden = true;
     renderFilters(); tl.day = null; reloadRec();
@@ -2512,7 +2524,7 @@ const Calendar = {
       <div class="head"><button type="button" class="small" data-nav="-1">◀</button><b>${MONTHS[m.getMonth()]} ${m.getFullYear()}</b><button type="button" class="small" data-nav="1">▶</button></div>
       <div class="days">${DAYS.map(d => `<span>${d.slice(0, 2)}</span>`).join('')}${cells}</div>
       <div class="hint">${this.first != null ? 'Click another day to show the days in between too.' : 'Click a day to show it; click a second day for a range.'}</div>
-      <div class="row" style="margin-top:8px;flex-wrap:wrap"><button type="button" class="small" data-p="0">Today</button><button type="button" class="small" data-p="1">Yesterday</button><button type="button" class="small" data-p="7">Last 7 days</button><button type="button" class="small" data-p="30">Last 30 days</button><button type="button" class="small" data-p="all">All time</button></div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap"><button type="button" class="small" data-p24>Last 24 hours</button><button type="button" class="small" data-p="0">Today</button><button type="button" class="small" data-p="1">Yesterday</button><button type="button" class="small" data-p="7">Last 7 days</button><button type="button" class="small" data-p="30">Last 30 days</button><button type="button" class="small" data-p="all">All time</button></div>
       <div class="row" style="margin-top:10px"><span class="muted">Only between</span><input type="time" id="cal-tf" value="${rec.todFrom}" style="width:auto"><span class="muted">and</span><input type="time" id="cal-tt" value="${rec.todTo}" style="width:auto"></div>
       <div class="actions" style="margin-top:10px"><button type="button" class="primary" data-apply>Done</button><button type="button" data-clear-time title="Every alert there is, at any time of day">All time</button></div></div>`;
     p.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => { this.month.setMonth(this.month.getMonth() + +b.dataset.nav); this.render(); });
@@ -2527,6 +2539,10 @@ const Calendar = {
       this.a = this.b = t; this.first = t;
       this.apply(false); this.render();
     });
+    p.querySelector('[data-p24]').onclick = () => {
+      rec.from = last24From(); rec.to = endOfDay(new Date()); rec.today = false; rec.last24 = true;
+      $('f-date-pop').hidden = true; renderFilters(); tl.day = null; reloadRec();
+    };
     p.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
       const t = startOfDay(new Date());
       if (b.dataset.p === 'all') { this.b = t.getTime(); this.a = new Date(2000, 0, 1).getTime(); }
@@ -4341,17 +4357,18 @@ const BRANDS = [
 function brandUrl(brand, which) {
   const b = BRANDS.find(x => x[0] === brand); if (!b) return '';
   const path = which === 'main' ? b[3] : b[4]; if (!path) return '';
-  const ip = val('q-ip').trim() || '192.168.1.100', port = val('q-port').trim() || b[2], ch = val('q-ch').trim() || '1';
+  // The brand's usual port and channel 1 (change them in the stream addresses).
+  const ip = val('q-ip').trim() || '192.168.1.100', port = b[2], ch = '1';
   const user = val('q-user').trim(), pass = $('q-pass').value;
   const auth = user ? `${enc(user)}${pass ? ':' + enc(pass) : ''}@` : '';
   return `rtsp://${auth}${ip}:${port}${path.replaceAll('{ch}', ch)}`;
 }
-// Put the quick-setup IP, port and login into an existing stream URL,
+// Put the quick-setup IP and login into an existing stream URL,
 // keeping its path (e.g. /Streaming/Channels/102).
 function rewriteUrl(u) {
   const m = u.trim().match(/^(rtsps?:\/\/)(?:([^@\/]*)@)?([^:\/?#]+)(?::(\d+))?(.*)$/i);
   if (!m) return u;
-  const ip = val('q-ip').trim() || m[3], port = val('q-port').trim() || m[4];
+  const ip = val('q-ip').trim() || m[3], port = m[4];
   const user = val('q-user').trim(), pass = $('q-pass').value;
   // Keep the URL's own login unless a new one is typed.
   const auth = user ? `${enc(user)}${pass ? ':' + enc(pass) : ''}@` : (m[2] ? m[2] + '@' : '');
@@ -4419,7 +4436,7 @@ async function openCameraDialog(id, clone, prof) {
         <label for="q-brand">Camera brand</label>
         <div><div class="row"><select id="q-brand">${brandOpts.replace('Format…', 'Choose brand…')}</select></div>
           <div class="hint">Fill in the camera's address and login, pick the brand, and the stream URLs are filled in for you.</div></div>
-        <label for="q-ip">IP address</label><div class="row"><input type="text" id="q-ip" value="${esc(q.ip || '')}" placeholder="192.168.1.100" style="flex:2"><input type="text" id="q-port" value="${esc(q.port || '')}" placeholder="port (554)" style="flex:1"><input type="text" id="q-ch" placeholder="channel 1" style="flex:1"></div>
+        <label for="q-ip">IP address</label><div class="row"><input type="text" id="q-ip" value="${esc(q.ip || '')}" placeholder="192.168.1.100" style="flex:2"></div>
         <label for="q-user">Camera login</label><div class="row"><input type="text" id="q-user" value="${esc(q.user || '')}" placeholder="username" style="flex:1" autocomplete="off"><input type="password" id="q-pass" value="${esc(q.pass || '')}" placeholder="password" style="flex:1" autocomplete="new-password"></div>
         <h3>Streams</h3>
         <label for="c-url">Main stream (HD)</label>
@@ -4668,14 +4685,12 @@ async function openCameraDialog(id, clone, prof) {
   $('d-conf').oninput = () => $('d-conf-v').textContent = val('d-conf') + '%';
   $('q-brand').onchange = () => {
     const b = val('q-brand'); if (!b) return;
-    const brand = BRANDS.find(x => x[0] === b);
-    if (!val('q-port')) $('q-port').placeholder = 'port (' + brand[2] + ')';
     $('c-url').value = brandUrl(b, 'main'); $('c-live').value = brandUrl(b, 'sub');
   };
   // Changing the address or login updates the stream URLs: from the brand
   // template if one is chosen, otherwise by editing the existing URLs (e.g.
   // after cloning a camera, just type the new IP).
-  for (const k of ['q-ip', 'q-port', 'q-ch', 'q-user', 'q-pass']) $(k).oninput = () => {
+  for (const k of ['q-ip', 'q-user', 'q-pass']) $(k).oninput = () => {
     if (val('q-brand')) return $('q-brand').onchange();
     for (const id of ['c-url', 'c-live']) $(id).value = rewriteUrl(val(id));
   };
@@ -5361,11 +5376,14 @@ async function renderStorage(body) {
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
     <label for="s-max">Maximum storage</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
     <label for="s-free">Keep free on disk</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
+    <span></span><div><label class="check"><input type="checkbox" id="s-tlon" ${s.timelapse !== false ? 'checked' : ''}> Time-lapse previews</label>
+      <div class="hint">The pictures shown while dragging along a timeline. Off: dragging moves the video itself, and nothing is kept or made.</div></div>
     <label for="s-tlsec">Time-lapse pictures</label><div><div class="row">
         <select id="s-tlsec">${[...new Set([2, 5, 10, 20, 30, 60, s.timelapse_seconds || 10])].sort((a, b) => a - b).map(n => `<option value="${n}" ${n === (s.timelapse_seconds || 10) ? 'selected' : ''}>One every ${n} seconds${n === 2 ? ' — smoothest' : n === 10 ? ' — standard' : n === 60 ? ' — lightest' : ''}</option>`).join('')}</select>
         <select id="s-tlw">${[[256, 'Standard (256 × 144)'], [384, 'Sharp (384 × 216)'], [512, 'Sharpest (512 × 288)']].map(([w, t]) => `<option value="${w}" ${w === (s.timelapse_width || 256) ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <span class="muted" id="s-tlsec-info"></span></div>
-      <div class="hint">The pictures you see while dragging along a timeline. They're kept as the camera records (from what motion detection already looks at), so more and sharper pictures cost little — mainly some disk space for the previews. Footage from before a change keeps its pictures.</div></div>
+      <div class="hint">Kept as the camera records (from what motion detection already looks at), so more and sharper pictures cost little — mainly some disk space. A change applies to new footage; what's already made stays as it is.</div>
+      <button type="button" class="small" id="s-tlremake" style="margin-top:8px">🖼️ Remake time-lapse with these settings…</button></div>
   </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>
   <div class="card"><h2>Where each camera saves</h2>
     <table><thead><tr><th>Camera</th><th>Folder</th><th class="hide-sm">Stored</th><th></th></tr></thead><tbody>
@@ -5382,12 +5400,20 @@ async function renderStorage(body) {
     $('s-tlsec-info').textContent = `${Math.ceil(300 / n)} pictures per 5 minutes · about ${fmtBytes(perDay)} a day per camera`;
   };
   $('s-tlsec').onchange = $('s-tlw').onchange = tlInfo; tlInfo();
+  const tlOn = () => ['s-tlsec', 's-tlw', 's-tlremake'].forEach(x => $(x).disabled = !chk('s-tlon'));
+  $('s-tlon').onchange = tlOn; tlOn();
+  // Remake what's already made, at the settings chosen (saved first).
+  $('s-tlremake').onclick = async () => {
+    if (!confirm('Remake the time-lapse at these settings?\n\nAll time-lapse previews are thrown away and made again: the last 24 hours first, older days when you open them. Footage older than a few hours has to be read again from the recordings, which can keep the computer busy for a while (see System → Tasks).')) return;
+    $('f-storage').requestSubmit();
+    setTimeout(async () => { try { const r = await api('api/maintenance/previews', {method: 'POST'}); toast(r.message || 'Remaking the time-lapse'); } catch (e) { toast(e.message, true); } }, 800);
+  };
   $('s-browse').onclick = async () => { const p = await pickFolder(val('s-dir'), 'Default recordings folder'); if (p) { $('s-dir').value = p; $('s-dir').oninput(); } };
   $('f-storage').onsubmit = async (e) => {
     e.preventDefault();
     const moving = !$('s-move-row').hidden && chk('s-move');
     if (moving) toast('Saving and moving recordings… this can take a while for large folders.');
-    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10)), timelapse_width: +val('s-tlw') || 256}});
+    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), timelapse: chk('s-tlon'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10)), timelapse_width: +val('s-tlw') || 256}});
     renderStorage(body);
   };
   const changeCam = async (id, dir) => {

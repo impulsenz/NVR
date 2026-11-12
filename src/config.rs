@@ -146,6 +146,9 @@ pub struct StorageConfig {
     pub max_storage_gb: f64,
     /// Delete the oldest recordings when free disk space drops below this (0 = off).
     pub min_free_gb: f64,
+    /// Time-lapse previews (the pictures shown while dragging along a
+    /// timeline): on or off.
+    pub timelapse: bool,
     /// Time-lapse previews: seconds between pictures (1–120).
     pub timelapse_seconds: u32,
     /// Time-lapse pictures' width in pixels (256, 384 or 512; 16:9).
@@ -160,6 +163,7 @@ impl Default for StorageConfig {
             retention_days: 14,
             max_storage_gb: 0.0,
             min_free_gb: 5.0,
+            timelapse: true,
             timelapse_seconds: 10,
             timelapse_width: 256,
         }

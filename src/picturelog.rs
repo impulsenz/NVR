@@ -18,12 +18,20 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The time-lapse settings (Settings → Recording & storage), read by each
 /// camera's motion detection as it goes: changed without restarting them.
+static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 static SECONDS: AtomicU32 = AtomicU32::new(10);
 static WIDTH: AtomicU32 = AtomicU32::new(256);
 
 pub fn configure(s: &crate::config::StorageConfig) {
+    ON.store(s.timelapse, Ordering::Relaxed);
     SECONDS.store(s.timelapse_seconds.max(1), Ordering::Relaxed);
     WIDTH.store(s.timelapse_width, Ordering::Relaxed);
+}
+
+/// Time-lapse previews are on (Settings → Recording & storage): when off,
+/// nothing is kept, made or served.
+pub fn enabled() -> bool {
+    ON.load(Ordering::Relaxed)
 }
 
 /// Seconds between time-lapse pictures.
@@ -45,6 +53,9 @@ pub fn dir(camera_dir: &Path) -> PathBuf {
 
 /// Keep a picture taken at `t`.
 pub fn save(camera_dir: &Path, t: DateTime<Local>, f: &Frame) -> Result<()> {
+    if !enabled() {
+        return Ok(());
+    }
     let (tw, th) = tile();
     let small = crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, tw, th);
     // One flat colour (a frame that couldn't be decoded): not kept (the
