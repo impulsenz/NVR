@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.31 — November 2026
+- **Ignore areas count for the AI too**: something the AI finds mostly inside the areas you painted to ignore (say a car parked behind the trees) no longer makes an alert — even when something else set off the check — and isn't boxed on the alert's HD picture either. A new tick box under the ignore areas, **"AI ignores these areas too"** (on by default), turns this off if you still want AI alerts there.
+- **Solid timeline bars**: recordings that follow each other are one continuous green bar (no gaps or rounded ends every 5 minutes), and the blue time-lapse line is solid too.
+- **Playhead time out of the way**: in Recordings the playhead's time now sits just under the time scale, clear of the red NOW mark.
+
 ## 0.6.30 — November 2026
 - **Faster switch from time-lapse to video**: when you let go after dragging through Recordings, the cameras' videos now load first. Dragging asked for the time-lapse of every file you passed over, and those requests were holding up the videos; they're dropped and the time-lapse carries on loading afterwards. A player that's switched away from also stops downloading its old file.
 - **Sub-stream / Main stream (HD) shows only that stream**: choose Main stream and the timeline shows only full-quality footage (the 24/7 HD recording, or the purple HD alert clips if you record the sub-stream 24/7); where there's none, nothing plays. A stream you haven't recorded shows as "not recorded" and can't be picked. Each file's stream is told by its picture size, so footage from before a change of recording mode is still shown correctly.

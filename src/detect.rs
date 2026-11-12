@@ -771,7 +771,21 @@ impl Detector {
         // The same object recognized as two things: keep the more confident
         // one (before choosing which objects alert, so a cat that also
         // looks a bit like a person counts as a cat).
-        let best = crate::ai::best_per_object(dets);
+        let mut best = crate::ai::best_per_object(dets);
+        // The areas drawn to ignore count for the AI too (not only for
+        // motion): whatever started this look, something mostly inside
+        // them is left out.
+        if d.ai_ignores_mask
+            && let Some(mask) = ignore_mask(d)
+        {
+            best.retain(|x| {
+                let keep = masked_share(&mask, x) <= 0.5;
+                if !keep {
+                    tracing::debug!("[{}] {} in an ignored area: left out", self.cam.name, x.label);
+                }
+                keep
+            });
+        }
         let mut hits: Vec<Detection> = best
             .iter()
             .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
@@ -1125,6 +1139,33 @@ impl Detector {
         );
         v
     }
+}
+
+/// The areas drawn to ignore, if any.
+pub fn ignore_mask(d: &crate::config::DetectConfig) -> Option<Vec<bool>> {
+    if !d.ai_ignores_mask {
+        return None;
+    }
+    crate::config::decode_mask(&d.mask).filter(|m| m.iter().any(|x| *x))
+}
+
+/// How much of a detection's box lies in the areas drawn to ignore (0..1).
+pub fn masked_share(mask: &[bool], x: &Detection) -> f32 {
+    use crate::config::{MASK_H, MASK_W};
+    let cells = |a: f32, b: f32, n: usize| {
+        let a = ((a.clamp(0.0, 1.0) * n as f32).floor() as usize).min(n - 1);
+        let b = ((b.clamp(0.0, 1.0) * n as f32).ceil() as usize).clamp(a + 1, n);
+        a..b
+    };
+    let (cx, cy) = (cells(x.x, x.x + x.w, MASK_W), cells(x.y, x.y + x.h, MASK_H));
+    let (mut all, mut ignored) = (0u32, 0u32);
+    for gy in cy {
+        for gx in cx.clone() {
+            all += 1;
+            ignored += mask[gy * MASK_W + gx] as u32;
+        }
+    }
+    if all == 0 { 0.0 } else { ignored as f32 / all as f32 }
 }
 
 /// The part of the picture around a zone (with a margin), for checking
@@ -1561,6 +1602,21 @@ mod tests {
         assert!(c.width >= 126 && c.width == c.height);
         assert!(x + w <= 1.0001 && y + h <= 1.0001 && x > 0.5 && y > 0.3);
         assert!(super::zoom_on(&f, (0.1, 0.1, 0.6, 0.6)).is_none());
+    }
+
+    #[test]
+    fn ai_leaves_out_what_is_in_ignored_areas() {
+        use crate::config::{MASK_H, MASK_W};
+        let mut mask = vec![false; MASK_W * MASK_H];
+        for y in 0..MASK_H / 2 {
+            for x in 0..MASK_W {
+                mask[y * MASK_W + x] = true; // ignore the top half
+            }
+        }
+        let det = |y: f32| Detection { label: "car".into(), score: 0.9, x: 0.4, y, w: 0.2, h: 0.2 };
+        assert!(super::masked_share(&mask, &det(0.1)) > 0.99); // in the trees
+        assert!(super::masked_share(&mask, &det(0.7)) < 0.01); // on the drive
+        assert!(super::masked_share(&mask, &det(0.4)) <= 0.5); // half in: kept
     }
 
     #[test]

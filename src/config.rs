@@ -631,6 +631,9 @@ pub struct DetectConfig {
     /// Motion set off by an animal that isn't in `objects` (a cat, a
     /// dog, a bird …) doesn't make an alert. Needs object detection on.
     pub ignore_animals: bool,
+    /// Objects the AI finds mostly inside the areas drawn to ignore are left
+    /// out too (not only motion there), whatever started the look.
+    pub ai_ignores_mask: bool,
     /// Seconds without moving before something counts as parked.
     pub parked_seconds: u32,
     /// Kinds of objects that stop alerting while they stand still.
@@ -666,6 +669,7 @@ impl Default for DetectConfig {
             ai_interval: 1.0,
             ignore_parked: true,
             ignore_animals: true,
+            ai_ignores_mask: true,
             parked_seconds: 60,
             parked_objects: crate::stationary::PARKING
                 .iter()

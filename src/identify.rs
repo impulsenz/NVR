@@ -128,6 +128,7 @@ pub async fn timed_moments(
             continue;
         };
         let boxes = if local {
+            let mask = crate::detect::ignore_mask(&rt.cfg.detect);
             ai.detect(&frame)
                 .await
                 .unwrap_or_default()
@@ -135,6 +136,8 @@ pub async fn timed_moments(
                 .filter(|d| {
                     d.score >= rt.cfg.detect.min_confidence.min(0.45)
                         && rt.cfg.detect.objects.contains(&d.label)
+                        // Not in the areas drawn to ignore.
+                        && mask.as_ref().is_none_or(|m| crate::detect::masked_share(m, d) <= 0.5)
                 })
                 .map(|d| SeenBox {
                     label: d.label,

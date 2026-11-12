@@ -1751,12 +1751,13 @@ const camTl = {
     $('ctl-axis').innerHTML = axis;
     declutterAxis($('ctl-axis'));
     let lane = `<div class="tl-grid">${grid}</div>`;
-    const lastRec = this.data.segments.filter(x => x.kind !== 'clip').slice(-1)[0];
+    const lastRec = this.data.segments.filter(x => x.kind !== 'clip').slice(-1)[0], pieces = [];
     for (const sg of this.data.segments) {
       const live = sg === lastRec && isGrowing(sg);
       const x0 = Math.max(0, pct(new Date(sg.start).getTime())), x1 = Math.min(100, pct(live ? Date.now() : new Date(sg.end).getTime()));
-      if (x1 > 0 && x0 < 100 && x1 > x0) lane += `<div class="seg ${sg.kind === 'clip' ? 'clip' : ''} ${live ? 'live' : ''}" style="left:${x0}%;width:${Math.max(0.15, x1 - x0)}%"${live ? ' title="Recording now"' : ''}></div>`;
+      if (x1 > 0 && x0 < 100 && x1 > x0) pieces.push({a: x0, b: x1, cls: sg.kind === 'clip' ? 'clip' : 'rec', live});
     }
+    lane += solidBars(pieces, 15000 / (b - a) * 100, 'div', 'seg');
     this.groups = [];
     lane += evMarks(this.data.events, pct, '', this.id, $('ctl-lane').clientWidth, this.groups);
     const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
@@ -1769,7 +1770,7 @@ const camTl = {
   paintStrip() {
     const el = $('ctl-tlp'); if (!el || !this.data) return;
     const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
-    let h = '';
+    const h = [];
     for (const sg of this.sources()) {
       const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
       const st = this.pv.get(sg.url) || {state: 'wait'};
@@ -1778,9 +1779,9 @@ const camTl = {
       // to its newest picture and one step more.
       const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
       const x0 = Math.max(0, pct(s0)), x1 = Math.min(100, pct(end));
-      if (x1 > 0 && x0 < 100 && x1 > x0) h += `<i class="s-${st.state}" style="left:${x0}%;width:${Math.max(x1 - x0, 0.15)}%"></i>`;
+      if (x1 > 0 && x0 < 100 && x1 > x0) h.push({a: x0, b: x1, cls: 's-' + st.state});
     }
-    el.innerHTML = h;
+    el.innerHTML = solidBars(h, 15000 / span * 100, 'i');
   },
   // Load the time-lapse of everything in view, newest first (up to now).
   async prefetch() {
@@ -2755,6 +2756,18 @@ function showVideo(el, i) {
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
 }
+// Bars on a timeline: pieces of the same kind that follow each other (a
+// recording is saved as a file every few minutes, with a second or two
+// between) are drawn as one solid bar. pieces: {a, b (%), cls, live}.
+function solidBars(pieces, gap, tag = 'div', base = '') {
+  const runs = [];
+  for (const p of pieces.slice().sort((x, y) => x.a - y.a)) {
+    const r = runs[runs.length - 1];
+    if (r && r.cls === p.cls && p.a - r.b <= gap) { r.b = Math.max(r.b, p.b); r.live = p.live; }
+    else runs.push({...p});
+  }
+  return runs.map(r => `<${tag} class="${base} ${r.cls} ${r.live ? 'live' : ''}" style="left:${r.a}%;width:${Math.max(r.b - r.a, 0.15)}%"${r.live ? ' title="Recording now"' : ''}></${tag}>`).join('');
+}
 // Which stream a piece of footage is (older servers didn't say).
 const streamOf = (s) => s.stream || (s.kind === 'sub' ? 'sub' : 'main');
 // The streams there's footage of here, and the one shown: the one chosen,
@@ -2978,12 +2991,13 @@ function drawTimeline() {
     let lane = '';
     // The newest recording, still being made, reaches up to now (and shows
     // it's still being recorded).
-    const shown = c.segments.filter(tlShows), lastRec = shown.filter(x => x.kind !== 'clip').slice(-1)[0];
+    const shown = c.segments.filter(tlShows), lastRec = shown.filter(x => x.kind !== 'clip').slice(-1)[0], pieces = [];
     for (const s of shown) {
       const live = s === lastRec && isGrowing(s);
       const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(s.end).getTime()));
-      if (b > 0 && a < 100 && b > a) lane += `<div class="seg ${s.kind === 'clip' ? 'clip' : ''} ${live ? 'live' : ''}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"${live ? ' title="Recording now"' : ''}></div>`;
+      if (b > 0 && a < 100 && b > a) pieces.push({a, b, cls: s.kind === 'clip' ? 'clip' : 'rec', live});
     }
+    lane += solidBars(pieces, 15000 / span * 100, 'div', 'seg');
     lane += evMarks(c.events, pct, `data-cam="${esc(c.camera)}"`, c.camera, lanePx, tl.groups);
     const st = cam(c.camera), recOn = !!(st && st.recorder && st.recorder.state === 'recording');
     const nEv = c.events.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
@@ -3192,7 +3206,7 @@ function paintPreviewStrips() {
   const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
   for (const el of document.querySelectorAll('#tl .tlp')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
-    let h = '';
+    const h = [];
     for (const sg of previewSources(c.segments)) {
       const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
       const st = (tl.pv && tl.pv.get(sg.url)) || {state: 'wait'};
@@ -3202,9 +3216,9 @@ function paintPreviewStrips() {
       const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
       const a = Math.max(0, pct(s0)), b = Math.min(100, pct(end));
       if (b <= 0 || a >= 100 || b <= a) continue;
-      h += `<i class="s-${st.state}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"></i>`;
+      h.push({a, b, cls: 's-' + st.state});
     }
-    el.innerHTML = h;
+    el.innerHTML = solidBars(h, 15000 / span * 100, 'i');
   }
 }
 async function prefetchSprites() {
@@ -3930,7 +3944,7 @@ async function openCameraDialog(id, clone, prof) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, parked_seconds: 60}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   // A profile: its settings on top of a new camera's.
   if (prof) { Object.assign(c, JSON.parse(JSON.stringify(prof.values || {}))); c.detect = {...c.detect, mask: ''}; c.name = prof.name; }
@@ -4043,6 +4057,7 @@ async function openCameraDialog(id, clone, prof) {
             <label class="muted small" style="margin:0">Brush <select id="d-mask-brush" class="small"><option value="1">Fine</option><option value="3" selected>Small</option><option value="7">Medium</option><option value="15">Large</option></select></label>
             <button type="button" class="small" id="d-mask-clear">Clear</button><button type="button" class="small" id="d-mask-invert">Invert</button></div>
           <div class="hint" style="margin:4px 0 0">Paint over the picture to mark areas to ignore (red); switch to Erase to unmark. Right-click (or hold Shift) erases too.</div>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="d-mask-ai" ${c.detect.ai_ignores_mask !== false ? 'checked' : ''}> AI ignores these areas too — something it finds mostly inside them (say a parked car) doesn't alert, even when something else set off the check. Untick to still get AI alerts there (motion there is ignored either way).</label>
           <div id="d-meter" class="hint" style="margin-top:8px"></div></div>
         <label for="d-pre">Record before alert</label>
         <div class="row"><input type="number" id="d-pre" min="0" max="120" value="${c.detect.pre_seconds}" style="width:110px"><span class="muted">seconds (pre-event buffer, in alert recording modes)</span></div>
@@ -4538,7 +4553,7 @@ function collectCamera() {
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
-      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
+      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
       parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgArea.length >= 3, package_area: pkgArea},
   };
 }
@@ -4757,7 +4772,7 @@ function applyProfile(p) {
   set('d-travel', d.min_travel_px); set('d-ai', d.ai); set('d-conf', Math.round(d.min_confidence * 100));
   if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
-  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-parked-s', d.parked_seconds || 60);
+  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-mask-ai', d.ai_ignores_mask !== false); set('d-parked-s', d.parked_seconds || 60);
   if (d.parked_objects) document.querySelectorAll('#d-parked-objs input').forEach(i => i.checked = d.parked_objects.includes(i.value));
   // Let the form update anything that depends on these (hidden sections, hints).
   for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select, [data-tab=ai] input, [data-tab=ai] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
