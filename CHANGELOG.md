@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.15 — November 2026
+- **Deleted alerts stay deleted**: after **Delete footage** (or deleting an alert), alerts no longer come back a while later with a black picture. Background work that was still busy with them (faces and plates, full-quality clips, notifications, sharper pictures) now lets them go instead of saving them again.
+
 ## 0.6.14 — November 2026
 - **Parked cars stay quiet**: "Stop alerting for objects that stay in one place" now works for cars that are only partly in the picture or recognised with a varying score. GAZE follows every sighting of a parked vehicle (not just those strong enough to alert), allows for the box around it jumping about, and only treats it as moving off once it's seen somewhere else twice in a row.
 
