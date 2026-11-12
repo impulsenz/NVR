@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.26 — November 2026
+- The detection label on the picture (e.g. "🚶 person") is always one solid bar — it no longer splits the icon and the word onto two lines near the edge of the picture. Other freely placed on-screen display items stay on one line too.
+
 ## 0.6.25 — November 2026
 - The **Scrub preview** choice (Time-lapse / Sub-stream / Main stream) and its "ms a picture" readout are gone from Recordings: dragging along the timeline always shows the time-lapse.
 
