@@ -238,6 +238,13 @@ pub struct PlaylistFile {
 /// of about `part` seconds. URLs are made relative to the playlist: `up`
 /// leads from where it's served back to the page (e.g. "../../../").
 pub fn playlist(files: &[PlaylistFile], part: f64, up: &str) -> String {
+    playlist_as(files, part, up, false)
+}
+
+/// The same; `live`: a playlist that keeps growing (up to now, more is
+/// added as it's recorded): the player asks for it again every few seconds
+/// and carries on without starting over.
+pub fn playlist_as(files: &[PlaylistFile], part: f64, up: &str, live: bool) -> String {
     let mut body = String::new();
     let mut longest: f64 = 1.0;
     let mut first = true;
@@ -277,8 +284,10 @@ pub fn playlist(files: &[PlaylistFile], part: f64, up: &str) -> String {
         }
     }
     format!(
-        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n{body}#EXT-X-ENDLIST\n",
-        longest.ceil() as u64
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:{}\n#EXT-X-INDEPENDENT-SEGMENTS\n{body}{}",
+        longest.ceil() as u64,
+        if live { "EVENT" } else { "VOD" },
+        if live { "" } else { "#EXT-X-ENDLIST\n" }
     )
 }
 

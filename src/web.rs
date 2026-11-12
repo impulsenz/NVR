@@ -1612,6 +1612,9 @@ async fn usage_kinds(State(m): App, user: Option<axum::Extension<CurrentUser>>) 
 struct HlsQuery {
     from: DateTime<chrono::FixedOffset>,
     to: DateTime<chrono::FixedOffset>,
+    /// Reaches now: a growing playlist (see hls::playlist_as).
+    #[serde(default)]
+    live: bool,
 }
 
 /// A camera's recordings of one stream ("sub" or "main", path ends in
@@ -1628,7 +1631,7 @@ async fn hls_playlist(
     }
     let c = camera!(m, id);
     let stream = stream.trim_end_matches(".m3u8").to_string();
-    let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
+    let (from, to, live) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local), q.live);
     if to <= from || (to - from).num_hours() > 26 {
         return err(StatusCode::BAD_REQUEST, "bad time range");
     }
@@ -1649,7 +1652,7 @@ async fn hls_playlist(
             };
             files.push(crate::hls::PlaylistFile { path, url: s.url, start: s.start });
         }
-        crate::hls::playlist(&files, 4.0, "../../../")
+        crate::hls::playlist_as(&files, 4.0, "../../../", live && to > Local::now())
     })
     .await
     .unwrap_or_default();

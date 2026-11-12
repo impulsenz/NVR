@@ -308,7 +308,16 @@ struct Active {
     /// For each of those areas: did the activity (something moving, or an
     /// object the AI found) reach it? Only those are checked afterwards.
     touched: Vec<bool>,
+    /// An area looked different once things went quiet: the alert is kept
+    /// open a minute (since when, and how each area looked then) to see the
+    /// change stays — a parcel left, not a shadow or something set down
+    /// for a moment.
+    item_hold: Option<(Instant, Vec<Option<Vec<f32>>>)>,
 }
+
+/// How long a change in a watched area must stay before it counts as an
+/// item left or taken.
+const ITEM_HOLD: Duration = Duration::from_secs(60);
 
 impl Active {
     /// Something was seen at this box (normalized): mark the watched areas
@@ -780,6 +789,7 @@ impl Detector {
             seen: Vec::new(),
             touched: vec![false; zone_before.len()],
             zone_before,
+            item_hold: None,
         }
     }
 
@@ -1211,9 +1221,44 @@ impl Detector {
         let post = self.cam.detect.post_seconds.max(3) as i64;
         let too_long = (now - a.event.start).num_seconds() > MAX_EVENT_SECONDS;
         if idle >= post || too_long {
+            // A watched area changed: wait a minute before deciding (the
+            // alert stays open; more activity carries on as usual).
+            if !too_long {
+                let a = active.as_mut().unwrap();
+                match &a.item_hold {
+                    None => {
+                        if let Some(sigs) = self.changed_areas(a) {
+                            info!(target: "event", "[{}] watched area looks different: checking again in a minute", self.cam.name);
+                            a.item_hold = Some((Instant::now(), sigs));
+                            return;
+                        }
+                    }
+                    Some((t, _)) if t.elapsed() < ITEM_HOLD => return,
+                    Some(_) => {}
+                }
+            }
             let a = active.take().unwrap();
             self.finish(a);
         }
+    }
+
+    /// The watched areas the activity reached that look different now: how
+    /// each looks (None: unchanged / not reached). None if none changed.
+    fn changed_areas(&self, a: &Active) -> Option<Vec<Option<Vec<f32>>>> {
+        if a.zone_before.is_empty() {
+            return None;
+        }
+        let now = self.latest.lock().unwrap().clone()?;
+        let sigs: Vec<Option<Vec<f32>>> = a
+            .zone_before
+            .iter()
+            .enumerate()
+            .map(|(zi, (z, before, _))| {
+                let sig = z.signature(&now);
+                (a.touched.get(zi).copied().unwrap_or(false) && crate::zones::area_change(before, &sig) > 0.12).then_some(sig)
+            })
+            .collect();
+        sigs.iter().any(Option::is_some).then_some(sigs)
     }
 
     fn finish(&self, mut a: Active) {
@@ -1261,7 +1306,19 @@ impl Detector {
                     before,
                     &z.signature(&now),
                 );
-                if change > 0.12 {
+                // Still different, and the same as a minute ago (it stayed:
+                // not something that came and went or moved on).
+                let stayed = match &a.item_hold {
+                    Some((_, sigs)) => sigs
+                        .get(zi)
+                        .and_then(|x| x.as_ref())
+                        .is_some_and(|then| crate::zones::area_change(then, &z.signature(&now)) < 0.08),
+                    None => true,
+                };
+                if change > 0.12 && !stayed {
+                    info!(target: "event", "[{}] {}: the change didn't stay a minute — not an item", self.cam.name, z.name);
+                }
+                if change > 0.12 && stayed {
                     // Keep both pictures: smart search tells a delivered
                     // parcel from one picked up (or a moved bin).
                     let dir = self.store.dir();

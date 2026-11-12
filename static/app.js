@@ -2883,7 +2883,11 @@ function hlsFor(el, cam) {
   const h = el._h = {hls, cam, frags: [], ready: false};
   hls.on(hlsLib.Events.LEVEL_LOADED, (_, d) => {
     h.frags = d.details.fragments.map(f => ({w: f.programDateTime, d: f.duration * 1000, m: f.start}));
-    h.ready = true; h.loadedAt = Date.now(); h.started = false;
+    h.loadedAt = Date.now();
+    // A growing (live) playlist comes again every few seconds with the
+    // newest pieces: the player carries on as it is.
+    if (h.ready) return;
+    h.ready = true; h.started = false;
     tlSync(true);
   });
   hls.on(hlsLib.Events.ERROR, (_, d) => {
@@ -2891,16 +2895,19 @@ function hlsFor(el, cam) {
     // Can't be played this way (e.g. a picture or sound format the browser
     // can't stream): this camera goes back to playing the files.
     console.warn('continuous playback off for', cam, d.details);
-    hls.destroy(); el._h = null; el._noHls = true; leaveHls(el); tlSync(true);
+    // (Tried again after a minute: it may have been a passing fault.)
+    hls.destroy(); el._h = null; el._noHls = Date.now(); leaveHls(el); tlSync(true);
   });
   return h;
 }
 function hlsLoad(h, T, stream) {
   const now = Date.now();
-  h.from = T - HLS_WIN; h.to = Math.min(now, T + HLS_WIN); h.live = now - h.to < 5000;
+  // Reaching now: a growing playlist that keeps up with the recording
+  // (asked again by the player every few seconds; nothing starts over).
+  h.from = T - HLS_WIN; h.to = T + HLS_WIN; h.live = h.to > now;
   h.stream = stream; h.ready = false; h.frags = []; h.reqAt = now; h.started = false;
   h.hls.stopLoad();
-  h.hls.loadSource(`api/hls/${enc(h.cam)}/${stream}.m3u8?from=${new Date(h.from).toISOString()}&to=${new Date(h.to + 60000).toISOString()}`);
+  h.hls.loadSource(`api/hls/${enc(h.cam)}/${stream}.m3u8?from=${new Date(h.from).toISOString()}&to=${new Date(h.to).toISOString()}${h.live ? '&live=true' : ''}`);
 }
 // Wall time → time in the stream (a moment between two files: the start of
 // the next one, if it's close; null when it's not in the stream).
@@ -2927,12 +2934,12 @@ function leaveHls(el) {
 // Play camera `el` at tl.T with the continuous stream; false: play the file.
 function tlHls(el, c, s, force) {
   const hd = tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
-  if (el._tc || el._noHls || s.kind === 'clip' || hd || !hlsReady()) { leaveHls(el); return false; }
+  if (el._tc || (el._noHls && Date.now() - el._noHls < 60000) || s.kind === 'clip' || hd || !hlsReady()) { leaveHls(el); return false; }
   const h = hlsFor(el, c.camera), q = tlQ(), T = tl.T, now = Date.now();
   const busy = !h.ready && now - (h.reqAt || 0) < 5000;
   // A playlist for this stream and time (a new one past its ends, and
   // every so often near now, where the recording keeps growing).
-  if (h.stream !== q || ((T < h.from || T > h.to || (h.live && T > h.to - 15000 && now - (h.loadedAt || 0) > 15000)) && !busy)) hlsLoad(h, T, q);
+  if (h.stream !== q || ((T < h.from || T > h.to) && !busy)) hlsLoad(h, T, q);
   // Playlist on its way (a moment): the picture on screen stays.
   if (!h.ready) { el._vids.forEach(v => { if (!v.paused) v.pause(); }); return true; }
   const at = hlsAt(h, T);

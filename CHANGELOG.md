@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.39 — November 2026
+- **Recordings stays loaded near "now"**: watching recent footage, each camera's stream now keeps growing with the recording instead of being loaded again every so often — which emptied the picture (black) while it reloaded, and is why coming back to Recordings showed black boxes. The picture and what's loaded now stay, and newer footage is added as it's recorded.
+- **Packages must stay a minute**: when the package spot (or an area watching for items) looks different after activity, GAZE waits a minute and looks again. Only a change that's still there — and hasn't moved — counts as a parcel left or taken; something set down for a moment, a shadow or a passing reflection doesn't.
+
 ## 0.6.38 — November 2026
 - **New server load graph** (System): CPU, GPU and memory over time as smooth, filled lines, with a faint band for the peaks. Cards above it show each one now, its average and its peak over the range; hover anywhere for that moment's readings, click a card to hide or show its line.
 - **The time ranges match the data**: each range (1 h, 6 h, 24 h, 7 days, 30 days) now spans its full length with round time marks. After GAZE restarts, the 1 h and 6 h views use the saved per-minute history for the time before (they showed nothing but zero there). Times without readings (GAZE not running, computer off) are shown hatched instead of as 0 %.
