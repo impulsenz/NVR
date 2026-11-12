@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.18 — November 2026
+- **Your voice in the recordings**: what you say with 🎙️ Push to talk (and the chimes) is now added to the camera's recordings — the recording, the timeline copy and the alert clip of that time — so playing them back you hear both sides of the conversation. It's added a minute or two after each recording file is finished; the video itself isn't touched.
+- **Hear the camera while you talk**: pressing Push to talk turns on the camera's sound automatically (and leaves it on to hear the answer; the 🔊 button turns it off).
+
 ## 0.6.17 — November 2026
 - **"Goodbye" tune when you stop talking**: letting go of 🎙️ Push to talk (or tapping it off) plays three quick, soft falling notes through the camera's speaker, so whoever is there knows you've finished. It follows the camera's chime setting (Audio tab).
 
