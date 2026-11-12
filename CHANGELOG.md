@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.35 — November 2026
+- **Recordings loads in the background**: open GAZE (or refresh the page) on any page and the Recordings timeline loads behind the scenes — footage, each camera's stream and the time-lapse pictures — so it's ready the moment you go there.
+- **Time-lapse when reviewing an alert**: dragging along an alert's (or any recording's) bar now shows the time-lapse pictures already made for the timeline, and the HD video loads where you let go. Hovering over the bar shows them too. (Before, it looked for the alert clip's own time-lapse, which usually isn't made.)
+
 ## 0.6.34 — November 2026
 - **Main stream (HD) time-lapse everywhere**: dragging through Recordings with Main stream chosen now shows the time-lapse at every moment with footage — not only where there's HD footage. (It stopped where there was none once a camera's HD footage played converted.)
 - **Main stream is purple**: on the timelines, main-stream (HD) recordings are purple and sub-stream recordings green, whether 24/7 or alert clips.

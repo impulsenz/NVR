@@ -1008,21 +1008,30 @@ class Player {
     const a = new Date(item.file_start).getTime();
     try {
       const [t] = await api(`api/timeline?cameras=${enc(item.camera)}&from=${enc(new Date(a - 60000).toISOString())}&to=${enc(new Date(a + 3 * 3600000).toISOString())}`);
-      if (this.item === item) this.lightSegs = ((t && t.segments) || []).filter(x => x.kind === 'sub');
+      // The 24/7 recording's time-lapse (the blue line of the timelines),
+      // whichever stream it is.
+      if (this.item === item) this.lightSegs = previewSources((t && t.segments) || []);
     } catch (e) {}
   }
   // While dragging: the time-lapse picture of moment `t` over the whole
   // video (the full-quality video is loaded there on release).
+  // The time-lapse picture of moment `t` of this file: from the 24/7
+  // recording's time-lapse (already made, the one the timelines use), or
+  // this file's own. Resolves to [sprite, seconds into it] or null.
+  async tlapAt(t) {
+    const W = this.wallAt(t).getTime();
+    const seg = (this.lightSegs || []).find(x => new Date(x.start).getTime() <= W && W < (isGrowing(x) ? Date.now() : new Date(x.end).getTime()) + 1000);
+    const sp = seg && await spriteFor(this.item.camera, seg);
+    if (sp) return [sp, (W - new Date(seg.start).getTime()) / 1000];
+    return this.sprite ? [this.sprite, t] : null;
+  }
   showTimelapse(t) {
     const ov = this.tlap; if (!ov || !this.item) return;
-    const W = this.wallAt(t).getTime(), cam = this.item.camera, want = this.tlapWant = t;
-    const seg = (this.lightSegs || []).find(x => new Date(x.start).getTime() <= W && W < new Date(x.end).getTime() + 1000);
-    const show = (sp, off) => {
-      if (!sp || this.tlapWant !== want) return;
-      if (spriteStyle(ov, sp, Math.floor(off / sp.info.interval), this.surface.clientWidth, this.surface.clientHeight, false)) ov.hidden = false;
-    };
-    if (seg) spriteFor(cam, seg).then(sp => sp ? show(sp, (W - new Date(seg.start).getTime()) / 1000) : show(this.sprite, t));
-    else show(this.sprite, t);
+    const want = this.tlapWant = t;
+    this.tlapAt(t).then(r => {
+      if (!r || this.tlapWant !== want) return;
+      if (spriteStyle(ov, r[0], Math.floor(r[1] / r[0].info.interval), this.surface.clientWidth, this.surface.clientHeight, false)) ov.hidden = false;
+    });
   }
   hideTimelapse() {
     const ov = this.tlap; if (!ov || ov.hidden) return;
@@ -1071,11 +1080,12 @@ class Player {
     this.paintButtons();
   }
   showPreview(t, x) {
-    const s = this.sprite, p = this.el.prev;
+    const p = this.el.prev;
     p.hidden = false;
     p.style.left = Math.min(Math.max(x, 100), this.el.scrub.clientWidth - 100) + 'px';
     this.el.pt.textContent = fmtTime(this.wallAt(t)) + ' · ' + fmtClock(t);
-    if (s) spriteStyle(this.el.pimg, s, Math.floor(t / s.info.interval), 192, 108);
+    const want = this.prevWant = t;
+    this.tlapAt(t).then(r => { if (r && this.prevWant === want) spriteStyle(this.el.pimg, r[0], Math.floor(r[1] / r[0].info.interval), 192, 108); });
   }
   wireScrub() {
     const sc = this.el.scrub;
@@ -2833,15 +2843,32 @@ function buildTimelineVideos() {
 // a break. The file-by-file players are kept for HD alert clips, converted
 // playback, and browsers that can't play the stream.
 let hlsLib;  // undefined: not loaded yet; 0: loading; false: not usable
+let hlsLoaded;  // settles once it's known (loaded or not usable)
 function hlsReady() {
   if (hlsLib === undefined) {
     hlsLib = 0;
-    const sc = document.createElement('script'); sc.src = 'hls.min.js';
-    sc.onload = () => { hlsLib = window.Hls && Hls.isSupported() ? Hls : false; if (hlsLib && page === 'recordings') tlSync(true); };
-    sc.onerror = () => { hlsLib = false; };
-    document.head.appendChild(sc);
+    hlsLoaded = new Promise(done => {
+      const sc = document.createElement('script'); sc.src = 'hls.min.js';
+      sc.onload = () => { hlsLib = window.Hls && Hls.isSupported() ? Hls : false; done(); if (hlsLib && page === 'recordings') tlSync(true); };
+      sc.onerror = () => { hlsLib = false; done(); };
+      document.head.appendChild(sc);
+    });
   }
   return hlsLib || null;
+}
+// Opening GAZE (or refreshing the page) anywhere but Recordings: its
+// timeline is loaded in the background — footage, each camera's stream at
+// the moment it opens on, and the time-lapse pictures — so it's ready when
+// you go there (it then carries on as loaded, see resumeTimeline). Leaving
+// for another page stops its downloads as usual.
+async function preloadRecordings() {
+  // (Not with the data saver on: nothing is fetched until it's asked for.)
+  if (page === 'recordings' || tl.key || document.hidden || dataSaver) return;
+  hlsReady(); await hlsLoaded;
+  if (page === 'recordings' || tl.key) return;
+  const mode = rec.mode;
+  rec.mode = 'timeline';
+  try { await loadTimeline(); } finally { if (page !== 'recordings') rec.mode = mode; }
 }
 const HLS_WIN = 90 * 60000;  // a playlist covers 1½ h either side
 function hlsFor(el, cam) {
@@ -5580,6 +5607,8 @@ async function boot() {
   await refreshStatus();
   showWhatsNew();
   route();
+  // Recordings loads in the background meanwhile (ready when you go there).
+  setTimeout(preloadRecordings, 2500);
 }
 const isAdmin = () => me && me.role === 'admin';
 $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $('um-pop').hidden = !$('um-pop').hidden; };
