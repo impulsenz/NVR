@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.27 — November 2026
+- **No black blink after scrubbing**: when you let go of the timeline, the time-lapse picture stays until each camera's video has really loaded its picture — however long that takes — and then fades smoothly into the video.
+- **What's new after an update**: when GAZE has been updated, a window shows which version you're now running and what changed in it (once).
+- The Updates button starts at **0%** when an update begins (it showed 100% for a moment).
+
 ## 0.6.26 — November 2026
 - The detection label on the picture (e.g. "🚶 person") is always one solid bar — it no longer splits the icon and the word onto two lines near the edge of the picture. Other freely placed on-screen display items stay on one line too.
 
