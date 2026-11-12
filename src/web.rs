@@ -124,6 +124,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
         .route("/api/known-inbox", get(inbox_list))
+        .route("/api/known-seen", get(known_seen))
         .route("/api/known-inbox/assign", post(inbox_assign))
         .route("/api/known-inbox/dismiss", post(inbox_dismiss))
         .route("/api/cloud/status", get(cloud_status))
@@ -640,9 +641,54 @@ fn recent_events(m: &Manager, days: i64) -> Vec<crate::events::Event> {
         .collect()
 }
 
-async fn inbox_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+/// For each known person: the faces in the last 30 days of alerts that were
+/// taken for them (newest first, up to 30), to check and correct.
+async fn known_seen(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
     let vis = visible(&user);
     let mut evs = recent_events(&m, 30);
+    evs.retain(|e| vis.as_ref().is_none_or(|v| v.contains(&e.camera)));
+    evs.sort_by(|a, b| b.start.cmp(&a.start));
+    let mut out: std::collections::BTreeMap<String, Vec<serde_json::Value>> = Default::default();
+    for e in &evs {
+        for (i, f) in e.faces.iter().enumerate() {
+            let Some(name) = &f.name else { continue };
+            let list = out.entry(name.clone()).or_default();
+            if list.len() < 30 {
+                list.push(json!({
+                    "camera": e.camera,
+                    "event": e.id,
+                    "face": i,
+                    "time": e.start,
+                    "picture": format!("media/{}/events/{}", e.camera, f.file),
+                }));
+            }
+        }
+    }
+    Json(out).into_response()
+}
+
+#[derive(Deserialize)]
+struct InboxRange {
+    from: Option<DateTime<Local>>,
+    to: Option<DateTime<Local>>,
+}
+
+/// New faces and plates (not named yet), from the last 30 days, or from the
+/// days asked for (the Alerts page's "New faces & plates" filter).
+async fn inbox_list(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Query(r): Query<InboxRange>,
+) -> Response {
+    let vis = visible(&user);
+    let mut evs = match (r.from, r.to) {
+        (Some(from), Some(to)) => m
+            .cameras()
+            .iter()
+            .flat_map(|c| c.events.between(from, to))
+            .collect(),
+        _ => recent_events(&m, 30),
+    };
     evs.retain(|e| vis.as_ref().is_none_or(|v| v.contains(&e.camera)));
     let d = crate::inbox::dismissed(&m.data_dir);
     let faces = crate::inbox::group_faces(&evs, &d);

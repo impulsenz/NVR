@@ -852,3 +852,14 @@ body[data-fit=crop] .surface > img { object-fit: cover; }
 /* Time-lapse switched off for now: no preview strips or time-lapse choice. */
 .no-timelapse .tlp, .no-timelapse #ctl-tlp, .no-timelapse #tl-scrub [data-v=timelapse] { display: none !important; }
 .no-timelapse .preview .img { display: none; }
+
+/* People & vehicles: faces recognised as someone, to check and correct. */
+.k-seen { margin-top: 8px; }
+.k-seen summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.k-seen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin-top: 8px; }
+.k-seen-f { display: flex; flex-direction: column; gap: 3px; align-items: center; text-align: center; }
+.k-seen-f img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; background: #000; }
+.k-seen-f select { width: 100%; font-size: 12px; min-height: 0; padding: 3px 4px; }
+
+/* Alerts → "New faces & plates to name" */
+.nf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }

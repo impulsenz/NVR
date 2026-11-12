@@ -2023,10 +2023,10 @@ async function fillWhoFilter() {
   try { list = await api('api/known'); } catch (_) { return; }
   const people = list.filter(k => k.kind === 'person'), cars = list.filter(k => k.kind !== 'person');
   const opt = (k) => `<option value="${esc(k.id)}" ${rec.who === k.id ? 'selected' : ''}>${k.kind === 'person' ? '🧑' : '🚗'} ${esc(k.name)}${k.plates && k.plates.length ? ' — ' + esc(k.plates.join(', ')) : ''}</option>`;
-  sel.innerHTML = `<option value="">Anyone</option>`
+  sel.innerHTML = `<option value="">Anyone</option><option value="__new" ${rec.who === '__new' ? 'selected' : ''}>🆕 New faces &amp; plates to name</option>`
     + (people.length ? `<optgroup label="People (faces)">${people.map(opt).join('')}</optgroup>` : '')
     + (cars.length ? `<optgroup label="Vehicles (number plates)">${cars.map(opt).join('')}</optgroup>` : '');
-  sel.hidden = !list.length;
+  sel.hidden = false;
 }
 $('f-who').onchange = () => { rec.who = val('f-who'); loadRecordings(); };
 $('f-seen-all').onclick = async () => {
@@ -2037,7 +2037,7 @@ $('f-seen-all').onclick = async () => {
 };
 // New alerts appear by themselves (no need to refresh the page).
 setInterval(async () => {
-  if (page !== 'recordings' || rec.mode !== 'list' || document.hidden || rec.loading) return;
+  if (page !== 'recordings' || rec.mode !== 'list' || document.hidden || rec.loading || rec.who === '__new') return;
   const before = rec.items.map(i => i.event ? i.event.id + i.event.end + (i.event.notes || []).length + i.seen : i.name).join();
   const r = await fetchRecordings().catch(() => null);
   if (!r) return;
@@ -2172,12 +2172,13 @@ function recQuery() {
   if (rec.todFrom) q.set('tod_from', rec.todFrom);
   if (rec.todTo) q.set('tod_to', rec.todTo);
   if (rec.seen) q.set('seen', rec.seen);
-  if (rec.who) q.set('who', rec.who);
+  if (rec.who && rec.who !== '__new') q.set('who', rec.who);
   return q;
 }
 async function loadRecordings() {
   $('rec-count').textContent = 'Loading…';
   if (!(Date.now() - (loadRecordings.who || 0) < 60000)) { loadRecordings.who = Date.now(); fillWhoFilter(); }
+  if (rec.who === '__new') return loadNewFaces();
   rec.loading = true;
   try {
     const r = await fetch('api/recordings?' + recQuery());
@@ -2195,6 +2196,7 @@ async function loadRecordings() {
 
 function renderRecordings() {
   const box = $('rec-cards'), items = rec.items;
+  $('rec-collapse').hidden = false;
   const ev = items.filter(i => i.kind === 'event').length;
   $('rec-count').textContent = (items.length ? `${ev} alert${ev === 1 ? '' : 's'}` : '')
     + (items.length ? ' · recordings are on the Timeline tab' : '');
@@ -2244,6 +2246,48 @@ function renderRecordings() {
   });
   $('rec-collapse').textContent = keys.some(k => !recFolded.has(k.key)) ? '− All' : '+ All';
 }
+// "New faces & plates to name": the faces and number plates of the chosen
+// days that aren't anyone known yet (the same person in several alerts
+// shown once). Choose who it is: GAZE names all those alerts and learns it.
+async function loadNewFaces() {
+  const box = $('rec-cards');
+  let inbox = {faces: [], plates: []}, list = [];
+  try {
+    [inbox, list] = await Promise.all([
+      api(`api/known-inbox?from=${enc(rec.from.toISOString())}&to=${enc(rec.to.toISOString())}`),
+      api('api/known').catch(() => [])]);
+  } catch (e) { toast(e.message, true); }
+  rec.items = [];
+  const people = list.filter(k => k.kind === 'person'), cars = list.filter(k => k.kind !== 'person');
+  const n = inbox.faces.length + inbox.plates.length;
+  $('rec-count').textContent = n ? `${inbox.faces.length} new face${inbox.faces.length === 1 ? '' : 's'} · ${inbox.plates.length} new plate${inbox.plates.length === 1 ? '' : 's'}` : '';
+  $('rec-collapse').hidden = true;
+  if (!n) { box.innerHTML = `<div class="empty" style="grid-column:1/-1">No new faces or number plates for these days. (Turn on faces and plates in Settings → People &amp; vehicles.)</div>`; return; }
+  const pick = (face, i) => `<select class="nf-who op-only" data-face="${face ? 1 : 0}" data-i="${i}"><option value="">${face ? 'Who is this?' : 'Whose vehicle?'}</option>${(face ? people : cars).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">${face ? 'New person…' : 'New vehicle…'}</option></select>`;
+  box.innerHTML = `<div class="nf-grid" style="grid-column:1/-1">`
+    + inbox.faces.map((g, i) => `<div class="ib"><img src="${esc(g.picture)}" alt=""><div class="muted small">${g.count} alert${g.count === 1 ? '' : 's'} · ${fmtAgo(g.last)}</div>${pick(true, i)}<button type="button" class="small nf-hide op-only" data-face="1" data-i="${i}">Hide</button></div>`).join('')
+    + inbox.plates.map((g, i) => `<div class="ib">${g.picture ? `<img src="${esc(g.picture)}" alt="" class="wide">` : ''}<span class="plate">${esc(g.plate)}</span><div class="muted small">${g.count} alert${g.count === 1 ? '' : 's'} · ${fmtAgo(g.last)}</div>${pick(false, i)}<button type="button" class="small nf-hide op-only" data-face="0" data-i="${i}">Hide</button></div>`).join('')
+    + `</div>`;
+  box.querySelectorAll('.nf-who').forEach(sel => sel.onchange = async () => {
+    let id = sel.value; if (!id) return;
+    const face = sel.dataset.face === '1', g = (face ? inbox.faces : inbox.plates)[+sel.dataset.i];
+    if (id === '+') {
+      const name = (prompt(face ? 'Name of this person:' : 'Name of the vehicle (e.g. Dad’s car):') || '').trim();
+      if (!name) { sel.value = ''; return; }
+      try { id = (await api('api/known', {method: 'POST', json: {kind: face ? 'person' : 'vehicle', name, plates: []}})).id; } catch (e) { toast(e.message, true); sel.value = ''; return; }
+      loadRecordings.who = 0;
+    }
+    try {
+      const r = await api('api/known-inbox/assign', {method: 'POST', json: face ? {known: id, members: g.members} : {known: id, plate: g.plate}});
+      toast(r.message); loadRecordings();
+    } catch (e) { toast(e.message, true); sel.value = ''; }
+  });
+  box.querySelectorAll('.nf-hide').forEach(b => b.onclick = async () => {
+    const face = b.dataset.face === '1', g = (face ? inbox.faces : inbox.plates)[+b.dataset.i];
+    try { await api('api/known-inbox/dismiss', {method: 'POST', json: face ? {members: g.members} : {plate: g.plate}}); loadRecordings(); } catch (e) { toast(e.message, true); }
+  });
+}
+
 // Alert groups: the day, the part of the day, or the hour.
 let recGroup = store.get('rec-group', 'day');
 const recFolded = new Set(store.get('rec-folded', []));
@@ -4778,7 +4822,7 @@ function photoToJpeg(file, max = 1600) {
   });
 }
 async function renderKnown(body) {
-  const [list, inbox] = await Promise.all([api('api/known').catch(() => []), api('api/known-inbox').catch(() => ({faces: [], plates: []}))]);
+  const [list, inbox, seen] = await Promise.all([api('api/known').catch(() => []), api('api/known-inbox').catch(() => ({faces: [], plates: []})), api('api/known-seen').catch(() => ({}))]);
   const a = settings.ai;
   const people = list.filter(k => k.kind === 'person'), vehicles = list.filter(k => k.kind === 'vehicle');
   const pick = (kind, i) => `<select class="ib-who" data-kind="${kind}" data-i="${i}"><option value="">${kind === 'face' ? 'Who is this?' : 'Whose vehicle?'}</option>${(kind === 'face' ? people : vehicles).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">${kind === 'face' ? 'New person…' : 'New vehicle…'}</option></select>`;
@@ -4805,6 +4849,9 @@ async function renderKnown(body) {
           <label class="k-add btn small">＋ Photo<input type="file" accept="image/*" multiple hidden></label></div>
         <div class="hint">${k.kind === 'person' ? `${k.faces} face${k.faces === 1 ? '' : 's'} learned${k.faces < 3 ? ' — 3 or more clear photos work best' : ''}`
           : `Add photos of the vehicle: GAZE reads its plate from them.<br>Plates: <input type="text" class="k-plates" value="${esc(k.plates.join(', '))}" placeholder="ABC123, …" style="width:180px"> <button type="button" class="small k-psave">Save</button>${k.looks ? ` · ${k.looks} look${k.looks === 1 ? '' : 's'} learned` : ''}`}</div>
+        ${k.kind === 'person' && (seen[k.name] || []).length ? `<details class="k-seen"><summary>Recognised as ${esc(k.name)} in alerts (${seen[k.name].length}${seen[k.name].length >= 30 ? '+' : ''}, last 30 days) — check for mistakes</summary>
+          <div class="k-seen-grid">${seen[k.name].map((f, i) => `<div class="k-seen-f" data-i="${i}"><img src="${esc(f.picture)}" alt="" loading="lazy" title="${esc(fmtDate(f.time))}"><div class="muted small">${esc(fmtAgo(f.time))}</div>
+            <select class="k-fix op-only"><option value="">✎ Wrong?</option>${people.filter(p => p.id !== k.id).map(p => `<option value="${esc(p.id)}">It's ${esc(p.name)}</option>`).join('')}<option value="+">New person…</option><option value="none">Not anyone I know</option></select></div>`).join('')}</div></details>` : ''}
       </div>`).join('')}</div></div>`;
   $('k-save-ai').onclick = async () => { await saveSettings({ai: {...settings.ai, api_key: '', faces: chk('k-faces'), plates: chk('k-plates')}}, 'Saved'); };
   const add = async (kind) => {
@@ -4832,6 +4879,29 @@ async function renderKnown(body) {
   });
   $('k-add-person').onclick = () => add('person');
   $('k-add-vehicle').onclick = () => add('vehicle');
+  // A face wrongly taken for this person: name it right (or "not anyone I
+  // know"); GAZE stops taking that face for them.
+  body.querySelectorAll('.known').forEach(el => {
+    const k = list.find(x => x.id === el.dataset.id);
+    el.querySelectorAll('.k-seen-f').forEach(tile => {
+      const sel = tile.querySelector('.k-fix'), f = seen[k.name][+tile.dataset.i];
+      sel.onchange = async () => {
+        let to = sel.value; if (!to) return;
+        if (to === '+') {
+          const name = (prompt('Name of this person:') || '').trim(); if (!name) { sel.value = ''; return; }
+          try { to = (await api('api/known', {method: 'POST', json: {kind: 'person', name}})).id; } catch (e) { toast(e.message, true); sel.value = ''; return; }
+        }
+        try {
+          const r = await api(`api/known/${enc(to)}/learn`, {method: 'POST', json: {camera: f.camera, event: f.event, face: f.face}});
+          toast(r.message);
+          const d = el.querySelector('.k-seen'); const open = d && d.open;
+          await renderKnown(body);
+          // Keep this person's list open to carry on checking.
+          const again = body.querySelector(`.known[data-id="${CSS.escape(k.id)}"] .k-seen`); if (again && open) again.open = true;
+        } catch (e) { toast(e.message, true); sel.value = ''; }
+      };
+    });
+  });
   body.querySelectorAll('.known').forEach(el => {
     const id = el.dataset.id;
     el.querySelector('.k-del').onclick = async () => { if (confirm('Forget this ' + (el.querySelector('b').textContent.trim()) + '?')) { await api(`api/known/${enc(id)}`, {method: 'DELETE'}).catch(e => toast(e.message, true)); renderKnown(body); } };
