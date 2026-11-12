@@ -47,6 +47,7 @@
       <button type="button" id="um-install" hidden title="Add GAZE to this device's home screen or Start menu, like an app">📲 Install GAZE as an app</button>
       <button type="button" id="um-pass">Change password</button>
       <button type="button" id="um-2fa">🔐 Two-step sign-in</button>
+      <button type="button" id="um-tokens" title="Keys for scripts, Home Assistant or another GAZE to use GAZE as you">🔑 API tokens</button>
       <button type="button" id="um-out">Sign out</button>
     </div>
   </div>
@@ -74,6 +75,7 @@
         <button id="wall-btn" class="primary" title="Fill the whole screen with cameras">⛶ Full screen</button>
       </div>
       <div id="dash"></div>
+      <div id="remotes" hidden></div>
       <div class="empty" id="no-cameras" hidden>
         <p>No cameras yet.</p>
         <button class="primary" onclick="openCameraDialog()">Add your first camera</button>

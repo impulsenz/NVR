@@ -294,6 +294,7 @@ pub struct SettingsUpdate {
     pub update: Option<crate::config::UpdateConfig>,
     pub mqtt: Option<crate::config::MqttConfig>,
     pub webhooks: Option<Vec<crate::config::Webhook>>,
+    pub remotes: Option<Vec<crate::config::RemoteServer>>,
     /// When the recordings folder changes, move existing recordings there.
     #[serde(default)]
     pub move_recordings: bool,
@@ -478,6 +479,9 @@ impl Manager {
 
     /// Validate and persist a new config, then make it current.
     fn commit(&self, new: Config) -> Result<()> {
+        if Config::safe_mode().is_some() {
+            anyhow::bail!("GAZE is in safe mode because the settings file can't be read — fix it first (the banner at the top of the page)");
+        }
         new.validate()?;
         new.save(&self.cfg_path)?;
         crate::picturelog::configure(&new.storage);
@@ -732,6 +736,22 @@ impl Manager {
                 n.token = old.notify.token.clone();
             }
             cfg.notify = n;
+        }
+        if let Some(mut r) = up.remotes {
+            for x in &mut r {
+                let u = x.url.trim().trim_end_matches('/').to_string();
+                if !(u.starts_with("http://") || u.starts_with("https://")) {
+                    anyhow::bail!("\"{}\": the address must start with http:// or https://", x.name);
+                }
+                x.url = u;
+                // The form never receives saved tokens; empty means "keep".
+                if x.token.trim().is_empty()
+                    && let Some(o) = old.remotes.iter().find(|o| o.url == x.url)
+                {
+                    x.token = o.token.clone();
+                }
+            }
+            cfg.remotes = r;
         }
         if let Some(w) = up.webhooks {
             for h in &w {

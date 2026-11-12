@@ -3,7 +3,7 @@
 
 use crate::config::AiConfig;
 use crate::imgutil::Frame;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -270,6 +270,11 @@ impl Ai {
         self.cfg.provider != "none"
     }
 
+    /// The classes the loaded model knows (your model's own, or COCO's).
+    pub fn labels(&self) -> Vec<String> {
+        self.model.lock().unwrap().as_ref().map(|m| m.labels()).unwrap_or_default()
+    }
+
     pub fn status(&self) -> AiStatus {
         self.status.lock().unwrap().clone()
     }
@@ -288,6 +293,27 @@ impl Ai {
 
     /// Load (downloading first if needed) the built-in model in the background.
     fn prepare_builtin(self: Arc<Self>) {
+        // Your own model: loaded from where it is (nothing to download).
+        if self.cfg.builtin_model == "custom" {
+            tokio::spawn(async move {
+                let (path, size, labels) = (PathBuf::from(self.cfg.custom_model.trim()), self.cfg.custom_size as usize, self.cfg.custom_labels.clone());
+                match tokio::task::spawn_blocking(move || Yolox::load_custom(&path, size, labels)).await {
+                    Ok(Ok(m)) => {
+                        info!("AI: your model loaded ({} classes, {}×{} input)", m.labels().len(), m.size, m.size);
+                        *self.model.lock().unwrap() = Some(Arc::new(m));
+                        let mut s = self.status.lock().unwrap();
+                        s.ready = true;
+                        s.error = None;
+                    }
+                    Ok(Err(e)) => {
+                        warn!("AI: can't load your model: {e:#}");
+                        self.status.lock().unwrap().error = Some(format!("can't load your model: {e:#}"));
+                    }
+                    Err(e) => warn!("AI: {e}"),
+                }
+            });
+            return;
+        }
         tokio::spawn(async move {
             let path = self.model_path();
             if !path.exists()
@@ -466,6 +492,14 @@ impl Ai {
 pub struct Yolox {
     net: crate::infer::Net,
     pub size: usize,
+    /// Your own model (YOLOv8 / YOLO11 layout or YOLOX) and its class names;
+    /// the built-in models are YOLOX with the 80 COCO classes.
+    custom: Option<Vec<String>>,
+}
+
+/// Total boxes a YOLO model gives for a size×size picture (strides 8, 16, 32).
+fn anchors(size: usize) -> usize {
+    [8, 16, 32].iter().map(|s| (size / s) * (size / s)).sum()
 }
 
 impl Yolox {
@@ -489,7 +523,31 @@ impl Yolox {
                 .into_runnable()
                 .map_err(|e| anyhow!("{e}"))
         })?;
-        Ok(Self { net, size })
+        Ok(Self { net, size, custom: None })
+    }
+
+    /// Your own ONNX detection model: `size`×`size` input, these class names
+    /// (empty: the 80 COCO classes).
+    pub fn load_custom(path: &Path, size: usize, labels: Vec<String>) -> Result<Self> {
+        let net = crate::infer::load(path, "object detection (your model)", || {
+            use tract_onnx::prelude::*;
+            tract_onnx::onnx()
+                .model_for_path(path)
+                .map_err(|e| anyhow!("{e}"))?
+                .with_input_fact(0, f32::fact([1, 3, size, size]).into())
+                .map_err(|e| anyhow!("{e}"))?
+                .into_optimized()
+                .map_err(|e| anyhow!("{e}"))?
+                .into_runnable()
+                .map_err(|e| anyhow!("{e}"))
+        })?;
+        let labels = if labels.is_empty() { COCO.iter().map(|s| s.to_string()).collect() } else { labels };
+        Ok(Self { net, size, custom: Some(labels) })
+    }
+
+    /// The class names this model knows.
+    pub fn labels(&self) -> Vec<String> {
+        self.custom.clone().unwrap_or_else(|| COCO.iter().map(|s| s.to_string()).collect())
     }
 
     pub fn detect(&self, frame: &Frame, min_score: f32) -> Result<Vec<Detection>> {
@@ -500,6 +558,9 @@ impl Yolox {
             ((frame.height as f32 * r) as u32).max(1),
         );
         let resized = crate::imgutil::resize_rgb(&frame.rgb, frame.width, frame.height, nw, nh);
+        if let Some(labels) = &self.custom {
+            return self.detect_custom(frame, &resized, nw, nh, r, labels, min_score);
+        }
         // Letterboxed, BGR, planar, 0..255.
         let plane = size * size;
         let mut input = vec![114.0f32; 3 * plane];
@@ -558,6 +619,94 @@ impl Yolox {
         }
         Ok(nms(dets, 0.45))
     }
+
+    /// Your own model: YOLOv8 / YOLO11 (RGB 0..1 in; [4 + classes, boxes]
+    /// out) or YOLOX (BGR 0..255 in; [boxes, 5 + classes] out), told apart
+    /// by the size of its answer.
+    #[allow(clippy::too_many_arguments)]
+    fn detect_custom(&self, frame: &Frame, resized: &[u8], nw: u32, nh: u32, r: f32, labels: &[String], min_score: f32) -> Result<Vec<Detection>> {
+        let size = self.size;
+        let plane = size * size;
+        let mut input = vec![114.0f32 / 255.0; 3 * plane];
+        for y in 0..nh as usize {
+            for x in 0..nw as usize {
+                let i = (y * nw as usize + x) * 3;
+                let o = y * size + x;
+                input[o] = resized[i] as f32 / 255.0;
+                input[plane + o] = resized[i + 1] as f32 / 255.0;
+                input[2 * plane + o] = resized[i + 2] as f32 / 255.0;
+            }
+        }
+        let out = self.net.run(crate::infer::Input::f32(&[1, 3, size, size], input))?;
+        let data = out.first().ok_or_else(|| anyhow!("unexpected model output"))?;
+        decode_custom(data, size, labels, r, frame.width as f32, frame.height as f32, min_score)
+    }
+}
+
+/// Read your model's answer: YOLOv8 / YOLO11 layout ([4 + classes, boxes])
+/// or YOLOX ([boxes, 5 + classes], grid-relative), told apart by its size.
+pub fn decode_custom(data: &[f32], size: usize, labels: &[String], r: f32, fw: f32, fh: f32, min_score: f32) -> Result<Vec<Detection>> {
+    let n = anchors(size);
+    let nc = labels.len();
+        let mut dets = Vec::new();
+        let mut push = |cx: f32, cy: f32, w: f32, h: f32, score: f32, class: usize| {
+            let (cx, cy, w, h) = (cx / r, cy / r, w / r, h / r);
+            let x0 = ((cx - w / 2.0) / fw).clamp(0.0, 1.0);
+            let y0 = ((cy - h / 2.0) / fh).clamp(0.0, 1.0);
+            dets.push(Detection {
+                label: labels.get(class).cloned().unwrap_or_else(|| format!("class {class}")),
+                score,
+                x: x0,
+                y: y0,
+                w: (w / fw).min(1.0 - x0),
+                h: (h / fh).min(1.0 - y0),
+            });
+        };
+        if data.len() == n * (4 + nc) {
+            // YOLOv8 / YOLO11: rows are cx, cy, w, h, then one score per class.
+            for i in 0..n {
+                let (mut best, mut class) = (0f32, 0usize);
+                for c in 0..nc {
+                    let v = data[(4 + c) * n + i];
+                    if v > best {
+                        best = v;
+                        class = c;
+                    }
+                }
+                if best >= min_score {
+                    push(data[i], data[n + i], data[2 * n + i], data[3 * n + i], best, class);
+                }
+            }
+        } else if data.len() == n * (5 + nc) {
+            // YOLOX layout (grid-relative, as the built-in models).
+            let mut idx = 0;
+            for stride in [8usize, 16, 32] {
+                let g = size / stride;
+                for gy in 0..g {
+                    for gx in 0..g {
+                        let row = &data[idx * (5 + nc)..(idx + 1) * (5 + nc)];
+                        idx += 1;
+                        let (mut best, mut class) = (0f32, 0usize);
+                        for (c, &v) in row[5..].iter().enumerate() {
+                            if v > best {
+                                best = v;
+                                class = c;
+                            }
+                        }
+                        let score = row[4] * best;
+                        if score >= min_score {
+                            push((row[0] + gx as f32) * stride as f32, (row[1] + gy as f32) * stride as f32, row[2].exp() * stride as f32, row[3].exp() * stride as f32, score, class);
+                        }
+                    }
+                }
+            }
+        } else {
+            bail!(
+                "your model's answer doesn't fit a {size}×{size} YOLO model with {nc} classes ({} numbers) — check the picture size and the class names",
+                data.len()
+            );
+        }
+    Ok(nms(dets, 0.45))
 }
 
 fn iou(a: &Detection, b: &Detection) -> f32 {
@@ -610,6 +759,29 @@ pub fn nms(mut dets: Vec<Detection>, thr: f32) -> Vec<Detection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_your_own_yolov8_model() {
+        // A 640×640 YOLOv8 answer with 2 classes: one "fox" box in the middle.
+        let labels = vec!["fox".to_string(), "hedgehog".to_string()];
+        let n = anchors(640);
+        assert_eq!(n, 8400);
+        let mut data = vec![0f32; n * (4 + 2)];
+        let i = 123;
+        data[i] = 320.0; // cx
+        data[n + i] = 320.0; // cy
+        data[2 * n + i] = 100.0; // w
+        data[3 * n + i] = 200.0; // h
+        data[4 * n + i] = 0.1; // fox
+        data[5 * n + i] = 0.9; // hedgehog
+        let d = decode_custom(&data, 640, &labels, 1.0, 640.0, 640.0, 0.5).unwrap();
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].label, "hedgehog");
+        assert!((d[0].x - 270.0 / 640.0).abs() < 1e-3 && (d[0].h - 200.0 / 640.0).abs() < 1e-3);
+        // A wrong size or wrong number of classes says so.
+        let three = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert!(decode_custom(&data, 640, &three, 1.0, 640.0, 640.0, 0.5).is_err());
+    }
 
     #[test]
     fn one_label_per_object() {

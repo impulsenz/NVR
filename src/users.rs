@@ -48,6 +48,19 @@ pub struct User {
     /// One-time recovery codes (SHA-256 of each).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     recovery: Vec<String>,
+    /// API tokens: for scripts, Home Assistant or another GAZE (they act as
+    /// this user). Only their SHA-256 is kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tokens: Vec<ApiToken>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiToken {
+    pub id: String,
+    pub name: String,
+    hash: String,
+    #[serde(default)]
+    pub created: Option<DateTime<Utc>>,
 }
 
 impl User {
@@ -295,6 +308,7 @@ impl Users {
                 created: Some(Utc::now()),
                 totp: None,
                 recovery: Vec::new(),
+                tokens: Vec::new(),
             });
             let _ = self.save();
             tracing::info!(
@@ -350,6 +364,7 @@ impl Users {
                 created: Some(Utc::now()),
                 totp: None,
                 recovery: Vec::new(),
+                tokens: Vec::new(),
             });
         }
         self.save()?;
@@ -629,6 +644,47 @@ impl Users {
     }
 
     /// The user signed in with this session token.
+    /// The user an API token belongs to ("Authorization: Bearer …").
+    pub fn token_user(&self, token: &str) -> Option<User> {
+        let h = digest(token.trim());
+        self.users.read().unwrap().iter().find(|u| u.tokens.iter().any(|t| t.hash == h)).cloned()
+    }
+
+    /// A new API token for this user: shown once, only its hash is kept.
+    pub fn new_token(&self, user: &str, name: &str) -> Result<(String, String)> {
+        let name = name.trim();
+        if name.is_empty() || name.len() > 60 {
+            bail!("give the token a name (what it's for), up to 60 characters");
+        }
+        let t = format!("gaze_{}", token());
+        let id = token()[..12].to_string();
+        {
+            let mut users = self.users.write().unwrap();
+            let u = users.iter_mut().find(|u| u.username == user).ok_or_else(|| anyhow::anyhow!("no such user"))?;
+            if u.tokens.len() >= 20 {
+                bail!("at most 20 tokens per user — remove one first");
+            }
+            u.tokens.push(ApiToken { id: id.clone(), name: name.to_string(), hash: digest(&t), created: Some(Utc::now()) });
+        }
+        self.save()?;
+        Ok((id, t))
+    }
+
+    pub fn tokens(&self, user: &str) -> Vec<serde_json::Value> {
+        self.users.read().unwrap().iter().find(|u| u.username == user)
+            .map(|u| u.tokens.iter().map(|t| serde_json::json!({"id": t.id, "name": t.name, "created": t.created})).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn remove_token(&self, user: &str, id: &str) -> Result<()> {
+        {
+            let mut users = self.users.write().unwrap();
+            let u = users.iter_mut().find(|u| u.username == user).ok_or_else(|| anyhow::anyhow!("no such user"))?;
+            u.tokens.retain(|t| t.id != id);
+        }
+        self.save()
+    }
+
     pub fn session_user(&self, token: &str) -> Option<User> {
         let name = {
             let s = self.sessions.lock().unwrap();

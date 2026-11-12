@@ -167,7 +167,7 @@ impl Live {
         let mut child = crate::load::cmd(&self.env.ffmpeg_path)
             .args(["-hide_banner", "-loglevel", "error"])
             .args(self.relay.input_args())
-            .args(self.cam.privacy_filter().map(|f| vec!["-vf".to_string(), f]).unwrap_or_default())
+            .args(self.cam.view_filter().map(|f| vec!["-vf".to_string(), f]).unwrap_or_default())
             .args([
                 "-frames:v",
                 "1",
@@ -225,9 +225,11 @@ impl Live {
             let res = match &self.detector {
                 // The detector analyses a few frames per second; faster grid
                 // views need their own decoder.
+                // (A fisheye camera's grid picture is flattened: its own decoder.)
                 Some(d)
                     if Instant::now() >= own_decoder_until
-                        && self.target_fps() <= self.cam.detect.fps =>
+                        && self.target_fps() <= self.cam.detect.fps
+                        && !self.cam.dewarp.enabled =>
                 {
                     let r = self.run_from_detector(d).await;
                     if r.is_err() {
@@ -324,7 +326,7 @@ impl Live {
             Quality::Main => 1920,
         };
         let mut vf = format!("fps={fps}");
-        if let Some(f) = self.cam.privacy_filter() {
+        if let Some(f) = self.cam.view_filter() {
             vf = format!("{f},{vf}");
         }
         if width > 0 {

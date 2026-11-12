@@ -85,6 +85,17 @@ pub fn set_restart(f: impl Fn() + Send + Sync + 'static) {
     let _ = RESTART.set(Box::new(f));
 }
 
+/// Restart GAZE now (as after an update).
+pub fn restart_now() -> bool {
+    match RESTART.get() {
+        Some(f) => {
+            f();
+            true
+        }
+        None => false,
+    }
+}
+
 fn with<R>(f: impl FnOnce(&mut Status) -> R) -> R {
     let mut g = STATUS.lock().unwrap();
     let s = g.get_or_insert_with(|| Status {

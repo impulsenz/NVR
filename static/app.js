@@ -370,6 +370,23 @@ function paintMode() {
 $('mode-btn').onclick = (e) => { e.stopPropagation(); $('mode-pop').hidden = !$('mode-pop').hidden; };
 document.addEventListener('click', (e) => { if (!e.target.closest('#mode-menu')) $('mode-pop').hidden = true; });
 
+// Other GAZE servers' cameras, under the grid (pictures refreshed every 2 s).
+let remotesAt = 0, remotesTimer = null;
+async function drawRemotes() {
+  const box = $('remotes');
+  if (page !== 'live' || focusId || !status || !status.has_remotes) { box.hidden = true; return; }
+  if (Date.now() - remotesAt > 30000) {
+    remotesAt = Date.now();
+    let list = []; try { list = await api('api/remotes'); } catch (_) { list = []; }
+    box.hidden = !list.length;
+    box.innerHTML = list.map(r => `<div class="remote"><h3>🌐 ${esc(r.name || r.server || r.url)} <a class="small muted" href="${esc(r.url)}" target="_blank" rel="noopener">open ↗</a></h3>
+      ${r.ok ? `<div class="remote-grid">${r.cameras.map(c => `<a class="surface tile remote-tile" href="${esc(r.url)}/#live/${enc(c.id)}" target="_blank" rel="noopener" title="Open on ${esc(r.name)}"><img alt="" data-src="remote/${r.i}/${enc(c.id)}/frame.jpg"><div class="ov ov-tl"><span class="name">${esc(c.name)}</span></div>${c.online ? '' : '<div class="msg">Offline</div>'}</a>`).join('')}</div>`
+        : `<div class="err">${esc(r.error || 'Not reachable')}</div>`}</div>`).join('');
+  }
+  box.querySelectorAll('img[data-src]').forEach(im => { if (!im.dataset.busy) { im.dataset.busy = 1; const n = new Image(); n.onload = () => { im.src = n.src; delete im.dataset.busy; }; n.onerror = () => { delete im.dataset.busy; }; n.src = im.dataset.src + '?t=' + Date.now(); } });
+}
+setInterval(() => { if (!document.hidden) drawRemotes(); }, 2000);
+
 // Snoozing a camera's notifications (from here or the notification itself).
 function paintSnooze(c) {
   const sel = $('focus-snooze'); if (!sel || !c) return;
@@ -895,7 +912,20 @@ async function refreshStatus() {
   paintUpdBtn(status.update);
   alertsChanged();
   const gb = $('g-banner');
-  if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
+  if (status.safe_mode) {
+    // The settings file couldn't be read: GAZE started without it.
+    gb.hidden = false; gb.classList.add('safe');
+    if (gb.dataset.safe !== status.safe_mode) {
+      gb.dataset.safe = status.safe_mode;
+      gb.innerHTML = `<b>⚠ Safe mode: GAZE couldn't read its settings file</b>, so it started without your cameras (nothing is recorded or changed). ${me && me.role === 'admin'
+        ? `<button type="button" class="small" id="sm-fix">Fix the settings file…</button>${status.safe_mode_good_copy ? ' <button type="button" class="small primary" id="sm-restore">Restore the last good settings</button>' : ''}<div class="muted small" style="margin-top:4px">${esc(status.safe_mode)}</div>` : 'Ask the admin to fix it.'}`;
+      if ($('sm-fix')) $('sm-fix').onclick = openSafeEditor;
+      if ($('sm-restore')) $('sm-restore').onclick = async () => {
+        if (!confirm('Put back the settings from the last time GAZE started fine? The broken file is kept as nvr.toml.broken.')) return;
+        try { const r = await api('api/safe-mode/restore', {method: 'POST'}); toast(r.message); setTimeout(() => location.reload(), 6000); } catch (e) { toast(e.message, true); }
+      };
+    }
+  } else if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
     gb.hidden = false;
     gb.innerHTML = `<b>📷 New camera${status.new_cameras > 1 ? 's' : ''} found on your network</b> (${status.new_cameras}) — <a href="#settings/cameras">add ${status.new_cameras > 1 ? 'them' : 'it'}</a> · <a href="javascript:void 0" id="gb-x">dismiss</a>`;
     $('gb-x').onclick = () => { store.set('newcam-dismissed-' + status.new_cameras, true); gb.hidden = true; };
@@ -3039,6 +3069,23 @@ async function playItem(it, card) {
     api('api/alerts/seen', {method: 'POST', json: {ids: [e.id]}}).then(refreshStatus).catch(() => {});
   }
 }
+// Safe mode: fix the settings file by hand (GAZE checks it before saving).
+async function openSafeEditor() {
+  let r; try { r = await api('api/safe-mode/config'); } catch (e) { toast(e.message, true); return; }
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg safe-ed';
+  dlg.innerHTML = `<div class="head"><h2>Fix the settings file</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+    <div class="body"><p class="errc" style="margin-top:0">${esc(r.problem || '')}</p>
+      <p class="muted small">${esc(r.path)} — correct the line the problem points to. GAZE checks the file before saving it, keeps the broken one as nvr.toml.broken, and restarts.</p>
+      <textarea id="sm-text" spellcheck="false">${esc(r.text)}</textarea>
+      <div class="actions"><button type="button" data-x>Cancel</button><button type="button" class="primary" id="sm-save">Check and save</button></div></div>`;
+  document.body.appendChild(dlg); dlg.showModal();
+  dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = () => { dlg.close(); dlg.remove(); });
+  $('sm-save').onclick = async () => {
+    try { const x = await api('api/safe-mode/config', {method: 'POST', json: {text: val('sm-text')}}); toast(x.message); dlg.close(); dlg.remove(); setTimeout(() => location.reload(), 6000); }
+    catch (e) { toast(e.message, true); }
+  };
+}
+
 // ---------- a time-lapse video of a camera's day ----------
 $('f-tlx').onclick = () => {
   const cams = status.cameras.filter(c => !rec.cameras.size || rec.cameras.has(c.id));
@@ -4941,6 +4988,14 @@ async function openCameraDialog(id, clone, prof) {
         <label>Privacy areas${tip('Black out parts of the picture for good \u2014 a neighbour\u2019s window or garden, a public footpath. They\u2019re black in the live view, new recordings, snapshots and alert pictures, and nothing is ever detected there. This camera\u2019s recordings are then converted while recording (more work for the computer), and its live view uses pictures instead of smooth video. Recordings made before stay as they are.')}</label>
         <div><div class="surface priv-ed" id="c-priv" style="aspect-ratio:16/9;max-width:560px;cursor:crosshair;touch-action:none"><img alt="" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div></div>
           <div class="row" style="margin-top:6px"><button type="button" class="small" id="c-priv-clear">Clear all</button><span class="hint" style="margin:0">Drag on the picture to black out an area; ✕ removes one.</span></div></div>
+        <label>Fisheye (360°) camera${tip('For cameras with a round, fisheye picture: the live view and snapshots become a normal flat picture of one direction \u2014 choose where to look and how wide. Recordings keep the whole circle, so nothing outside the view is lost. Example: point the view at the front gate.')}</label>
+        <div><label class="check"><input type="checkbox" id="c-fe" ${c.dewarp && c.dewarp.enabled ? 'checked' : ''}> Show a flat picture instead of the circle</label>
+          <div class="fe-sl" style="margin-top:6px">${[['yaw', 'Look left / right', -180, 180, 0], ['pitch', 'Look up / down', -90, 90, 0], ['width', 'Width of view (smaller = zoomed in)', 30, 160, 100], ['lens', 'Lens angle', 120, 360, 180]].map(([k, t, a, b, d]) => `<label class="muted small" style="display:flex;gap:8px;align-items:center;margin:2px 0"><span style="width:240px">${t}</span><input type="range" id="c-fe-${k}" min="${a}" max="${b}" value="${(c.dewarp && c.dewarp[k] != null) ? c.dewarp[k] : d}" style="flex:1"><span id="c-fe-${k}-v" style="width:44px">${(c.dewarp && c.dewarp[k] != null) ? c.dewarp[k] : d}°</span></label>`).join('')}</div>
+          <div class="hint">Save, then look at the camera's live view to check the direction.</div></div>
+        <label for="c-rtmp">Stream live${tip('Broadcast this camera live on YouTube, Facebook, Twitch or any RTMP server \u2014 a bird feeder, the view, the weather. In YouTube Studio: Create \u2192 Go live \u2192 Stream; copy the stream URL and key and put them together here, e.g. rtmp://a.rtmp.youtube.com/live2/abcd-1234-efgh. The camera\u2019s own video is passed through, so it costs almost nothing (H.265 cameras are converted).')}</label>
+        <div><label class="check"><input type="checkbox" id="c-rtmp-on" ${c.stream_live ? 'checked' : ''}> Stream this camera live</label>
+          <input type="password" id="c-rtmp" value="${esc(c.stream_url || '')}" placeholder="rtmp://a.rtmp.youtube.com/live2/your-stream-key" autocomplete="off" style="margin-top:6px">
+          <div class="hint">${(() => { const st = id && cam(id) && cam(id).streaming; return !st ? 'The address includes your stream key: keep it private.' : st.live ? `<span class="okc">● Live since ${fmtTime(st.since)}</span>` : `<span class="errc">● ${esc(st.error || 'Not streaming')}</span>`; })()}</div></div>
         <label for="c-transport">Connection type${tip('How the video travels from the camera. TCP is reliable and right for almost every camera, especially on Wi-Fi. Only try UDP if a camera won’t connect with TCP.')}</label>
         <div><select id="c-transport"><option value="tcp">TCP — reliable (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
@@ -5125,6 +5180,7 @@ async function openCameraDialog(id, clone, prof) {
   });
   setupRestartButton(id && !clone ? id : null);
   setupPrivacy(c, id && !clone ? id : null);
+  ['yaw', 'pitch', 'width', 'lens'].forEach(k => { const r = $('c-fe-' + k); if (r) r.oninput = () => { $('c-fe-' + k + '-v').textContent = r.value + '°'; }; });
   // Patrol: the camera's presets to choose from.
   if (id && !clone && c.ptz.enabled) api(`api/cameras/${enc(id)}/ptz/presets`).then(list => {
     const box = $('p-patrol'); if (!box) return;
@@ -5153,7 +5209,7 @@ async function openCameraDialog(id, clone, prof) {
   setupPackageArea(c, id && !clone ? id : null);
   // Passwords hidden: in the stream addresses too, with an eye to show them.
   for (const x of ['c-url', 'c-live', 'c-talk-url']) if ($(x)) maskUrlInput($(x));
-  for (const x of ['q-pass', 'p-pass']) if ($(x)) eyeFor($(x));
+  for (const x of ['q-pass', 'p-pass', 'c-rtmp']) if ($(x)) eyeFor($(x));
   // "More things to watch for": a ticked one joins the list (ticked).
   if ($('d-more')) $('d-more').onchange = (e) => {
     const inp = e.target; if (!inp.checked) return;
@@ -5596,7 +5652,7 @@ function collectCamera() {
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
-    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true, onvif_events: chk('c-onvif-ev'), onvif_motion: chk('c-onvif-mo'), privacy: privRects,
+    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true, onvif_events: chk('c-onvif-ev'), onvif_motion: chk('c-onvif-mo'), privacy: privRects, stream_live: chk('c-rtmp-on'), stream_url: val('c-rtmp').trim(), dewarp: {enabled: chk('c-fe'), yaw: num('c-fe-yaw'), pitch: num('c-fe-pitch'), width: num('c-fe-width'), lens: num('c-fe-lens')},
     osd: readOsd(),
     view: {grid_quality: val('c-vq') || 'auto', grid_fps: +val('c-vg') || 0, hd_fps: +val('c-vh') || 0},
     ptz: {enabled: chk('p-on'), host: val('p-host').trim(), port: Math.round(num('p-port')) || 80, username: val('p-user').trim(), password: $('p-pass').value,
@@ -6068,8 +6124,14 @@ function renderAi(body) {
         <option value="yolox_tiny" ${a.builtin_model === 'yolox_tiny' ? 'selected' : ''}>Tiny — balanced (≈90 ms), recommended</option>
         <option value="yolox_s" ${a.builtin_model === 'yolox_s' ? 'selected' : ''}>Small — more accurate (≈350 ms)</option>
         <option value="yolox_m" ${a.builtin_model === 'yolox_m' ? 'selected' : ''}>Medium — for bigger PCs (≈0.9 s, 100 MB)</option>
-        <option value="yolox_l" ${a.builtin_model === 'yolox_l' ? 'selected' : ''}>Large — most accurate, powerful PCs only (≈2 s, 220 MB)</option></select>
-        <div class="hint">Times are per picture on a 4-core PC; the AI only runs while there is motion.</div></div>
+        <option value="yolox_l" ${a.builtin_model === 'yolox_l' ? 'selected' : ''}>Large — most accurate, powerful PCs only (≈2 s, 220 MB)</option>
+        <option value="custom" ${a.builtin_model === 'custom' ? 'selected' : ''}>Your own model (.onnx file)…</option></select>
+        <div class="hint">Times are per picture on a 4-core PC; the AI only runs while there is motion.</div>
+        <div id="ai-custom" class="ai-custom" ${a.builtin_model === 'custom' ? '' : 'hidden'}>
+          <label for="ai-cpath">Model file${tip('An object detection model in ONNX format: YOLOv8 or YOLO11 exported by Ultralytics (yolo export format=onnx), or YOLOX. Train one on your own pictures to recognise what matters to you \u2014 a fox, your own dog, a delivery van, the gate open or closed.')}</label><input type="text" id="ai-cpath" value="${esc(a.custom_model || '')}" placeholder="e.g. C:\\GAZE\\models\\my-yard.onnx">
+          <label for="ai-csize">Picture size${tip('The size the model was trained and exported at (imgsz). Usually 640.')}</label><select id="ai-csize">${[320, 416, 480, 512, 608, 640, 736, 800, 960, 1024, 1280].map(n => `<option ${n === (a.custom_size || 640) ? 'selected' : ''}>${n}</option>`).join('')}</select>
+          <label for="ai-clabels">Class names${tip('What the model recognises, one per line, in the model\u2019s own order (the names list from your training data.yaml). Leave empty for a model trained on the usual 80 COCO classes (person, car, dog\u2026). Your classes then appear in each camera\u2019s \u201cMore things to watch for\u201d.')}</label><textarea id="ai-clabels" rows="4" placeholder="fox&#10;hedgehog&#10;delivery van">${esc((a.custom_labels || []).join('\n'))}</textarea>
+        </div></div>
       <label class="p-builtin" for="ai-verify">Double-check alerts${tip('When the AI thinks it sees something that would raise an alert, a bigger model looks at the same picture and has the final say: fewer false alerts and fewer mix-ups (a cat called a person). It only runs on those few pictures, so it suits normal PCs too.')}</label><div class="p-builtin"><select id="ai-verify">
         <option value="">Off</option>
         ${[['yolox_s', 'Small model (≈350 ms)'], ['yolox_m', 'Medium model (≈0.9 s) — recommended'], ['yolox_l', 'Large model (≈2 s)']].map(([k, t]) => `<option value="${k}" ${a.verify_model === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
@@ -6088,7 +6150,9 @@ function renderAi(body) {
     $('ai-test').disabled = p === 'none' || !$('ai-cam').value;
   };
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
+  $('ai-model').onchange = () => { $('ai-custom').hidden = val('ai-model') !== 'custom'; };
   const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'),
+    custom_model: val('ai-cpath').trim(), custom_size: +val('ai-csize') || 640, custom_labels: val('ai-clabels').split('\n').map(x => x.trim()).filter(Boolean),
     verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device')});
   const showStatus = () => {
     if ($('ai-device-st') && status) $('ai-device-st').innerHTML = `Running on: <b>${esc(status.ai_device || '')}</b>`;
@@ -6298,6 +6362,9 @@ async function renderSystemSettings(body) {
     <label for="y-port">Port${tip('The number after the colon in GAZE’s web address, e.g. http://192.168.1.10:8080. Only change it if another program already uses 8080.')}</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px"><span class="muted">1–65535 (default 8080)</span></div>
     <label for="y-bind">Reachable from${tip('Who can open GAZE. “Every device on my network” lets your phone and other computers at home use it. “Only this computer” keeps it private to this PC.')}</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
       ${addrs.map(a => `<option value="${esc(a)}">Only via ${esc(a)}</option>`).join('')}</select><div class="hint">Changing the port or this setting takes effect after the NVR restarts.</div></div>
+    <h3>Other GAZE servers${tip('See the cameras of another GAZE (a holiday house, the shop, a relative\u2019s) on this Live page. On that GAZE, make an API token (\u{1F464} menu \u2192 API tokens), then add its address and the token here. Its cameras show under your own; click one to open it there.')}</h3>
+    <span></span><div id="y-remotes"></div>
+    <span></span><div><button type="button" class="small" id="y-remote-add">＋ Add a server</button></div>
     <h3>Secure address (https)</h3>
     <label for="y-hport">Secure port${tip('GAZE also answers on a secure https address. Phones need it for the share menu and to install GAZE as an app, and it keeps passwords and video private on the way. 0 turns it off.')}</label><div class="row"><input type="number" id="y-hport" min="0" max="65535" value="${s.https_port ?? 8443}" style="width:110px"><span class="muted">0 = off (default 8443)</span></div>
     <label>Certificate${tip('Proves to browsers that this really is your GAZE. GAZE\u2019s own works straight away, but each browser warns once (\u201cAdvanced \u2192 Continue\u201d). A Tailscale certificate is trusted everywhere with no warning, and is also the easy, safe way to reach GAZE away from home.')}</label><div>
@@ -6319,6 +6386,11 @@ async function renderSystemSettings(body) {
   };
   $('y-port').oninput = $('y-bind').onchange = showAddr;
   showAddr();
+  // Other GAZE servers.
+  const rmRow = (r) => `<div class="rm row" style="flex-wrap:wrap;gap:6px;margin-bottom:6px"><input type="text" class="rm-name" placeholder="Name, e.g. Holiday house" value="${esc(r.name || '')}" style="width:170px"><input type="text" class="rm-url" placeholder="https://its-address:8443" value="${esc(r.url || '')}" style="flex:1;min-width:200px"><input type="password" class="rm-token" placeholder="${r.url ? 'Token saved – leave empty to keep' : 'API token from that GAZE'}" style="width:230px" autocomplete="off"><label class="check" title="That GAZE uses its own certificate (browsers warn about it): accept it"><input type="checkbox" class="rm-trust" ${r.trust_own_cert ? 'checked' : ''}> trust its own certificate</label><button type="button" class="small danger rm-del">✕</button></div>`;
+  const rmWire = () => document.querySelectorAll('#y-remotes .rm-del').forEach(b => b.onclick = () => b.closest('.rm').remove());
+  $('y-remotes').innerHTML = (settings.remotes || []).map(rmRow).join(''); rmWire();
+  $('y-remote-add').onclick = () => { $('y-remotes').insertAdjacentHTML('beforeend', rmRow({})); rmWire(); };
   // https: which certificate, and how it's going.
   const certKind = () => !s.https_cert ? 'own' : /tailscale\.crt$/.test(s.https_cert) ? 'tailscale' : 'files';
   $('y-cert').value = certKind();
@@ -6338,11 +6410,12 @@ async function renderSystemSettings(body) {
   $('f-sys').onsubmit = async (e) => {
     e.preventDefault();
     const listen = `${val('y-bind')}:${Math.round(num('y-port'))}`;
+    const remotes = [...document.querySelectorAll('#y-remotes .rm')].map(el => ({name: el.querySelector('.rm-name').value.trim(), url: el.querySelector('.rm-url').value.trim(), token: el.querySelector('.rm-token').value.trim(), trust_own_cert: el.querySelector('.rm-trust').checked})).filter(r => r.url);
     const kind = val('y-cert'), files = kind === 'files';
     const server = {name: val('y-name'), listen, ffmpeg_path: val('y-ffmpeg'), https_port: Math.max(0, Math.round(num('y-hport')) || 0)};
     if (kind === 'own') { server.https_cert = ''; server.https_key = ''; }
     if (files) { server.https_cert = val('y-hcert'); server.https_key = val('y-hkey'); }
-    if (await saveSettings({server})) { sysinfo = null; renderSystemSettings(body); }
+    if (await saveSettings({server, remotes})) { remotesAt = 0; sysinfo = null; renderSystemSettings(body); }
   };
 }
 
@@ -6480,6 +6553,27 @@ const isAdmin = () => me && me.role === 'admin';
 $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $('um-pop').hidden = !$('um-pop').hidden; };
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
 $('um-out').onclick = async () => { await fetch('api/auth/logout', {method: 'POST'}); location.hash = '#live'; location.reload(); };
+// API tokens: keys for scripts, Home Assistant or another GAZE.
+$('um-tokens').onclick = async () => {
+  $('um-pop').hidden = true;
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg';
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  const draw = async (fresh) => {
+    let list = []; try { list = await api('api/auth/tokens'); } catch (e) { toast(e.message, true); }
+    dlg.innerHTML = `<div class="head"><h2>🔑 API tokens</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+      <div class="body"><p class="muted" style="margin-top:0">A token lets a script, Home Assistant or another GAZE use GAZE as you (with your access), sent as <code>Authorization: Bearer …</code>. Remove one to stop it working.</p>
+      ${fresh ? `<div class="tok-new"><b>Copy this token now — it won't be shown again:</b><div class="row" style="margin-top:6px"><input type="text" readonly value="${esc(fresh)}" id="tok-val" style="flex:1"><button type="button" id="tok-copy">📋 Copy</button></div></div>` : ''}
+      ${list.length ? `<table><tbody>${list.map(t => `<tr><td><b>${esc(t.name)}</b></td><td class="muted small">${t.created ? fmtDate(t.created) : ''}</td><td style="text-align:right"><button type="button" class="small danger" data-del="${esc(t.id)}">Remove</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No tokens yet.</p>'}
+      <div class="row" style="margin-top:10px"><input type="text" id="tok-name" placeholder="What it's for, e.g. Home Assistant" style="flex:1"><button type="button" class="primary" id="tok-make">Make a token</button></div></div>`;
+    dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+    if ($('tok-copy')) $('tok-copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(val('tok-val')).then(() => toast('Copied')).catch(() => $('tok-val').select());
+    $('tok-make').onclick = async () => { try { const r = await api('api/auth/tokens', {method: 'POST', json: {name: val('tok-name')}}); draw(r.token); } catch (e) { toast(e.message, true); } };
+    dlg.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Remove this token? Whatever uses it stops working.')) return; try { await api('api/auth/tokens/' + enc(b.dataset.del), {method: 'DELETE'}); draw(); } catch (e) { toast(e.message, true); } });
+  };
+  await draw(); dlg.showModal();
+};
+
 // Two-step sign-in: a code from an authenticator app after the password.
 $('um-2fa').onclick = async () => {
   $('um-pop').hidden = true;

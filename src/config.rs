@@ -70,6 +70,18 @@ pub fn decode_mask(s: &str) -> Option<Vec<bool>> {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
+pub struct RemoteServer {
+    pub name: String,
+    /// Its address, e.g. https://cabin.tail1234.ts.net:8443
+    pub url: String,
+    /// An API token made on that server.
+    pub token: String,
+    /// It uses its own certificate (not a trusted one): accept it anyway.
+    pub trust_own_cert: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
 pub struct Webhook {
     pub name: String,
     pub enabled: bool,
@@ -167,6 +179,43 @@ impl ModesConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DewarpConfig {
+    pub enabled: bool,
+    /// The lens's field of view in degrees (180 for most fisheye cameras).
+    pub lens: f32,
+    /// Where to look: left/right (yaw) and up/down (pitch), in degrees.
+    pub yaw: f32,
+    pub pitch: f32,
+    /// How wide the flat picture is, in degrees (smaller = zoomed in).
+    pub width: f32,
+}
+
+impl Default for DewarpConfig {
+    fn default() -> Self {
+        Self { enabled: false, lens: 180.0, yaw: 0.0, pitch: 0.0, width: 100.0 }
+    }
+}
+
+impl DewarpConfig {
+    /// The ffmpeg filter that makes the flat picture.
+    pub fn filter(&self) -> Option<String> {
+        self.enabled.then(|| {
+            let w = self.width.clamp(30.0, 160.0);
+            format!(
+                "v360=input=fisheye:output=flat:ih_fov={l}:iv_fov={l}:h_fov={w:.1}:v_fov={v:.1}:yaw={y:.1}:pitch={p:.1}:w=1920:h=1080",
+                l = self.lens.clamp(120.0, 360.0),
+                v = w * 9.0 / 16.0,
+                y = self.yaw.clamp(-180.0, 180.0),
+                p = self.pitch.clamp(-90.0, 90.0)
+            )
+        })
+    }
+}
+
+static SAFE_MODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// Write a mask in the "160x90:" run-length form `decode_mask` reads.
 pub fn encode_mask(cells: &[bool]) -> String {
     let mut runs = Vec::new();
@@ -222,6 +271,8 @@ pub struct Config {
     pub mqtt: MqttConfig,
     /// Addresses each new alert is sent to (JSON).
     pub webhooks: Vec<Webhook>,
+    /// Other GAZE servers whose cameras show on the Live page.
+    pub remotes: Vec<RemoteServer>,
     pub cameras: Vec<CameraConfig>,
 
 }
@@ -427,6 +478,11 @@ pub struct AiConfig {
     /// Object detection: "none" (off) or "builtin" (on this computer).
     pub provider: String,
     pub builtin_model: String,
+    /// Your own model (builtin_model "custom"): an ONNX file, its picture
+    /// size and its class names, one per line (empty = the 80 COCO classes).
+    pub custom_model: String,
+    pub custom_size: u32,
+    pub custom_labels: Vec<String>,
     /// A bigger model that double-checks what the main
     /// model found before an alert is raised ("" = off).
     pub verify_model: String,
@@ -445,6 +501,9 @@ impl Default for AiConfig {
         Self {
             provider: "none".into(),
             builtin_model: "yolox_tiny".into(),
+            custom_model: String::new(),
+            custom_size: 640,
+            custom_labels: Vec::new(),
             verify_model: String::new(),
             night_boost: true,
             device: "gpu".into(),
@@ -1084,6 +1143,12 @@ pub struct CameraConfig {
     /// detection, line crossing, doorbell, tampering become alerts.
     /// Privacy areas (x, y, w, h; 0..1 of the picture): blacked out in the
     /// live view, recordings, snapshots and alerts, and never detected in.
+    /// Stream live to YouTube / Facebook / Twitch (RTMP address with the key).
+    /// A fisheye (360°) camera: the live view is turned into a normal,
+    /// flat picture (recordings keep the whole circle).
+    pub dewarp: DewarpConfig,
+    pub stream_live: bool,
+    pub stream_url: String,
     pub privacy: Vec<[f32; 4]>,
     pub onvif_events: bool,
     /// …and also the camera's own (plain) motion detection.
@@ -1125,6 +1190,9 @@ impl Default for CameraConfig {
             retention_days: 0,
             max_storage_gb: 0.0,
             timeline_copy: true,
+            dewarp: DewarpConfig::default(),
+            stream_live: false,
+            stream_url: String::new(),
             privacy: Vec::new(),
             onvif_events: false,
             onvif_motion: false,
@@ -1292,6 +1360,12 @@ impl CameraConfig {
         self.transcode || self.record_fps > 0 || !self.privacy.is_empty()
     }
 
+    /// The filters for the live view: privacy areas, then dewarping.
+    pub fn view_filter(&self) -> Option<String> {
+        let f: Vec<String> = [self.privacy_filter(), self.dewarp.filter()].into_iter().flatten().collect();
+        (!f.is_empty()).then(|| f.join(","))
+    }
+
     /// The ffmpeg filter that blacks out the privacy areas (None = none).
     pub fn privacy_filter(&self) -> Option<String> {
         let boxes: Vec<String> = self
@@ -1333,6 +1407,46 @@ impl Config {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading config file {}", path.display()))?;
         Self::from_toml(&text).with_context(|| format!("in {}", path.display()))
+    }
+
+    /// The settings file couldn't be read: GAZE started in safe mode with
+    /// this problem, and saves nothing until it's fixed.
+    pub fn safe_mode() -> Option<String> {
+        SAFE_MODE.lock().unwrap().clone()
+    }
+    pub fn set_safe_mode(problem: String) {
+        *SAFE_MODE.lock().unwrap() = Some(problem);
+    }
+
+    /// For safe mode: the settings that can still be read from a broken
+    /// file (where the web interface listens), the rest left at defaults.
+    pub fn rescue(text: &str) -> Self {
+        let mut cfg = Config::default();
+        // Line by line: one broken line mustn't hide the rest.
+        let mut section = String::new();
+        for line in text.lines() {
+            let l = line.trim();
+            if l.starts_with('[') {
+                section = l.trim_matches(|c| c == '[' || c == ']').trim().to_string();
+                continue;
+            }
+            if section != "server" {
+                continue;
+            }
+            let Some((k, v)) = l.split_once('=') else { continue };
+            let v = v.trim().trim_matches('"').to_string();
+            match k.trim() {
+                "listen" if !v.is_empty() => cfg.server.listen = v,
+                "ffmpeg_path" if !v.is_empty() => cfg.server.ffmpeg_path = v.replace("\\\\", "\\"),
+                "https_port" => {
+                    if let Ok(p) = v.parse() {
+                        cfg.server.https_port = p;
+                    }
+                }
+                _ => {}
+            }
+        }
+        cfg
     }
 
     /// Parse (and migrate) config text, e.g. from an imported backup.
@@ -1464,7 +1578,14 @@ impl Config {
                 ai.verify_model
             );
         }
-        if !BUILTIN_MODELS.contains(&ai.builtin_model.as_str()) {
+        if ai.builtin_model == "custom" {
+            if ai.custom_model.trim().is_empty() {
+                bail!("choose your model file (.onnx)");
+            }
+            if ![320, 416, 480, 512, 608, 640, 736, 800, 960, 1024, 1280].contains(&ai.custom_size) {
+                bail!("your model's picture size must be one of 320, 416, 480, 512, 608, 640, 736, 800, 960, 1024 or 1280");
+            }
+        } else if !BUILTIN_MODELS.contains(&ai.builtin_model.as_str()) {
             bail!("unknown built-in AI model \"{}\"", ai.builtin_model);
         }
         if self.cloud.enabled && self.cloud.remote.trim().is_empty() {
@@ -1490,6 +1611,11 @@ impl Config {
 
     /// Write the config atomically.
     pub fn save(&self, path: &Path) -> Result<()> {
+        // Safe mode: the settings file couldn't be read. It's never written
+        // over (that would lose everything in it) until it's fixed.
+        if Self::safe_mode().is_some() {
+            return Ok(());
+        }
         // Camera passwords and API keys are in here: only the owner reads it.
         let text = self.to_toml()?;
         let tmp = path.with_extension("toml.tmp");
@@ -1641,6 +1767,24 @@ mod tests {
             super::Config::from_toml("[ai]\nprovider = \"gemini\"\napi_key = \"x\"\n").unwrap();
         assert!(changed);
         assert_eq!(c.ai.provider, "builtin");
+    }
+
+    #[test]
+    fn safe_mode_keeps_the_broken_file() {
+        let text = "[server]\nname = \"Home\"\nlisten = \"127.0.0.1:8096\"\nthis is broken = = 3\nhttps_port = 9443\n";
+        assert!(Config::from_toml(text).is_err());
+        let r = Config::rescue(text);
+        assert_eq!(r.server.listen, "127.0.0.1:8096");
+        assert_eq!(r.server.https_port, 9443);
+        let dir = std::env::temp_dir().join(format!("nvr-safe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nvr.toml");
+        std::fs::write(&path, text).unwrap();
+        Config::set_safe_mode("broken".into());
+        r.save(&path).unwrap();
+        *SAFE_MODE.lock().unwrap() = None;
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

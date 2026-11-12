@@ -121,6 +121,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/auth/logout", post(auth_logout))
         .route("/api/auth/password", post(auth_password))
         .route("/api/auth/two-step/start", post(two_step_start))
+        .route("/api/auth/tokens", get(tokens_list).post(tokens_new))
+        .route("/api/auth/tokens/{id}", axum::routing::delete(tokens_remove))
         .route("/api/auth/two-step/finish", post(two_step_finish))
         .route("/api/auth/two-step/off", post(two_step_off))
         .route("/api/users/{name}/two-step-off", post(two_step_off_admin))
@@ -182,6 +184,10 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/where", get(where_work_runs))
         .route("/api/https", get(https_status))
         .route("/api/mode", post(set_mode))
+        .route("/api/remotes", get(remotes_list))
+        .route("/remote/{i}/{cam}/frame.jpg", get(remote_frame))
+        .route("/api/safe-mode/config", get(safe_config_get).post(safe_config_save))
+        .route("/api/safe-mode/restore", post(safe_config_restore))
         .route("/api/snooze", get(snooze_link).post(snooze_link))
         .route("/api/cameras/{id}/snooze", post(snooze_camera))
         .route("/api/webhooks/test", post(webhook_test))
@@ -328,6 +334,7 @@ async fn status(
                 "watch": cur.detect.objects,
                 "snoozed_until": crate::notify::snoozed_until(&c.cfg.id),
                 "camera_events": crate::onvif_events::status(&c.cfg.id),
+                "streaming": crate::rtmp::status(&c.cfg.id),
                 "alerts_on": alert_kinds(cur, &cfg.ai),
                 "talk": c.cfg.talk,
                 "talk_chime": c.cfg.talk_chime,
@@ -377,6 +384,9 @@ async fn status(
         "alerts_unseen": library::unseen_count(&m),
         "timelapse": crate::picturelog::enabled(),
         "timelapse_seconds": crate::picturelog::seconds(),
+        "safe_mode": Config::safe_mode(),
+        "has_remotes": !cfg.remotes.is_empty(),
+        "safe_mode_good_copy": Config::safe_mode().is_some() && m.cfg_path.with_extension("toml.good").is_file(),
         "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.lock().unwrap().len() } else { 0 },
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
@@ -400,7 +410,7 @@ async fn system(State(m): App) -> Response {
         "uptime_seconds": m.started.elapsed().as_secs(),
         "capabilities": caps,
         "ai_objects": crate::ai::MAIN_OBJECTS,
-        "ai_more": crate::ai::more_objects(),
+        "ai_more": ai_more(&m),
     }))
     .into_response()
 }
@@ -484,6 +494,9 @@ async fn get_settings(State(m): App) -> Response {
     let has_token = !cfg.notify.token.is_empty();
     let has_cloud_password = !cfg.cloud.password.is_empty();
     let has_mqtt_password = !cfg.mqtt.password.is_empty();
+    for r in &mut cfg.remotes {
+        r.token.clear();
+    }
     cfg.mqtt.password.clear();
     cfg.server.password.clear();
     cfg.notify.token.clear();
@@ -3313,6 +3326,58 @@ async fn snooze_camera(State(m): App, Path(id): Path<String>, Json(r): Json<Snoo
     Json(json!({"ok": true, "until": crate::notify::snoozed_until(&c.cfg.id)})).into_response()
 }
 
+/// Safe mode: the settings file as it is, to fix it on the page.
+async fn safe_config_get(State(m): App) -> Response {
+    let text = std::fs::read_to_string(&m.cfg_path).unwrap_or_default();
+    Json(json!({ "text": text, "problem": Config::safe_mode(), "path": m.cfg_path.display().to_string() })).into_response()
+}
+
+#[derive(Deserialize)]
+struct SafeText {
+    text: String,
+}
+
+/// Save a corrected settings file (only if GAZE can read it) and restart.
+async fn safe_config_save(State(m): App, Json(r): Json<SafeText>) -> Response {
+    if let Err(e) = Config::from_toml(&r.text) {
+        return err(StatusCode::BAD_REQUEST, format!("still not right: {e:#}"));
+    }
+    let _ = std::fs::copy(&m.cfg_path, m.cfg_path.with_extension("toml.broken"));
+    if let Err(e) = std::fs::write(&m.cfg_path, &r.text) {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    tracing::info!("settings file fixed from the web page; restarting");
+    restart_soon();
+    Json(json!({ "ok": true, "message": "Saved — GAZE is restarting with the fixed settings" })).into_response()
+}
+
+/// Put back the settings from the last time GAZE started fine, and restart.
+async fn safe_config_restore(State(m): App) -> Response {
+    let good = m.cfg_path.with_extension("toml.good");
+    let Ok(text) = std::fs::read_to_string(&good) else {
+        return err(StatusCode::NOT_FOUND, "there's no last good copy");
+    };
+    if let Err(e) = Config::from_toml(&text) {
+        return err(StatusCode::BAD_REQUEST, format!("the last good copy can't be read either: {e:#}"));
+    }
+    let _ = std::fs::copy(&m.cfg_path, m.cfg_path.with_extension("toml.broken"));
+    if let Err(e) = std::fs::write(&m.cfg_path, text) {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    tracing::info!("settings restored from the last good copy; restarting");
+    restart_soon();
+    Json(json!({ "ok": true, "message": "Restored — GAZE is restarting" })).into_response()
+}
+
+fn restart_soon() {
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        if !crate::update::restart_now() {
+            tracing::warn!("restart GAZE to use the fixed settings");
+        }
+    });
+}
+
 #[derive(Deserialize)]
 struct ModeReq {
     mode: String,
@@ -3334,6 +3399,49 @@ async fn put_modes(State(m): App, Json(c): Json<crate::config::ModesConfig>) -> 
     match m.update_modes(c).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => bad(e),
+    }
+}
+
+/// "More things to watch for": your own model's classes first, if you use one.
+fn ai_more(m: &Manager) -> Vec<String> {
+    let mut v: Vec<String> = crate::ai::more_objects().into_iter().map(String::from).collect();
+    if m.config().ai.builtin_model == "custom" {
+        for l in m.ai.get().labels().into_iter().rev() {
+            if !v.contains(&l) {
+                v.insert(0, l);
+            }
+        }
+    }
+    v
+}
+
+/// The other GAZE servers and their cameras. Only for accounts that see
+/// every camera here (the others' cameras aren't sorted by account).
+async fn remotes_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    if visible(&user).is_some() {
+        return Json(json!([])).into_response();
+    }
+    let mut out = Vec::new();
+    for (i, r) in m.config().remotes.iter().enumerate() {
+        let mut v = crate::remote::cameras(r).await;
+        v["i"] = json!(i);
+        v["name"] = json!(r.name);
+        v["url"] = json!(r.url);
+        out.push(v);
+    }
+    Json(out).into_response()
+}
+
+async fn remote_frame(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((i, cam)): Path<(usize, String)>) -> Response {
+    if visible(&user).is_some() {
+        return err(StatusCode::FORBIDDEN, "your account can't see other servers' cameras");
+    }
+    let Some(r) = m.config().remotes.get(i).cloned() else {
+        return err(StatusCode::NOT_FOUND, "no such server");
+    };
+    match crate::remote::frame(&r, &cam).await {
+        Ok(b) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], b).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
     }
 }
 
@@ -3390,7 +3498,7 @@ async fn live_video_ws(
     let main = !matches!(lq.q, Some(Quality::Sub)) || !c.cfg.has_sub();
     let relay = if main { c.relay_main.clone() } else { c.relay_sub.clone() };
     let ffmpeg_path = m.config().server.ffmpeg_path.clone();
-    let rotated = c.cfg.rotate % 360 != 0 || !c.cfg.privacy.is_empty();
+    let rotated = c.cfg.rotate % 360 != 0 || !c.cfg.privacy.is_empty() || c.cfg.dewarp.enabled;
     ws.on_upgrade(move |mut socket| async move {
         // Rotation and privacy areas are applied while decoding: those
         // cameras keep the picture stream.
@@ -3866,6 +3974,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/jobs/pause",
         "/api/https",
         "/api/modes",
+        "/api/safe-mode",
         "/api/webhooks",
         "/api/overview",
     ];
@@ -4001,7 +4110,13 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
     {
         return next.run(req).await;
     }
-    let user = session_token(req.headers()).and_then(|t| m.users.session_user(&t));
+    // A signed-in browser, or an API token (scripts, Home Assistant,
+    // another GAZE): "Authorization: Bearer gaze_…".
+    let bearer = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::to_string);
+    let user = match bearer {
+        Some(t) => m.users.token_user(&t),
+        None => session_token(req.headers()).and_then(|t| m.users.session_user(&t)),
+    };
     let Some(user) = user else {
         return err(StatusCode::UNAUTHORIZED, "please sign in");
     };
@@ -4108,6 +4223,33 @@ async fn auth_login(
             tracing::warn!("failed sign-in for {:?} from {ip}", r.username.trim());
             err(StatusCode::UNAUTHORIZED, format!("{e:#}"))
         }
+    }
+}
+
+/// API tokens of the signed-in user.
+async fn tokens_list(State(m): App, user: axum::Extension<CurrentUser>) -> Response {
+    Json(m.users.tokens(&user.0.0.username)).into_response()
+}
+
+#[derive(Deserialize)]
+struct TokenReq {
+    name: String,
+}
+
+async fn tokens_new(State(m): App, user: axum::Extension<CurrentUser>, Json(r): Json<TokenReq>) -> Response {
+    match m.users.new_token(&user.0.0.username, &r.name) {
+        Ok((id, token)) => {
+            tracing::info!("{:?} made an API token \"{}\"", user.0.0.username, r.name.trim());
+            Json(json!({ "id": id, "token": token })).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn tokens_remove(State(m): App, user: axum::Extension<CurrentUser>, Path(id): Path<String>) -> Response {
+    match m.users.remove_token(&user.0.0.username, &id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
     }
 }
 

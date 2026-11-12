@@ -40,6 +40,8 @@ mod ptz_auto;
 mod recog;
 mod recorder;
 mod relay;
+mod remote;
+mod rtmp;
 mod seen;
 mod stationary;
 mod storage;
@@ -226,7 +228,23 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     // HTTPS (cloud AI, model download) uses rustls with the ring crypto backend.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (mut cfg, needs_save) = config::Config::load_or_create(&path)?;
+    // A settings file that can't be read: start in safe mode (nothing is
+    // saved over it) so it can be fixed from the web page; a good one is
+    // kept as the last good copy.
+    let (mut cfg, needs_save) = match config::Config::load_or_create(&path) {
+        Ok(x) => {
+            if path.exists() {
+                let _ = std::fs::copy(&path, path.with_extension("toml.good"));
+            }
+            x
+        }
+        Err(e) => {
+            let problem = format!("{e:#}");
+            error!("the settings file can't be used: {problem} — starting in safe mode (fix it on the web page)");
+            config::Config::set_safe_mode(problem);
+            (config::Config::rescue(&std::fs::read_to_string(&path).unwrap_or_default()), false)
+        }
+    };
     config::private_file(&path);
     // Logs, statistics and AI models live next to the config file.
     let data_dir = path
@@ -310,6 +328,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(hooks::run(mgr.clone()));
     tokio::spawn(onvif_events::run(mgr.clone()));
     tokio::spawn(ptz_auto::run(mgr.clone()));
+    tokio::spawn(rtmp::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));
     tokio::spawn(infer::run(mgr.clone()));
 

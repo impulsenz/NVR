@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## 0.6.54 — November 2026
+- **Stream live to YouTube, Facebook or Twitch**: camera → General → Stream live, with the service's RTMP address and stream key. The camera's own video is passed through (H.265 cameras are converted), with sound added when the camera has none; it restarts by itself if the connection drops.
+- **Fisheye (360°) cameras**: camera → General → Fisheye. The live view and snapshots become a normal flat picture — choose where to look and how wide; recordings keep the whole circle.
+- **Your own AI model**: Settings → Object recognition → AI model → Your own model. Any YOLOv8 / YOLO11 (Ultralytics) or YOLOX detection model in ONNX format, with its picture size and class names — e.g. one trained to tell a fox, your dog or a delivery van. Its classes appear in each camera's "More things to watch for".
+- **Other GAZE servers**: Settings → System → Other GAZE servers. The cameras of another GAZE (a holiday house, the shop) show on this Live page; click one to open it there.
+- **API tokens**: 👤 menu → API tokens. Keys for scripts, Home Assistant or another GAZE to use GAZE as you (Authorization: Bearer …); removing one stops it at once.
+- **Safe mode**: if the settings file can't be read (a typo when editing it by hand, a damaged file), GAZE now starts anyway without touching it, shows exactly what's wrong, and lets you fix the file on the page or restore the settings from the last good start.
+
 ## 0.6.53 — November 2026
 - **Two-step sign-in**: 👤 menu → Two-step sign-in. After the password, GAZE asks for the 6-digit code from an authenticator app (Google or Microsoft Authenticator, Authy, a password manager) — a stolen password alone isn't enough. Eight one-time recovery codes for a lost phone; an admin can turn it off for someone (Settings → Users).
 - **Overview of all cameras**: every camera in one moving picture, or only the ones with something going on — for a wall tablet, a slow connection or a Home Assistant dashboard. A private link works without signing in (Settings → Smart home), and a new link stops the old one.
