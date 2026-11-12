@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.7 — November 2026
+- **Time-lapse previews switched off for now**: making them in the background couldn't keep up and kept the computer busy. Nothing is made any more; dragging along a timeline moves the video itself (sub-stream or main stream, as chosen on Recordings), and alert pop-ups jump straight to the full-quality video.
+- **Delete all footage** (header, admins): removes every recording, timeline copy, alert, clip and alert picture on all cameras after you type DELETE — handy for testing. Cameras, settings and known people stay, and recording carries on.
+- **Step one frame**: −10s / +10s are now **−1 frame / +1 frame** in the video players and on the Recordings timeline (pauses on that frame).
+
 ## 0.6.6 — November 2026
 - **Package spot picture fixed**: the camera's picture under "Notice parcels delivered or picked up" now shows the live sub-stream (like the motion mask), so it appears straight away and keeps updating. Before, it asked the camera for a full-size snapshot, which could fail or time out (blank box) on big or H.265 streams.
 - The camera editor's pictures (motion mask, package spot, zones) now always get the sub-stream while the editor is open, even if the Live grid is set to the main stream.
