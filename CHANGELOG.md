@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.19 — November 2026
+- **No more black gaps between recordings**: on the Recordings timeline the next file is loaded in the background and switched to only once it has a picture, so playback runs straight from one 5-minute file into the next.
+- **Updates button shows what's happening**: it spins while checking, shows a dot when a new version is ready, and while updating a ring fills up with "Updating 45%", then "Installing…" and "Restarting…".
+- The update bar is shorter (no "released … · takes a few seconds" line).
+
 ## 0.6.18 — November 2026
 - **Your voice in the recordings**: what you say with 🎙️ Push to talk (and the chimes) is now added to the camera's recordings — the recording, the timeline copy and the alert clip of that time — so playing them back you hear both sides of the conversation. It's added a minute or two after each recording file is finished; the video itself isn't touched.
 - **Hear the camera while you talk**: pressing Push to talk turns on the camera's sound automatically (and leaves it on to hear the answer; the 🔊 button turns it off).
