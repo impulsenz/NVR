@@ -201,15 +201,24 @@ fn cap(s: &str) -> String {
         .unwrap_or_default()
 }
 
+
 /// Item left / taken: a small grey picture of an area, compared before and
-/// after an alert.
-pub fn area_signature(f: &crate::imgutil::Frame, poly: &[[f32; 2]]) -> Vec<f32> {
+/// after an alert: the points of its box
+/// (x0, y0, x1, y1; 0..1 of the picture) that are in the area.
+pub fn area_signature_by(
+    f: &crate::imgutil::Frame,
+    (x0, y0, x1, y1): (f32, f32, f32, f32),
+    contains: impl Fn([f32; 2]) -> bool,
+) -> Vec<f32> {
     const N: usize = 32;
     let mut out = Vec::new();
     for gy in 0..N {
         for gx in 0..N {
-            let p = [(gx as f32 + 0.5) / N as f32, (gy as f32 + 0.5) / N as f32];
-            if !inside(poly, p) {
+            let p = [
+                x0 + (x1 - x0) * (gx as f32 + 0.5) / N as f32,
+                y0 + (y1 - y0) * (gy as f32 + 0.5) / N as f32,
+            ];
+            if !contains(p) {
                 continue;
             }
             let x = ((p[0] * f.width as f32) as u32).min(f.width - 1);
@@ -316,13 +325,13 @@ mod tests {
                 rgb: std::sync::Arc::new(rgb),
             }
         };
-        let before = area_signature(&mk(60, false), &poly);
+        let before = area_signature_by(&mk(60, false), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p));
         assert!(
-            area_change(&before, &area_signature(&mk(80, false), &poly)) < 0.05,
+            area_change(&before, &area_signature_by(&mk(80, false), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p))) < 0.05,
             "brightness change ignored"
         );
         assert!(
-            area_change(&before, &area_signature(&mk(60, true), &poly)) > 0.15,
+            area_change(&before, &area_signature_by(&mk(60, true), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p))) > 0.15,
             "parcel noticed"
         );
     }

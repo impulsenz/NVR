@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.36 — November 2026
+- **Paint the package spot**: instead of dragging a box, colour in exactly where parcels are left (Settings → camera → AI), with the same paint / erase brush as the ignore areas. When an alert ends, only the painted part is compared with how it looked before, and the alert's before-and-after pictures show just that part (everything else blacked out). A box drawn before becomes painted the first time you open the camera's settings.
+
 ## 0.6.35 — November 2026
 - **Recordings loads in the background**: open GAZE (or refresh the page) on any page and the Recordings timeline loads behind the scenes — footage, each camera's stream and the time-lapse pictures — so it's ready the moment you go there.
 - **Time-lapse when reviewing an alert**: dragging along an alert's (or any recording's) bar now shows the time-lapse pictures already made for the timeline, and the HD video loads where you let go. Hovering over the bar shows them too. (Before, it looked for the alert clip's own time-lapse, which usually isn't made.)

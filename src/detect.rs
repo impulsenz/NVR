@@ -240,7 +240,7 @@ impl Active {
     /// it reaches (with a small margin, for an arm putting a parcel down).
     fn touch(&mut self, x: f32, y: f32, w: f32, h: f32) {
         for (i, (z, ..)) in self.zone_before.iter().enumerate() {
-            if !self.touched[i] && box_reaches(&z.points, x, y, w, h) {
+            if !self.touched[i] && z.reaches(x, y, w, h) {
                 self.touched[i] = true;
             }
         }
@@ -656,8 +656,8 @@ impl Detector {
                 self.watched_areas()
                     .into_iter()
                     .map(|w| {
-                        let sig = crate::zones::area_signature(&f, &w.points);
-                        let pic = zone_picture(&f, &w.points);
+                        let sig = w.signature(&f);
+                        let pic = w.picture(&f);
                         (w, sig, pic)
                     })
                     .collect()
@@ -1060,7 +1060,7 @@ impl Detector {
                 }
                 let change = crate::zones::area_change(
                     before,
-                    &crate::zones::area_signature(&now, &z.points),
+                    &z.signature(&now),
                 );
                 if change > 0.12 {
                     // Keep both pictures: smart search tells a delivered
@@ -1071,7 +1071,7 @@ impl Detector {
                         format!("{}-z{zi}-after.jpg", a.event.id),
                     );
                     if let (Ok(b), Ok(af)) =
-                        (before_pic.jpeg(85), zone_picture(&now, &z.points).jpeg(85))
+                        (before_pic.jpeg(85), z.picture(&now).jpeg(85))
                         && std::fs::write(dir.join(&bn), b).is_ok()
                         && std::fs::write(dir.join(&an), af).is_ok()
                     {
@@ -1110,10 +1110,96 @@ impl Detector {
     }
 }
 
-/// An area watched for items left or taken.
+/// An area watched for items left or taken: a polygon (zones), or painted
+/// cells (the package spot: the same grid as the ignore areas).
 struct Watched {
     name: String,
     points: Vec<[f32; 2]>,
+    cells: Option<Vec<bool>>,
+}
+
+impl Watched {
+    fn cell(p: [f32; 2]) -> usize {
+        use crate::config::{MASK_H, MASK_W};
+        let x = ((p[0].clamp(0.0, 1.0) * MASK_W as f32) as usize).min(MASK_W - 1);
+        let y = ((p[1].clamp(0.0, 1.0) * MASK_H as f32) as usize).min(MASK_H - 1);
+        y * MASK_W + x
+    }
+    fn contains(&self, p: [f32; 2]) -> bool {
+        match &self.cells {
+            Some(m) => m[Self::cell(p)],
+            None => crate::zones::inside(&self.points, p),
+        }
+    }
+    /// Its box (x0, y0, x1, y1), 0..1 of the picture.
+    fn bounds(&self) -> (f32, f32, f32, f32) {
+        use crate::config::{MASK_H, MASK_W};
+        let (mut x0, mut y0, mut x1, mut y1) = (1f32, 1f32, 0f32, 0f32);
+        match &self.cells {
+            Some(m) => {
+                for (i, _) in m.iter().enumerate().filter(|(_, v)| **v) {
+                    let (cx, cy) = ((i % MASK_W) as f32, (i / MASK_W) as f32);
+                    x0 = x0.min(cx / MASK_W as f32);
+                    y0 = y0.min(cy / MASK_H as f32);
+                    x1 = x1.max((cx + 1.0) / MASK_W as f32);
+                    y1 = y1.max((cy + 1.0) / MASK_H as f32);
+                }
+            }
+            None => {
+                for p in &self.points {
+                    x0 = x0.min(p[0]);
+                    y0 = y0.min(p[1]);
+                    x1 = x1.max(p[0]);
+                    y1 = y1.max(p[1]);
+                }
+            }
+        }
+        (x0, y0, x1.max(x0), y1.max(y0))
+    }
+    /// Does an object's box (with a little margin) reach the area?
+    fn reaches(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
+        match &self.cells {
+            None => box_reaches(&self.points, x, y, w, h),
+            Some(_) => {
+                let (mx, my) = (w * 0.1, h * 0.1);
+                let (x0, y0, x1, y1) = (x - mx, y - my, x + w + mx, y + h + my);
+                (0..=12).any(|i| {
+                    (0..=12).any(|j| {
+                        self.contains([x0 + (x1 - x0) * i as f32 / 12.0, y0 + (y1 - y0) * j as f32 / 12.0])
+                    })
+                })
+            }
+        }
+    }
+    /// What the area looks like, for comparing before and after.
+    fn signature(&self, f: &Frame) -> Vec<f32> {
+        crate::zones::area_signature_by(f, self.bounds(), |p| self.contains(p))
+    }
+    /// The picture of the area for the alert: a painted spot exactly (the
+    /// rest blacked out), a zone with a little of its surroundings.
+    fn picture(&self, f: &Frame) -> Frame {
+        let (x0, y0, x1, y1) = self.bounds();
+        let (fw, fh) = (f.width as f32, f.height as f32);
+        let (mx, my) = if self.cells.is_some() { (0.0, 0.0) } else { ((x1 - x0) * 0.1, (y1 - y0) * 0.1) };
+        let (px, py) = (((x0 - mx).max(0.0) * fw).floor(), ((y0 - my).max(0.0) * fh).floor());
+        let crop = crate::recog::crop(f, px, py, ((x1 + mx).min(1.0) * fw).ceil() - px, ((y1 + my).min(1.0) * fh).ceil() - py);
+        let crop = if self.cells.is_some() {
+            let mut rgb = (*crop.rgb).clone();
+            for yy in 0..crop.height {
+                for xx in 0..crop.width {
+                    let p = [(px + xx as f32 + 0.5) / fw, (py + yy as f32 + 0.5) / fh];
+                    if !self.contains(p) {
+                        let i = ((yy * crop.width + xx) * 3) as usize;
+                        rgb[i..i + 3].copy_from_slice(&[0, 0, 0]);
+                    }
+                }
+            }
+            Frame { width: crop.width, height: crop.height, rgb: std::sync::Arc::new(rgb) }
+        } else {
+            crop
+        };
+        crop.fit(640)
+    }
 }
 
 impl Detector {
@@ -1121,11 +1207,15 @@ impl Detector {
     fn watched_areas(&self) -> Vec<Watched> {
         let d = &self.cam.detect;
         let mut v: Vec<Watched> = Vec::new();
-        if d.packages && d.package_area.len() >= 3 {
-            v.push(Watched {
-                name: "the package spot".into(),
-                points: d.package_area.clone(),
-            });
+        if d.packages {
+            let cells = crate::config::decode_mask(&d.package_mask).filter(|m| m.iter().any(|x| *x));
+            if cells.is_some() || d.package_area.len() >= 3 {
+                v.push(Watched {
+                    name: "the package spot".into(),
+                    points: d.package_area.clone(),
+                    cells,
+                });
+            }
         }
         v.extend(
             self.cam
@@ -1135,6 +1225,7 @@ impl Detector {
                 .map(|z| Watched {
                     name: z.name.clone(),
                     points: z.points.clone(),
+                    cells: None,
                 }),
         );
         v
@@ -1168,8 +1259,6 @@ pub fn masked_share(mask: &[bool], x: &Detection) -> f32 {
     if all == 0 { 0.0 } else { ignored as f32 / all as f32 }
 }
 
-/// The part of the picture around a zone (with a margin), for checking
-/// what's there.
 /// A closer view around a small moving area (normalized box), as a
 /// square about three times its size, and where that view sits in the
 /// picture (normalized x, y, width, height). None when the moving area is
@@ -1198,25 +1287,6 @@ fn zoom_on(f: &Frame, (x, y, w, h): (f32, f32, f32, f32)) -> Option<(Frame, [f32
     ))
 }
 
-fn zone_picture(f: &Frame, poly: &[[f32; 2]]) -> Frame {
-    let (mut x0, mut y0, mut x1, mut y1) = (1f32, 1f32, 0f32, 0f32);
-    for p in poly {
-        x0 = x0.min(p[0]);
-        y0 = y0.min(p[1]);
-        x1 = x1.max(p[0]);
-        y1 = y1.max(p[1]);
-    }
-    let (fw, fh) = (f.width as f32, f.height as f32);
-    let (mx, my) = ((x1 - x0) * 0.1, (y1 - y0) * 0.1);
-    crate::recog::crop(
-        f,
-        (x0 - mx) * fw,
-        (y0 - my) * fh,
-        (x1 - x0 + 2.0 * mx) * fw,
-        (y1 - y0 + 2.0 * my) * fh,
-    )
-    .fit(640)
-}
 
 /// A moving object found in a frame.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -1602,6 +1672,43 @@ mod tests {
         assert!(c.width >= 126 && c.width == c.height);
         assert!(x + w <= 1.0001 && y + h <= 1.0001 && x > 0.5 && y > 0.3);
         assert!(super::zoom_on(&f, (0.1, 0.1, 0.6, 0.6)).is_none());
+    }
+
+    #[test]
+    fn painted_package_spot_compares_only_itself() {
+        use crate::config::{MASK_H, MASK_W};
+        // A spot painted at the bottom left (x 10–30 %, y 70–90 %).
+        let mut cells = vec![false; MASK_W * MASK_H];
+        for y in (MASK_H * 7 / 10)..(MASK_H * 9 / 10) {
+            for x in (MASK_W / 10)..(MASK_W * 3 / 10) {
+                cells[y * MASK_W + x] = true;
+            }
+        }
+        let spot = super::Watched { name: "spot".into(), points: vec![], cells: Some(cells) };
+        let frame = |parcel: bool, beside: bool| {
+            let (w, h) = (320u32, 180u32);
+            let mut rgb = vec![90u8; (w * h * 3) as usize];
+            for y in 0..h {
+                for x in 0..w {
+                    let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+                    let on = (parcel && (0.15..0.25).contains(&fx) && (0.75..0.85).contains(&fy))
+                        || (beside && (0.4..0.6).contains(&fx) && (0.75..0.85).contains(&fy));
+                    if on {
+                        let i = ((y * w + x) * 3) as usize;
+                        rgb[i..i + 3].copy_from_slice(&[200, 150, 90]);
+                    }
+                }
+            }
+            Frame { width: w, height: h, rgb: std::sync::Arc::new(rgb) }
+        };
+        let before = spot.signature(&frame(false, false));
+        assert!(crate::zones::area_change(&before, &spot.signature(&frame(true, false))) > 0.15); // parcel left
+        assert!(crate::zones::area_change(&before, &spot.signature(&frame(false, true))) < 0.01); // next to it: not compared
+        assert!(spot.reaches(0.12, 0.5, 0.1, 0.3)); // someone at the spot
+        assert!(!spot.reaches(0.6, 0.1, 0.2, 0.3)); // elsewhere
+        // The alert's picture: exactly the spot, nothing around it.
+        let pic = spot.picture(&frame(false, true));
+        assert!((pic.width as f32 / pic.height as f32 - (0.2 * 320.0) / (0.2 * 180.0)).abs() < 0.2);
     }
 
     #[test]

@@ -4348,9 +4348,12 @@ async function openCameraDialog(id, clone, prof) {
         <div><label class="check"><input type="checkbox" id="d-pkg" ${c.detect.packages ? 'checked' : ''}> Notice parcels delivered or picked up</label>
           <div class="surface" id="d-pkg-area" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair;margin-top:6px">
             <img alt="" id="d-pkg-img" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div>
-            <svg id="d-pkg-svg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
-          <div class="row" style="margin-top:6px"><button type="button" class="small" id="d-pkg-clear">Clear</button>
-            <span class="hint" style="margin:0" id="d-pkg-hint">Drag a box on the picture around where parcels are left (doorstep, porch).</span></div>
+            <canvas id="d-pkg-grid" width="160" height="90" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated"></canvas></div>
+          <div class="row mask-tools" style="margin-top:6px">
+            <div class="seg" id="d-pkg-tool"><button type="button" class="small on" data-v="paint">🖌 Paint</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
+            <label class="muted small" style="margin:0">Brush <select id="d-pkg-brush" class="small"><option value="1">Fine</option><option value="3">Small</option><option value="7" selected>Medium</option><option value="15">Large</option></select></label>
+            <button type="button" class="small" id="d-pkg-clear">Clear</button></div>
+          <div class="hint" style="margin:4px 0 0" id="d-pkg-hint">Paint over where parcels are left (doorstep, porch) — just that spot. When an alert ends, only the painted part is compared with how it looked before, and the alert shows that part before and after.</div>
           <div class="hint">GAZE compares this spot before and after each visit and notes when something was left or taken, with before/after pictures in the alert.</div></div>
       </div>
       <div data-tab="osd" class="form" hidden>
@@ -4498,13 +4501,7 @@ let maskCells = [], maskUnbind = null, meterTimer = null;
 // One cell per pixel motion detection looks at (a 640×360 picture shrunk 4×).
 const MASK_W = 160, MASK_H = 90;
 // Stored as "160x90:" + run lengths (unmasked, masked, unmasked, …).
-function maskValue() {
-  if (!maskCells.some(x => x)) return '';
-  const runs = []; let cur = false, n = 0;
-  for (const v of maskCells) { if (v === cur) n++; else { runs.push(n); cur = v; n = 1; } }
-  runs.push(n);
-  return `${MASK_W}x${MASK_H}:` + runs.join(',');
-}
+function maskValue() { return encodeCells(maskCells); }
 function decodeMask(m) {
   const out = new Array(MASK_W * MASK_H).fill(false);
   m = (m || '').trim();
@@ -4516,50 +4513,63 @@ function decodeMask(m) {
   }
   return out;
 }
-let maskTool = 'paint';
-function setupMaskEditor(mask, camId) {
-  maskCells = decodeMask(mask);
-  const cv = $('d-mask-grid'), ctx = cv.getContext('2d');
+function encodeCells(cells) {
+  if (!cells.some(x => x)) return '';
+  const runs = []; let cur = false, n = 0;
+  for (const v of cells) { if (v === cur) n++; else { runs.push(n); cur = v; n = 1; } }
+  runs.push(n);
+  return `${MASK_W}x${MASK_H}:` + runs.join(',');
+}
+// Painting cells on a camera picture (ignore areas, the package spot):
+// paint / erase tools, a round brush, strokes without gaps. `cells()`
+// gives the array painted; `rgba` its colour; `changed` is called after
+// each stroke.
+function wirePainter({cv, cells, rgba, tools, brush, brushKey, brushDefault, changed}) {
+  const ctx = cv.getContext('2d');
+  let tool = 'paint';
   const paint = () => {
-    const img = ctx.createImageData(MASK_W, MASK_H), d = img.data;
-    for (let i = 0; i < maskCells.length; i++) if (maskCells[i]) { d[i * 4] = 239; d[i * 4 + 1] = 68; d[i * 4 + 2] = 68; d[i * 4 + 3] = 115; }
+    const img = ctx.createImageData(MASK_W, MASK_H), d = img.data, c = cells();
+    for (let i = 0; i < c.length; i++) if (c[i]) { d[i * 4] = rgba[0]; d[i * 4 + 1] = rgba[1]; d[i * 4 + 2] = rgba[2]; d[i * 4 + 3] = rgba[3]; }
     ctx.putImageData(img, 0, 0);
   };
   paint();
-  $('d-mask-tool').querySelectorAll('button').forEach(b => {
-    b.classList.toggle('on', b.dataset.v === maskTool);
-    b.onclick = () => { maskTool = b.dataset.v; $('d-mask-tool').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); cv.style.cursor = maskTool === 'erase' ? 'cell' : 'crosshair'; };
+  tools.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('on', b.dataset.v === tool);
+    b.onclick = () => { tool = b.dataset.v; tools.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); cv.style.cursor = tool === 'erase' ? 'cell' : 'crosshair'; };
   });
-  const brush = $('d-mask-brush');
-  brush.value = store.get('maskBrush', '3'); brush.onchange = () => store.set('maskBrush', brush.value);
+  brush.value = store.get(brushKey, brushDefault); brush.onchange = () => store.set(brushKey, brush.value);
   const at = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * MASK_W, (e.clientY - r.top) / r.height * MASK_H]; };
-  // A round brush, `size` cells across, at (x, y) in cells.
   const dab = (x, y, val) => {
-    const size = +brush.value || 3, rad = size / 2;
-    let changed = false;
+    const size = +brush.value || 3, rad = size / 2, c = cells();
+    let ch = false;
     for (let cy = Math.floor(y - rad); cy <= Math.ceil(y + rad); cy++) for (let cx = Math.floor(x - rad); cx <= Math.ceil(x + rad); cx++) {
       if (cx < 0 || cy < 0 || cx >= MASK_W || cy >= MASK_H) continue;
       if (size > 1 && (cx + 0.5 - x) ** 2 + (cy + 0.5 - y) ** 2 > rad * rad) continue;
       if (size === 1 && (cx !== Math.floor(x) || cy !== Math.floor(y))) continue;
       const i = cy * MASK_W + cx;
-      if (maskCells[i] !== val) { maskCells[i] = val; changed = true; }
+      if (c[i] !== val) { c[i] = val; ch = true; }
     }
-    return changed;
+    return ch;
   };
   let val = null, last = null;
-  // Fill along the line from the last point so fast strokes leave no gaps.
   const stroke = (e) => {
     const p = at(e), from = last || p;
     const steps = Math.max(1, Math.ceil(Math.hypot(p[0] - from[0], p[1] - from[1]) / 0.5));
-    let changed = false;
-    for (let k = 1; k <= steps; k++) changed = dab(from[0] + (p[0] - from[0]) * k / steps, from[1] + (p[1] - from[1]) * k / steps, val) || changed;
+    let ch = false;
+    for (let k = 1; k <= steps; k++) ch = dab(from[0] + (p[0] - from[0]) * k / steps, from[1] + (p[1] - from[1]) * k / steps, val) || ch;
     last = p;
-    if (changed) paint();
+    if (ch) paint();
   };
   cv.oncontextmenu = (e) => e.preventDefault();
-  cv.onpointerdown = (e) => { e.preventDefault(); val = !(maskTool === 'erase' || e.button === 2 || e.shiftKey); last = null; cv.setPointerCapture(e.pointerId); stroke(e); };
+  cv.onpointerdown = (e) => { e.preventDefault(); val = !(tool === 'erase' || e.button === 2 || e.shiftKey); last = null; cv.setPointerCapture(e.pointerId); stroke(e); };
   cv.onpointermove = (e) => { if (val !== null) stroke(e); };
-  cv.onpointerup = cv.onpointercancel = () => { val = null; last = null; };
+  cv.onpointerup = cv.onpointercancel = () => { if (val !== null && changed) changed(); val = null; last = null; };
+  return paint;
+}
+function setupMaskEditor(mask, camId) {
+  maskCells = decodeMask(mask);
+  const cv = $('d-mask-grid');
+  const paint = wirePainter({cv, cells: () => maskCells, rgba: [239, 68, 68, 115], tools: $('d-mask-tool'), brush: $('d-mask-brush'), brushKey: 'maskBrush', brushDefault: '3'});
   $('d-mask-clear').onclick = () => { maskCells.fill(false); paint(); };
   $('d-mask-invert').onclick = () => { maskCells = maskCells.map(x => !x); paint(); };
   if (maskUnbind) maskUnbind();
@@ -4572,40 +4582,31 @@ function setupMaskEditor(mask, camId) {
     meterTimer = setInterval(() => updateMotionMeter(camId), 500);
   }
 }
-// Package delivery spot (camera → AI): drag a box on the camera picture.
-let pkgArea = [], pkgUnbind = null;
+// Package delivery spot (camera → AI): painted on the camera picture like
+// the ignore areas. A box drawn by an older version becomes painted cells.
+let pkgCells = [], pkgUnbind = null;
 function setupPackageArea(c, camId) {
-  pkgArea = (c.detect.package_area || []).map(p => [...p]);
-  const surf = $('d-pkg-area'), svg = $('d-pkg-svg');
-  const draw = () => {
-    svg.innerHTML = pkgArea.length >= 3 ? `<polygon points="${pkgArea.map(p => p.join(',')).join(' ')}" fill="rgba(255,176,32,.25)" stroke="#ffb020" stroke-width="0.006" vector-effect="non-scaling-stroke"/>` : '';
-    $('d-pkg-hint').textContent = pkgArea.length >= 3 ? 'Package spot set. Drag again to redraw it.' : 'Drag a box on the picture around where parcels are left (doorstep, porch).';
-  };
-  // The camera's live picture (light stream 2, as for the motion mask): a
-  // full-size snapshot can take long or fail on big / H.265 streams.
+  pkgCells = decodeMask(c.detect.package_mask);
+  const box = c.detect.package_area || [];
+  if (!pkgCells.some(x => x) && box.length >= 3) {
+    const xs = box.map(p => p[0]), ys = box.map(p => p[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    for (let i = 0; i < pkgCells.length; i++) {
+      const x = (i % MASK_W + 0.5) / MASK_W, y = (Math.floor(i / MASK_W) + 0.5) / MASK_H;
+      pkgCells[i] = x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    }
+  }
+  const paint = wirePainter({cv: $('d-pkg-grid'), cells: () => pkgCells, rgba: [255, 176, 32, 120], tools: $('d-pkg-tool'), brush: $('d-pkg-brush'), brushKey: 'pkgBrush', brushDefault: '7',
+    changed: () => { if (pkgCells.some(x => x)) $('d-pkg').checked = true; }});
+  $('d-pkg-clear').onclick = () => { pkgCells.fill(false); paint(); };
+  // The camera's live picture (light stream 2, as for the motion mask).
   if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; }
   if (camId) {
-    const img = $('d-pkg-img'), m = surf.querySelector('.msg');
+    const img = $('d-pkg-img'), m = $('d-pkg-area').querySelector('.msg');
     if (m) { m.textContent = 'Connecting…'; m.hidden = false; }
     img.onload = () => { if (m) m.hidden = true; };
     pkgUnbind = Live.bind(img, camId, 'sub');
   }
-  let start = null;
-  const at = (e) => { const r = surf.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
-  surf.onpointerdown = (e) => { start = at(e); surf.setPointerCapture(e.pointerId); e.preventDefault(); };
-  surf.onpointermove = (e) => {
-    if (!start) return;
-    const p = at(e), [x0, x1] = [Math.min(start[0], p[0]), Math.max(start[0], p[0])], [y0, y1] = [Math.min(start[1], p[1]), Math.max(start[1], p[1])];
-    pkgArea = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(q => q.map(v => Math.round(v * 1000) / 1000));
-    draw();
-  };
-  surf.onpointerup = () => {
-    if (start && pkgArea.length >= 3 && (pkgArea[1][0] - pkgArea[0][0] < 0.02 || pkgArea[2][1] - pkgArea[1][1] < 0.02)) pkgArea = [];
-    start = null; draw();
-    if (pkgArea.length >= 3) $('d-pkg').checked = true;
-  };
-  $('d-pkg-clear').onclick = () => { pkgArea = []; draw(); };
-  draw();
 }
 
 function stopMotionMeter() { clearInterval(meterTimer); meterTimer = null; if (maskUnbind) { maskUnbind(); maskUnbind = null; } }
@@ -4758,7 +4759,7 @@ async function saveCamera(ev) {
 async function saveProfileForm(body) {
   const pe = profileEdit, p = {name: pe.name};
   for (const k of PROFILE_KEYS) p[k] = JSON.parse(JSON.stringify(body[k]));
-  p.detect.mask = ''; p.detect.packages = false; p.detect.package_area = [];
+  p.detect.mask = ''; p.detect.packages = false; p.detect.package_area = []; p.detect.package_mask = '';
   const profiles = [...((settings && settings.profiles) || [])];
   if (pe.idx >= 0) profiles[pe.idx] = p; else profiles.push(p);
   // The window closes at once; the profile is saved (and the cameras
@@ -4798,7 +4799,7 @@ function collectCamera() {
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
-      parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgArea.length >= 3, package_area: pkgArea},
+      parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgCells.some(x => x), package_mask: encodeCells(pkgCells), package_area: []},
   };
 }
 // ---------- restart the camera over ONVIF ----------

@@ -640,7 +640,11 @@ pub struct DetectConfig {
     pub parked_objects: Vec<String>,
     /// Package delivery: watch `package_area` for parcels left or taken.
     pub packages: bool,
-    /// Where parcels are left (polygon, 0..1 of the picture).
+    /// Where parcels are left, painted on the picture: the same grid as
+    /// `mask` ('1' = part of the spot). Empty: `package_area` (older box).
+    pub package_mask: String,
+    /// Where parcels are left (polygon, 0..1 of the picture), from older
+    /// versions (a box); replaced by `package_mask` once painted.
     pub package_area: Vec<[f32; 2]>,
 }
 
@@ -676,6 +680,7 @@ impl Default for DetectConfig {
                 .map(|s| s.to_string())
                 .collect(),
             packages: false,
+            package_mask: String::new(),
             package_area: Vec::new(),
         }
     }
@@ -856,14 +861,16 @@ impl Profile {
         cam.max_storage_gb = self.max_storage_gb;
         // Areas drawn on this camera's own picture stay the camera's.
         let mask = std::mem::take(&mut cam.detect.mask);
-        let (packages, area) = (
+        let (packages, area, spot) = (
             cam.detect.packages,
             std::mem::take(&mut cam.detect.package_area),
+            std::mem::take(&mut cam.detect.package_mask),
         );
         cam.detect = self.detect.clone();
         cam.detect.mask = mask;
         cam.detect.packages = packages;
         cam.detect.package_area = area;
+        cam.detect.package_mask = spot;
         cam.profile = self.name.clone();
     }
 }
