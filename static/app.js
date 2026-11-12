@@ -2583,7 +2583,7 @@ function revealWhenReady(el, i) {
   v.addEventListener('seeked', () => { if (v.readyState >= 2) done(); }, {once: true});
   v.addEventListener('loadeddata', done, {once: true});
   v.addEventListener('playing', done, {once: true});
-  setTimeout(done, 4000);
+  setTimeout(done, 15000);
 }
 function showVideo(el, i) {
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
@@ -3056,13 +3056,28 @@ function liveStill(sp, cam) {
 // (hiding it at once showed black while the video loaded).
 function hideSpritesWhenReady() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
-    const sp = el.querySelector('.sprite'), v = activeVideo(el);
+    const sp = el.querySelector('.sprite');
     if (sp.hidden) continue;
     const gen = sp._gen = (sp._gen || 0) + 1;
-    const done = () => { if (sp._gen === gen) sp.hidden = true; };
-    const check = () => { if (v.readyState >= 2 && !v.seeking) done(); else setTimeout(check, 100); };
-    setTimeout(check, 50);
-    setTimeout(done, 4000);
+    // Fade the time-lapse picture out over the video (no hard cut).
+    const fade = () => {
+      if (sp._gen !== gen || sp.classList.contains('fading')) return;
+      sp.classList.add('fading');
+      setTimeout(() => { if (sp._gen === gen) { sp.hidden = true; sp.classList.remove('fading'); } }, 220);
+    };
+    // Only once the video (the player that will be shown) has actually
+    // drawn the picture at the new time; however long that takes to load.
+    const check = () => {
+      if (sp._gen !== gen) return;
+      const v = activeVideo(el);
+      if (el._pending == null && v.style.visibility !== 'hidden' && v.readyState >= 2 && !v.seeking) {
+        if (v.requestVideoFrameCallback) { v.requestVideoFrameCallback(() => fade()); setTimeout(fade, 400); } else fade();
+        return;
+      }
+      setTimeout(check, 60);
+    };
+    setTimeout(check, 60);
+    setTimeout(fade, 15000);
   }
 }
 function previewAll() {
@@ -3070,6 +3085,7 @@ function previewAll() {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
     el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
     const s = c && segAt(c, tl.T), sp = el.querySelector('.sprite');
+    if (sp.classList.contains('fading')) { sp._gen = (sp._gen || 0) + 1; sp.classList.remove('fading'); }
     el.querySelector('.msg').hidden = !!s;
     if (!s) el._vids.forEach(x => x.style.visibility = 'hidden');
     if (!s) { sp.hidden = true; continue; }
@@ -3219,13 +3235,37 @@ function waitForGazeRestart() {
 // Phones: the account menu has System, Logs and the update check.
 if ($('um-upd')) $('um-upd').onclick = () => { $('um-pop').hidden = true; $('upd-btn').click(); };
 document.querySelectorAll('.um-links a').forEach(a => a.addEventListener('click', () => { $('um-pop').hidden = true; }));
+// After an update: once, a window saying which version is now running and
+// what's new in it (from the changelog built into GAZE).
+async function showWhatsNew() {
+  const v = status && status.version; if (!v) return;
+  const last = store.get('seen-version', '');
+  store.set('seen-version', v);
+  if (!last || last === v) return;
+  let r; try { r = await api('api/whatsnew'); } catch (_) { return; }
+  const lines = (r.text || '').split('\n').filter(l => l.trim());
+  const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>');
+  const dlg = document.createElement('dialog');
+  dlg.className = 'wn-dlg';
+  dlg.innerHTML = `<div class="head"><h2>🎉 You're now running GAZE ${esc(v)}</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+    <div class="body"><p class="muted" style="margin-top:0">Updated from ${esc(last)}. What's new:</p>
+      ${lines.length ? `<ul>${lines.map(l => `<li>${md(l.replace(/^-\s*/, ''))}</li>`).join('')}</ul>` : '<p>Fixes and improvements.</p>'}
+      <div class="actions"><button type="button" class="primary" data-x>Got it</button></div></div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
+  dlg.showModal();
+}
 // The header's Updates button: spins while checking; while an update is
 // installing, a ring fills with the download and the label says what it's
 // doing; a dot when a new version is ready.
 function paintUpdBtn(u) {
   const b = $('upd-btn'); if (!b) return;
   const busy = u && ['downloading', 'installing', 'restarting'].includes(u.state);
-  const pct = busy && u.state === 'downloading' && u.total ? Math.min(100, Math.round(u.done / u.total * 100)) : busy ? 100 : 0;
+  // Downloading starts at 0% (also before the size is known); installing
+  // and restarting show a full ring.
+  const pct = !busy ? 0 : u.state === 'downloading' ? (u.total ? Math.min(100, Math.round(u.done / u.total * 100)) : 0) : 100;
   b.classList.toggle('busy', !!busy);
   b.classList.toggle('ready', !busy && !!(u && u.available));
   b.style.setProperty('--upd-pct', pct + '%');
@@ -5076,6 +5116,7 @@ async function boot() {
   } else Live.ws && Live.ws.close();
   settings = null;
   await refreshStatus();
+  showWhatsNew();
   route();
 }
 const isAdmin = () => me && me.role === 'admin';

@@ -182,6 +182,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/export", get(export_clip))
         .route("/api/sprite/{id}/{kind}/{name}", get(sprite_info))
         .route("/api/sprites-ready", post(sprites_ready))
+        .route("/api/whatsnew", get(whats_new))
         .route("/api/probe", post(probe))
         .route("/api/fs", get(fs_list))
         .route("/api/fs/mkdir", post(fs_mkdir))
@@ -2466,6 +2467,21 @@ async fn refresh_alert_pictures(State(m): App, Json(r): Json<RefreshPictures>) -
         r.days.clamp(1, 90),
     ));
     Json(json!({"ok": true, "message": "Making sharper alert pictures from the recordings (see Tasks)"})).into_response()
+}
+
+/// What's new in the running version: its section of the changelog
+/// (built into GAZE), shown once after an update.
+async fn whats_new() -> Response {
+    const LOG: &str = include_str!("../CHANGELOG.md");
+    let version = env!("CARGO_PKG_VERSION");
+    let head = format!("## {version} ");
+    let text = LOG
+        .split("\n## ")
+        .map(|s| format!("## {s}"))
+        .find(|s| s.starts_with(&head) || s.starts_with(&format!("#{head}")))
+        .map(|s| s.lines().skip(1).collect::<Vec<_>>().join("\n").trim().to_string())
+        .unwrap_or_default();
+    Json(json!({ "version": version, "text": text })).into_response()
 }
 
 #[derive(Deserialize)]
