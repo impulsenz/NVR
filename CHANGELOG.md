@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.16 — November 2026
+- **Much less delay when talking**: what you say no longer builds up while the camera's speaker connects (it stayed as a delay for the whole conversation); your voice goes straight after the doorbell chime.
+- **Live sound closer to real time**: the camera's sound starts from this moment (not a few seconds back), and the player keeps itself within about a third of a second of live instead of falling behind.
+- **Instant snapshots**: 📷 Snapshot saves the full-quality picture you're looking at straight away (if the picture hasn't loaded yet, it asks the camera as before).
+- "Hold to talk" is now **Push to talk**.
+
 ## 0.6.15 — November 2026
 - **Deleted alerts stay deleted**: after **Delete footage** (or deleting an alert), alerts no longer come back a while later with a black picture. Background work that was still busy with them (faces and plates, full-quality clips, notifications, sharper pictures) now lets them go instead of saving them again.
 
