@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.29 — November 2026
+- **Alert pictures on the timelines**: above the recording bar, each AI alert now shows its actual picture, framed in the colour of its kind. Where several alerts are too close to fit, they stack into one picture with a count — click it to see them all and pick one to watch.
+- **No more red NOW lines down every row**: "now" is a single small mark on the time scale, and the part of the recording still being made has a moving striped end (like the time-lapse line while it loads).
+- **Time-lapse in the camera view fills the box**: scrubbing no longer shows bits of the next and previous pictures down the sides.
+- **Settings opens instantly**: leaving Live or Recordings now stops their background time-lapse downloads and half-loaded videos, which were holding up the browser's connections; Settings also shows straight away instead of waiting for the server.
+
 ## 0.6.28 — November 2026
 - **New look for the timelines**: the Recordings timeline and the camera view's timeline now look the same, with much more detail:
   - alerts coloured by kind — **people blue, vehicles amber, animals green, packages pink, motion orange** — each with a round symbol badge;

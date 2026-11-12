@@ -369,6 +369,7 @@ function legendHtml(kind, data) {
   const rows = data || [], segs = rows.flatMap(c => c.segments || []), evs = rows.flatMap(c => c.events || []);
   const watched = [...new Set(rows.flatMap(c => (cam(c.camera) || {}).watch || []))];
   const bars = [['<i class="lg-bar rec"></i>', 'Recording']];
+  if (segs.some(isGrowing)) bars.push(['<i class="lg-bar live"></i>', 'Recording now']);
   if (segs.some(s => s.kind === 'clip')) bars.push(['<i class="lg-bar clip"></i>', 'HD alert clip']);
   // Alerts in the colour of their kind (only kinds that are on it).
   const cats = new Set(evs.map(evCat));
@@ -552,6 +553,10 @@ function route() {
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
   if (page !== 'live' && typeof soundCam !== 'undefined' && soundCam) stopSound();
   if (page !== 'recordings') pauseAllPlayback();
+  // Leaving a page: its downloads stop (see cutPageDownloads), and videos
+  // left behind on it come back when it's shown again.
+  if (page !== lastPage) { cutPageDownloads(); lastPage = page; }
+  unparkVideos($('page-' + page));
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
   else if (page === 'system') showSystem();
@@ -559,6 +564,37 @@ function route() {
   updateSubscriptions();
 }
 window.addEventListener('hashchange', route);
+// A browser only opens a few connections (6) to the NVR at a time. The
+// time-lapse pictures of Live and Recordings (each can take a while to
+// make) and half-loaded videos kept them all busy after leaving those
+// pages, so the next page (e.g. Settings) waited seconds for its turn.
+let lastPage = null, pageNet = new AbortController();
+function cutPageDownloads() {
+  pageNet.abort(); pageNet = new AbortController();
+  tl.pfGen = (tl.pfGen || 0) + 1; camTl.pfGen++; clearTimeout(camTl.pfRetry);
+  for (const [u, e] of tl.sprites) if (!e.done) tl.sprites.delete(u);
+  for (const [u, im] of spritePages) if (!im.complete) { im._cut = true; spritePages.delete(u); im.src = ''; }
+  for (const s of PAGES) if (s !== page) parkVideos($('page-' + s));
+}
+// A paused video that's still downloading keeps its connection: let go of
+// it (where it was is kept, and it's put back when the page is shown).
+function parkVideos(root) {
+  for (const v of root.querySelectorAll('video')) {
+    if (v.dataset.parked || v.networkState !== HTMLMediaElement.NETWORK_LOADING || !v.getAttribute('src')) continue;
+    v.dataset.parked = v.getAttribute('src'); v.dataset.parkedAt = v.currentTime;
+    v.pause(); v.removeAttribute('src'); v.load();
+  }
+}
+function unparkVideos(root) {
+  if (!root) return;
+  for (const v of root.querySelectorAll('video[data-parked]')) {
+    const src = v.dataset.parked, t = +v.dataset.parkedAt || 0;
+    delete v.dataset.parked; delete v.dataset.parkedAt;
+    if (v.getAttribute('src')) continue;  // already given something new
+    v.addEventListener('loadedmetadata', () => { try { v.currentTime = t; } catch (_) {} }, {once: true});
+    v.src = src;
+  }
+}
 
 async function refreshStatus() {
   try { status = await api('api/status?device=' + deviceKind()); } catch (e) { return; }
@@ -636,9 +672,14 @@ function spriteStyle(el, sp, n, W, H, fill) {
   const a = i.aspect || i.tile_width / i.tile_height;
   const dw = fill ? W : Math.min(W, H * a), dh = fill ? H : Math.min(H, W / a);
   const ox = (W - dw) / 2, oy = (H - dh) / 2;
+  // Black bars around a picture that keeps its shape (a border, so the
+  // pictures next to it on the sheet never show at the sides).
+  el.style.boxSizing = 'border-box';
+  el.style.border = `solid #000`;
+  el.style.borderWidth = `${Math.floor(oy)}px ${Math.floor(ox)}px`;
   el.style.backgroundImage = `url("${url}")`;
   el.style.backgroundSize = `${i.columns * dw}px ${rows * dh}px`;
-  el.style.backgroundPosition = `${ox - col * dw}px ${oy - row * dh}px`;
+  el.style.backgroundPosition = `${-col * dw}px ${-row * dh}px`;
   return {ox, oy};
 }
 function preloadSprite(sp) {
@@ -1590,8 +1631,10 @@ function timeMarks(a, span, pct) {
     axis += `<i class="mj" style="left:${x}%"></i><span class="${cls}" style="left:${x}%;${shift ? 'transform:' + shift : ''}">${step >= 86400000 ? fmtDay(d) : hm + (midnight ? ' ' + fmtDay(d) : '')}</span>`;
     grid += `<i class="${midnight ? 'day' : ''}" style="left:${pct(t)}%"></i>`;
   }
+  // "Now": one small mark on the scale (the rows show it by the recording
+  // bar that's still growing).
   const nowP = pct(Date.now());
-  if (nowP >= 0 && nowP <= 100) grid += `<i class="now ${nowP > 92 ? 'end' : ''}" style="left:${nowP}%" title="Now"><em>NOW</em></i>`;
+  if (nowP >= 0 && nowP <= 100) axis += `<i class="now-ax ${nowP > 92 ? 'end' : ''}" style="left:${nowP}%" title="Now"><em>NOW</em></i>`;
   return {axis, grid};
 }
 // Hide time-scale labels that would run into each other (dates win over
@@ -1613,22 +1656,56 @@ function evCat(e) {
   const l = e.labels[0].label;
   return l === 'package' ? 'package' : (LABEL_GROUP[l] || 'other');
 }
-// Alert markers for a timeline lane: a coloured bar for how long it lasted
-// and a round badge with its symbol (left out where the same symbol is
-// right next to it, so busy times stay readable).
-function evMarks(events, pct, attrs = '') {
+// Alert markers for a timeline lane: a thin bar in the colour of the kind
+// of alert for how long it lasted, and above the recording bar the alert's
+// picture. Pictures too close to fit side by side are stacked into one with
+// a count; clicking it shows them all to choose from. `groups` collects the
+// alerts of each picture (for the click).
+function evMarks(events, pct, attrs = '', cam = '', lanePx = 800, groups = []) {
   let out = '';
-  const lastIcon = {};
   for (const e of events) {
     const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime());
     if (b < 0 || a > 100) continue;
-    const x = Math.max(0, a), icon = e.labels.length ? labelIcon(e.labels[0].label) : '';
-    const showIc = icon && !(lastIcon[icon] != null && Math.abs(lastIcon[icon] - x) < 1.2);
-    if (showIc) lastIcon[icon] = x;
+    const x = Math.max(0, a);
     const tip = e.labels.length ? e.labels.map(l => `${l.label} ${Math.round(l.score * 100)}%`).join(', ') : 'motion';
-    out += `<div class="ev cat-${evCat(e)}" style="left:${x}%;width:${Math.max(0.25, Math.min(100, b) - x)}%" title="${esc(tip)} · ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" ${attrs}>${showIc ? `<span class="ic">${icon}</span>` : ''}</div>`;
+    out += `<div class="ev cat-${evCat(e)}" style="left:${x}%;width:${Math.max(0.25, Math.min(100, b) - x)}%" title="${esc(tip)} · ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" ${attrs}></div>`;
   }
+  // Pictures of AI alerts, grouped where they'd overlap (a picture is ~50 px).
+  const step = 52 / Math.max(200, lanePx) * 100;
+  let group = null;
+  const flush = () => {
+    if (!group) return;
+    const e0 = group.evs[0], x = group.x, n = group.evs.length, gi = groups.push({cam, evs: group.evs}) - 1;
+    const shift = x > 96 ? 'transform:translateX(-100%)' : '';
+    out += `<div class="evt cat-${evCat(e0)}" data-g="${gi}" style="left:${x}%;${shift}" title="${n > 1 ? n + ' alerts — click to see them all' : esc(e0.labels.map(l => l.label).join(', ')) + ' · ' + fmtTime(e0.start) + ' — click to watch'}">`
+      + `<img loading="lazy" src="media/${enc(cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
+    group = null;
+  };
+  for (const e of events.filter(e => e.labels.length && e.thumb).sort((p, q) => new Date(p.start) - new Date(q.start))) {
+    const x = pct(new Date(e.start).getTime());
+    if (x < 0 || x > 100) continue;
+    if (group && x - group.x < step) { group.evs.push(e); continue; }
+    flush();
+    group = {x, evs: [e]};
+  }
+  flush();
   return out;
+}
+// The alert pictures of one stacked marker, to choose from.
+function openAlertPicker(anchor, g, pick) {
+  document.querySelectorAll('.evt-pop').forEach(x => x.remove());
+  const pop = document.createElement('div');
+  pop.className = 'evt-pop';
+  pop.innerHTML = g.evs.map((e, i) => `<button type="button" class="it cat-${evCat(e)}" data-i="${i}"><img src="media/${enc(g.cam)}/events/${enc(e.thumb)}" alt="">
+    <span class="cap">${e.labels.map(l => labelIcon(l.label)).join('')} ${esc(e.labels.map(l => l.label).join(', '))}<b>${fmtTime(e.start)}</b></span></button>`).join('');
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect(), pr = pop.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(innerWidth - pr.width - 8, r.left + r.width / 2 - pr.width / 2)) + 'px';
+  pop.style.top = (r.bottom + pr.height + 8 > innerHeight ? Math.max(8, r.top - pr.height - 6) : r.bottom + 6) + 'px';
+  const close = (ev) => { if (ev && pop.contains(ev.target)) return; pop.remove(); document.removeEventListener('pointerdown', close, true); document.removeEventListener('keydown', esc1); };
+  const esc1 = (ev) => { if (ev.key === 'Escape') close(); };
+  setTimeout(() => { document.addEventListener('pointerdown', close, true); document.addEventListener('keydown', esc1); });
+  pop.querySelectorAll('.it').forEach(b => b.onclick = () => { close(); pick(g.evs[+b.dataset.i]); });
 }
 const camTl = {
   id: null, data: null, zoom: 21600, end: null, loadedAt: 0, pv: new Map(), pfGen: 0,
@@ -1656,11 +1733,14 @@ const camTl = {
     $('ctl-axis').innerHTML = axis;
     declutterAxis($('ctl-axis'));
     let lane = `<div class="tl-grid">${grid}</div>`;
+    const lastRec = this.data.segments.filter(x => x.kind !== 'clip').slice(-1)[0];
     for (const sg of this.data.segments) {
-      const x0 = Math.max(0, pct(new Date(sg.start).getTime())), x1 = Math.min(100, pct(new Date(sg.end).getTime()));
-      if (x1 > 0 && x0 < 100 && x1 > x0) lane += `<div class="seg ${sg.kind === 'clip' ? 'clip' : ''}" style="left:${x0}%;width:${Math.max(0.15, x1 - x0)}%"></div>`;
+      const live = sg === lastRec && isGrowing(sg);
+      const x0 = Math.max(0, pct(new Date(sg.start).getTime())), x1 = Math.min(100, pct(live ? Date.now() : new Date(sg.end).getTime()));
+      if (x1 > 0 && x0 < 100 && x1 > x0) lane += `<div class="seg ${sg.kind === 'clip' ? 'clip' : ''} ${live ? 'live' : ''}" style="left:${x0}%;width:${Math.max(0.15, x1 - x0)}%"${live ? ' title="Recording now"' : ''}></div>`;
     }
-    lane += evMarks(this.data.events, pct);
+    this.groups = [];
+    lane += evMarks(this.data.events, pct, '', this.id, $('ctl-lane').clientWidth, this.groups);
     const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
     lb.innerHTML = lane + '<div class="head" hidden><em></em></div><div class="hover-line" hidden></div>';
     lb.appendChild(pv);
@@ -1700,6 +1780,7 @@ const camTl = {
         if (spriteBackoff(sg.url)) { missing++; continue; }
         if (!had || had.state !== 'ready') { this.pv.set(sg.url, {state: 'loading'}); this.paintStrip(); }
         const sp = await previewReady(id, sg);
+        if (gen !== this.pfGen) break;
         if (sp) this.pv.set(sg.url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
         else { missing++; if (!had || had.state !== 'ready') this.pv.set(sg.url, {state: isGrowing(sg) || (tl.sprites.get(sg.url) || {}).tries < 3 ? 'wait' : 'none'}); }
         this.paintStrip();
@@ -1732,7 +1813,7 @@ const camTl = {
     if (!sg) return;
     const sp = await spriteFor(this.id, sg);
     if (!sp || this.scrubT !== T) return;
-    if (spriteStyle(el, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), surf.clientWidth, surf.clientHeight)) el.hidden = false;
+    if (spriteStyle(el, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), surf.clientWidth, surf.clientHeight, true)) el.hidden = false;
   },
   // Play the camera's footage at time T in the camera view.
   playAt(T) {
@@ -1764,6 +1845,14 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
     if (sp) spriteStyle(im, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), 192, 108);
   };
   const down = (e) => {
+    const pic = e.target.closest('.evt');
+    if (pic && camTl.groups) {
+      e.preventDefault();
+      const g = camTl.groups[+pic.dataset.g];
+      if (g.evs.length === 1) camTl.playAt(new Date(g.evs[0].start).getTime() - 3000);
+      else openAlertPicker(pic, g, (ev) => camTl.playAt(new Date(ev.start).getTime() - 3000));
+      return;
+    }
     if (!camTl.data || markAt(e)) return;
     e.preventDefault();
     camTl.dragging = true; lane.setPointerCapture(e.pointerId);
@@ -2830,14 +2919,20 @@ function drawTimeline() {
   const box = $('tl'), W0 = tl.winStart, span = tl.zoom * 1000;
   const pct = (t) => ((t - W0) / span * 100);
   const {axis, grid} = timeMarks(W0, span, pct);
+  const lanePx = box.clientWidth - (parseFloat(getComputedStyle(box).getPropertyValue('--tl-label')) || 160);
+  tl.groups = [];
   let rows = '';
   for (const c of tl.data) {
     let lane = '';
+    // The newest recording, still being made, reaches up to now (and shows
+    // it's still being recorded).
+    const lastRec = c.segments.filter(x => x.kind !== 'clip').slice(-1)[0];
     for (const s of c.segments) {
-      const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(new Date(s.end).getTime()));
-      if (b > 0 && a < 100 && b > a) lane += `<div class="seg ${s.kind === 'clip' ? 'clip' : ''}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"></div>`;
+      const live = s === lastRec && isGrowing(s);
+      const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(s.end).getTime()));
+      if (b > 0 && a < 100 && b > a) lane += `<div class="seg ${s.kind === 'clip' ? 'clip' : ''} ${live ? 'live' : ''}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"${live ? ' title="Recording now"' : ''}></div>`;
     }
-    lane += evMarks(c.events, pct, `data-cam="${esc(c.camera)}"`);
+    lane += evMarks(c.events, pct, `data-cam="${esc(c.camera)}"`, c.camera, lanePx, tl.groups);
     const st = cam(c.camera), recOn = !!(st && st.recorder && st.recorder.state === 'recording');
     const nEv = c.events.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
     rows += `<div class="tl-row"><button type="button" class="label" data-cam="${esc(c.camera)}" title="${esc(c.name)} — show just this camera"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">${esc(c.name)}</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</button><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
@@ -2902,6 +2997,15 @@ function markAt(e) {
     // Clip start / end handles: drag to change the clip.
     const hd = e.target.closest('.tl-h');
     if (hd) { e.preventDefault(); handle = hd.classList.contains('in') ? 'in' : 'out'; box.setPointerCapture(e.pointerId); return; }
+    // An alert picture: watch it, or choose among a stack of them.
+    const pic = e.target.closest('.evt');
+    if (pic) {
+      e.preventDefault();
+      const g = tl.groups[+pic.dataset.g];
+      if (g.evs.length === 1) tlShowEvent(g.cam, new Date(g.evs[0].start).getTime());
+      else openAlertPicker(pic, g, (ev) => tlShowEvent(g.cam, new Date(ev.start).getTime()));
+      return;
+    }
     // An alert marker or symbol (the nearest to the pointer, see below):
     // watch that alert on that camera.
     const mark = markAt(e);
@@ -2962,7 +3066,7 @@ async function spriteFor(cam, seg) {
     const tries = have && have.failed ? have.tries + 1 : 0;
     const kind = {clip: 'clip', sub: 'tl'}[seg.kind] || 'rec';
     const entry = {at: now, tries, ok: have && have.ok};
-    entry.p = Promise.race([api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`), new Promise((_, no) => setTimeout(() => no(new Error('timed out')), 120000))])
+    entry.p = Promise.race([api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`, {signal: pageNet.signal}), new Promise((_, no) => setTimeout(() => no(new Error('timed out')), 120000))])
       .then(preloadSprite).catch(() => null)
       .then(sp => { entry.done = true; if (sp) { entry.ok = sp; entry.failed = false; } else spriteFailed(entry); return entry.ok || null; });
     tl.sprites.set(key, entry);
@@ -2978,9 +3082,10 @@ async function previewReady(cam, sg) {
   if (!sp) return null;
   const ok = await Promise.all([...Array(sp.info.pages).keys()].map(p => pagesDone.has(sp.url + p) ? true :
     new Promise(r => { const im = spritePage(sp.url + p);
-      const done = () => { if (im.naturalWidth) { pagesDone.add(sp.url + p); r(true); } else { spritePages.delete(sp.url + p); r(false); } };
+      const done = () => { if (im.naturalWidth) { pagesDone.add(sp.url + p); r(true); } else if (im._cut) r('cut'); else { if (spritePages.get(sp.url + p) === im) spritePages.delete(sp.url + p); r(false); } };
       if (im.complete) done(); else { im.addEventListener('load', done, {once: true}); im.addEventListener('error', done, {once: true}); } })));
-  if (ok.every(Boolean)) return sp;
+  if (ok.every(x => x === true)) return sp;
+  if (ok.includes('cut')) return null;  // page left: not a failure
   const e = tl.sprites.get(sg.url);
   if (e) { e.ok = null; e.done = true; spriteFailed(e); }
   return null;
@@ -3075,6 +3180,7 @@ async function prefetchSprites() {
       if (spriteBackoff(key)) { missing++; continue; }
       if (!had || had.state !== 'ready') { tl.pv.set(key, {state: 'loading'}); paintPreviewStrips(); }
       const sp = await previewReady(job.cam, job.sg), ok = !!sp;
+      if (gen !== tl.pfGen) break;
       if (ok) tl.pv.set(key, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
       else if (!had || had.state !== 'ready') { missing++; tl.pv.set(key, {state: isGrowing(job.sg) || (tl.sprites.get(key) || {}).tries < 3 ? 'wait' : 'none'}); }
       else missing++;
@@ -3547,7 +3653,20 @@ async function loadSettings() { [settings, cameraCfgs] = await Promise.all([api(
 async function showSettings(sec) {
   section = SECTIONS.includes(sec) ? sec : 'cameras';
   document.querySelectorAll('#side a').forEach(a => a.classList.toggle('active', a.dataset.s === section));
-  try { await loadSettings(); } catch (e) { toast(e.message, true); return; }
+  // Drawn at once from the settings already here (fetched fresh behind,
+  // and drawn again only if something changed meanwhile).
+  if (settings && cameraCfgs) {
+    const before = JSON.stringify([settings, cameraCfgs]), want = section;
+    loadSettings().then(() => {
+      if (page === 'settings' && section === want && JSON.stringify([settings, cameraCfgs]) !== before
+        && !$('settings-body').contains(document.activeElement)) drawSettings();
+    }).catch(() => {});
+  } else {
+    try { await loadSettings(); } catch (e) { toast(e.message, true); return; }
+  }
+  drawSettings();
+}
+function drawSettings() {
   camPreviewUnbind.splice(0).forEach(u => u());
   const body = $('settings-body');
   // The log view is kept, and lent to the Logs section while it's open.
