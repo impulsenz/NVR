@@ -206,6 +206,81 @@ pub struct Detector {
     quiet: Mutex<Option<(Frame, Instant)>>,
     /// Parked vehicles (no alerts until they move).
     parked: Mutex<crate::stationary::Stationary>,
+    /// The full-quality stream, for checking what the AI found (none when
+    /// the camera has no separate sub-stream: it's already the same).
+    relay_main: Option<Arc<crate::relay::Relay>>,
+    /// Things the full-quality check didn't confirm: (label, box, when).
+    /// The same thing at the same spot isn't alerted on again for a while.
+    rejected: Mutex<Vec<(String, [f32; 4], Instant)>>,
+}
+
+/// What the full-quality picture showed for an object the AI found.
+#[derive(Debug, Clone, PartialEq)]
+enum HdVerdict {
+    /// The same thing (its score in full quality).
+    Confirmed(f32),
+    /// Something else that's watched for.
+    Relabel(String, f32),
+    /// Nothing there.
+    NotSeen,
+    /// Couldn't be checked (no picture from the camera).
+    Failed,
+}
+
+/// The results of one full-quality check: event, then (label, box, verdict).
+struct HdResult {
+    event: String,
+    checks: Vec<(String, [f32; 4], HdVerdict)>,
+}
+
+/// Is `d`'s middle within box `b` (grown by half its size each way: the
+/// full-quality picture is from a moment later)?
+fn same_spot(d: &Detection, b: [f32; 4]) -> bool {
+    let (cx, cy) = (d.x + d.w / 2.0, d.y + d.h / 2.0);
+    cx >= b[0] - b[2] * 0.5 && cx <= b[0] + b[2] * 1.5 && cy >= b[1] - b[3] * 0.5 && cy <= b[1] + b[3] * 1.5
+}
+
+/// One object checked in a full-quality picture: a close-up around where
+/// the sub-stream saw it (the AI looks at a small picture: only a close-up
+/// gains from the detail).
+async fn hd_verify(ai: &crate::ai::Ai, f: &Frame, label: &str, b: [f32; 4], min_conf: f32, watched: &[String]) -> HdVerdict {
+    let (fw, fh) = (f.width as f32, f.height as f32);
+    let (cx, cy) = ((b[0] + b[2] / 2.0) * fw, (b[1] + b[3] / 2.0) * fh);
+    let cw = (b[2] * fw * 2.2).max(320.0).min(fw);
+    let ch = (b[3] * fh * 2.2).max(320.0).min(fh);
+    let (x0, y0) = ((cx - cw / 2.0).clamp(0.0, fw - cw), (cy - ch / 2.0).clamp(0.0, fh - ch));
+    let crop = crate::recog::crop(f, x0, y0, cw, ch);
+    let Ok(dets) = ai.detect(&crop).await else { return HdVerdict::Failed };
+    let (sw, sh) = (crop.width as f32, crop.height as f32);
+    let found: Vec<Detection> = dets
+        .into_iter()
+        .map(|d| Detection { x: (x0 + d.x * sw) / fw, y: (y0 + d.y * sh) / fh, w: d.w * sw / fw, h: d.h * sh / fh, ..d })
+        .filter(|d| d.score >= min_conf * 0.85 && same_spot(d, b))
+        .collect();
+    const VEHICLES: [&str; 4] = ["car", "truck", "bus", "motorcycle"];
+    let alike = |l: &str| l == label || (VEHICLES.contains(&l) && VEHICLES.contains(&label));
+    let best = |pick: &dyn Fn(&Detection) -> bool| found.iter().filter(|d| pick(d)).max_by(|a, b| a.score.total_cmp(&b.score)).cloned();
+    if let Some(d) = best(&|d| alike(&d.label)) {
+        return HdVerdict::Confirmed(d.score);
+    }
+    match best(&|d| watched.contains(&d.label)) {
+        Some(d) => HdVerdict::Relabel(d.label, d.score),
+        None => HdVerdict::NotSeen,
+    }
+}
+
+/// A full-quality picture of this moment (at most 1920 px wide).
+async fn hd_frame(relay: &crate::relay::Relay, ffmpeg: &str) -> anyhow::Result<Frame> {
+    let _connect = relay.subscribe();
+    let info = relay.wait_info(Duration::from_secs(10)).await;
+    let (sw, sh) = info
+        .and_then(|i| Some((i.width?, i.height?)))
+        .map(|(w, h)| relay.rotated(w, h))
+        .ok_or_else(|| anyhow::anyhow!("main stream size not known"))?;
+    let w = sw.min(1920).max(2) & !1;
+    let h = ((w as f32 * sh as f32 / sw.max(1) as f32).round() as u32).max(2) & !1;
+    let rgb = crate::relay::grab_rgb_live(relay, ffmpeg, w, h).await?;
+    Ok(Frame { width: w, height: h, rgb: Arc::new(rgb) })
 }
 
 struct Active {
@@ -281,6 +356,7 @@ impl Detector {
         store: Arc<EventStore>,
         buffer: Option<Arc<EventBuffer>>,
         relay: Arc<crate::relay::Relay>,
+        relay_main: Option<Arc<crate::relay::Relay>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             cam,
@@ -297,6 +373,8 @@ impl Detector {
             parked: Mutex::new(crate::stationary::Stationary::open(Some(
                 store.dir().join("parked.json"),
             ))),
+            relay_main,
+            rejected: Mutex::new(Vec::new()),
         })
     }
 
@@ -469,6 +547,7 @@ impl Detector {
         let mut motion = MotionDetector::new(w, h, MotionSettings::from(d));
         let mut peak_at = Instant::now();
         let (ai_tx, mut ai_rx) = mpsc::channel::<(Frame, Result<Vec<Detection>, AiError>)>(4);
+        let (hd_tx, mut hd_rx) = mpsc::channel::<HdResult>(8);
         let mut ai_busy = false;
         let mut last_ai = Instant::now() - Duration::from_secs(3600);
         let mut fps_count = 0u32;
@@ -485,7 +564,11 @@ impl Detector {
                 }
                 Some((frame, res)) = ai_rx.recv() => {
                     ai_busy = false;
-                    self.handle_ai(frame, res, active);
+                    self.handle_ai(frame, res, active, &hd_tx);
+                    continue;
+                }
+                Some(r) = hd_rx.recv() => {
+                    self.apply_hd(r, active);
                     continue;
                 }
                 _ = tick.tick() => {
@@ -684,6 +767,7 @@ impl Detector {
                 items: Vec::new(),
                 notified: 0,
                 suspicious: String::new(),
+                hd_checking: false,
             },
             last_activity: now,
             qualified: false,
@@ -751,6 +835,7 @@ impl Detector {
         frame: Frame,
         res: Result<Vec<Detection>, AiError>,
         active: &mut Option<Active>,
+        hd_tx: &mpsc::Sender<HdResult>,
     ) {
         let d = &self.cam.detect;
         let dets = match res {
@@ -879,6 +964,15 @@ impl Detector {
                 }
             }
         }
+        // Not confirmed in full quality a moment ago, at the same spot: still
+        // nothing (no new alert for it).
+        {
+            let mut rj = self.rejected.lock().unwrap();
+            rj.retain(|(_, _, t)| t.elapsed() < Duration::from_secs(120));
+            if !rj.is_empty() {
+                hits.retain(|h| !rj.iter().any(|(l, b, _)| *l == h.label && same_spot(h, *b)));
+            }
+        }
         // Zones: required areas, crossings, loitering.
         let mut zone_notes = Vec::new();
         if !self.cam.zones.is_empty() {
@@ -902,6 +996,7 @@ impl Detector {
         }
         a.last_activity = now;
         let mut new_labels = Vec::new();
+        let mut hd_checks: Vec<(String, [f32; 4])> = Vec::new();
         let mut changed = !a.qualified;
         for h in &hits {
             // The object's colour, measured from the pixels in its box.
@@ -921,8 +1016,10 @@ impl Detector {
                         label: h.label.clone(),
                         score: h.score,
                         color,
+                        hd: None,
                     });
                     new_labels.push(format!("{} {:.0}%", h.label, h.score * 100.0));
+                    hd_checks.push((h.label.clone(), [h.x, h.y, h.w, h.h]));
                     changed = true;
                 }
             }
@@ -959,12 +1056,114 @@ impl Detector {
         if !new_labels.is_empty() {
             info!(target: "event", "[{}] alert: {}", self.cam.name, new_labels.join(", "));
         }
+        // Something new: checked in a full-quality picture (see apply_hd).
+        if !hd_checks.is_empty()
+            && d.hd_check != "off"
+            && let Some(relay) = self.relay_main.clone()
+        {
+            a.event.hd_checking = true;
+            changed = true;
+            let (ai, tx, id, ffmpeg) = (self.ai.get(), hd_tx.clone(), a.event.id.clone(), self.env.ffmpeg_path.clone());
+            let (min_conf, watched) = (d.min_confidence, d.objects.clone());
+            tokio::spawn(async move {
+                let mut checks = Vec::new();
+                match hd_frame(&relay, &ffmpeg).await {
+                    Ok(f) => {
+                        for (label, b) in hd_checks {
+                            let v = hd_verify(&ai, &f, &label, b, min_conf, &watched).await;
+                            checks.push((label, b, v));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("full-quality check: {e:#}");
+                        checks = hd_checks.into_iter().map(|(l, b)| (l, b, HdVerdict::Failed)).collect();
+                    }
+                }
+                let _ = tx.send(HdResult { event: id, checks }).await;
+            });
+        }
         a.qualified = true;
         // Only write when something changed (the final state is saved when the event ends).
         if changed {
             self.store.save_detected(a.event.clone());
         }
         self.mark_active(a);
+    }
+
+    /// The full-quality check's answer: confirmed, something else, or not
+    /// seen (marked, or left out of the alert — the setting).
+    fn apply_hd(&self, r: HdResult, active: &mut Option<Active>) {
+        let drop = self.cam.detect.hd_check == "drop";
+        let is_active = active.as_ref().is_some_and(|a| a.event.id == r.event);
+        let Some(mut e) = (if is_active { active.as_ref().map(|a| a.event.clone()) } else { self.store.get(&r.event) }) else {
+            return;
+        };
+        let had_labels = !e.labels.is_empty();
+        for (label, b, v) in r.checks {
+            match v {
+                HdVerdict::Confirmed(s) => {
+                    if let Some(l) = e.labels.iter_mut().find(|l| l.label == label) {
+                        l.hd = Some(true);
+                        l.score = l.score.max(s);
+                    }
+                    info!(target: "event", "[{}] {label}: confirmed in full quality ({:.0}%)", self.cam.name, s * 100.0);
+                }
+                HdVerdict::Relabel(new, s) => {
+                    info!(target: "event", "[{}] {label}: a {new} in full quality ({:.0}%)", self.cam.name, s * 100.0);
+                    if e.labels.iter().any(|l| l.label == new) {
+                        e.labels.retain(|l| l.label != label);
+                        if let Some(l) = e.labels.iter_mut().find(|l| l.label == new) {
+                            l.hd = Some(true);
+                            l.score = l.score.max(s);
+                        }
+                    } else if let Some(l) = e.labels.iter_mut().find(|l| l.label == label) {
+                        l.label = new.clone();
+                        l.score = s;
+                        l.hd = Some(true);
+                    }
+                    for bx in e.boxes.iter_mut().filter(|bx| bx.label == label) {
+                        bx.label = new.clone();
+                    }
+                    e.notes.push(format!("Full-quality check: a {new}, not a {label}"));
+                }
+                HdVerdict::NotSeen => {
+                    self.rejected.lock().unwrap().push((label.clone(), b, Instant::now()));
+                    if drop {
+                        info!(target: "event", "[{}] {label}: not seen in full quality — left out", self.cam.name);
+                        e.labels.retain(|l| l.label != label);
+                        e.boxes.retain(|bx| bx.label != label);
+                    } else {
+                        info!(target: "event", "[{}] {label}: not seen in full quality — marked", self.cam.name);
+                        if let Some(l) = e.labels.iter_mut().find(|l| l.label == label) {
+                            l.hd = Some(false);
+                        }
+                    }
+                }
+                HdVerdict::Failed => {}
+            }
+        }
+        e.labels.sort_by(|x, y| y.score.total_cmp(&x.score));
+        e.hd_checking = false;
+        // Nothing left that was found: no alert.
+        let gone = drop && had_labels && e.labels.is_empty() && e.items.is_empty();
+        if gone {
+            info!(target: "event", "[{}] alert dropped: nothing confirmed in full quality", self.cam.name);
+            self.store.delete(&e.id);
+        }
+        match active.as_mut().filter(|a| a.event.id == r.event) {
+            Some(a) => {
+                a.event = e;
+                if gone {
+                    // Kept going (unsaved) in case something real turns up.
+                    a.qualified = false;
+                    a.thumb_score = -1.0;
+                } else {
+                    self.store.save_detected(a.event.clone());
+                }
+            }
+            None if !gone => self.store.save(e),
+            None => {}
+        }
     }
 
     fn save_thumb(
@@ -1094,6 +1293,7 @@ impl Detector {
                             label: "package".into(),
                             score: 1.0,
                             color: None,
+                            hd: None,
                         });
                     }
                 }

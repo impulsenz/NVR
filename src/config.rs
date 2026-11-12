@@ -634,6 +634,10 @@ pub struct DetectConfig {
     /// Objects the AI finds mostly inside the areas drawn to ignore are left
     /// out too (not only motion there), whatever started the look.
     pub ai_ignores_mask: bool,
+    /// What the AI finds in the sub-stream is checked in a full-quality
+    /// (main stream) picture: "off", "mark" (not confirmed: marked as such)
+    /// or "drop" (not confirmed: left out of the alert).
+    pub hd_check: String,
     /// Seconds without moving before something counts as parked.
     pub parked_seconds: u32,
     /// Kinds of objects that stop alerting while they stand still.
@@ -674,6 +678,7 @@ impl Default for DetectConfig {
             ignore_parked: true,
             ignore_animals: true,
             ai_ignores_mask: true,
+            hd_check: "mark".into(),
             parked_seconds: 60,
             parked_objects: crate::stationary::PARKING
                 .iter()

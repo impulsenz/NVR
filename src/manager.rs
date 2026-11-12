@@ -184,6 +184,7 @@ impl CameraRuntime {
                 events.clone(),
                 event_buffer,
                 relay_sub.clone(),
+                cfg.has_sub().then(|| relay_main.clone()),
             )
         });
         if let Some(d) = &detector {

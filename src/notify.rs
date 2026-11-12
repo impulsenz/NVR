@@ -150,7 +150,7 @@ fn what(e: &Event) -> String {
     let mut v: Vec<String> = e
         .labels
         .iter()
-        .filter(|l| l.label != "motion")
+        .filter(|l| l.label != "motion" && l.hd != Some(false))
         .map(|l| cap(&l.label))
         .collect();
     v.dedup();
@@ -314,7 +314,15 @@ impl Notifier {
                 continue;
             }
             for mut e in rt.events.between(now - chrono::Duration::minutes(15), now) {
-                if e.notified == DONE || !e.labels.iter().any(|l| n.objects.contains(&l.label)) {
+                // Only what the full-quality check didn't turn down.
+                if e.notified == DONE
+                    || !e.labels.iter().any(|l| n.objects.contains(&l.label) && l.hd != Some(false))
+                {
+                    continue;
+                }
+                // Being checked in full quality: wait for the answer (a
+                // few seconds at most).
+                if e.hd_checking && (now - e.start).num_seconds() < 20 {
                     continue;
                 }
                 // 1. The picture, right away.

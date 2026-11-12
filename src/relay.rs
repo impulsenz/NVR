@@ -680,6 +680,53 @@ pub fn feed(
     })
 }
 
+/// One RGB frame (scaled to `w`×`h`) of this moment. A new viewer of a
+/// relay first gets the last few seconds at once (from the latest keyframe):
+/// those frames come in a burst and are skipped; the first one that comes
+/// at the camera's own pace is now. (At most a few seconds.)
+pub async fn grab_rgb_live(relay: &Relay, ffmpeg: &str, w: u32, h: u32) -> anyhow::Result<Vec<u8>> {
+    let mut child: Child = crate::load::cmd(ffmpeg)
+        .args(["-hide_banner", "-loglevel", "error"])
+        .args(relay.input_args())
+        .args(["-frames:v", "400", "-vf", &format!("scale={w}:{h}"), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let stop = CancellationToken::new();
+    let _feed = feed(relay.subscribe(), child.stdin.take().unwrap(), stop.clone());
+    let mut stdout = child.stdout.take().unwrap();
+    let len = (w * h * 3) as usize;
+    let (mut frame, mut got) = (vec![0u8; len], false);
+    let started = std::time::Instant::now();
+    let r: anyhow::Result<()> = async {
+        loop {
+            let t = std::time::Instant::now();
+            let left = Duration::from_secs(8).saturating_sub(started.elapsed());
+            match tokio::time::timeout(left.max(Duration::from_millis(50)), stdout.read_exact(&mut frame)).await {
+                Ok(Ok(_)) => {
+                    // At the camera's pace (not the burst): this is now.
+                    if got && t.elapsed() > Duration::from_millis(25) {
+                        return Ok(());
+                    }
+                    got = true;
+                }
+                Ok(Err(e)) => return if got { Ok(()) } else { Err(e.into()) },
+                Err(_) => return if got { Ok(()) } else { anyhow::bail!("no picture from the camera (timed out)") },
+            }
+            if started.elapsed() > Duration::from_secs(8) {
+                return Ok(());
+            }
+        }
+    }
+    .await;
+    stop.cancel();
+    let _ = child.kill().await;
+    r?;
+    Ok(frame)
+}
+
 /// Grab one RGB frame (scaled to `w`×`h`) from a relay.
 pub async fn grab_rgb(relay: &Relay, ffmpeg: &str, w: u32, h: u32) -> anyhow::Result<Vec<u8>> {
     let mut child: Child = crate::load::cmd(ffmpeg)

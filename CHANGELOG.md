@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.37 — November 2026
+- **AI finds are checked in HD**: the AI keeps watching stream 2 (light on the computer), and when it finds something new, GAZE takes one full-quality picture from the main stream and has the AI look closely at that spot. It's either confirmed (**HD✓** on the alert), corrected (say a cat, not a dog), or not confirmed. Settings → camera → AI → **Check in full quality (HD)**: *mark* what HD doesn't confirm (shown as **HD?**, and no notification for it), *leave it out* of the alert (an alert with nothing confirmed is dropped), or *off*. Notifications wait a few seconds for the check. Needs a separate stream 2.
+
 ## 0.6.36 — November 2026
 - **Paint the package spot**: instead of dragging a box, colour in exactly where parcels are left (Settings → camera → AI), with the same paint / erase brush as the ignore areas. When an alert ends, only the painted part is compared with how it looked before, and the alert's before-and-after pictures show just that part (everything else blacked out). A box drawn before becomes painted the first time you open the camera's settings.
 

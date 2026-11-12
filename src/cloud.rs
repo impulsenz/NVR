@@ -366,6 +366,7 @@ mod tests {
             items: Vec::new(),
             notified: 0,
             suspicious: String::new(),
+            hd_checking: false,
         };
         store.save_detected(ev(
             "ev-person",
@@ -373,6 +374,7 @@ mod tests {
                 label: "person".into(),
                 score: 0.9,
                 color: None,
+                hd: None,
             }],
         ));
         store.save_detected(ev("ev-motion", vec![]));

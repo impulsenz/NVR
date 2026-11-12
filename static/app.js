@@ -185,7 +185,7 @@ function boxesHtml(ev, labels) {
   }).join('') + '</div>';
 }
 function labelTags(labels, motion) {
-  if (labels && labels.length) return labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}">${esc(l.label)} ${Math.round(l.score * 100)}%</span>`).join('');
+  if (labels && labels.length) return labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''} ${hdClass(l)}" title="${hdTip(l)}">${esc(l.label)} ${Math.round(l.score * 100)}%${hdMark(l)}</span>`).join('');
   return motion ? '<span class="tag motion">motion</span>' : '';
 }
 
@@ -362,6 +362,10 @@ function updateSubscriptions() {
 const LABEL_ICON = {person: '🚶', car: '🚗', truck: '🚚', bus: '🚌', motorcycle: '🏍️', bicycle: '🚲', dog: '🐕', cat: '🐈', bird: '🐦',
   horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', package: '📦', motion: '〰️'};
 const labelIcon = (l) => LABEL_ICON[l] || '🔷';
+// The full-quality (HD) check of what the AI found: ✓ confirmed, ? not.
+const hdMark = (l) => l.hd === true ? ' <b class="hdc">HD✓</b>' : l.hd === false ? ' <b class="hdc no">HD?</b>' : '';
+const hdClass = (l) => l.hd === false ? 'unconfirmed' : '';
+const hdTip = (l) => l.hd === true ? 'confirmed in a full-quality picture' : l.hd === false ? 'not confirmed in a full-quality picture' : 'found in stream 2';
 // What the timeline colours and symbols mean.
 // What the marks on a timeline mean: only what's on it — the kinds of
 // footage shown and the objects these cameras look for.
@@ -2601,7 +2605,7 @@ function renderRecordings() {
     card.dataset.eid = it.event ? it.event.id : '';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
-    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''}" title="${esc(l.label)} ${Math.round(l.score * 100)}%">${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
+    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''} ${hdClass(l)}" title="${esc(l.label)} ${Math.round(l.score * 100)}% — ${hdTip(l)}">${labelIcon(l.label)} ${Math.round(l.score * 100)}%${hdMark(l)}</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
     card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw" style="${zoomStyle(it.event && it.event.focus)}"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
         <div class="tags">${it.kind === 'event' && !it.seen ? '<span class="tag newtag">NEW</span>' : ''}${icons}${it.kind === 'event' && it.event.clip ? '<span class="tag">HD</span>' : ''}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small op-only" data-a="del" title="Delete">✕</button></div>
@@ -4336,6 +4340,13 @@ async function openCameraDialog(id, clone, prof) {
         <label for="d-trig">What makes an alert</label>
         <div><select id="d-trig"><option value="motion">Any motion</option><option value="objects">Only recognized objects (ignores trees, shadows, rain)</option></select>
           <label class="check" style="margin-top:6px"><input type="checkbox" id="d-animals" ${c.detect.ignore_animals !== false ? 'checked' : ''}> Check motion with AI first — no alert when it's a cat (or another animal you don't watch for)</label>
+          <label for="d-hdcheck" style="margin-top:10px">Check in full quality (HD)</label>
+          <select id="d-hdcheck">
+            <option value="mark" ${(c.detect.hd_check || 'mark') === 'mark' ? 'selected' : ''}>On — mark what HD doesn't confirm</option>
+            <option value="drop" ${c.detect.hd_check === 'drop' ? 'selected' : ''}>On — leave out what HD doesn't confirm</option>
+            <option value="off" ${c.detect.hd_check === 'off' ? 'selected' : ''}>Off</option>
+          </select>
+          <div class="hint" style="margin-top:4px">The AI watches stream 2 (light on the computer). When it finds something new, one full-quality picture from the main stream is taken and the AI looks closely at that spot: confirmed ✓, corrected (a cat, not a dog), or not confirmed — marked, or left out of the alert (no notification for it either). Needs a separate stream 2.</div>
           <div class="hint">With “Any motion”, the frames of each motion are sent to the AI before it becomes an alert. If the AI sees a cat, dog, bird… that isn't ticked above, and nothing you do watch for, the motion isn't kept on the Alerts page. Tick “cat” above to get alerts for cats.</div></div>
         <label for="d-int">AI check interval</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks while there's motion (lower = quicker to recognise, more work for the computer)</span></div>
@@ -4798,7 +4809,7 @@ function collectCamera() {
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
-      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
+      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), hd_check: val('d-hdcheck'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
       parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgCells.some(x => x), package_mask: encodeCells(pkgCells), package_area: []},
   };
 }
@@ -5017,7 +5028,7 @@ function applyProfile(p) {
   set('d-travel', d.min_travel_px); set('d-ai', d.ai); set('d-conf', Math.round(d.min_confidence * 100));
   if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
-  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-mask-ai', d.ai_ignores_mask !== false); set('d-parked-s', d.parked_seconds || 60);
+  set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-hdcheck', d.hd_check || 'mark'); set('d-mask-ai', d.ai_ignores_mask !== false); set('d-parked-s', d.parked_seconds || 60);
   if (d.parked_objects) document.querySelectorAll('#d-parked-objs input').forEach(i => i.checked = d.parked_objects.includes(i.value));
   // Let the form update anything that depends on these (hidden sections, hints).
   for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select, [data-tab=ai] input, [data-tab=ai] select')) el.dispatchEvent(new Event('change', {bubbles: true}));

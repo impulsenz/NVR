@@ -14,6 +14,9 @@ pub struct Label {
     /// Main colour of the object ("red", "white"...), for search.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Checked in a full-quality picture: confirmed (true) or not (false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hd: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -69,6 +72,10 @@ pub struct Event {
     /// Why this looks suspicious (empty = not suspicious).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub suspicious: String,
+    /// What the AI found is being checked in a full-quality picture
+    /// (notifications wait for it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hd_checking: bool,
 }
 
 fn is_zero(n: &u8) -> bool {
@@ -359,12 +366,14 @@ mod tests {
             items: Vec::new(),
             notified: 0,
             suspicious: String::new(),
+            hd_checking: false,
         };
         s.save_detected(e.clone());
         e.labels.push(Label {
             label: "person".into(),
             score: 0.9,
             color: None,
+            hd: None,
         });
         s.save(e.clone());
         let s2 = EventStore::open(&dir);
