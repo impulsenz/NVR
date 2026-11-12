@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.32 — November 2026
+- **Time-lapse scrubbing on Main stream (HD)**: dragging through Recordings with Main stream chosen now shows the time-lapse pictures, as it does on Sub-stream. The HD alert clips have no time-lapse of their own, so their moments show the 24/7 recording's pictures (the blue line).
+
 ## 0.6.31 — November 2026
 - **Ignore areas count for the AI too**: something the AI finds mostly inside the areas you painted to ignore (say a car parked behind the trees) no longer makes an alert — even when something else set off the check — and isn't boxed on the alert's HD picture either. A new tick box under the ignore areas, **"AI ignores these areas too"** (on by default), turns this off if you still want AI alerts there.
 - **Solid timeline bars**: recordings that follow each other are one continuous green bar (no gaps or rounded ends every 5 minutes), and the blue time-lapse line is solid too.

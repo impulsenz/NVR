@@ -3327,9 +3327,13 @@ function previewAll() {
     }
     // The last moments (newer than the preview): the live picture.
     if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; continue; }
-    spriteFor(c.camera, s).then(info => {
+    // The time-lapse is of the 24/7 recording (the blue line), whichever
+    // stream is chosen: on Main stream the HD alert clips have none of their
+    // own, so their moments show the 24/7 recording's pictures.
+    const ps = previewSources(c.segments).find(x => new Date(x.start).getTime() <= T && T < (isGrowing(x) ? Date.now() : new Date(x.end).getTime()) + 1000) || s;
+    spriteFor(c.camera, ps).then(info => {
       if (!info || tl.T !== T) return;
-      const off = (T - new Date(s.start).getTime()) / 1000;
+      const off = (T - new Date(ps.start).getTime()) / 1000;
       if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) sp.hidden = false;
     });
   }
