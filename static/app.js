@@ -138,7 +138,18 @@ function toast(msg, isError) {
 
 function fullscreen(el) {
   if (document.fullscreenElement) document.exitFullscreen();
-  else (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el);
+  else goFullscreen(el);
+}
+// A camera on the Live grid goes full screen as its camera view, with the
+// timeline that slides up from the bottom; leaving full screen goes back
+// to the grid.
+function goFullscreen(el) {
+  if (el.classList.contains('tile') && el.closest('#dash') && el.dataset.id && typeof route === 'function') {
+    fsFromTile = true;
+    location.hash = '#live/' + enc(el.dataset.id); route();
+    el = $('focus-surface');
+  }
+  (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el)?.catch?.(() => {});
 }
 // Double-click any video picture: full screen; double-click again: back to
 // how it was (also inside the full-screen video wall or recordings view,
@@ -149,7 +160,7 @@ document.addEventListener('dblclick', (e) => {
   e.preventDefault();
   window.getSelection && window.getSelection().removeAllRanges();
   if (document.fullscreenElement === s) document.exitFullscreen().catch(() => {});
-  else (s.requestFullscreen || s.webkitRequestFullscreen || (() => {})).call(s);
+  else goFullscreen(s);
 });
 // "Connecting…" for at most 30 s, then "Camera offline" (red) until a
 // picture arrives.
@@ -3301,7 +3312,7 @@ function drawTimeline() {
   const pct = (t) => ((t - W0) / span * 100);
   paintQualityChoice();
   const {axis, grid} = timeMarks(W0, span, pct);
-  const lanePx = box.clientWidth - (parseFloat(getComputedStyle(box).getPropertyValue('--tl-label')) || 160);
+  const lw = parseFloat(getComputedStyle(box).getPropertyValue('--tl-label')), lanePx = box.clientWidth - (isNaN(lw) ? 160 : lw);
   tl.groups = [];
   let rows = '';
   // In full screen: only the camera shown (more room for the picture).
@@ -3373,8 +3384,7 @@ document.addEventListener('fullscreenchange', () => {
   document.querySelectorAll('.surface.fs-panel').forEach(x => { if (x !== fe) x.classList.remove('fs-panel'); });
   // Left the camera view opened from a grid camera in full screen: out of
   // the grid camera's full screen too.
-  if (fsFromTile && fe && fe.classList.contains('tile')) { fsFromTile = false; document.exitFullscreen().catch(() => {}); return; }
-  if (!fe) fsFromTile = false;
+  if (!fe && fsFromTile) { fsFromTile = false; if (location.hash.startsWith('#live/')) { location.hash = '#live'; route(); } }
   // (The alert player has its own controls; the camera view gets its
   // timeline also while it plays something back.)
   if (!fe || !fe.classList.contains('surface') || (fe.querySelector('.pov') && fe.id !== 'focus-surface')) return;
@@ -3472,7 +3482,9 @@ function liveFsBar(el, camId) {
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
       <a class="btn p-file play-only" title="Download the whole recording file">⇩ File</a>
-      ${inView ? '<button type="button" class="p-golive play-only" title="Back to the live picture">● Back to live</button>' : '<button type="button" class="p-tl" title="Scrub back through this camera\'s footage">⏪ Timeline</button>'}
+      ${inView ? `<button type="button" class="p-golive play-only" title="Back to the live picture">● Back to live</button>
+      <select class="p-zoom" title="Zoom">${[...$('ctl-zoom').options].map(o => `<option value="${o.value}" ${o.value === $('ctl-zoom').value ? 'selected' : ''}>${o.textContent}</option>`).join('')}</select>
+      <button type="button" class="p-left" title="Earlier">◀</button><button type="button" class="p-right" title="Later">▶</button>` : ''}
       <button type="button" class="p-fs" title="Leave full screen">⛶</button>
     </div>`;
   el.appendChild(bar); el.classList.add('has-pov');
@@ -3492,15 +3504,11 @@ function liveFsBar(el, camId) {
     q('.p-pback').onclick = () => focusPlayer.stepFrame(-1);
     q('.p-pfwd').onclick = () => focusPlayer.stepFrame(1);
     q('.p-pspeed').onchange = (e) => { const s = pq('.p-speed'); if (s) { s.value = e.target.value; s.dispatchEvent(new Event('change')); } };
+    q('.p-zoom').onchange = (e) => { $('ctl-zoom').value = e.target.value; $('ctl-zoom').dispatchEvent(new Event('change')); };
+    q('.p-left').onclick = () => $('ctl-left').click();
+    q('.p-right').onclick = () => $('ctl-right').click();
     slidePanel(el, bar, () => !!camTl.dragging);
   } else {
-    // A camera on the grid: its own view in full screen, with the timeline.
-    q('.p-tl').onclick = () => {
-      fsFromTile = true;
-      location.hash = '#live/' + enc(camId); route();
-      const fs = $('focus-surface');
-      (fs.requestFullscreen || fs.webkitRequestFullscreen).call(fs).catch(() => {});
-    };
     fsIdle(el, bar);
   }
   const p2 = (n) => String(n).padStart(2, '0'), stamp = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}`;
@@ -3548,8 +3556,8 @@ function liveFsBar(el, camId) {
 }
 // The clip buttons, named the same on every player and timeline.
 const CLIP_IN = '[ Clip start', CLIP_OUT = 'Clip end ]';
-// A grid camera switched to its camera view in full screen (⏪ Timeline):
-// leaving full screen leaves both at once.
+// A grid camera shown full screen as its camera view: leaving full screen
+// goes back to the grid.
 let fsFromTile = false;
 
 // The alert marker of the timeline row under the pointer that is nearest

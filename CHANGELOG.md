@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.48 — November 2026
+- **Full-screen timeline uses the whole width**: the camera name column is gone, so the time line runs edge to edge.
+- **Live cameras go straight to the slide-up timeline**: full screen on a Live grid camera (double-click or ⛶) now opens it in full screen with the same timeline as Recordings — move the mouse to the bottom of the screen and it slides up. The ⏪ Timeline button is gone. Leaving full screen goes back to the grid.
+- **One look for both**: the live full-screen timeline has the same height, zoom and ◀ ▶ buttons in its toolbar as the Recordings one.
+
 ## 0.6.47 — November 2026
 - **One toolbar in full screen, on every video**: the old controls across the bottom of the picture are gone. Play/pause, −1/+1 frame, speed, clip start and end, ⇩ File and Back to live are all in the toolbar under the full-screen timeline.
 - **Timeline in live full screen**: a camera's live view in full screen has its timeline in the slide-up panel — drag back to watch what happened, then Back to live. A full-screen tile on the Live grid has a **⏪ Timeline** button that opens it.

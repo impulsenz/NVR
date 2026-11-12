@@ -1090,7 +1090,7 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .fspov.livebar .play-only { display: none; }
 .fspov.livebar.playing .play-only { display: inline-flex; }
 .fspov.livebar.playing .live-only { display: none; }
-.fspov.tl-panel #cam-tl > .row h2 { visibility: hidden; }
+.fspov.tl-panel #cam-tl > .row { display: none; }
 .fspov.tl-panel #cam-tl .legend { display: none; }
 /* a clip mark on its own (start or end set, not yet both) */
 .tl-mark1 { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--amber); box-shadow: 0 0 8px rgba(245,158,11,.7); z-index: 3; pointer-events: none; }
@@ -1121,3 +1121,7 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 }
 #f-refresh .rf-t { display: none; } #page-recordings.tl-mode #f-refresh .rf-t { display: inline; }
 .ptz-msg:empty { display: none; }
+/* Full screen: the timeline uses the whole width (no camera name column) */
+.fspov #tl { --tl-label: 0px; }
+.fspov #tl .tl-row .label { display: none; }
+.fspov #cam-tl .ctl-lane { height: 66px; border-radius: 0; } .fspov #cam-tl .ctl-axis { height: 30px; }
