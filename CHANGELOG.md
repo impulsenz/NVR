@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.11 — November 2026
+- **Camera settings close straight away**: the window closes as soon as you press **Save camera**, and the camera is saved (and its video restarted) in the background — "Camera updated" appears when done. If the settings are refused, the window comes back with what you typed and the reason. Moving recordings to a new folder still waits until it's done.
+
 ## 0.6.10 — November 2026
 - **See how far "Object must travel" is**: camera → Motion now draws a green ring on the camera picture showing how far something's centre has to move before it counts, and it changes as you type the number (like the blue box for the minimum object size).
 
