@@ -154,6 +154,8 @@ pub struct StorageConfig {
     /// Prepare the timeline's time-lapse previews for the last 24 hours in
     /// the background, so scrubbing is instant.
     pub prebuild_timelapse: bool,
+    /// Time-lapse previews: seconds between pictures (1–120).
+    pub timelapse_seconds: u32,
 }
 
 impl Default for StorageConfig {
@@ -165,6 +167,7 @@ impl Default for StorageConfig {
             max_storage_gb: 0.0,
             min_free_gb: 5.0,
             prebuild_timelapse: true,
+            timelapse_seconds: 10,
         }
     }
 }
@@ -1252,6 +1255,9 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         let s = &self.storage;
+        if !(1..=120).contains(&s.timelapse_seconds) {
+            bail!("time-lapse: one picture every 1 to 120 seconds");
+        }
         if s.segment_seconds < 10 || s.segment_seconds > MAX_SEGMENT_SECONDS {
             bail!("file length must be between 10 seconds and 24 hours");
         }

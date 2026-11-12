@@ -722,25 +722,25 @@ pub async fn sprite(
     ffmpeg: &str,
     file: &std::path::Path,
     prefix: &std::path::Path,
-    dense: bool,
+    interval: f64,
     hw: &[String],
 ) -> Result<SpriteInfo> {
     // On the graphics card when one is set up (Settings → GPU acceleration);
     // the processor if that fails for this file.
     if !hw.is_empty() {
-        match sprite_with(ffmpeg, file, prefix, dense, hw).await {
+        match sprite_with(ffmpeg, file, prefix, interval, hw).await {
             Ok(i) => return Ok(i),
             Err(e) => tracing::debug!("preview on the GPU failed ({e:#}); using the processor"),
         }
     }
-    sprite_with(ffmpeg, file, prefix, dense, &[]).await
+    sprite_with(ffmpeg, file, prefix, interval, &[]).await
 }
 
 async fn sprite_with(
     ffmpeg: &str,
     file: &std::path::Path,
     prefix: &std::path::Path,
-    dense: bool,
+    interval: f64,
     hw: &[String],
 ) -> Result<SpriteInfo> {
     use tokio::io::AsyncReadExt;
@@ -748,10 +748,9 @@ async fn sprite_with(
     const PER_PAGE: u32 = 100;
     let (tw, th) = (256u32, 144u32);
     let duration = duration(ffmpeg, file).await.unwrap_or(0.0);
-    // One picture every 10 seconds (light on the computer), from keyframes
-    // only for full-quality files.
-    let _ = dense;
-    let interval = 10.0;
+    // One picture every `interval` seconds (Settings → Recording & storage),
+    // from keyframes only (light on the computer).
+    let interval = interval.max(1.0);
     let aspect = display_aspect(ffmpeg, file).await.unwrap_or(16.0 / 9.0);
     let vf = format!("fps=1/{interval},scale={tw}:{th}");
     let mut command = crate::load::cmd(ffmpeg);

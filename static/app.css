@@ -677,7 +677,9 @@ ol.steps code { user-select: all; }
 .cam-nav { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; margin-right: 8px; }
 
 /* Update notice: slides down under the header (pushes the page, covers nothing). */
-.upd-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 18px; max-height: 0; overflow: hidden; position: relative;
+/* Stays under the header while the page scrolls (on phones, where the
+   header is at the bottom, at the top of the screen). */
+.upd-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 18px; max-height: 0; overflow: hidden; position: sticky; top: 52px; z-index: 19;
   background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 26%, var(--panel)), color-mix(in srgb, var(--accent) 8%, var(--panel)) 70%);
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 6px 18px -12px rgba(0,0,0,.6);
   transition: max-height .35s ease, padding .35s ease; font-size: 14px; }
@@ -886,3 +888,4 @@ table.where td:first-child { width: 44px; }
 .prof { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .prof .row { gap: 6px; }
 .profile-mode .profile-bar { display: none; }
+@media (max-width: 760px) { .upd-bar { top: 0; } }

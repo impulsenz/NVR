@@ -181,6 +181,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/timeline", get(timeline))
         .route("/api/export", get(export_clip))
         .route("/api/sprite/{id}/{kind}/{name}", get(sprite_info))
+        .route("/api/sprites-ready", post(sprites_ready))
         .route("/api/probe", post(probe))
         .route("/api/fs", get(fs_list))
         .route("/api/fs/mkdir", post(fs_mkdir))
@@ -1818,12 +1819,13 @@ pub const TIMELAPSE: bool = true;
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
 /// The preview's description is of the current kind (pictures stored in
-/// their own shape).
-fn sprite_meta_current(meta: &std::path::Path) -> bool {
+/// their own shape, one every `interval` seconds as set): otherwise it's
+/// made again.
+fn sprite_meta_current(meta: &std::path::Path, interval: u32) -> bool {
     std::fs::read(meta)
         .ok()
         .and_then(|b| serde_json::from_slice::<ffmpeg::SpriteInfo>(&b).ok())
-        .is_some_and(|i| i.aspect > 0.0)
+        .is_some_and(|i| i.aspect > 0.0 && (i.interval - interval as f64).abs() < 0.01)
 }
 
 fn fresh(cache: &std::path::Path, src: &std::path::Path) -> bool {
@@ -1871,8 +1873,9 @@ async fn ensure_sprite(
     let first = dir.join(format!("{name}.sprite-000.jpg"));
     let meta = dir.join(format!("{name}.sprite.json"));
     // Previews from before pictures were stored in their own shape are made again.
+    let every = m.config().storage.timelapse_seconds;
     let load = || -> Option<ffmpeg::SpriteInfo> {
-        sprite_meta_current(&meta)
+        sprite_meta_current(&meta, every)
             .then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok())
             .flatten()
     };
@@ -1912,7 +1915,7 @@ async fn ensure_sprite(
     let page = |p: &std::path::Path, n: u32| PathBuf::from(format!("{}-{n:03}.jpg", p.display()));
     let cfg = m.config();
     let hw = ffmpeg::decode_args(&cfg.hardware, false);
-    let made = ffmpeg::sprite(&cfg.server.ffmpeg_path, &src, &staging, kind == "tl", &hw).await;
+    let made = ffmpeg::sprite(&cfg.server.ffmpeg_path, &src, &staging, cfg.storage.timelapse_seconds as f64, &hw).await;
     let info = match (made, before) {
         // Fewer pictures than before (the end of a file being written
         // couldn't be read this time), or none at all: keep the older one.
@@ -1953,7 +1956,7 @@ static PREBUILD_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static PREBUILD_FORCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A file's time-lapse preview is made and up to date.
-fn preview_ready(c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> bool {
+fn preview_ready(c: &crate::manager::CameraRuntime, kind: &str, name: &str, every: u32) -> bool {
     let Ok(src) = media_path(c, kind, name) else {
         return false;
     };
@@ -1963,7 +1966,7 @@ fn preview_ready(c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> b
         .join(".thumbs")
         .join(format!("{name}.sprite-000.jpg"));
     let meta = first.with_file_name(format!("{name}.sprite.json"));
-    fresh(&first, &src) && sprite_meta_current(&meta)
+    fresh(&first, &src) && sprite_meta_current(&meta, every)
 }
 
 type PreviewTodo = (
@@ -2007,7 +2010,8 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
             }
         }
     }
-    todo.retain(|(c, kind, name, ..)| media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name));
+    let every = m.config().storage.timelapse_seconds;
+    todo.retain(|(c, kind, name, ..)| media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name, every));
     todo.sort_by(|a, b| b.3.cmp(&a.3));
     todo
 }
@@ -2108,7 +2112,8 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                     ));
                     // Let people scrubbing the timeline go first — the preview
                     // may be made for them meanwhile: then it counts as done.
-                    let ready = || preview_ready(c, kind, name);
+                    let every = m.config().storage.timelapse_seconds;
+                    let ready = || preview_ready(c, kind, name, every);
                     while THUMB_JOBS.available_permits() < 3 && !ready() {
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
@@ -2461,6 +2466,43 @@ async fn refresh_alert_pictures(State(m): App, Json(r): Json<RefreshPictures>) -
         r.days.clamp(1, 90),
     ));
     Json(json!({"ok": true, "message": "Making sharper alert pictures from the recordings (see Tasks)"})).into_response()
+}
+
+#[derive(Deserialize)]
+struct ReadyReq {
+    camera: String,
+    /// (kind, file name) of each file.
+    files: Vec<(String, String)>,
+}
+
+/// Which of these files already have their time-lapse preview made (and
+/// its details), in one go — nothing is made here. The timeline asks this
+/// when it opens, so previews made before show at once after a reload.
+async fn sprites_ready(State(m): App, Json(r): Json<ReadyReq>) -> Response {
+    if !TIMELAPSE {
+        return Json(json!({})).into_response();
+    }
+    let c = camera!(m, r.camera);
+    let every = m.config().storage.timelapse_seconds;
+    let mut out = serde_json::Map::new();
+    for (kind, name) in r.files.into_iter().take(2000) {
+        if !preview_ready(&c, &kind, &name, every) {
+            continue;
+        }
+        let Ok(src) = media_path(&c, &kind, &name) else { continue };
+        let meta = src.parent().unwrap().join(".thumbs").join(format!("{name}.sprite.json"));
+        let Some(info) = std::fs::read(&meta)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<ffmpeg::SpriteInfo>(&b).ok())
+        else {
+            continue;
+        };
+        out.insert(
+            format!("{kind}/{name}"),
+            json!({"info": info, "url": format!("media/{}/sprite/{kind}/{name}?v={}&page=", c.cfg.id, info.version)}),
+        );
+    }
+    Json(serde_json::Value::Object(out)).into_response()
 }
 
 async fn sprite_info(

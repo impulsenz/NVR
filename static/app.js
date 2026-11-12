@@ -1633,7 +1633,10 @@ const camTl = {
     for (const sg of this.sources()) {
       const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
       const st = this.pv.get(sg.url) || {state: 'wait'};
-      const end = st.state === 'ready' && st.secs ? Math.min(Math.max(s1, isGrowing(sg) ? Date.now() : s1), s0 + st.secs * 1000) : s1;
+      // A finished file's preview covers the whole file (its last picture can
+      // be up to one step before the end); a file still being recorded, up
+      // to its newest picture and one step more.
+      const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
       const x0 = Math.max(0, pct(s0)), x1 = Math.min(100, pct(end));
       if (x1 > 0 && x0 < 100 && x1 > x0) h += `<i class="s-${st.state}" style="left:${x0}%;width:${Math.max(x1 - x0, 0.15)}%"></i>`;
     }
@@ -1643,6 +1646,9 @@ const camTl = {
   async prefetch() {
     if (!TIMELAPSE) return;
     const gen = ++this.pfGen, id = this.id;
+    await knownPreviews(id, this.sources(), this.pv);
+    if (gen !== this.pfGen || id !== this.id) return;
+    this.paintStrip();
     const todo = this.sources().slice().sort((x, y) => new Date(y.start) - new Date(x.start)).slice(0, 300);
     let i = 0, missing = 0;
     const worker = async () => {
@@ -1652,7 +1658,7 @@ const camTl = {
         if (spriteBackoff(sg.url)) { missing++; continue; }
         if (!had || had.state !== 'ready') { this.pv.set(sg.url, {state: 'loading'}); this.paintStrip(); }
         const sp = await previewReady(id, sg);
-        if (sp) this.pv.set(sg.url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval});
+        if (sp) this.pv.set(sg.url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
         else { missing++; if (!had || had.state !== 'ready') this.pv.set(sg.url, {state: isGrowing(sg) || (tl.sprites.get(sg.url) || {}).tries < 3 ? 'wait' : 'none'}); }
         this.paintStrip();
       }
@@ -2943,6 +2949,21 @@ async function previewReady(cam, sg) {
   if (e) { e.ok = null; e.done = true; spriteFailed(e); }
   return null;
 }
+// Previews already made for these files, asked in one go (nothing is made):
+// they show as ready at once, e.g. after the page is reloaded.
+async function knownPreviews(cam, segs, pv) {
+  const kindOf = (sg) => ({clip: 'clip', sub: 'tl'}[sg.kind] || 'rec');
+  const want = segs.filter(sg => { const e = tl.sprites.get(sg.url); return !(e && e.ok); });
+  if (!TIMELAPSE || !want.length) return;
+  let r = {};
+  try { r = await api('api/sprites-ready', {method: 'POST', json: {camera: cam, files: want.map(sg => [kindOf(sg), sg.name])}}); } catch (_) { return; }
+  for (const sg of want) {
+    const sp = r[kindOf(sg) + '/' + sg.name]; if (!sp) continue;
+    preloadSprite(sp);
+    tl.sprites.set(sg.url, {at: Date.now(), done: true, ok: sp, p: Promise.resolve(sp), tries: 0});
+    pv.set(sg.url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
+  }
+}
 function spriteFailed(entry) {
   entry.failed = true;
   entry.retryAt = Date.now() + Math.min(300000, 5000 * 2 ** Math.min(entry.tries || 0, 6));
@@ -2975,7 +2996,10 @@ function paintPreviewStrips() {
     for (const sg of previewSources(c.segments)) {
       const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
       const st = (tl.pv && tl.pv.get(sg.url)) || {state: 'wait'};
-      const end = st.state === 'ready' && st.secs ? Math.min(Math.max(s1, isGrowing(sg) ? Date.now() : s1), s0 + st.secs * 1000) : s1;
+      // A finished file's preview covers the whole file (its last picture can
+      // be up to one step before the end); a file still being recorded, up
+      // to its newest picture and one step more.
+      const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
       const a = Math.max(0, pct(s0)), b = Math.min(100, pct(end));
       if (b <= 0 || a >= 100 || b <= a) continue;
       h += `<i class="s-${st.state}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"></i>`;
@@ -2983,9 +3007,19 @@ function paintPreviewStrips() {
     el.innerHTML = h;
   }
 }
-function prefetchSprites() {
+async function prefetchSprites() {
   if (!TIMELAPSE) return;
   const gen = tl.pfGen = (tl.pfGen || 0) + 1;
+  tl.pv = tl.pv || new Map();
+  {
+    const a0 = tl.winStart, b0 = a0 + tl.zoom * 1000;
+    for (const c of tl.data) {
+      const segs = previewSources(c.segments).filter(sg => new Date(sg.end).getTime() >= a0 && new Date(sg.start).getTime() <= b0);
+      await knownPreviews(c.camera, segs, tl.pv);
+    }
+    if (gen !== tl.pfGen) return;
+    paintPreviewStrips();
+  }
   const a = tl.winStart, b = a + tl.zoom * 1000;
   const list = [];
   for (const c of tl.data) for (const sg of previewSources(c.segments)) {
@@ -3005,7 +3039,7 @@ function prefetchSprites() {
       if (spriteBackoff(key)) { missing++; continue; }
       if (!had || had.state !== 'ready') { tl.pv.set(key, {state: 'loading'}); paintPreviewStrips(); }
       const sp = await previewReady(job.cam, job.sg), ok = !!sp;
-      if (ok) tl.pv.set(key, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval});
+      if (ok) tl.pv.set(key, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
       else if (!had || had.state !== 'ready') { missing++; tl.pv.set(key, {state: isGrowing(job.sg) || (tl.sprites.get(key) || {}).tries < 3 ? 'wait' : 'none'}); }
       else missing++;
       paintPreviewStrips();
@@ -4570,6 +4604,8 @@ async function renderStorage(body) {
     <label for="s-free">Keep free on disk</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
     <span ${TIMELAPSE ? '' : 'hidden'}></span><div ${TIMELAPSE ? '' : 'hidden'}><label class="check"><input type="checkbox" id="s-tl" ${s.prebuild_timelapse !== false ? 'checked' : ''}> Prepare time-lapse previews for the last 24 hours automatically</label>
       <div class="hint">The timeline's scrub previews are made in the background (newest first, a little CPU), so they appear instantly. Older days are still made when you open them.</div></div>
+    <label for="s-tlsec" ${TIMELAPSE ? '' : 'hidden'}>Time-lapse pictures</label><div ${TIMELAPSE ? '' : 'hidden'}><div class="row"><span class="muted">one every</span><input type="number" id="s-tlsec" min="1" max="120" value="${s.timelapse_seconds || 10}" style="width:90px"><span class="muted">seconds</span><span class="muted" id="s-tlsec-info"></span></div>
+      <div class="hint">Fewer seconds: smoother scrubbing, more work for the computer and more space for the previews. Changing it makes the previews again at the new rate (in the background, newest first).</div></div>
   </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>
   <div class="card"><h2>Where each camera saves</h2>
     <table><thead><tr><th>Camera</th><th>Folder</th><th class="hide-sm">Stored</th><th></th></tr></thead><tbody>
@@ -4579,12 +4615,14 @@ async function renderStorage(body) {
     </tbody></table>
     <div class="hint">Changing a folder can move the camera's existing recordings too. Moving to another drive copies the files, which can take a while; the camera pauses recording during the move.</div></div>`;
   $('s-dir').oninput = () => $('s-move-row').hidden = val('s-dir').trim() === s.dir;
+  const tlInfo = () => { const n = Math.min(120, Math.max(1, +val('s-tlsec') || 10)); $('s-tlsec-info').textContent = `— ${Math.ceil(300 / n)} pictures per 5 minutes of video`; };
+  $('s-tlsec').oninput = tlInfo; tlInfo();
   $('s-browse').onclick = async () => { const p = await pickFolder(val('s-dir'), 'Default recordings folder'); if (p) { $('s-dir').value = p; $('s-dir').oninput(); } };
   $('f-storage').onsubmit = async (e) => {
     e.preventDefault();
     const moving = !$('s-move-row').hidden && chk('s-move');
     if (moving) toast('Saving and moving recordings… this can take a while for large folders.');
-    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), prebuild_timelapse: chk('s-tl')}});
+    await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), prebuild_timelapse: chk('s-tl'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10))}});
     renderStorage(body);
   };
   const changeCam = async (id, dir) => {
