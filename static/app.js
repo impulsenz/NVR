@@ -370,8 +370,11 @@ function legendHtml(kind, data) {
   const watched = [...new Set(rows.flatMap(c => (cam(c.camera) || {}).watch || []))];
   const bars = [['<i class="lg-bar rec"></i>', 'Recording']];
   if (segs.some(s => s.kind === 'clip')) bars.push(['<i class="lg-bar clip"></i>', 'HD alert clip']);
-  if (kind === 'tl' && evs.some(e => e.labels.length)) bars.push(['<i class="lg-bar ev"></i>', 'Alert (AI)']);
-  if (evs.some(e => !e.labels.length)) bars.push([kind === 'tl' ? '<i class="lg-bar mo"></i>' : '<i class="lg-tick"></i>', 'Motion only']);
+  // Alerts in the colour of their kind (only kinds that are on it).
+  const cats = new Set(evs.map(evCat));
+  for (const [k, t] of [['person', 'People'], ['vehicle', 'Vehicles'], ['animal', 'Animals'], ['package', 'Packages'], ['other', 'Other'], ['motion', 'Motion only']])
+    if (cats.has(k)) bars.push([`<i class="lg-bar ev cat-${k}"></i>`, t]);
+  if (TIMELAPSE) bars.push(['<i class="lg-bar tlr"></i>', 'Time-lapse ready']);
   return bars.map(([i, t]) => `<span>${i}${t}</span>`).join('')
     + (watched.length ? '<span class="lg-sep"></span>' + watched.map(o => `<span>${labelIcon(o)} ${esc(o)}</span>`).join('') : '');
 }
@@ -1563,21 +1566,69 @@ let ptzMove = null, ptzStop = null;
 // the camera's picture, let go to play from there; a strip shows which
 // parts of the time-lapse are loaded.
 // Time marks for a window: labels, small ticks between, and grid lines.
+// The time scale shared by every timeline: labels and ticks, faint bands
+// for every other interval, a line at midnight and the "now" line.
 function timeMarks(a, span, pct) {
   const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map(x => x * 1000);
   const step = steps.find(x => span / x <= 12) || 86400000;
   const minor = step / ([120000, 600000, 1800000, 7200000].includes(step) ? 4 : [10800000, 43200000].includes(step) ? 3 : step === 86400000 ? 4 : 5);
   let axis = '', grid = '';
+  // Bands: every other major interval slightly lighter.
+  for (let t = Math.floor(a / step) * step; t < a + span; t += step) {
+    if (Math.round(t / step) % 2) continue;
+    const x0 = Math.max(0, pct(t)), x1 = Math.min(100, pct(t + step));
+    if (x1 > x0) grid += `<b class="band" style="left:${x0}%;width:${x1 - x0}%"></b>`;
+  }
   for (let t = Math.ceil(a / minor) * minor; t <= a + span; t += minor) {
-    const major = Math.abs(t % step) < 1 || (step >= 86400000 && new Date(t).getHours() === 0 && new Date(t).getMinutes() === 0);
+    const d = new Date(t), midnight = d.getHours() === 0 && d.getMinutes() === 0;
+    const major = Math.abs(t % step) < 1 || (step >= 86400000 && midnight);
     if (!major) { axis += `<i class="mn" style="left:${pct(t)}%"></i>`; continue; }
-    const d = new Date(t), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-    axis += `<i class="mj" style="left:${pct(t)}%"></i><span style="left:${pct(t)}%">${step >= 86400000 ? fmtDay(d) : hm + (hm === '00:00' ? ' ' + fmtDay(d) : '')}</span>`;
-    grid += `<i style="left:${pct(t)}%"></i>`;
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const cls = midnight ? 'day' : d.getMinutes() === 0 ? 'hr' : '';
+    // Labels near either end stay inside the timeline.
+    const x = pct(t), shift = x < 6 ? 'translateX(0)' : x > 94 ? 'translateX(-100%)' : '';
+    axis += `<i class="mj" style="left:${x}%"></i><span class="${cls}" style="left:${x}%;${shift ? 'transform:' + shift : ''}">${step >= 86400000 ? fmtDay(d) : hm + (midnight ? ' ' + fmtDay(d) : '')}</span>`;
+    grid += `<i class="${midnight ? 'day' : ''}" style="left:${pct(t)}%"></i>`;
   }
   const nowP = pct(Date.now());
-  if (nowP >= 0 && nowP <= 100) grid += `<i class="now" style="left:${nowP}%" title="Now"></i>`;
+  if (nowP >= 0 && nowP <= 100) grid += `<i class="now ${nowP > 92 ? 'end' : ''}" style="left:${nowP}%" title="Now"><em>NOW</em></i>`;
   return {axis, grid};
+}
+// Hide time-scale labels that would run into each other (dates win over
+// whole hours, whole hours over the rest).
+function declutterAxis(axis) {
+  if (!axis) return;
+  const rank = (el) => el.classList.contains('day') ? 2 : el.classList.contains('hr') ? 1 : 0;
+  let prev = null;
+  for (const el of [...axis.querySelectorAll('span')].sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)) {
+    el.style.visibility = '';
+    if (prev && el.getBoundingClientRect().left < prev.getBoundingClientRect().right + 8) {
+      if (rank(el) > rank(prev)) { prev.style.visibility = 'hidden'; prev = el; } else el.style.visibility = 'hidden';
+    } else prev = el;
+  }
+}
+// What kind of alert, for its colour on the timeline.
+function evCat(e) {
+  if (!e.labels.length) return 'motion';
+  const l = e.labels[0].label;
+  return l === 'package' ? 'package' : (LABEL_GROUP[l] || 'other');
+}
+// Alert markers for a timeline lane: a coloured bar for how long it lasted
+// and a round badge with its symbol (left out where the same symbol is
+// right next to it, so busy times stay readable).
+function evMarks(events, pct, attrs = '') {
+  let out = '';
+  const lastIcon = {};
+  for (const e of events) {
+    const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime());
+    if (b < 0 || a > 100) continue;
+    const x = Math.max(0, a), icon = e.labels.length ? labelIcon(e.labels[0].label) : '';
+    const showIc = icon && !(lastIcon[icon] != null && Math.abs(lastIcon[icon] - x) < 1.2);
+    if (showIc) lastIcon[icon] = x;
+    const tip = e.labels.length ? e.labels.map(l => `${l.label} ${Math.round(l.score * 100)}%`).join(', ') : 'motion';
+    out += `<div class="ev cat-${evCat(e)}" style="left:${x}%;width:${Math.max(0.25, Math.min(100, b) - x)}%" title="${esc(tip)} · ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" ${attrs}>${showIc ? `<span class="ic">${icon}</span>` : ''}</div>`;
+  }
+  return out;
 }
 const camTl = {
   id: null, data: null, zoom: 21600, end: null, loadedAt: 0, pv: new Map(), pfGen: 0,
@@ -1603,24 +1654,15 @@ const camTl = {
     const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
     const {axis, grid} = timeMarks(a, span, pct);
     $('ctl-axis').innerHTML = axis;
+    declutterAxis($('ctl-axis'));
     let lane = `<div class="tl-grid">${grid}</div>`;
     for (const sg of this.data.segments) {
       const x0 = Math.max(0, pct(new Date(sg.start).getTime())), x1 = Math.min(100, pct(new Date(sg.end).getTime()));
       if (x1 > 0 && x0 < 100 && x1 > x0) lane += `<div class="seg ${sg.kind === 'clip' ? 'clip' : ''}" style="left:${x0}%;width:${Math.max(0.15, x1 - x0)}%"></div>`;
     }
-    // Detections: a symbol per alert; nearby alerts with the same symbol are merged.
-    let last = {};
-    for (const e of this.data.events) {
-      const x = pct(new Date(e.start).getTime());
-      if (x < 0 || x > 100) continue;
-      if (!e.labels.length) { lane += `<div class="mo" style="left:${x}%" data-t="${new Date(e.start).getTime()}" title="Motion ${fmtTime(e.start)} — click to watch"></div>`; continue; }
-      const icon = labelIcon(e.labels[0].label);
-      if (last[icon] != null && Math.abs(last[icon] - x) < 1.2) continue;
-      last[icon] = x;
-      lane += `<span class="ic" style="left:${x}%" data-t="${new Date(e.start).getTime()}" title="${esc(e.labels.map(l => l.label).join(', '))} ${fmtTime(e.start)} — click to watch">${icon}</span>`;
-    }
+    lane += evMarks(this.data.events, pct);
     const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
-    lb.innerHTML = lane + '<div class="head" hidden></div>';
+    lb.innerHTML = lane + '<div class="head" hidden><em></em></div><div class="hover-line" hidden></div>';
     lb.appendChild(pv);
     $('cam-tl').querySelector('.legend').innerHTML = legendHtml('cam', [{...this.data, camera: this.id}]);
     this.paintStrip(); this.paintHead();
@@ -1674,7 +1716,7 @@ const camTl = {
     if (T == null && focusPlayback && focusPlayer && focusPlayer.item) T = focusPlayer.wallAt(focusPlayer.cur()).getTime();
     const [a, b] = this.win(), p = T == null ? -1 : (T - a) / (b - a);
     h.hidden = p < 0 || p > 1;
-    if (!h.hidden) h.style.left = (p * 100) + '%';
+    if (!h.hidden) { h.style.left = (p * 100) + '%'; const em = h.querySelector('em'); if (em) em.textContent = fmtTime(new Date(T)); }
   },
   segAt(T) {
     const segs = (this.data && this.data.segments) || [];
@@ -1722,7 +1764,7 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
     if (sp) spriteStyle(im, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), 192, 108);
   };
   const down = (e) => {
-    if (!camTl.data || e.target.closest('.ic, .mo')) return;
+    if (!camTl.data || markAt(e)) return;
     e.preventDefault();
     camTl.dragging = true; lane.setPointerCapture(e.pointerId);
     lane.querySelector('.preview').hidden = true;
@@ -1730,6 +1772,15 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   };
   lane.addEventListener('pointerdown', down);
   strip.addEventListener('pointerdown', (e) => { lane.dispatchEvent(new PointerEvent('pointerdown', e)); });
+  // The marker nearest the pointer lights up; a guide line follows it.
+  let hot = null;
+  const setHot = (m) => { if (hot === m) return; if (hot) hot.classList.remove('hot'); hot = m; if (hot) hot.classList.add('hot'); lane.style.cursor = hot ? 'pointer' : ''; };
+  lane.addEventListener('pointermove', (e) => {
+    const g = lane.querySelector('.hover-line');
+    if (g) { g.hidden = camTl.dragging; g.style.left = (e.clientX - lane.getBoundingClientRect().left) + 'px'; }
+    setHot(camTl.dragging ? null : markAt(e));
+  });
+  lane.addEventListener('pointerleave', () => { setHot(null); const g = lane.querySelector('.hover-line'); if (g) g.hidden = true; });
   lane.addEventListener('pointermove', (e) => {
     if (!camTl.data) return;
     if (!camTl.dragging) return preview(e);
@@ -1743,8 +1794,8 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   lane.addEventListener('pointerup', up); lane.addEventListener('pointercancel', up);
   lane.addEventListener('pointerleave', () => { lane.querySelector('.preview').hidden = true; });
   lane.addEventListener('click', (e) => {
-    const icon = e.target.closest('.ic, .mo');
-    if (icon) camTl.playAt(+icon.dataset.t - 3000);
+    const m = markAt(e);
+    if (m) camTl.playAt(+m.dataset.t - 3000);
   });
 })();
 // While open: new footage and its time-lapse keep coming in (up to now),
@@ -2778,20 +2829,7 @@ function selStyle(pct) {
 function drawTimeline() {
   const box = $('tl'), W0 = tl.winStart, span = tl.zoom * 1000;
   const pct = (t) => ((t - W0) / span * 100);
-  // Labels about every 1/10 of the window, with small ticks between.
-  const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600].map(s => s * 1000);
-  const step = steps.find(s => span / s <= 12) || 21600000;
-  const minor = step / ([120000, 600000, 1800000, 7200000].includes(step) ? 4 : step === 10800000 ? 3 : 5);
-  let axis = '', grid = '';
-  for (let t = Math.ceil(W0 / minor) * minor; t <= W0 + span; t += minor) {
-    const major = Math.abs(t % step) < 1;
-    if (!major) { axis += `<i class="mn" style="left:${pct(t)}%"></i>`; continue; }
-    const d = new Date(t);
-    axis += `<i class="mj" style="left:${pct(t)}%"></i><span style="left:${pct(t)}%">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}${d.getHours() === 0 && d.getMinutes() === 0 ? ' ' + fmtDay(d) : ''}</span>`;
-    grid += `<i style="left:${pct(t)}%"></i>`;
-  }
-  const nowP = pct(Date.now());
-  if (nowP >= 0 && nowP <= 100) grid += `<i class="now" style="left:${nowP}%" title="Now"></i>`;
+  const {axis, grid} = timeMarks(W0, span, pct);
   let rows = '';
   for (const c of tl.data) {
     let lane = '';
@@ -2799,17 +2837,15 @@ function drawTimeline() {
       const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(new Date(s.end).getTime()));
       if (b > 0 && a < 100 && b > a) lane += `<div class="seg ${s.kind === 'clip' ? 'clip' : ''}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"></div>`;
     }
-    for (const e of c.events) {
-      const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime());
-      if (b < 0 || a > 100) continue;
-      const tip = e.labels.length ? e.labels.map(l => l.label).join(', ') : 'motion';
-      lane += `<div class="ev ${e.labels.length ? '' : 'motion'}" style="left:${Math.max(0, a)}%;width:${Math.max(0.3, b - a)}%" title="${esc(tip)} ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" data-cam="${esc(c.camera)}">${e.labels.length ? `<span class="ic">${labelIcon(e.labels[0].label)}</span>` : ''}</div>`;
-    }
-    rows += `<div class="tl-row"><button type="button" class="label" data-cam="${esc(c.camera)}" title="${esc(c.name)} — show just this camera">${esc(c.name)}</button><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
+    lane += evMarks(c.events, pct, `data-cam="${esc(c.camera)}"`);
+    const st = cam(c.camera), recOn = !!(st && st.recorder && st.recorder.state === 'recording');
+    const nEv = c.events.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
+    rows += `<div class="tl-row"><button type="button" class="label" data-cam="${esc(c.camera)}" title="${esc(c.name)} — show just this camera"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">${esc(c.name)}</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</button><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
       <div class="tlp" data-cam="${esc(c.camera)}" title="Time-lapse previews — blue: ready to scrub · striped: loading · grey: not loaded yet · red: couldn't be made"></div></div></div>`;
   }
   const sel = tl.inT != null && tl.outT != null ? `<div class="tl-sel" style="${selStyle(pct)}"><div class="tl-h in" title="Drag to change the clip start"></div><div class="tl-h out" title="Drag to change the clip end"></div></div>` : '';
-  box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"></div>`;
+  box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"><em></em></div><div class="tl-hover" id="tl-hover" hidden><em></em></div>`;
+  declutterAxis(box.querySelector('.tl-axis'));
   box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
   box.querySelectorAll('.tl-row .label').forEach(b => {
     b.onpointerdown = (e) => e.stopPropagation();
@@ -2830,6 +2866,7 @@ function drawHead() {
   const p = (tl.T - tl.winStart) / (tl.zoom * 1000);
   h.hidden = p < 0 || p > 1;
   h.style.left = `calc(var(--tl-label) + (100% - var(--tl-label)) * ${p})`;
+  const em = h.querySelector('em'); if (em) em.textContent = fmtTime(new Date(tl.T));
   $('tl-time').textContent = fmtDate(new Date(tl.T));
 }
 
@@ -2838,7 +2875,7 @@ function drawHead() {
 // together, so the pointer doesn't have to be exactly on one.
 function markAt(e) {
   const el = document.elementFromPoint(e.clientX, e.clientY);
-  const row = el && el.closest('#tl .tl-row');
+  const row = el && (el.closest('#tl .tl-row') || el.closest('#ctl-lane'));
   if (!row) return null;
   let best = null, score = Infinity;
   for (const m of row.querySelectorAll('.ev')) {
@@ -2878,8 +2915,16 @@ function markAt(e) {
   // so close markers are easy to pick.
   let hot = null;
   const setHot = (m) => { if (hot === m) return; if (hot) hot.classList.remove('hot'); hot = m; if (hot) hot.classList.add('hot'); box.style.cursor = hot ? 'pointer' : ''; };
-  box.addEventListener('pointerleave', () => setHot(null));
-  box.addEventListener('pointermove', (e) => { if (!drag && !handle) setHot(markAt(e)); });
+  const hov = () => $('tl-hover');
+  box.addEventListener('pointerleave', () => { setHot(null); if (hov()) hov().hidden = true; });
+  box.addEventListener('pointermove', (e) => {
+    if (!drag && !handle) setHot(markAt(e));
+    // A guide line with the time under the pointer.
+    const g = hov(), lane = box.querySelector('.lane'); if (!g || !lane) return;
+    const r = lane.getBoundingClientRect(), p = (e.clientX - r.left) / r.width;
+    g.hidden = drag || p < 0 || p > 1;
+    if (!g.hidden) { g.style.left = `calc(var(--tl-label) + (100% - var(--tl-label)) * ${p})`; g.querySelector('em').textContent = fmtTime(new Date(tl.winStart + p * tl.zoom * 1000)); }
+  });
   box.addEventListener('pointermove', (e) => {
     if (handle) {
       const t = Math.min(tAt(e), Date.now());
