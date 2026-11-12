@@ -3663,7 +3663,7 @@ async function openCameraDialog(id, clone, prof) {
           <label class="check" style="margin-top:6px"><input type="checkbox" id="d-animals" ${c.detect.ignore_animals !== false ? 'checked' : ''}> Check motion with AI first — no alert when it's a cat (or another animal you don't watch for)</label>
           <div class="hint">With “Any motion”, the frames of each motion are sent to the AI before it becomes an alert. If the AI sees a cat, dog, bird… that isn't ticked above, and nothing you do watch for, the motion isn't kept on the Alerts page. Tick “cat” above to get alerts for cats.</div></div>
         <label for="d-int">AI check interval</label>
-        <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks during motion (raise this for cloud AI)</span></div>
+        <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds between AI checks while there's motion (lower = quicker to recognise, more work for the computer)</span></div>
         <label>Stationary objects</label>
         <div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Stop alerting for objects that stay in one place</label>
           <div class="row" style="margin-top:4px"><span class="muted">after</span><input type="number" id="d-parked-s" min="10" max="3600" value="${c.detect.parked_seconds || 60}" style="width:90px"><span class="muted">seconds without moving, for:</span></div>
@@ -4086,15 +4086,21 @@ async function saveProfileForm(body) {
   p.detect.mask = ''; p.detect.packages = false; p.detect.package_area = [];
   const profiles = [...((settings && settings.profiles) || [])];
   if (pe.idx >= 0) profiles[pe.idx] = p; else profiles.push(p);
-  const btn = $('c-save'); btn.disabled = true;
+  // The window closes at once; the profile is saved (and the cameras
+  // following it updated) in the background. If it's refused, the window
+  // comes back with what was set and why, unless another was opened since.
+  const gen = camDlgGen;
+  closeCameraDialog();
+  toast(`Saving profile “${pe.name}”…`);
   try {
     await api('api/profiles', {method: 'PUT', json: profiles});
-    closeCameraDialog();
     const n = cameraCfgs.filter(c => (c.profile || '').toLowerCase() === pe.name.toLowerCase()).length;
     toast(`Profile “${pe.name}” saved${n ? ` — ${n} camera${n === 1 ? '' : 's'} following it updated` : ''}`);
-    showSettings('profiles');
-  } catch (e) { $('c-err').hidden = false; $('c-err').textContent = e.message; }
-  finally { btn.disabled = false; }
+    if (page === 'settings' && section === 'profiles') showSettings('profiles'); else loadSettings().catch(() => {});
+  } catch (e) {
+    if (camDlgGen === gen && !$('cam-dialog').open) { profileEdit = pe; $('cam-dialog').showModal(); $('c-err').hidden = false; $('c-err').textContent = e.message; }
+    else toast('Profile not saved: ' + e.message, true);
+  }
 }
 // Read the camera form.
 function collectCamera() {
