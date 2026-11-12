@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.25 — November 2026
+- The **Scrub preview** choice (Time-lapse / Sub-stream / Main stream) and its "ms a picture" readout are gone from Recordings: dragging along the timeline always shows the time-lapse.
+
 ## 0.6.24 — November 2026
 - **Time-lapse stays after a reload**: previews already made show as ready straight away when you open or reload the timeline (GAZE asks for all of them in one go) — only missing ones are made.
 - **No more little gaps in the blue time-lapse bar** between recording files.
