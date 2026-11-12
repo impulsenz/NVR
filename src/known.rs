@@ -235,7 +235,10 @@ impl KnownStore {
     pub fn not_this(&self, name: &str, print: &[f32]) -> Result<()> {
         {
             let mut items = self.items.write().unwrap();
-            let Some(k) = items.iter_mut().find(|k| k.kind == "person" && k.name == name) else {
+            let Some(k) = items
+                .iter_mut()
+                .find(|k| k.kind == "person" && k.name == name)
+            else {
                 return Ok(());
             };
             k.faces.retain(|f| cosine(&unpack(f), print) < 0.9);
@@ -323,7 +326,9 @@ mod tests {
         s.add(&mum, Some(&mum_face), None, None).unwrap();
         // A visitor who looks a bit like Mum: taken for her.
         let visitor: Vec<f32> = crate::recog::normalize(
-            (0..128).map(|i| (i as f32 * 0.37).sin() + 0.6 * (i as f32 * 2.3).cos()).collect(),
+            (0..128)
+                .map(|i| (i as f32 * 0.37).sin() + 0.6 * (i as f32 * 2.3).cos())
+                .collect(),
         );
         assert_eq!(s.match_face(&visitor).map(|x| x.0).as_deref(), Some("Mum"));
         // "Not Mum": no longer taken for her; Mum herself still is.

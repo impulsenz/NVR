@@ -564,17 +564,35 @@ function route() {
   updateSubscriptions();
 }
 window.addEventListener('hashchange', route);
+// Clicking Recordings while it's open loads it afresh: newest footage,
+// every camera's video reloaded at the same moment (cameras chosen stay),
+// time-lapse pictures that failed asked for again.
+document.querySelector('nav a[data-page="recordings"]').addEventListener('click', (e) => {
+  if (page !== 'recordings' || rec.mode !== 'timeline') return;
+  e.preventDefault();
+  if (location.hash !== '#recordings' && !location.hash.startsWith('#recordings/timeline')) { location.hash = '#recordings'; return; }
+  cutSpriteDownloads();
+  for (const [u, x] of tl.sprites) if (x.failed) tl.sprites.delete(u);
+  tl.hd = null; tl.pv = new Map();
+  loadTimeline();
+  toast('Recordings reloaded');
+});
 // A browser only opens a few connections (6) to the NVR at a time. The
 // time-lapse pictures of Live and Recordings (each can take a while to
 // make) and half-loaded videos kept them all busy after leaving those
 // pages, so the next page (e.g. Settings) waited seconds for its turn.
 let lastPage = null, pageNet = new AbortController();
 function cutPageDownloads() {
+  cutSpriteDownloads();
+  for (const s of PAGES) if (s !== page) parkVideos($('page-' + s));
+}
+// Stop time-lapse pictures still being made or downloaded (asked again
+// when needed).
+function cutSpriteDownloads() {
   pageNet.abort(); pageNet = new AbortController();
   tl.pfGen = (tl.pfGen || 0) + 1; camTl.pfGen++; clearTimeout(camTl.pfRetry);
   for (const [u, e] of tl.sprites) if (!e.done) tl.sprites.delete(u);
   for (const [u, im] of spritePages) if (!im.complete) { im._cut = true; spritePages.delete(u); im.src = ''; }
-  for (const s of PAGES) if (s !== page) parkVideos($('page-' + s));
 }
 // A paused video that's still downloading keeps its connection: let go of
 // it (where it was is kept, and it's put back when the page is shown).
@@ -2718,7 +2736,15 @@ const activeVideo = (el) => el._vids[el._active];
 function revealWhenReady(el, i) {
   const v = el._vids[i];
   el._active = i; el._pending = i;
-  const done = () => { if (el._pending !== i) return; el._pending = null; if (el._active === i) showVideo(el, i); };
+  const done = () => {
+    if (el._pending !== i) return; el._pending = null;
+    if (el._active !== i) return;
+    showVideo(el, i);
+    // The player switched away from stops downloading its file (it held a
+    // connection the other cameras' videos waited for).
+    const old = el._vids[1 - i];
+    if (old.networkState === HTMLMediaElement.NETWORK_LOADING && old.dataset.url !== (el._vids[i].dataset.url)) { old.removeAttribute('src'); old.load(); delete old.dataset.url; }
+  };
   if (v.readyState >= 2 && !v.seeking) { done(); return; }
   v.addEventListener('seeked', () => { if (v.readyState >= 2) done(); }, {once: true});
   v.addEventListener('loadeddata', done, {once: true});
@@ -2728,6 +2754,29 @@ function revealWhenReady(el, i) {
 function showVideo(el, i) {
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
+}
+// Which stream a piece of footage is (older servers didn't say).
+const streamOf = (s) => s.stream || (s.kind === 'sub' ? 'sub' : 'main');
+// The streams there's footage of here, and the one shown: the one chosen,
+// or the other when the chosen one wasn't recorded at all.
+function tlStreams() { return new Set(tl.data.flatMap(c => c.segments.map(streamOf))); }
+function tlQ() { const have = tlStreams(); return have.has(tl.quality) || !have.size ? tl.quality : [...have][0]; }
+// Footage drawn and played for the chosen stream: main stream = HD only
+// (full-quality 24/7 recording and alert clips); sub-stream = the sub-stream
+// recording, with the HD alert clips still marked (alerts play in HD).
+function tlShows(s) { return tlQ() === 'main' ? streamOf(s) === 'main' : streamOf(s) === 'sub' || s.kind === 'clip'; }
+// The stream choice shows what's recorded: a stream with no footage here
+// can't be picked.
+function paintQualityChoice() {
+  const sel = $('tl-quality'), have = tlStreams(), q = tlQ();
+  for (const o of sel.options) {
+    const rec = !have.size || have.has(o.value);
+    o.disabled = !rec;
+    o.textContent = (o.value === 'main' ? 'Main stream (HD)' : 'Sub-stream') + (rec ? '' : ' — not recorded');
+  }
+  sel.value = q;
+  for (const el of document.querySelectorAll('#tl-videos .surface .msg'))
+    el.textContent = q === 'main' && have.has('sub') ? 'No main-stream (HD) footage at this time' : 'No recorded footage at this time';
 }
 function segAt(c, T, force) {
   // The newest file of a camera that was recording when the timeline
@@ -2739,9 +2788,11 @@ function segAt(c, T, force) {
   // alert, its full-quality footage until the alert is over.
   const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
   const order = force === 'main' ? ['clip', 'recording', 'sub'] : force === 'sub' ? ['sub', 'recording', 'clip']
-    : hd || tl.quality === 'main' ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip'];
+    : hd || tlQ() === 'main' ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip'];
+  // Only the chosen stream (an alert you clicked plays in HD either way).
+  const ok = force || hd ? () => true : tlShows;
   for (const k of order) {
-    const s = c.segments.find(x => x.kind === k && hit(x));
+    const s = c.segments.find(x => x.kind === k && ok(x) && hit(x));
     if (s) return s;
   }
   return null;
@@ -2847,7 +2898,7 @@ $('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); };
 $('tl-quality').value = tl.quality;
 // Scrubbing shows the time-lapse pictures (the video itself when time-lapse
 // is switched off).
-$('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-quality', tl.quality); tlSync(true); };
+$('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-quality', tl.quality); drawTimeline(); tlSync(true); };
 $('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
 $('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 $('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
@@ -2918,6 +2969,7 @@ function selStyle(pct) {
 function drawTimeline() {
   const box = $('tl'), W0 = tl.winStart, span = tl.zoom * 1000;
   const pct = (t) => ((t - W0) / span * 100);
+  paintQualityChoice();
   const {axis, grid} = timeMarks(W0, span, pct);
   const lanePx = box.clientWidth - (parseFloat(getComputedStyle(box).getPropertyValue('--tl-label')) || 160);
   tl.groups = [];
@@ -2926,8 +2978,8 @@ function drawTimeline() {
     let lane = '';
     // The newest recording, still being made, reaches up to now (and shows
     // it's still being recorded).
-    const lastRec = c.segments.filter(x => x.kind !== 'clip').slice(-1)[0];
-    for (const s of c.segments) {
+    const shown = c.segments.filter(tlShows), lastRec = shown.filter(x => x.kind !== 'clip').slice(-1)[0];
+    for (const s of shown) {
       const live = s === lastRec && isGrowing(s);
       const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(s.end).getTime()));
       if (b > 0 && a < 100 && b > a) lane += `<div class="seg ${s.kind === 'clip' ? 'clip' : ''} ${live ? 'live' : ''}" style="left:${a}%;width:${Math.max(b - a, 0.15)}%"${live ? ' title="Recording now"' : ''}></div>`;
@@ -3046,7 +3098,14 @@ function markAt(e) {
     if (handle) { handle = null; drawTimeline(); tlSync(true); hideSpritesWhenReady(); return; }
     if (!drag) return; drag = false; tl.dragging = false;
     document.querySelectorAll('#tl-videos video').forEach(v => { v._want = null; });
-    tlSync(true); hideSpritesWhenReady(); if (was) tlPlay(true);
+    // Let go: the videos come first. Dragging asked for the time-lapse of
+    // every file passed over (each can take a while to make), and those
+    // requests held the browser's few connections to the NVR, so the
+    // videos waited for them. They're dropped, and loading the time-lapse
+    // carries on once the videos show.
+    cutSpriteDownloads();
+    tlSync(true); if (was) tlPlay(true);
+    hideSpritesWhenReady().then(() => { if (page === 'recordings' && !tl.dragging) prefetchSprites(); });
   };
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
 })();
@@ -3206,12 +3265,15 @@ function liveStill(sp, cam) {
 // After scrubbing: keep the preview up until the video shows the new time
 // (hiding it at once showed black while the video loaded).
 function hideSpritesWhenReady() {
+  const all = [];
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const sp = el.querySelector('.sprite');
     if (sp.hidden) continue;
     const gen = sp._gen = (sp._gen || 0) + 1;
+    let ready; all.push(new Promise(r => ready = r));
     // Fade the time-lapse picture out over the video (no hard cut).
     const fade = () => {
+      ready();
       if (sp._gen !== gen || sp.classList.contains('fading')) return;
       sp.classList.add('fading');
       setTimeout(() => { if (sp._gen === gen) { sp.hidden = true; sp.classList.remove('fading'); } }, 220);
@@ -3230,6 +3292,7 @@ function hideSpritesWhenReady() {
     setTimeout(check, 60);
     setTimeout(fade, 15000);
   }
+  return Promise.all(all);
 }
 function previewAll() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
@@ -3351,7 +3414,10 @@ function showUpdateBar(u) {
     const what = u.state === 'downloading' ? (u.total ? `Downloading… ${pct}% (${fmtBytes(u.done)} of ${fmtBytes(u.total)})` : 'Downloading…')
       : u.state === 'installing' ? 'Installing…' : 'Restarting GAZE… the page reloads by itself.';
     bar.dataset.v = 'busy';
-    bar.innerHTML = head(`Updating to GAZE ${to}`, `<span class="ub-ver">${from} → ${to}</span> ${what}`, '⟳')
+    // A ring that fills with the download, around an arrow dropping into a tray.
+    const ic = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><g class="ub-arrow"><path d="M12 3v11"/><path d="M7.5 9.5 12 14l4.5-4.5"/></g><path d="M5 19h14"/></svg>`;
+    bar.style.setProperty('--ub-pct', (u.state === 'downloading' ? pct : 100) + '%');
+    bar.innerHTML = head(`Updating to GAZE ${to}`, `<span class="ub-ver">${from} → ${to}</span> ${what}`, ic)
       + `<div class="ub-prog"><i style="width:${u.state === 'downloading' ? pct : 100}%"></i></div>`;
     bar.classList.toggle('ub-busy', true);
     bar.hidden = false; requestAnimationFrame(() => bar.classList.add('show'));

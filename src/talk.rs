@@ -528,7 +528,10 @@ impl Talk {
     pub async fn send(&mut self, samples: &[i16]) -> Result<()> {
         self.pending.extend_from_slice(samples);
         let n = self.pending.len() / PACKET * PACKET;
-        let chunks: Vec<Vec<i16>> = self.pending[..n].chunks(PACKET).map(<[i16]>::to_vec).collect();
+        let chunks: Vec<Vec<i16>> = self.pending[..n]
+            .chunks(PACKET)
+            .map(<[i16]>::to_vec)
+            .collect();
         self.pending.drain(..n);
         let step = Duration::from_millis((PACKET as u64 * 1000) / 8000);
         for chunk in chunks {

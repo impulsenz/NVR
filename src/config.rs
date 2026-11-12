@@ -1448,7 +1448,9 @@ mod tests {
     #[test]
     fn motion_masks() {
         assert!(decode_mask("").is_none());
-        let old: String = (0..576).map(|i| if i % 32 < 16 { '1' } else { '0' }).collect();
+        let old: String = (0..576)
+            .map(|i| if i % 32 < 16 { '1' } else { '0' })
+            .collect();
         let m = decode_mask(&old).unwrap();
         assert_eq!(m.len(), MASK_W * MASK_H);
         assert!(m[0] && m[79] && !m[80] && m[MASK_W * 89]);

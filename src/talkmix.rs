@@ -26,7 +26,10 @@ pub fn talk_dir(camera_dir: &Path) -> PathBuf {
 pub fn save(camera_dir: &Path, start: DateTime<Local>, samples: &[i16]) -> Result<PathBuf> {
     let dir = talk_dir(camera_dir);
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("talk_{}.wav", start.format("%Y-%m-%d_%H-%M-%S-%3f")));
+    let path = dir.join(format!(
+        "talk_{}.wav",
+        start.format("%Y-%m-%d_%H-%M-%S-%3f")
+    ));
     let data_len = (samples.len() * 2) as u32;
     let mut b = Vec::with_capacity(44 + data_len as usize);
     b.extend_from_slice(b"RIFF");
@@ -156,13 +159,21 @@ async fn has_audio(ffmpeg: &str, file: &Path) -> bool {
 async fn mix(ffmpeg: &str, target: &Path, talk: &Path, offset: f64) -> Result<()> {
     let modified = std::fs::metadata(target)?.modified()?;
     let talk_chain = if offset >= 0.0 {
-        format!("[1:a]aresample=16000,adelay={}:all=1[t]", (offset * 1000.0).round() as i64)
+        format!(
+            "[1:a]aresample=16000,adelay={}:all=1[t]",
+            (offset * 1000.0).round() as i64
+        )
     } else {
-        format!("[1:a]atrim=start={:.3},asetpts=PTS-STARTPTS,aresample=16000[t]", -offset)
+        format!(
+            "[1:a]atrim=start={:.3},asetpts=PTS-STARTPTS,aresample=16000[t]",
+            -offset
+        )
     };
     let audio = has_audio(ffmpeg, target).await;
     let filter = if audio {
-        format!("{talk_chain};[0:a]aresample=16000[c];[c][t]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
+        format!(
+            "{talk_chain};[0:a]aresample=16000[c];[c][t]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]"
+        )
     } else {
         format!("{talk_chain};[t]apad[a]")
     };
@@ -177,7 +188,16 @@ async fn mix(ffmpeg: &str, target: &Path, talk: &Path, offset: f64) -> Result<()
         .arg(target)
         .arg("-i")
         .arg(talk)
-        .args(["-filter_complex", &filter, "-map", "0:v", "-map", "[a]", "-c:v", "copy"])
+        .args([
+            "-filter_complex",
+            &filter,
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "copy",
+        ])
         .args(crate::ffmpeg::hevc_tag(ffmpeg, target).await)
         .args(["-c:a", "aac", "-b:a", "64k", "-ac", "1"]);
     if !audio {

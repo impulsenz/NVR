@@ -303,6 +303,8 @@ pub struct Segment {
     pub name: String,
     /// "recording" (as recorded), "sub" (light copy for the timeline) or "clip".
     pub kind: &'static str,
+    /// Which camera stream it is: "main" (full quality) or "sub".
+    pub stream: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -325,6 +327,35 @@ pub fn timeline(
             continue;
         }
         let id = &rt.cfg.id;
+        // Which stream each recording is: told by its picture size (the
+        // recording mode may have changed since); a file still being
+        // written (no header yet) is of the stream recorded now.
+        let now_stream = if rt.cfg.record_mode.continuous_stream() == Some(true) {
+            "sub"
+        } else {
+            "main"
+        };
+        let h = |r: &crate::relay::Relay| r.info().and_then(|i| i.height);
+        let (main_h, sub_h) = (h(&rt.relay_main), h(&rt.relay_sub));
+        let stream_of = |name: &str| match mp4_height_cached(&rt.dir.join(name)) {
+            Some(fh) => match (main_h, sub_h) {
+                (Some(m), Some(s)) if s < m => {
+                    if fh * 2 <= s + m {
+                        "sub"
+                    } else {
+                        "main"
+                    }
+                }
+                _ => {
+                    if fh <= 576 {
+                        "sub"
+                    } else {
+                        "main"
+                    }
+                }
+            },
+            None => now_stream,
+        };
         let mut segments: Vec<Segment> = recordings(&rt)
             .into_iter()
             .filter(|r| r.end >= from && r.start <= to)
@@ -332,6 +363,7 @@ pub fn timeline(
                 start: r.start,
                 end: r.end,
                 url: rec_url(id, &r.name),
+                stream: stream_of(&r.name),
                 name: r.name,
                 kind: "recording",
             })
@@ -346,6 +378,7 @@ pub fn timeline(
                     url: format!("media/{}/tl/{}", enc(id), enc(&r.name)),
                     name: r.name,
                     kind: "sub",
+                    stream: "sub",
                 }),
         );
         let events = rt.events.between(from, to);
@@ -362,6 +395,7 @@ pub fn timeline(
                         url: event_file_url(id, clip),
                         name: clip.clone(),
                         kind: "clip",
+                        stream: "main",
                     });
                 }
             }
@@ -446,4 +480,114 @@ pub fn unseen_count(mgr: &Manager) -> usize {
         .flat_map(|rt| rt.events.between(from, Local::now()))
         .filter(|e| !mgr.seen.is_seen(&e.id, e.start))
         .count()
+}
+
+/// Picture height of an MP4 file, read from its header (no ffmpeg), kept
+/// once known (a file still being written has no header yet).
+fn mp4_height_cached(path: &std::path::Path) -> Option<u32> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<PathBuf, u32>>> = Mutex::new(None);
+    if let Some(h) = CACHE
+        .lock()
+        .ok()?
+        .get_or_insert_with(HashMap::new)
+        .get(path)
+    {
+        return Some(*h);
+    }
+    let h = mp4_height(path)?;
+    let mut c = CACHE.lock().ok()?;
+    let map = c.get_or_insert_with(HashMap::new);
+    if map.len() > 100_000 {
+        map.clear();
+    }
+    map.insert(path.to_path_buf(), h);
+    Some(h)
+}
+
+/// Picture height of an MP4 file from its `moov` box (wherever it is).
+pub fn mp4_height(path: &std::path::Path) -> Option<u32> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut pos = 0u64;
+    while pos + 8 <= len {
+        f.seek(SeekFrom::Start(pos)).ok()?;
+        let mut h = [0u8; 16];
+        f.read_exact(&mut h[..8]).ok()?;
+        let mut size = u32::from_be_bytes(h[0..4].try_into().ok()?) as u64;
+        let mut hdr = 8u64;
+        if size == 1 {
+            f.read_exact(&mut h[8..16]).ok()?;
+            size = u64::from_be_bytes(h[8..16].try_into().ok()?);
+            hdr = 16;
+        } else if size == 0 {
+            size = len - pos;
+        }
+        if size < hdr {
+            return None;
+        }
+        if &h[4..8] == b"moov" {
+            let n = (size - hdr).min(64 << 20) as usize;
+            let mut buf = vec![0; n];
+            f.read_exact(&mut buf).ok()?;
+            return tkhd_height(&buf);
+        }
+        pos += size;
+    }
+    None
+}
+
+/// The first track with a picture: its height (`tkhd` ends with width and
+/// height as 16.16 numbers).
+fn tkhd_height(b: &[u8]) -> Option<u32> {
+    let mut i = 0;
+    while i + 8 <= b.len() {
+        let size = u32::from_be_bytes(b[i..i + 4].try_into().ok()?) as usize;
+        if size < 8 || i + size > b.len() {
+            return None;
+        }
+        let body = &b[i + 8..i + size];
+        match &b[i + 4..i + 8] {
+            b"trak" => {
+                if let Some(h) = tkhd_height(body) {
+                    return Some(h);
+                }
+            }
+            b"tkhd" if body.len() >= 8 => {
+                let h = u32::from_be_bytes(body[body.len() - 4..].try_into().ok()?) >> 16;
+                if h > 0 {
+                    return Some(h);
+                }
+            }
+            _ => {}
+        }
+        i += size;
+    }
+    None
+}
+
+#[cfg(test)]
+mod mp4_tests {
+    #[test]
+    fn reads_picture_height_from_the_header() {
+        // moov > trak > tkhd, with width 1280 and height 720 at the end.
+        let mut tkhd = vec![0u8; 84];
+        tkhd[76..80].copy_from_slice(&(1280u32 << 16).to_be_bytes());
+        tkhd[80..84].copy_from_slice(&(720u32 << 16).to_be_bytes());
+        let bx = |t: &[u8], body: &[u8]| {
+            [&((body.len() + 8) as u32).to_be_bytes()[..], t, body].concat()
+        };
+        let file = [
+            bx(b"ftyp", &[0; 8]),
+            bx(b"mdat", &[1; 32]),
+            bx(b"moov", &bx(b"trak", &bx(b"tkhd", &tkhd))),
+        ]
+        .concat();
+        let p = std::env::temp_dir().join(format!("gaze-mp4-{}.mp4", std::process::id()));
+        std::fs::write(&p, file).unwrap();
+        assert_eq!(super::mp4_height(&p), Some(720));
+        let _ = std::fs::remove_file(&p);
+    }
 }

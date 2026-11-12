@@ -578,7 +578,11 @@ async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnR
         let k = if id == "none" {
             None
         } else {
-            Some(m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?)
+            Some(
+                m.known
+                    .get(&id)
+                    .ok_or_else(|| anyhow::anyhow!("not found"))?,
+            )
         };
         let c = m
             .camera(&r.camera)
@@ -606,7 +610,8 @@ async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnR
         // The alert's notes: who was recognised, and whether a face is unknown.
         let names: Vec<String> = e.faces.iter().filter_map(|f| f.name.clone()).collect();
         e.notes.retain(|n| {
-            n.strip_prefix("Recognized ").is_none_or(|who| names.iter().any(|x| x == who))
+            n.strip_prefix("Recognized ")
+                .is_none_or(|who| names.iter().any(|x| x == who))
         });
         for n in &names {
             let note = format!("Recognized {n}");
@@ -621,15 +626,24 @@ async fn known_learn(State(m): App, Path(id): Path<String>, Json(r): Json<LearnR
         }
         let notes = e.notes.clone();
         c.events.save(e);
-        anyhow::Ok((notes, match (new_name, old) {
-            (Some(n), Some(o)) => format!("Corrected — this is {n}, not {o}. GAZE won't take this face for {o} again."),
-            (Some(n), None) => format!("Learned — this is {n}"),
-            (None, Some(o)) => format!("Corrected — not {o}. GAZE won't take this face for {o} again."),
-            (None, None) => "Marked as someone you don't know".to_string(),
-        }))
+        anyhow::Ok((
+            notes,
+            match (new_name, old) {
+                (Some(n), Some(o)) => format!(
+                    "Corrected — this is {n}, not {o}. GAZE won't take this face for {o} again."
+                ),
+                (Some(n), None) => format!("Learned — this is {n}"),
+                (None, Some(o)) => {
+                    format!("Corrected — not {o}. GAZE won't take this face for {o} again.")
+                }
+                (None, None) => "Marked as someone you don't know".to_string(),
+            },
+        ))
     })();
     match res {
-        Ok((notes, message)) => Json(json!({ "ok": true, "message": message, "notes": notes })).into_response(),
+        Ok((notes, message)) => {
+            Json(json!({ "ok": true, "message": message, "notes": notes })).into_response()
+        }
         Err(e) => bad(e),
     }
 }
@@ -1916,7 +1930,14 @@ async fn ensure_sprite(
     let page = |p: &std::path::Path, n: u32| PathBuf::from(format!("{}-{n:03}.jpg", p.display()));
     let cfg = m.config();
     let hw = ffmpeg::decode_args(&cfg.hardware, false);
-    let made = ffmpeg::sprite(&cfg.server.ffmpeg_path, &src, &staging, cfg.storage.timelapse_seconds as f64, &hw).await;
+    let made = ffmpeg::sprite(
+        &cfg.server.ffmpeg_path,
+        &src,
+        &staging,
+        cfg.storage.timelapse_seconds as f64,
+        &hw,
+    )
+    .await;
     let info = match (made, before) {
         // Fewer pictures than before (the end of a file being written
         // couldn't be read this time), or none at all: keep the older one.
@@ -1992,7 +2013,10 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
         for r in &copies {
             todo.push((c.clone(), "tl", r.name.clone(), r.start, r.end));
         }
-        for r in library::recordings(&c).iter().filter(|r| r.end >= from && r.start < to) {
+        for r in library::recordings(&c)
+            .iter()
+            .filter(|r| r.end >= from && r.start < to)
+        {
             // Skip the file still being written (it keeps growing).
             if (now - r.end).num_seconds() < 30 {
                 continue;
@@ -2012,7 +2036,9 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
         }
     }
     let every = m.config().storage.timelapse_seconds;
-    todo.retain(|(c, kind, name, ..)| media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name, every));
+    todo.retain(|(c, kind, name, ..)| {
+        media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name, every)
+    });
     todo.sort_by(|a, b| b.3.cmp(&a.3));
     todo
 }
@@ -2041,20 +2067,29 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
             let day_ago = now - chrono::Duration::hours(24);
             // Not again too soon after failing: 5 minutes, then longer each
             // time (up to 6 hours); older footage at most 3 tries.
-            let retry_ok = |failed: &std::collections::HashMap<String, (u32, std::time::Instant)>,
-                            t: &PreviewTodo,
-                            old: bool| {
-                failed.get(&format!("{}/{}", t.0.cfg.id, t.2)).is_none_or(|(n, at)| {
-                    (!old || *n < 3)
-                        && at.elapsed()
-                            >= std::time::Duration::from_secs((300u64 << (*n - 1).min(6)).min(6 * 3600))
-                })
-            };
-            let recent: Vec<PreviewTodo> = missing_previews(&m, day_ago, now + chrono::Duration::minutes(5))
-                .into_iter()
-                .filter(|t| force || retry_ok(&failed, t, false))
-                .collect();
-            let sweep = force || recent.is_empty() && last_sweep.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(600));
+            let retry_ok =
+                |failed: &std::collections::HashMap<String, (u32, std::time::Instant)>,
+                 t: &PreviewTodo,
+                 old: bool| {
+                    failed
+                        .get(&format!("{}/{}", t.0.cfg.id, t.2))
+                        .is_none_or(|(n, at)| {
+                            (!old || *n < 3)
+                                && at.elapsed()
+                                    >= std::time::Duration::from_secs(
+                                        (300u64 << (*n - 1).min(6)).min(6 * 3600),
+                                    )
+                        })
+                };
+            let recent: Vec<PreviewTodo> =
+                missing_previews(&m, day_ago, now + chrono::Duration::minutes(5))
+                    .into_iter()
+                    .filter(|t| force || retry_ok(&failed, t, false))
+                    .collect();
+            let sweep = force
+                || recent.is_empty()
+                    && last_sweep
+                        .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(600));
             let mut older: Vec<PreviewTodo> = if sweep {
                 last_sweep = Some(std::time::Instant::now());
                 missing_previews(&m, now - chrono::Duration::days(3650), day_ago)
@@ -2071,7 +2106,13 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
             }
             for (part, list, title) in [
                 (0, recent, "Time-lapse previews (last 24 hours)".to_string()),
-                (1, older, format!("Time-lapse previews — catching up on older footage ({backlog} missing)")),
+                (
+                    1,
+                    older,
+                    format!(
+                        "Time-lapse previews — catching up on older footage ({backlog} missing)"
+                    ),
+                ),
             ] {
                 if list.is_empty() {
                     continue;
@@ -2368,7 +2409,10 @@ async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
 /// 24 hours again (older ones are made when looked at).
 async fn rebuild_previews(State(m): App) -> Response {
     if !TIMELAPSE {
-        return err(StatusCode::BAD_REQUEST, "time-lapse previews are switched off");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "time-lapse previews are switched off",
+        );
     }
     let mut removed = 0;
     for c in m.cameras() {
@@ -2413,7 +2457,9 @@ async fn delete_all_footage(State(m): App) -> Response {
                 c.events.dir().to_path_buf(),
             ] {
                 let _ = std::fs::remove_dir_all(dir.join(".thumbs"));
-                let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+                let Ok(rd) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
                 for e in rd.flatten() {
                     let p = e.path();
                     let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
@@ -2479,7 +2525,14 @@ async fn whats_new() -> Response {
         .split("\n## ")
         .map(|s| format!("## {s}"))
         .find(|s| s.starts_with(&head) || s.starts_with(&format!("#{head}")))
-        .map(|s| s.lines().skip(1).collect::<Vec<_>>().join("\n").trim().to_string())
+        .map(|s| {
+            s.lines()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string()
+        })
         .unwrap_or_default();
     Json(json!({ "version": version, "text": text })).into_response()
 }
@@ -2505,8 +2558,14 @@ async fn sprites_ready(State(m): App, Json(r): Json<ReadyReq>) -> Response {
         if !preview_ready(&c, &kind, &name, every) {
             continue;
         }
-        let Ok(src) = media_path(&c, &kind, &name) else { continue };
-        let meta = src.parent().unwrap().join(".thumbs").join(format!("{name}.sprite.json"));
+        let Ok(src) = media_path(&c, &kind, &name) else {
+            continue;
+        };
+        let meta = src
+            .parent()
+            .unwrap()
+            .join(".thumbs")
+            .join(format!("{name}.sprite.json"));
         let Some(info) = std::fs::read(&meta)
             .ok()
             .and_then(|b| serde_json::from_slice::<ffmpeg::SpriteInfo>(&b).ok())
@@ -2526,7 +2585,10 @@ async fn sprite_info(
     Path((id, kind, name)): Path<(String, String, String)>,
 ) -> Response {
     if !TIMELAPSE {
-        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
+        return err(
+            StatusCode::NOT_FOUND,
+            "time-lapse previews are switched off",
+        );
     }
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
@@ -2552,7 +2614,10 @@ async fn sprite_image(
     req: Request,
 ) -> Response {
     if !TIMELAPSE {
-        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
+        return err(
+            StatusCode::NOT_FOUND,
+            "time-lapse previews are switched off",
+        );
     }
     let c = camera!(m, id);
     // A page already made is served as it is (pages are only ever written

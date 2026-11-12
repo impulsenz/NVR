@@ -27,7 +27,10 @@ fn same_place(a: &[f32; 4], b: &[f32; 4]) -> bool {
     if iou(a, b) >= 0.45 {
         return true;
     }
-    let (ca, cb) = ([a[0] + a[2] / 2.0, a[1] + a[3] / 2.0], [b[0] + b[2] / 2.0, b[1] + b[3] / 2.0]);
+    let (ca, cb) = (
+        [a[0] + a[2] / 2.0, a[1] + a[3] / 2.0],
+        [b[0] + b[2] / 2.0, b[1] + b[3] / 2.0],
+    );
     let size = a[2].max(a[3]).max(b[2]).max(b[3]);
     let dist = ((ca[0] - cb[0]).powi(2) + (ca[1] - cb[1]).powi(2)).sqrt();
     let ratio = (a[2] * a[3]).max(1e-6) / (b[2] * b[3]).max(1e-6);
@@ -139,7 +142,11 @@ impl Stationary {
                 .filter(|(i, it)| !seen[*i] && group(&it.label) == group(&d.label))
                 .map(|(i, it)| (i, iou(&it.b, &b), same_place(&it.b, &b)))
                 .filter(|(_, o, same)| *o > 0.1 || *same)
-                .max_by(|a, b| (a.2, a.1).partial_cmp(&(b.2, b.1)).unwrap_or(std::cmp::Ordering::Equal));
+                .max_by(|a, b| {
+                    (a.2, a.1)
+                        .partial_cmp(&(b.2, b.1))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             match best {
                 Some((i, _, true)) => {
                     seen[i] = true;
@@ -234,13 +241,39 @@ mod tests {
         let kinds: Vec<String> = PARKING.iter().map(|s| s.to_string()).collect();
         let after = Duration::from_secs(60);
         let t0 = Instant::now();
-        let car = |x: f32, w: f32, h: f32| Detection { label: "car".into(), score: 0.75, x, y: 0.0, w, h, ..Default::default() };
-        assert_eq!(s.filter_at(vec![car(0.40, 0.20, 0.08)], &kinds, after, t0).0.len(), 1);
+        let car = |x: f32, w: f32, h: f32| Detection {
+            label: "car".into(),
+            score: 0.75,
+            x,
+            y: 0.0,
+            w,
+            h,
+            ..Default::default()
+        };
+        assert_eq!(
+            s.filter_at(vec![car(0.40, 0.20, 0.08)], &kinds, after, t0)
+                .0
+                .len(),
+            1
+        );
         // Jittery boxes of the same car over the next minutes: parked, then quiet.
-        let looks = [(0.42, 0.17, 0.05), (0.39, 0.22, 0.09), (0.41, 0.18, 0.06), (0.40, 0.21, 0.07)];
+        let looks = [
+            (0.42, 0.17, 0.05),
+            (0.39, 0.22, 0.09),
+            (0.41, 0.18, 0.06),
+            (0.40, 0.21, 0.07),
+        ];
         let mut alerts = 0;
         for (i, (x, w, h)) in looks.iter().enumerate() {
-            alerts += s.filter_at(vec![car(*x, *w, *h)], &kinds, after, t0 + Duration::from_secs(70 * (i as u64 + 1))).0.len();
+            alerts += s
+                .filter_at(
+                    vec![car(*x, *w, *h)],
+                    &kinds,
+                    after,
+                    t0 + Duration::from_secs(70 * (i as u64 + 1)),
+                )
+                .0
+                .len();
         }
         assert_eq!(alerts, 0);
         assert_eq!(s.parked(), ["car"]);
@@ -302,7 +335,11 @@ mod tests {
                 .is_empty()
         );
         // One odd box elsewhere doesn't wake it; seen moved again, it alerts.
-        assert!(s.filter_at(vec![det("car", 0.42)], &kinds, after, at(3890)).0.is_empty());
+        assert!(
+            s.filter_at(vec![det("car", 0.42)], &kinds, after, at(3890))
+                .0
+                .is_empty()
+        );
         let (k, n) = s.filter_at(vec![det("car", 0.45)], &kinds, after, at(3900));
         assert_eq!(k.len(), 1);
         assert!(n[0].contains("moving"));

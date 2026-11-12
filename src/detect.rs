@@ -253,7 +253,10 @@ fn box_reaches(poly: &[[f32; 2]], x: f32, y: f32, w: f32, h: f32) -> bool {
     let (mx, my) = (w * 0.1, h * 0.1);
     let (x0, y0, x1, y1) = (x - mx, y - my, x + w + mx, y + h + my);
     // A corner of the area inside the box…
-    if poly.iter().any(|p| p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1) {
+    if poly
+        .iter()
+        .any(|p| p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1)
+    {
         return true;
     }
     // …or a point of the box inside the area.
@@ -261,7 +264,10 @@ fn box_reaches(poly: &[[f32; 2]], x: f32, y: f32, w: f32, h: f32) -> bool {
         (0..=6).any(|j| {
             crate::zones::inside(
                 poly,
-                [x0 + (x1 - x0) * i as f32 / 6.0, y0 + (y1 - y0) * j as f32 / 6.0],
+                [
+                    x0 + (x1 - x0) * i as f32 / 6.0,
+                    y0 + (y1 - y0) * j as f32 / 6.0,
+                ],
             )
         })
     })
@@ -603,8 +609,11 @@ impl Detector {
                     tokio::spawn(async move {
                         let mut res = ai.detect(&f).await;
                         if let Ok(dets) = &mut res
-                            && !dets.iter().any(|x| x.score >= min_conf && want.contains(&x.label))
-                            && let Some((crop, [ox, oy, sw, sh])) = near.and_then(|n| zoom_on(&f, n))
+                            && !dets
+                                .iter()
+                                .any(|x| x.score >= min_conf && want.contains(&x.label))
+                            && let Some((crop, [ox, oy, sw, sh])) =
+                                near.and_then(|n| zoom_on(&f, n))
                             && let Ok(more) = ai.detect(&crop).await
                         {
                             dets.extend(more.into_iter().map(|x| Detection {
@@ -781,7 +790,10 @@ impl Detector {
             });
             if animal && !a.animal_seen {
                 a.animal_seen = true;
-                tracing::debug!("[{}] an animal that isn't watched for is moving: no motion alert", self.cam.name);
+                tracing::debug!(
+                    "[{}] an animal that isn't watched for is moving: no motion alert",
+                    self.cam.name
+                );
             }
         }
         // Parked vehicles don't alert until they move.
@@ -790,8 +802,10 @@ impl Detector {
             // enough to alert: a parked car that comes and goes around the
             // minimum confidence would otherwise be forgotten and alert again.
             let kinds = &d.parked_objects;
-            let mut others: Vec<Detection> =
-                hits.into_iter().filter(|h| !kinds.contains(&h.label)).collect();
+            let mut others: Vec<Detection> = hits
+                .into_iter()
+                .filter(|h| !kinds.contains(&h.label))
+                .collect();
             let candidates: Vec<Detection> = best
                 .iter()
                 .filter(|x| x.score >= 0.3 && kinds.contains(&x.label))
@@ -998,7 +1012,11 @@ impl Detector {
         let d = &self.cam.detect;
         // Motion that turned out to be a cat (or another animal that isn't
         // watched for), with nothing watched for seen: not kept as an alert.
-        if d.ignore_animals && a.animal_seen && a.event.labels.is_empty() && a.event.items.is_empty() {
+        if d.ignore_animals
+            && a.animal_seen
+            && a.event.labels.is_empty()
+            && a.event.items.is_empty()
+        {
             if a.qualified {
                 info!(target: "event", "[{}] motion was an animal that isn't watched for: alert dropped", self.cam.name);
                 self.store.delete(&a.event.id);
@@ -1130,7 +1148,12 @@ fn zoom_on(f: &Frame, (x, y, w, h): (f32, f32, f32, f32)) -> Option<(Frame, [f32
     let crop = crate::recog::crop(f, x0, y0, side, side);
     Some((
         crop.clone(),
-        [x0 / fw, y0 / fh, crop.width as f32 / fw, crop.height as f32 / fh],
+        [
+            x0 / fw,
+            y0 / fh,
+            crop.width as f32 / fw,
+            crop.height as f32 / fh,
+        ],
     ))
 }
 

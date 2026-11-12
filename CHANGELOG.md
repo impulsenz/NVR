@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.30 — November 2026
+- **Faster switch from time-lapse to video**: when you let go after dragging through Recordings, the cameras' videos now load first. Dragging asked for the time-lapse of every file you passed over, and those requests were holding up the videos; they're dropped and the time-lapse carries on loading afterwards. A player that's switched away from also stops downloading its old file.
+- **Sub-stream / Main stream (HD) shows only that stream**: choose Main stream and the timeline shows only full-quality footage (the 24/7 HD recording, or the purple HD alert clips if you record the sub-stream 24/7); where there's none, nothing plays. A stream you haven't recorded shows as "not recorded" and can't be picked. Each file's stream is told by its picture size, so footage from before a change of recording mode is still shown correctly.
+- **Click Recordings again to reload it**: with Recordings open, clicking the Recordings tab loads it afresh — newest footage, every camera's video reloaded — keeping the cameras you chose.
+- **New update animation**: the spinning arrow is replaced by a download arrow dropping into a tray, with a ring that fills as the update downloads.
+
 ## 0.6.29 — November 2026
 - **Alert pictures on the timelines**: above the recording bar, each AI alert now shows its actual picture, framed in the colour of its kind. Where several alerts are too close to fit, they stack into one picture with a count — click it to see them all and pick one to watch.
 - **No more red NOW lines down every row**: "now" is a single small mark on the time scale, and the part of the recording still being made has a moving striped end (like the time-lapse line while it loads).
