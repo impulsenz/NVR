@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.22 — November 2026
+- **New alerts appear straight away**: the Alerts page updates as soon as a new alert comes in, without refreshing — also when you've had the page open a long time (and "Today" moves on to the new day at midnight).
+- **Easier to pick alerts on the timeline**: the alert nearest the mouse (even a few pixels off) lights up with a white outline, and that's the one a click opens — no more jiggling to hit thin or close-together markers.
+- **Time-lapse is back**: the blue bar under each camera's timeline shows where a time-lapse preview is ready. Previews now take one picture every 10 seconds (from keyframes only), which is far lighter on the computer.
+
 ## 0.6.21 — November 2026
 - **Bigger alert window that stays put**: on a computer the alert window now fills most of the screen and keeps exactly the same size and place as you step through alerts with ◀ ▶, so the arrows never move under your mouse (longer details scroll inside). Clicking outside the window closes it.
 - **Updating**: the Updates button just shows the ring filling up (no spinning arrows).
