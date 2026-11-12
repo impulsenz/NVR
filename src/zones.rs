@@ -69,6 +69,33 @@ struct Track {
     entered: Vec<Option<Instant>>,
     /// Zones already reported for this object (enter / loiter / cross).
     told: Vec<String>,
+    /// Speeds measured in each area that has a real length (km/h).
+    speeds: Vec<Vec<f32>>,
+}
+
+/// The area's length along its longer side, in picture units (16 × 9),
+/// and which way that is (true = left–right).
+fn long_axis(points: &[[f32; 2]]) -> (f32, bool) {
+    let (mut x0, mut x1, mut y0, mut y1) = (1f32, 0f32, 1f32, 0f32);
+    for p in points {
+        x0 = x0.min(p[0]);
+        x1 = x1.max(p[0]);
+        y0 = y0.min(p[1]);
+        y1 = y1.max(p[1]);
+    }
+    let (w, h) = ((x1 - x0) * 16.0, (y1 - y0) * 9.0);
+    if w >= h { (w, true) } else { (h, false) }
+}
+
+/// Speed (km/h) of something that moved from `a` to `b` in `secs`, in an
+/// area whose long side is `metres` long.
+pub fn speed_kmh(points: &[[f32; 2]], metres: f32, a: [f32; 2], b: [f32; 2], secs: f32) -> Option<f32> {
+    let (len, across) = long_axis(points);
+    if len <= 0.0 || secs <= 0.05 || metres <= 0.0 {
+        return None;
+    }
+    let moved = if across { (b[0] - a[0]).abs() * 16.0 } else { (b[1] - a[1]).abs() * 9.0 };
+    Some(moved / len * metres / secs * 3.6)
 }
 
 /// Follows objects between AI checks and reports zone happenings.
@@ -118,12 +145,15 @@ impl ZoneWatch {
                         seen: now,
                         entered: vec![None; zones.len()],
                         told: vec![],
+                        speeds: vec![Vec::new(); zones.len()],
                     });
                     self.tracks.len() - 1
                 }
             };
             let t = &mut self.tracks[ti];
             t.entered.resize(zones.len(), None);
+            t.speeds.resize(zones.len(), Vec::new());
+            let dt = now.duration_since(t.seen).as_secs_f32();
             let prev = t.pos;
             let name = cap(&d.label);
             let mut in_required = false;
@@ -156,8 +186,28 @@ impl ZoneWatch {
                     continue;
                 }
                 if !inside(&z.points, p) {
+                    // Left an area with a real length: how fast it went.
+                    if t.entered[zi].is_some() && !t.speeds[zi].is_empty() {
+                        let mut v = std::mem::take(&mut t.speeds[zi]);
+                        v.sort_by(f32::total_cmp);
+                        let kmh = v[v.len() / 2];
+                        let key = format!("speed:{}", z.name);
+                        if !t.told.contains(&key) && kmh >= 1.0 {
+                            t.told.push(key);
+                            r.notes.push(format!("{name} going {:.0} km/h through {}", kmh, z.name));
+                        }
+                    }
                     t.entered[zi] = None;
                     continue;
+                }
+                // Moving inside an area with a real length: a speed sample.
+                if z.distance_m > 0.0
+                    && t.entered[zi].is_some()
+                    && inside(&z.points, prev)
+                    && let Some(kmh) = speed_kmh(&z.points, z.distance_m, prev, p, dt)
+                    && kmh < 250.0
+                {
+                    t.speeds[zi].push(kmh);
                 }
                 if z.required {
                     in_required = true;
@@ -268,6 +318,16 @@ mod tests {
             points,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn speed_through_an_area() {
+        // A 20 m stretch of road across the whole picture.
+        let road = vec![[0.0, 0.4], [1.0, 0.4], [1.0, 0.6], [0.0, 0.6]];
+        // A third of the way across in a second: 6.7 m/s ≈ 24 km/h.
+        let kmh = speed_kmh(&road, 20.0, [0.2, 0.5], [0.5333, 0.5], 1.0).unwrap();
+        assert!((kmh - 24.0).abs() < 0.5, "{kmh}");
+        assert!(speed_kmh(&road, 0.0, [0.2, 0.5], [0.5, 0.5], 1.0).is_none());
     }
 
     #[test]

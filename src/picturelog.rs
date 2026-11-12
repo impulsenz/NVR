@@ -84,6 +84,11 @@ pub fn prune(camera_dir: &Path) {
 }
 
 /// The kept pictures: (time in ms, file), oldest first.
+/// The kept pictures from `from` to `to` (milliseconds), oldest first.
+pub fn between(camera_dir: &Path, from: i64, to: i64) -> Vec<PathBuf> {
+    list(camera_dir).into_iter().filter(|(t, _)| *t >= from && *t <= to).map(|(_, p)| p).collect()
+}
+
 fn list(camera_dir: &Path) -> Vec<(i64, PathBuf)> {
     let Ok(rd) = std::fs::read_dir(dir(camera_dir)) else { return Vec::new() };
     let mut v: Vec<(i64, PathBuf)> = rd

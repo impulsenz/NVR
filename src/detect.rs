@@ -179,6 +179,11 @@ pub struct DetectStatus {
     pub active_labels: Vec<Label>,
     pub event_active: bool,
     pub last_event: Option<DateTime<Local>>,
+    /// What the AI found in its latest look (for PTZ follow), and when.
+    #[serde(skip)]
+    pub seen_now: Vec<SeenBox>,
+    #[serde(skip)]
+    pub seen_at: Option<Instant>,
     pub ai_error: Option<String>,
     pub error: Option<String>,
     pub fps: f32,
@@ -595,6 +600,11 @@ impl Detector {
                     return Ok(());
                 }
             }
+            // Privacy areas: blacked out before anything sees the frame (the
+            // grid, motion, the AI, alert pictures, the time-lapse).
+            if !self.cam.privacy.is_empty() {
+                self.cam.paint_privacy(&mut buf, w, h);
+            }
             let frame = Frame {
                 width: w,
                 height: h,
@@ -917,6 +927,11 @@ impl Detector {
             .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
             .cloned()
             .collect();
+        {
+            let mut s = self.status.lock().unwrap();
+            s.seen_now = hits.iter().map(|x| SeenBox { label: x.label.clone(), score: x.score, x: x.x, y: x.y, w: x.w, h: x.h }).collect();
+            s.seen_at = Some(Instant::now());
+        }
         // For "ignore animals": what this look found.
         if let Some(a) = active.as_mut() {
             for x in best.iter().filter(|x| x.score >= 0.4) {
@@ -1106,10 +1121,17 @@ impl Detector {
             changed = true;
             let (ai, tx, id, ffmpeg) = (self.ai.get(), hd_tx.clone(), a.event.id.clone(), self.env.ffmpeg_path.clone());
             let (min_conf, watched) = (d.min_confidence, d.objects.clone());
+            let cam = self.cam.clone();
             tokio::spawn(async move {
                 let mut checks = Vec::new();
                 match hd_frame(&relay, &ffmpeg).await {
-                    Ok(f) => {
+                    Ok(mut f) => {
+                        // Privacy areas are black here too.
+                        if !cam.privacy.is_empty() {
+                            let mut px = (*f.rgb).clone();
+                            cam.paint_privacy(&mut px, f.width, f.height);
+                            f.rgb = Arc::new(px);
+                        }
                         for (label, b) in hd_checks {
                             let v = hd_verify(&ai, &f, &label, b, min_conf, &watched).await;
                             checks.push((label, b, v));

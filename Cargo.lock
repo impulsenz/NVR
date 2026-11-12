@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "nvr"
-version = "0.6.52"
+version = "0.6.53"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1524,6 +1524,7 @@ dependencies = [
  "md-5",
  "nu-ansi-term",
  "ort",
+ "qrcode",
  "rand_core 0.6.4",
  "rcgen",
  "reqwest",
@@ -1793,6 +1794,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quote"

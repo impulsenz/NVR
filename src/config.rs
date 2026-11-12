@@ -903,6 +903,14 @@ pub struct PtzConfig {
     pub speed: f32,
     pub invert_pan: bool,
     pub invert_tilt: bool,
+    /// Patrol: preset tokens visited in turn (empty = off).
+    pub patrol: Vec<String>,
+    /// Seconds at each patrol preset.
+    pub patrol_seconds: u32,
+    /// Follow (auto-tracking): turn to keep what the AI finds in view.
+    pub follow: bool,
+    /// What to follow (empty = person).
+    pub follow_objects: Vec<String>,
 }
 
 impl Default for PtzConfig {
@@ -916,6 +924,10 @@ impl Default for PtzConfig {
             speed: 0.5,
             invert_pan: false,
             invert_tilt: false,
+            patrol: Vec::new(),
+            patrol_seconds: 30,
+            follow: false,
+            follow_objects: Vec::new(),
         }
     }
 }
@@ -938,6 +950,9 @@ pub struct ZoneConfig {
     /// Line: "any", "ab" or "ba".
     pub direction: String,
     /// Area: report when something was left or taken (parcel, theft).
+    /// Real length of the area's long side in metres (0 = off): GAZE then
+    /// notes how fast things go through it.
+    pub distance_m: f32,
     pub watch_items: bool,
 }
 
@@ -951,6 +966,7 @@ impl Default for ZoneConfig {
             required: false,
             loiter_seconds: 0,
             direction: "any".into(),
+            distance_m: 0.0,
             watch_items: false,
         }
     }
@@ -1066,6 +1082,9 @@ pub struct CameraConfig {
     pub timeline_copy: bool,
     /// Use the camera's own detection (ONVIF events): its person / vehicle
     /// detection, line crossing, doorbell, tampering become alerts.
+    /// Privacy areas (x, y, w, h; 0..1 of the picture): blacked out in the
+    /// live view, recordings, snapshots and alerts, and never detected in.
+    pub privacy: Vec<[f32; 4]>,
     pub onvif_events: bool,
     /// …and also the camera's own (plain) motion detection.
     pub onvif_motion: bool,
@@ -1106,6 +1125,7 @@ impl Default for CameraConfig {
             retention_days: 0,
             max_storage_gb: 0.0,
             timeline_copy: true,
+            privacy: Vec::new(),
             onvif_events: false,
             onvif_motion: false,
             rotate: 0,
@@ -1266,9 +1286,40 @@ impl CameraConfig {
         }
     }
 
-    /// Recordings must be re-encoded (for H.264 conversion or a lower frame rate).
+    /// Recordings must be re-encoded (for H.264 conversion, a lower frame
+    /// rate, or privacy areas painted in).
     pub fn reencode(&self) -> bool {
-        self.transcode || self.record_fps > 0
+        self.transcode || self.record_fps > 0 || !self.privacy.is_empty()
+    }
+
+    /// The ffmpeg filter that blacks out the privacy areas (None = none).
+    pub fn privacy_filter(&self) -> Option<String> {
+        let boxes: Vec<String> = self
+            .privacy
+            .iter()
+            .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+            .map(|b| {
+                format!(
+                    "drawbox=x=iw*{:.4}:y=ih*{:.4}:w=iw*{:.4}:h=ih*{:.4}:color=black:t=fill",
+                    b[0].clamp(0.0, 1.0), b[1].clamp(0.0, 1.0), b[2].clamp(0.0, 1.0), b[3].clamp(0.0, 1.0)
+                )
+            })
+            .collect();
+        (!boxes.is_empty()).then(|| boxes.join(","))
+    }
+
+    /// Black out the privacy areas in an RGB picture.
+    pub fn paint_privacy(&self, rgb: &mut [u8], w: u32, h: u32) {
+        for b in &self.privacy {
+            let x0 = ((b[0].clamp(0.0, 1.0) * w as f32) as u32).min(w);
+            let y0 = ((b[1].clamp(0.0, 1.0) * h as f32) as u32).min(h);
+            let x1 = (((b[0] + b[2]).clamp(0.0, 1.0) * w as f32).ceil() as u32).min(w);
+            let y1 = (((b[1] + b[3]).clamp(0.0, 1.0) * h as f32).ceil() as u32).min(h);
+            for y in y0..y1 {
+                let row = (y * w * 3) as usize;
+                rgb[row + (x0 * 3) as usize..row + (x1 * 3) as usize].fill(0);
+            }
+        }
     }
 }
 

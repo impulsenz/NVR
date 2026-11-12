@@ -120,6 +120,10 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/logout", post(auth_logout))
         .route("/api/auth/password", post(auth_password))
+        .route("/api/auth/two-step/start", post(two_step_start))
+        .route("/api/auth/two-step/finish", post(two_step_finish))
+        .route("/api/auth/two-step/off", post(two_step_off))
+        .route("/api/users/{name}/two-step-off", post(two_step_off_admin))
         .route("/api/users", get(users_list).post(users_create))
         .route("/api/users/{name}", put(users_update).delete(users_delete))
         .route(
@@ -213,6 +217,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/recordings", get(search))
         .route("/api/timeline", get(timeline))
         .route("/api/export", get(export_clip))
+        .route("/api/timelapse-export", get(timelapse_export))
         .route("/api/sprite/{id}/{kind}/{name}", get(sprite_info))
         .route("/api/sprites-ready", post(sprites_ready))
         .route("/api/whatsnew", get(whats_new))
@@ -238,6 +243,9 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/live/{id}/audio.mp3", get(live_audio))
         .route("/live/{id}/frame.jpg", get(live_frame))
         .route("/live/{id}/video", get(live_video_ws))
+        .route("/overview.jpg", get(overview_jpg))
+        .route("/overview.mjpeg", get(overview_mjpeg))
+        .route("/api/overview/key", get(overview_key).post(overview_key_renew))
         .route("/snapshot/{id}", get(snapshot))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(mgr.clone(), auth))
@@ -353,7 +361,7 @@ async fn status(
         // The user's own layout for this kind of device (else the shared one).
         "mode": { "current": cfg.modes.current, "effective": cfg.modes.effective(crate::notify::is_night(&cfg.notify, Local::now())), "modes": cfg.modes },
         "dashboard": user.as_ref().and_then(|u| m.users.layout(&u.0.0.username, device_kind(&dq.device))).unwrap_or(cfg.dashboard.clone()),
-        "me": user.as_ref().map(|u| crate::users::Me { username: u.0.0.username.clone(), role: u.0.0.role, cameras: u.0.0.cameras.clone() }),
+        "me": user.as_ref().map(|u| crate::users::Me { username: u.0.0.username.clone(), role: u.0.0.role, two_step: u.0.0.two_step(), cameras: u.0.0.cameras.clone() }),
         "cameras": cameras,
         "ai": m.ai.get().status(),
         // Where the AI models run (GPU or processor, and why).
@@ -368,6 +376,7 @@ async fn status(
             .collect::<Vec<_>>(),
         "alerts_unseen": library::unseen_count(&m),
         "timelapse": crate::picturelog::enabled(),
+        "timelapse_seconds": crate::picturelog::seconds(),
         "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.lock().unwrap().len() } else { 0 },
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
@@ -1202,6 +1211,7 @@ struct PtzMove {
 }
 
 async fn ptz_move(State(m): App, Path(id): Path<String>, Json(mv): Json<PtzMove>) -> Response {
+    crate::ptz_auto::manual(&id);
     let r = async {
         let t = ptz_target(&m, &id)?;
         let cfg = m.config();
@@ -1251,6 +1261,7 @@ struct PresetReq {
 }
 
 async fn ptz_goto(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq>) -> Response {
+    crate::ptz_auto::manual(&id);
     let res = async {
         m.onvif(&id)
             .goto_preset(&ptz_target(&m, &id)?, &r.token)
@@ -2067,6 +2078,86 @@ async fn play_converted(
 /// Videos being converted for the browser at once.
 static CONVERSIONS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
     std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(6)));
+
+#[derive(Deserialize)]
+struct TimelapseQuery {
+    camera: String,
+    from: DateTime<chrono::FixedOffset>,
+    to: DateTime<chrono::FixedOffset>,
+    /// Pictures per second in the video (how fast it goes).
+    #[serde(default)]
+    fps: Option<u32>,
+}
+
+/// A time-lapse video (MP4) of any stretch of time, made from the
+/// time-lapse pictures already kept: a whole day takes seconds to make.
+async fn timelapse_export(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Query(q): Query<TimelapseQuery>,
+) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&q.camera)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let c = camera!(m, q.camera);
+    let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
+    if to <= from || (to - from).num_days() > 31 {
+        return err(StatusCode::BAD_REQUEST, "choose up to 31 days");
+    }
+    let pics = crate::picturelog::between(&c.dir, from.timestamp_millis(), to.timestamp_millis());
+    if pics.len() < 2 {
+        return err(StatusCode::NOT_FOUND, "no time-lapse pictures for that time (time-lapse previews are kept as the camera records)");
+    }
+    let fps = q.fps.unwrap_or(30).clamp(1, 120);
+    let Ok(_permit) = CONVERSIONS.clone().try_acquire_owned() else {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "too many videos are being made right now — try again in a moment");
+    };
+    let ffmpeg_path = m.config().server.ffmpeg_path.clone();
+    let child = crate::load::cmd(&ffmpeg_path)
+        .args(["-hide_banner", "-loglevel", "error", "-f", "image2pipe", "-framerate", &fps.to_string(), "-c:v", "mjpeg", "-i", "pipe:0"])
+        // Even sizes for H.264; the pictures may differ in size over time.
+        .args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23"])
+        .args(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let mut stdin = child.stdin.take().unwrap();
+    tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        for p in pics {
+            if let Ok(b) = tokio::fs::read(&p).await
+                && stdin.write_all(&b).await.is_err()
+            {
+                break;
+            }
+        }
+        let _ = stdin.shutdown().await;
+    });
+    let stdout = child.stdout.take().unwrap();
+    let stream = futures_util::stream::unfold(
+        (tokio_util::io::ReaderStream::new(stdout), child, _permit),
+        |(mut r, c, p)| async move {
+            use futures_util::StreamExt;
+            r.next().await.map(|x| (x, (r, c, p)))
+        },
+    );
+    let name = format!("{} time-lapse {} to {}.mp4", file_safe(&c.cfg.name), from.format("%Y-%m-%d %H-%M"), to.format("%Y-%m-%d %H-%M"));
+    let mut res = Response::builder()
+        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from_stream(stream))
+        .unwrap();
+    if let Ok(v) = HeaderValue::from_str(&attachment(&name)) {
+        res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+    }
+    res
+}
 
 /// Resolve "rec"/"clip" + name to a file of the camera.
 fn media_path(
@@ -3299,9 +3390,10 @@ async fn live_video_ws(
     let main = !matches!(lq.q, Some(Quality::Sub)) || !c.cfg.has_sub();
     let relay = if main { c.relay_main.clone() } else { c.relay_sub.clone() };
     let ffmpeg_path = m.config().server.ffmpeg_path.clone();
-    let rotated = c.cfg.rotate % 360 != 0;
+    let rotated = c.cfg.rotate % 360 != 0 || !c.cfg.privacy.is_empty();
     ws.on_upgrade(move |mut socket| async move {
-        // Rotation is applied while decoding: those cameras keep the picture stream.
+        // Rotation and privacy areas are applied while decoding: those
+        // cameras keep the picture stream.
         if rotated {
             let _ = socket.send(Message::Text(json!({"error": "rotated"}).to_string().into())).await;
             return;
@@ -3347,6 +3439,66 @@ async fn live_video_ws(
             }
         }
     })
+}
+
+#[derive(Deserialize)]
+struct OverviewQuery {
+    /// Only cameras with something going on.
+    #[serde(default)]
+    active: bool,
+    #[serde(default)]
+    w: Option<u32>,
+    #[serde(default)]
+    fps: Option<f32>,
+}
+
+fn overview_size(q: &OverviewQuery) -> (u32, u32) {
+    let w = q.w.unwrap_or(1280).clamp(320, 3840) & !1;
+    (w, (w * 9 / 16) & !1)
+}
+
+/// Every camera in one picture.
+async fn overview_jpg(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<OverviewQuery>) -> Response {
+    let vis = visible(&user);
+    let (w, h) = overview_size(&q);
+    let m2 = m.clone();
+    match tokio::task::spawn_blocking(move || crate::overview::picture(&m2, vis.as_deref(), q.active, w, h)).await.ok().flatten() {
+        Some(jpg) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], jpg).into_response(),
+        None => err(StatusCode::SERVICE_UNAVAILABLE, "no camera pictures yet"),
+    }
+}
+
+/// Every camera in one moving picture (MJPEG: plays in any browser, in
+/// Home Assistant's generic camera, in VLC).
+async fn overview_mjpeg(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<OverviewQuery>) -> Response {
+    let vis = visible(&user);
+    let (w, h) = overview_size(&q);
+    let every = Duration::from_secs_f32(1.0 / q.fps.unwrap_or(2.0).clamp(0.2, 10.0));
+    let (tx, mut out) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
+    tokio::spawn(async move {
+        loop {
+            let (m2, v2) = (m.clone(), vis.clone());
+            let pic = tokio::task::spawn_blocking(move || crate::overview::picture(&m2, v2.as_deref(), q.active, w, h)).await.ok().flatten();
+            if let Some(jpg) = pic
+                && tx.send(Ok(multipart_part(&Bytes::from(jpg)))).await.is_err()
+            {
+                break;
+            }
+            if tx.is_closed() {
+                break;
+            }
+            tokio::time::sleep(every).await;
+        }
+    });
+    mjpeg_response(futures_util::stream::poll_fn(move |cx| out.poll_recv(cx)))
+}
+
+async fn overview_key(State(m): App) -> Response {
+    Json(json!({ "key": crate::overview::key(&m.data_dir, false) })).into_response()
+}
+
+async fn overview_key_renew(State(m): App) -> Response {
+    Json(json!({ "key": crate::overview::key(&m.data_dir, true) })).into_response()
 }
 
 /// Two-way audio: the browser sends 16-bit mono PCM at 8 kHz (binary
@@ -3715,6 +3867,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/https",
         "/api/modes",
         "/api/webhooks",
+        "/api/overview",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"
@@ -3841,6 +3994,13 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
     if open {
         return next.run(req).await;
     }
+    // The private overview link: its key opens the overview, nothing else.
+    if (path == "/overview.jpg" || path == "/overview.mjpeg")
+        && let Some(k) = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("k=")))
+        && crate::overview::key_ok(&m.data_dir, k)
+    {
+        return next.run(req).await;
+    }
     let user = session_token(req.headers()).and_then(|t| m.users.session_user(&t));
     let Some(user) = user else {
         return err(StatusCode::UNAUTHORIZED, "please sign in");
@@ -3871,6 +4031,7 @@ async fn auth_state(State(m): App, headers: axum::http::HeaderMap) -> Response {
     let me = session_token(&headers)
         .and_then(|t| m.users.session_user(&t))
         .map(|u| crate::users::Me {
+            two_step: u.two_step(),
             username: u.username,
             role: u.role,
             cameras: u.cameras,
@@ -3882,6 +4043,9 @@ async fn auth_state(State(m): App, headers: axum::http::HeaderMap) -> Response {
 struct LoginReq {
     username: String,
     password: String,
+    /// The code from the authenticator app (two-step sign-in).
+    #[serde(default)]
+    code: Option<String>,
     #[serde(default)]
     remember: bool,
 }
@@ -3918,13 +4082,14 @@ async fn auth_login(
 ) -> Response {
     let ip = client_ip(addr, &headers).to_string();
     let m2 = m.clone();
-    let (u, p, remember, from) = (
+    let (u, p, remember, from, code) = (
         r.username.clone(),
         r.password.clone(),
         r.remember,
         ip.clone(),
+        r.code.clone(),
     );
-    let res = check_password_blocking(move || m2.users.login(&u, &p, remember, &from)).await;
+    let res = check_password_blocking(move || m2.users.login(&u, &p, code.as_deref(), remember, &from)).await;
     match res.unwrap_or_else(|| Err(anyhow::anyhow!("busy, try again"))) {
         Ok(t) => (
             [(
@@ -3934,11 +4099,80 @@ async fn auth_login(
             Json(json!({ "ok": true })),
         )
             .into_response(),
+        // Right password: now the code from the authenticator app.
+        Err(e) if e.to_string() == crate::users::NEED_CODE => {
+            (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Enter the 6-digit code from your authenticator app", "need_code": true }))).into_response()
+        }
         Err(e) => {
             // {:?}: a user name can't add lines to the log.
             tracing::warn!("failed sign-in for {:?} from {ip}", r.username.trim());
             err(StatusCode::UNAUTHORIZED, format!("{e:#}"))
         }
+    }
+}
+
+/// Turning on two-step sign-in: a new secret and its QR code to scan.
+async fn two_step_start(State(m): App, user: axum::Extension<CurrentUser>) -> Response {
+    let name = user.0.0.username.clone();
+    let (secret, uri) = m.users.start_two_step(&name);
+    let qr = qrcode::QrCode::new(uri.as_bytes())
+        .map(|q| q.render::<qrcode::render::svg::Color>().min_dimensions(200, 200).quiet_zone(true).build())
+        .unwrap_or_default();
+    // Spaced in fours, for typing it in instead.
+    let spaced = secret.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).to_string()).collect::<Vec<_>>().join(" ");
+    Json(json!({ "qr_svg": qr, "secret": spaced })).into_response()
+}
+
+#[derive(Deserialize)]
+struct CodeReq {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    password: String,
+}
+
+async fn two_step_finish(State(m): App, user: axum::Extension<CurrentUser>, Json(r): Json<CodeReq>) -> Response {
+    match m.users.finish_two_step(&user.0.0.username, &r.code) {
+        Ok(codes) => {
+            tracing::info!("{:?} turned on two-step sign-in", user.0.0.username);
+            Json(json!({ "ok": true, "recovery": codes })).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+/// Turn it off for yourself: needs your password.
+async fn two_step_off(
+    State(m): App,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    user: axum::Extension<CurrentUser>,
+    Json(r): Json<CodeReq>,
+) -> Response {
+    let name = user.0.0.username.clone();
+    let ip = client_ip(addr, &headers).to_string();
+    let (m2, n2, pw) = (m.clone(), name.clone(), r.password.clone());
+    match check_password_blocking(move || m2.users.check(&n2, &pw, &ip)).await {
+        Some(Ok(_)) => {}
+        _ => return err(StatusCode::BAD_REQUEST, "the password is wrong"),
+    }
+    match m.users.stop_two_step(&name) {
+        Ok(()) => {
+            tracing::info!("{name:?} turned off two-step sign-in");
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+/// An admin turns it off for someone who lost their phone and codes.
+async fn two_step_off_admin(State(m): App, Path(name): Path<String>) -> Response {
+    match m.users.stop_two_step(&name) {
+        Ok(()) => {
+            tracing::info!("two-step sign-in turned off for {name:?} by an admin");
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => bad(e),
     }
 }
 

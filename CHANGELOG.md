@@ -1,5 +1,14 @@
 # What's new in GAZE
 
+## 0.6.53 — November 2026
+- **Two-step sign-in**: 👤 menu → Two-step sign-in. After the password, GAZE asks for the 6-digit code from an authenticator app (Google or Microsoft Authenticator, Authy, a password manager) — a stolen password alone isn't enough. Eight one-time recovery codes for a lost phone; an admin can turn it off for someone (Settings → Users).
+- **Overview of all cameras**: every camera in one moving picture, or only the ones with something going on — for a wall tablet, a slow connection or a Home Assistant dashboard. A private link works without signing in (Settings → Smart home), and a new link stops the old one.
+- **PTZ patrol**: a moving camera can visit chosen presets in turn, a set time at each; it pauses while something is going on and for 2 minutes after you steer it by hand.
+- **Follow people (auto-tracking)**: a moving camera turns to keep the person (or car, dog…) the AI finds in view, then goes back when they've gone.
+- **Speed**: give an area along a road its real length, and alerts note how fast things went through it ("Car going 42 km/h through Road").
+- **Privacy areas**: black out parts of a camera's picture for good (a neighbour's window, a footpath) — in the live view, new recordings, snapshots and alert pictures, and nothing is detected there. Camera → General.
+- **Time-lapse video**: Recordings → 🎞 Time-lapse video downloads a sped-up MP4 of any camera and time (a whole day in about 5 minutes), made in seconds from the time-lapse pictures.
+
 ## 0.6.52 — November 2026
 - **Smooth live video**: live pictures are now the camera's own video, played by your browser at the camera's full frame rate with half a second of buffer to smooth out Wi-Fi hiccups — much smoother (Tapo cameras especially) and far less work for the computer. The old picture stream is still used as the first picture, for data saver, and for browsers that can't play the camera's format. Settings → Live view & display → Live pictures switches it per browser.
 - **Secure address (https)**: GAZE also answers on https (port 8443). It makes its own certificate (browsers warn once), or gets a trusted one from Tailscale with one button — trusted everywhere, renewed by itself, and the easy way in from away from home. Settings → System.

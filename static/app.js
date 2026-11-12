@@ -2593,6 +2593,7 @@ function setRecMode(mode) {
   $('page-recordings').classList.toggle('tl-mode', mode === 'timeline');
   $('f-types').hidden = mode !== 'list';
   document.querySelectorAll('#page-recordings .list-only').forEach(e => e.hidden = mode !== 'list');
+  document.querySelectorAll('#page-recordings .tl-only').forEach(e => e.hidden = mode === 'list' || !TIMELAPSE);
   if (mode === 'list') { tlStop(); loadRecordings(); }
   else { closeAlert(); if (!resumeTimeline()) loadTimeline(); }
 }
@@ -3038,6 +3039,32 @@ async function playItem(it, card) {
     api('api/alerts/seen', {method: 'POST', json: {ids: [e.id]}}).then(refreshStatus).catch(() => {});
   }
 }
+// ---------- a time-lapse video of a camera's day ----------
+$('f-tlx').onclick = () => {
+  const cams = status.cameras.filter(c => !rec.cameras.size || rec.cameras.has(c.id));
+  const day = startOfDay(tl.day ? new Date(tl.day) : new Date());
+  const p2 = (n) => String(n).padStart(2, '0'), local = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg';
+  dlg.innerHTML = `<div class="head"><h2>🎞 Time-lapse video</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+    <div class="body form">
+      <label for="tx-cam">Camera</label><div><select id="tx-cam">${cams.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></div>
+      <label for="tx-from">From</label><div><input type="datetime-local" id="tx-from" value="${local(day)}"></div>
+      <label for="tx-to">To</label><div><input type="datetime-local" id="tx-to" value="${local(new Date(Math.min(Date.now(), day.getTime() + 86400000)))}"></div>
+      <label for="tx-fps">Speed${tip('How many time-lapse pictures are shown each second. With one picture every 10 seconds (the standard), 30 per second turns a whole day into about 5 minutes; 60 into about 2½.')}</label><div><select id="tx-fps"><option value="10">Slow (10 pictures a second)</option><option value="30" selected>Normal (30 a second)</option><option value="60">Fast (60 a second)</option></select><div class="hint" id="tx-len"></div></div>
+      <span></span><div class="actions" style="margin:0"><button type="button" data-x>Cancel</button><a class="btn primary" id="tx-go">⇩ Download video</a></div></div>`;
+  document.body.appendChild(dlg); dlg.showModal();
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+  const upd = () => {
+    const a = new Date(val('tx-from')), b = new Date(val('tx-to')), secs = (b - a) / 1000;
+    const pics = secs / (status.timelapse_seconds || 10), len = pics / (+val('tx-fps') || 30);
+    $('tx-len').textContent = secs > 0 ? `About ${fmtDur(len)} of video` : 'The end must be after the start';
+    $('tx-go').href = `api/timelapse-export?camera=${enc(val('tx-cam'))}&from=${enc(a.toISOString())}&to=${enc(b.toISOString())}&fps=${val('tx-fps')}`;
+  };
+  ['tx-cam', 'tx-from', 'tx-to', 'tx-fps'].forEach(i => $(i).oninput = upd); upd();
+  $('tx-go').onclick = () => { toast('Making the video — it downloads in a moment'); setTimeout(close, 300); };
+};
+
 // ---------- sharing an alert ----------
 // The system share sheet (Messenger, WhatsApp, Facebook, email… whatever is
 // on the phone or computer) when the browser offers it with files — it
@@ -4911,6 +4938,9 @@ async function openCameraDialog(id, clone, prof) {
         <label for="c-rotate">Rotate picture</label>
         <div><select id="c-rotate">${[[0, 'No rotation'], [90, '90° clockwise'], [180, '180° (upside down)'], [270, '90° anticlockwise']].map(([v, t]) => `<option value="${v}" ${(c.rotate || 0) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <div class="hint">For cameras mounted sideways or upside down: live view, alerts and new recordings are turned the right way.</div></div>
+        <label>Privacy areas${tip('Black out parts of the picture for good \u2014 a neighbour\u2019s window or garden, a public footpath. They\u2019re black in the live view, new recordings, snapshots and alert pictures, and nothing is ever detected there. This camera\u2019s recordings are then converted while recording (more work for the computer), and its live view uses pictures instead of smooth video. Recordings made before stay as they are.')}</label>
+        <div><div class="surface priv-ed" id="c-priv" style="aspect-ratio:16/9;max-width:560px;cursor:crosshair;touch-action:none"><img alt="" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div></div>
+          <div class="row" style="margin-top:6px"><button type="button" class="small" id="c-priv-clear">Clear all</button><span class="hint" style="margin:0">Drag on the picture to black out an area; ✕ removes one.</span></div></div>
         <label for="c-transport">Connection type${tip('How the video travels from the camera. TCP is reliable and right for almost every camera, especially on Wi-Fi. Only try UDP if a camera won’t connect with TCP.')}</label>
         <div><select id="c-transport"><option value="tcp">TCP — reliable (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
@@ -5067,6 +5097,12 @@ async function openCameraDialog(id, clone, prof) {
         <label for="p-user">Control login${tip('Usually the same user name and password as the video. Leave empty to use those. Tapo cameras: the camera account made in the Tapo app (Advanced settings → Camera account).')}</label><div class="row"><input type="text" id="p-user" value="${esc(c.ptz.username)}" placeholder="Same as stream" style="flex:1" autocomplete="off"><input type="password" id="p-pass" value="${esc(c.ptz.password)}" placeholder="Same as stream" style="flex:1" autocomplete="new-password"></div>
         <label for="p-speed">Speed</label><div class="row"><input type="range" id="p-speed" min="10" max="100" value="${Math.round(c.ptz.speed * 100)}" style="flex:1"><span class="muted" id="p-speed-v" style="width:44px">${Math.round(c.ptz.speed * 100)}%</span></div>
         <span></span><div class="row"><label class="check"><input type="checkbox" id="p-inv-pan" ${c.ptz.invert_pan ? 'checked' : ''}> Reverse left/right</label><label class="check"><input type="checkbox" id="p-inv-tilt" ${c.ptz.invert_tilt ? 'checked' : ''}> Reverse up/down</label></div>
+        <h3>Moving on its own</h3>
+        <label>Patrol${tip('The camera visits the presets ticked here in turn, staying a while at each \u2014 like a guard doing rounds. It pauses while something is going on, and for 2 minutes after you steer it by hand. Save presets with \u2606 on the camera\u2019s picture first.')}</label>
+        <div><div class="chips" id="p-patrol"><span class="muted small">${id && !clone ? 'Loading presets…' : 'Save the camera first.'}</span></div>
+          <div class="row" style="margin-top:6px"><span class="muted">stay</span><input type="number" id="p-patrol-s" min="5" max="3600" value="${c.ptz.patrol_seconds || 30}" style="width:90px"><span class="muted">seconds at each</span></div></div>
+        <span></span><div><label class="check"><input type="checkbox" id="p-follow" ${c.ptz.follow ? 'checked' : ''}> Follow people (auto-tracking)${tip('When the AI finds a person (or what you choose below) away from the middle of the picture, the camera turns to keep them in view. When they\u2019re gone, it goes back to its first patrol preset, or its home position. Needs object recognition on for this camera.')}</label>
+          <div class="chips" id="p-follow-objs" style="margin-top:4px">${['person', 'car', 'dog', 'cat'].map(o => `<label><input type="checkbox" value="${o}" ${(c.ptz.follow_objects && c.ptz.follow_objects.length ? c.ptz.follow_objects : ['person']).includes(o) ? 'checked' : ''}>${labelIcon(o)} ${o}</label>`).join('')}</div></div>
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
       <div data-tab="zones" hidden>
@@ -5088,6 +5124,15 @@ async function openCameraDialog(id, clone, prof) {
     if (b.dataset.t === 'zones') drawZones();
   });
   setupRestartButton(id && !clone ? id : null);
+  setupPrivacy(c, id && !clone ? id : null);
+  // Patrol: the camera's presets to choose from.
+  if (id && !clone && c.ptz.enabled) api(`api/cameras/${enc(id)}/ptz/presets`).then(list => {
+    const box = $('p-patrol'); if (!box) return;
+    box.dataset.loaded = '1';
+    box.innerHTML = list.length ? list.map(x => `<label><input type="checkbox" value="${esc(x.token)}" ${(c.ptz.patrol || []).includes(x.token) ? 'checked' : ''}>${esc(x.name)}</label>`).join('')
+      : '<span class="muted small">No presets yet: save some with ☆ on the camera\u2019s picture.</span>';
+  }).catch(e => { const box = $('p-patrol'); if (box) box.innerHTML = `<span class="muted small">Couldn't read the presets: ${esc(e.message)}</span>`; });
+  else if ($('p-patrol') && id && !clone) $('p-patrol').innerHTML = '<span class="muted small">Turn on pan / tilt / zoom and save, then choose presets here.</span>';
   setupProfiles(c);
   $('cam-dialog').classList.toggle('profile-mode', !!prof);
   if (prof) {
@@ -5186,7 +5231,48 @@ async function openCameraDialog(id, clone, prof) {
   if (!$('cam-dialog').open) $('cam-dialog').showModal();
 }
 function closeCameraDialog() { stopPreviews(); $('cam-dialog').close(); }
-$('cam-dialog').addEventListener('close', () => { if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; } stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });
+$('cam-dialog').addEventListener('close', () => { if (privUnbind) { privUnbind(); privUnbind = null; } if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; } stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });
+
+// ---------- privacy areas: boxes dragged on the picture ----------
+let privRects = [], privUnbind = null;
+function setupPrivacy(c, camId) {
+  privRects = (c.privacy || []).map(b => [...b]);
+  const box = $('c-priv');
+  const draw = () => {
+    box.querySelectorAll('.pv').forEach(e => e.remove());
+    privRects.forEach((b, i) => {
+      const d = document.createElement('div');
+      d.className = 'pv';
+      Object.assign(d.style, {left: b[0] * 100 + '%', top: b[1] * 100 + '%', width: b[2] * 100 + '%', height: b[3] * 100 + '%'});
+      d.innerHTML = '<button type="button" class="small" title="Remove this area">✕</button>';
+      d.querySelector('button').onpointerdown = (e) => e.stopPropagation();
+      d.querySelector('button').onclick = () => { privRects.splice(i, 1); draw(); };
+      box.appendChild(d);
+    });
+  };
+  const at = (e) => { const r = box.getBoundingClientRect(); return [Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1), Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1)]; };
+  let start = null, live = null;
+  box.onpointerdown = (e) => {
+    if (e.target.closest('button')) return;
+    start = at(e); box.setPointerCapture(e.pointerId);
+    live = document.createElement('div'); live.className = 'pv drawing'; box.appendChild(live);
+  };
+  box.onpointermove = (e) => {
+    if (!start) return;
+    const p = at(e), x = Math.min(start[0], p[0]), y = Math.min(start[1], p[1]);
+    Object.assign(live.style, {left: x * 100 + '%', top: y * 100 + '%', width: Math.abs(p[0] - start[0]) * 100 + '%', height: Math.abs(p[1] - start[1]) * 100 + '%'});
+  };
+  box.onpointerup = (e) => {
+    if (!start) return;
+    const p = at(e), b = [Math.min(start[0], p[0]), Math.min(start[1], p[1]), Math.abs(p[0] - start[0]), Math.abs(p[1] - start[1])];
+    start = null; live.remove();
+    if (b[2] > 0.01 && b[3] > 0.01) { privRects.push(b.map(v => +v.toFixed(4))); draw(); }
+  };
+  $('c-priv-clear').onclick = () => { privRects = []; draw(); };
+  if (privUnbind) { privUnbind(); privUnbind = null; }
+  if (camId) privUnbind = Live.bind(box.querySelector('img'), camId, 'sub');
+  draw();
+}
 
 // ---------- motion mask editor & live motion readout ----------
 let maskCells = [], maskUnbind = null, meterTimer = null;
@@ -5510,11 +5596,13 @@ function collectCamera() {
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),
-    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true, onvif_events: chk('c-onvif-ev'), onvif_motion: chk('c-onvif-mo'),
+    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true, onvif_events: chk('c-onvif-ev'), onvif_motion: chk('c-onvif-mo'), privacy: privRects,
     osd: readOsd(),
     view: {grid_quality: val('c-vq') || 'auto', grid_fps: +val('c-vg') || 0, hd_fps: +val('c-vh') || 0},
     ptz: {enabled: chk('p-on'), host: val('p-host').trim(), port: Math.round(num('p-port')) || 80, username: val('p-user').trim(), password: $('p-pass').value,
-      speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt')},
+      speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt'),
+      patrol: $('p-patrol').dataset.loaded ? [...document.querySelectorAll('#p-patrol input:checked')].map(i => i.value) : ((cameraCfgs.find(x => x.id === editingId) || {ptz: {}}).ptz.patrol || []), patrol_seconds: Math.max(5, Math.round(num('p-patrol-s')) || 30),
+      follow: chk('p-follow'), follow_objects: [...document.querySelectorAll('#p-follow-objs input:checked')].map(i => i.value)},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), join_seconds: Math.max(0, Math.round(num('d-join')) || 0), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), hd_check: val('d-hdcheck'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
@@ -5620,12 +5708,13 @@ function renderZoneList() {
       ${z.kind === 'line' ? `<div class="row"><span class="muted">Report crossings</span><select class="z-dir"><option value="any">both ways</option><option value="ab">only A → B</option><option value="ba">only B → A</option></select></div>`
         : `<div class="row" style="flex-wrap:wrap;gap:14px">
             <label class="check"><input type="checkbox" class="z-req" ${z.required ? 'checked' : ''}> Only alert for objects inside this area${tip('Objects outside this area don\u2019t raise an alert. Example: draw your driveway so cars driving past on the street are ignored.')}</label>
-            <label class="check">Alert if something stays longer than <input type="number" class="z-loiter" min="0" max="3600" value="${z.loiter_seconds}" style="width:80px"> seconds${tip('Loitering: someone (or something) staying in this area longer than this raises an alert. 0 = off. Example: 60 for a person hanging around your front gate.')}</label></div>`}`;
+            <label class="check">Alert if something stays longer than <input type="number" class="z-loiter" min="0" max="3600" value="${z.loiter_seconds}" style="width:80px"> seconds${tip('Loitering: someone (or something) staying in this area longer than this raises an alert. 0 = off. Example: 60 for a person hanging around your front gate.')}</label>
+            <label class="check">Real length <input type="number" class="z-dist" min="0" max="1000" step="0.5" value="${z.distance_m || 0}" style="width:80px"> metres${tip('To measure speed: draw the area along a road or path, and enter how long its longer side really is (pace it out, or use a map). Alerts then say e.g. \u201cCar going 42 km/h through Road\u201d. 0 = off. It\u2019s an estimate: best when the camera looks across the road rather than along it.')}</label></div>`}`;
     const upd = () => {
       z.name = el.querySelector('.z-name').value.trim() || z.name;
       z.objects = [...el.querySelectorAll('.z-objs input:checked')].map(i => i.value);
       if (z.kind === 'line') z.direction = el.querySelector('.z-dir').value;
-      else { z.required = el.querySelector('.z-req').checked; z.loiter_seconds = Math.max(0, Math.round(+el.querySelector('.z-loiter').value || 0)); }
+      else { z.required = el.querySelector('.z-req').checked; z.loiter_seconds = Math.max(0, Math.round(+el.querySelector('.z-loiter').value || 0)); z.distance_m = Math.max(0, +el.querySelector('.z-dist').value || 0); }
       drawZones();
     };
     if (z.kind === 'line') el.querySelector('.z-dir').value = z.direction || 'any';
@@ -6347,9 +6436,15 @@ function showAuth(mode) {
     $('auth-go').disabled = true;
     try {
       const r = await fetch(setup ? 'api/auth/setup' : 'api/auth/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username: val('auth-user'), password: $('auth-pass').value, remember: chk('auth-remember')})});
-      if (!r.ok) return fail((await r.json().catch(() => ({}))).error || 'Could not sign in');
-      $('auth-pass').value = $('auth-pass2').value = '';
+        body: JSON.stringify({username: val('auth-user'), password: $('auth-pass').value, remember: chk('auth-remember'), code: val('auth-code') || null})});
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        // Right password: now the code from the authenticator app.
+        if (j.need_code) { $('auth-code-row').hidden = false; $('auth-err').hidden = true; $('auth-code').focus(); $('auth-go').textContent = 'Sign in'; return; }
+        return fail(j.error || 'Could not sign in');
+      }
+      $('auth-pass').value = $('auth-pass2').value = $('auth-code').value = '';
+      $('auth-code-row').hidden = true;
       boot();
     } catch (err) { fail(err.message); } finally { $('auth-go').disabled = false; }
   };
@@ -6385,6 +6480,44 @@ const isAdmin = () => me && me.role === 'admin';
 $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $('um-pop').hidden = !$('um-pop').hidden; };
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
 $('um-out').onclick = async () => { await fetch('api/auth/logout', {method: 'POST'}); location.hash = '#live'; location.reload(); };
+// Two-step sign-in: a code from an authenticator app after the password.
+$('um-2fa').onclick = async () => {
+  $('um-pop').hidden = true;
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg';
+  const close = () => { dlg.close(); dlg.remove(); };
+  const head = `<div class="head"><h2>🔐 Two-step sign-in</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>`;
+  document.body.appendChild(dlg);
+  const wire = () => dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+  if (me.two_step) {
+    dlg.innerHTML = head + `<div class="body"><p>Two-step sign-in is <b>on</b>: signing in asks for the code from your authenticator app after your password.</p>
+      <label>Your password, to turn it off<input type="password" id="tf-pw" autocomplete="current-password"></label>
+      <div class="actions"><button type="button" data-x>Keep it on</button><button type="button" class="danger" id="tf-off">Turn off</button></div></div>`;
+    wire(); dlg.showModal();
+    $('tf-off').onclick = async () => { try { await api('api/auth/two-step/off', {method: 'POST', json: {password: val('tf-pw')}}); me.two_step = false; toast('Two-step sign-in is off'); close(); } catch (e) { toast(e.message, true); } };
+    return;
+  }
+  let r; try { r = await api('api/auth/two-step/start', {method: 'POST'}); } catch (e) { toast(e.message, true); dlg.remove(); return; }
+  dlg.innerHTML = head + `<div class="body">
+    <p style="margin-top:0">After your password, GAZE will also ask for a 6-digit code from an app on your phone — so a stolen password alone isn't enough.</p>
+    <ol class="steps"><li>Install an authenticator app: Google Authenticator, Microsoft Authenticator, Authy or your password manager.</li>
+      <li>In the app, add an account and scan this code:</li></ol>
+    <div class="tf-qr">${r.qr_svg}</div>
+    <p class="muted small" style="text-align:center">Can't scan? Type this key instead: <code>${esc(r.secret)}</code></p>
+    <label>3. Type the 6-digit code the app shows<input type="text" id="tf-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456"></label>
+    <div class="actions"><button type="button" data-x>Cancel</button><button type="button" class="primary" id="tf-ok">Turn on</button></div></div>`;
+  wire(); dlg.showModal(); $('tf-code').focus();
+  $('tf-ok').onclick = async () => {
+    try {
+      const x = await api('api/auth/two-step/finish', {method: 'POST', json: {code: val('tf-code')}});
+      me.two_step = true;
+      dlg.innerHTML = head + `<div class="body"><p><b>Two-step sign-in is on.</b> Keep these recovery codes somewhere safe (print them, or save them in your password manager). Each works once, instead of a code, if you lose your phone:</p>
+        <pre class="tf-codes">${x.recovery.map(esc).join('\n')}</pre>
+        <div class="actions"><button type="button" id="tf-copy">📋 Copy</button><button type="button" class="primary" data-x>I've saved them</button></div></div>`;
+      wire();
+      $('tf-copy').onclick = () => { navigator.clipboard && navigator.clipboard.writeText(x.recovery.join('\n')).then(() => toast('Copied')).catch(() => {}); };
+    } catch (e) { toast(e.message, true); }
+  };
+};
 $('um-pass').onclick = async () => {
   $('um-pop').hidden = true;
   const cur = prompt('Current password:'); if (cur == null) return;
@@ -6554,6 +6687,21 @@ function renderSmartHome(body) {
     });
   };
   draw();
+  // The overview: every camera in one picture, with a private link.
+  body.insertAdjacentHTML('beforeend', `<div class="card"><h2>Overview of all cameras${tip('Every camera in one moving picture, made from what GAZE already decodes \u2014 almost no extra work. Handy for a wall tablet, a slow phone connection, or a Home Assistant dashboard (add it as an MJPEG camera with the link below). \u201cOnly cameras with something going on\u201d shows just the busy ones (full size when it\u2019s only one), and every camera when all is quiet.')}</h2>
+    <div class="surface" style="aspect-ratio:16/9;max-width:640px"><img id="ov-img" alt="" style="object-fit:contain"></div>
+    <label class="check" style="margin-top:10px"><input type="checkbox" id="ov-active"> Only cameras with something going on</label>
+    <label style="margin-top:10px;display:block">Private link (works without signing in — keep it to yourself)</label>
+    <div class="row"><input type="text" id="ov-link" readonly style="flex:1"><button type="button" id="ov-copy">📋 Copy</button><button type="button" id="ov-new" title="Make a new link: the old one stops working">New link</button></div>
+    <div class="hint">Open it on a tablet, or in Home Assistant: Settings → Devices → Add integration → MJPEG IP Camera, and paste it as the MJPEG URL.</div></div>`);
+  let ovKey = '';
+  const ovLink = () => { const base = location.origin + location.pathname.replace(/[^/]*$/, ''); $('ov-link').value = `${base}overview.mjpeg?k=${ovKey}${chk('ov-active') ? '&active=true' : ''}`; };
+  api('api/overview/key').then(r => { ovKey = r.key; ovLink(); }).catch(() => {});
+  const ovPic = () => { if (!$('ov-img') || !$('ov-img').isConnected) return; $('ov-img').src = `overview.jpg?w=960${chk('ov-active') ? '&active=true' : ''}&t=${Date.now()}`; setTimeout(ovPic, 2000); };
+  ovPic();
+  $('ov-active').onchange = ovLink;
+  $('ov-copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(val('ov-link')).then(() => toast('Link copied')).catch(() => { $('ov-link').select(); });
+  $('ov-new').onclick = async () => { if (!confirm('Make a new link? The old one stops working (update it wherever you used it).')) return; ovKey = (await api('api/overview/key', {method: 'POST'})).key; ovLink(); toast('New link made'); };
   $('wh-add').onclick = () => { hooks.push({name: '', enabled: true, url: '', cameras: [], objects: [], picture: false}); draw(); };
   $('wh-save').onclick = () => saveSettings({webhooks: hooks}, 'Webhooks saved');
   $('f-mqtt').onsubmit = async (e) => {
@@ -6649,7 +6797,7 @@ async function renderUsers(body) {
     <p class="muted" style="margin-top:0">Who can open GAZE and what they can do. <b>Admin</b>: everything. <b>Operator</b>: watch, move PTZ cameras, pause recording, manage alerts. <b>Viewer</b>: watch live view, alerts and recordings only. Tick cameras to limit someone to those (none ticked = all cameras).</p>
     <table class="users"><thead><tr><th>User</th><th>Access</th><th>Cameras</th><th></th></tr></thead><tbody>
     ${users.map(u => `<tr data-u="${esc(u.username)}"><td><b>${esc(u.username)}</b>${me && u.username === me.username ? ' <span class="muted">(you)</span>' : ''}</td><td>${roleSel(u.role)}</td><td>${camPick(u.cameras)}</td>
-      <td style="text-align:right;white-space:nowrap"><button type="button" class="small u-save">Save</button> <button type="button" class="small u-pw">Set password</button> <button type="button" class="small danger u-del" ${me && u.username === me.username ? 'disabled' : ''}>Delete</button></td></tr>`).join('')}
+      <td style="text-align:right;white-space:nowrap"><button type="button" class="small u-save">Save</button> <button type="button" class="small u-pw">Set password</button> ${u.two_step ? '<button type="button" class="small u-2fa" title="Two-step sign-in is on. Turn it off for someone who lost their phone and recovery codes.">🔐 Turn off two-step</button> ' : ''}<button type="button" class="small danger u-del" ${me && u.username === me.username ? 'disabled' : ''}>Delete</button></td></tr>`).join('')}
     </tbody></table></div>
     <form class="card" id="u-new"><h2>Add a user</h2><div class="form">
       <label for="un-name">User name</label><div><input type="text" id="un-name" required autocomplete="off"></div>
@@ -6661,6 +6809,11 @@ async function renderUsers(body) {
   body.querySelectorAll('tr[data-u]').forEach(tr => {
     const name = tr.dataset.u;
     tr.querySelector('.u-save').onclick = async () => { try { await api(`api/users/${enc(name)}`, {method: 'PUT', json: rowData(tr)}); toast(`Saved ${name}`); } catch (e) { toast(e.message, true); } };
+    const tf = tr.querySelector('.u-2fa');
+    if (tf) tf.onclick = async () => {
+      if (!confirm(`Turn off two-step sign-in for ${name}? They'll sign in with just their password until they turn it on again.`)) return;
+      try { await api(`api/users/${enc(name)}/two-step-off`, {method: 'POST'}); toast(`Two-step sign-in off for ${name}`); renderUsers(body); } catch (e) { toast(e.message, true); }
+    };
     tr.querySelector('.u-pw').onclick = async () => {
       const p = prompt(`New password for ${name} (at least 8 characters):`); if (!p) return;
       try { await api(`api/users/${enc(name)}`, {method: 'PUT', json: {password: p}}); toast(`Password set for ${name} (signed out everywhere)`); } catch (e) { toast(e.message, true); }

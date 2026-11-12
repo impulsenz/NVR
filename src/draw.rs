@@ -97,6 +97,14 @@ pub fn text_width(s: &str, scale: i32) -> i32 {
     s.chars().count() as i32 * 6 * scale - scale
 }
 
+/// A caption: light text on a dark band, at (x, y) in a w×h RGB picture.
+pub fn caption(px: &mut Vec<u8>, w: u32, h: u32, x: i32, y: i32, text: &str, scale: i32) {
+    let mut c = Canvas { w: w as i32, h: h as i32, px };
+    let (tw, th) = (text_width(text, scale) + 4 * scale, 7 * scale + 4 * scale);
+    c.fill(x, y, tw, th, [12, 14, 20]);
+    c.text(x + 2 * scale, y + 2 * scale, text, scale, [235, 238, 245]);
+}
+
 /// One box to draw: normalized position (0..1) and its label.
 pub struct Mark<'a> {
     pub x: f32,

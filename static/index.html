@@ -46,6 +46,7 @@
       <select id="um-ds"><option value="auto">Automatic (on for phones)</option><option value="on">Always on</option><option value="off">Off</option></select>
       <button type="button" id="um-install" hidden title="Add GAZE to this device's home screen or Start menu, like an app">📲 Install GAZE as an app</button>
       <button type="button" id="um-pass">Change password</button>
+      <button type="button" id="um-2fa">🔐 Two-step sign-in</button>
       <button type="button" id="um-out">Sign out</button>
     </div>
   </div>
@@ -164,6 +165,7 @@
         <div class="popover" id="f-date-pop" hidden></div>
       </div>
       <button id="f-refresh" title="Load the list again">↻ <span class="rf-t">Refresh</span></button>
+      <button id="f-tlx" class="tl-only" title="Download a sped-up video of a camera's day (or any time), made from its time-lapse pictures">🎞 <span class="rf-t">Time-lapse video</span></button>
     </div>
     <div class="chips" id="f-types" style="margin-bottom:12px"></div>
 
@@ -307,6 +309,7 @@
     <label>User name<input type="text" id="auth-user" autocomplete="username" required></label>
     <label>Password<input type="password" id="auth-pass" autocomplete="current-password" required></label>
     <label id="auth-pass2-row" hidden>Password again<input type="password" id="auth-pass2" autocomplete="new-password"></label>
+    <label id="auth-code-row" hidden>Code from your authenticator app<input type="text" id="auth-code" autocomplete="one-time-code" inputmode="numeric" placeholder="6-digit code (or a recovery code)"></label>
     <label class="check" id="auth-remember-row"><input type="checkbox" id="auth-remember" checked> Keep me signed in on this device</label>
     <div class="err" id="auth-err" hidden></div>
     <button class="primary" id="auth-go">Sign in</button>

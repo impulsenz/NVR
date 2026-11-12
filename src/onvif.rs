@@ -401,6 +401,17 @@ impl Onvif {
         Ok(())
     }
 
+    /// Back to the camera's home position.
+    pub async fn home(&self, t: &Target) -> Result<()> {
+        let d = self.discover(t).await?;
+        let body = format!(
+            r#"<GotoHomePosition xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GotoHomePosition>"#,
+            xml_escape(&d.profile)
+        );
+        self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/GotoHomePosition", &body).await?;
+        Ok(())
+    }
+
     /// Save the current position as a preset.
     pub async fn set_preset(&self, t: &Target, name: &str) -> Result<()> {
         let d = self.discover(t).await?;

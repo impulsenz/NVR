@@ -1155,3 +1155,11 @@ table.modes { width: auto; border-collapse: collapse; }
 table.modes th, table.modes td { padding: 6px 14px; text-align: center; }
 table.modes td:first-child, table.modes th:first-child { text-align: left; }
 table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
+/* Two-step sign-in */
+.tf-qr { display: flex; justify-content: center; margin: 8px 0; }
+.tf-qr svg { background: #fff; padding: 8px; border-radius: 8px; width: 200px; height: 200px; }
+.tf-codes { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-size: 16px; letter-spacing: 1px; columns: 2; }
+/* Privacy areas */
+.priv-ed .pv { position: absolute; background: rgba(0,0,0,.92); border: 1px dashed rgba(255,255,255,.5); z-index: 2; }
+.priv-ed .pv.drawing { background: rgba(0,0,0,.6); border-color: var(--accent); }
+.priv-ed .pv button { position: absolute; top: 2px; right: 2px; min-height: 0; padding: 0 6px; }

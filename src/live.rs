@@ -167,6 +167,7 @@ impl Live {
         let mut child = crate::load::cmd(&self.env.ffmpeg_path)
             .args(["-hide_banner", "-loglevel", "error"])
             .args(self.relay.input_args())
+            .args(self.cam.privacy_filter().map(|f| vec!["-vf".to_string(), f]).unwrap_or_default())
             .args([
                 "-frames:v",
                 "1",
@@ -323,6 +324,9 @@ impl Live {
             Quality::Main => 1920,
         };
         let mut vf = format!("fps={fps}");
+        if let Some(f) = self.cam.privacy_filter() {
+            vf = format!("{f},{vf}");
+        }
         if width > 0 {
             vf.push_str(&format!(",scale='min({width},iw)':-2"));
         }

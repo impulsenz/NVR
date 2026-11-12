@@ -187,7 +187,8 @@ impl Recorder {
             let use_gpu = use_gpu
                 && !crate::load::gpu_too_busy(&format!("{} recording conversion", cam.name));
             let (encoder, keep) = if use_gpu {
-                (hw.resolved_encoder(), ffmpeg::full_gpu_pipeline(hw))
+                // Privacy boxes are drawn on frames in memory: not on the GPU.
+                (hw.resolved_encoder(), ffmpeg::full_gpu_pipeline(hw) && cam.privacy.is_empty())
             } else {
                 ("libx264", false)
             };
@@ -203,6 +204,9 @@ impl Recorder {
             out_args = out;
             if cam.record_fps > 0 {
                 out_args.extend(["-r".to_string(), cam.record_fps.to_string()]);
+            }
+            if let Some(f) = cam.privacy_filter() {
+                out_args.extend(["-vf".to_string(), f]);
             }
         }
         cmd.args(["-fflags", "+genpts"])

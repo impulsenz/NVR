@@ -42,9 +42,18 @@ pub struct User {
     pub layouts: HashMap<String, DashboardConfig>,
     #[serde(default)]
     pub created: Option<DateTime<Utc>>,
+    /// Two-step sign-in: the authenticator app's secret (base32).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    totp: Option<String>,
+    /// One-time recovery codes (SHA-256 of each).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recovery: Vec<String>,
 }
 
 impl User {
+    pub fn two_step(&self) -> bool {
+        self.totp.is_some()
+    }
     pub fn can_see(&self, camera: &str) -> bool {
         self.cameras.is_empty() || self.cameras.iter().any(|c| c == camera)
     }
@@ -56,6 +65,8 @@ pub struct Me {
     pub username: String,
     pub role: Role,
     pub cameras: Vec<String>,
+    /// Two-step sign-in is on.
+    pub two_step: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -72,6 +83,69 @@ pub struct Users {
     sessions: Mutex<HashMap<String, Session>>,
     /// Failed sign-ins per user name and per address (slows down guessing).
     failures: Mutex<HashMap<String, (u32, DateTime<Utc>)>>,
+}
+
+/// Signing in needs the code from the authenticator app (the page asks for it).
+pub const NEED_CODE: &str = "two-step code needed";
+static PENDING: std::sync::LazyLock<Mutex<HashMap<String, String>>> = std::sync::LazyLock::new(Default::default);
+static LAST_STEP: std::sync::LazyLock<Mutex<HashMap<String, i64>>> = std::sync::LazyLock::new(Default::default);
+
+/// RFC 6238 time-based code (HMAC-SHA1, 6 digits) for time step `step`.
+pub fn totp(key: &[u8], step: u64) -> u32 {
+    use sha1::{Digest, Sha1};
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        k[..20].copy_from_slice(&Sha1::digest(key));
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let (mut ipad, mut opad) = ([0x36u8; 64], [0x5cu8; 64]);
+    for i in 0..64 {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let inner = Sha1::new().chain_update(ipad).chain_update(step.to_be_bytes()).finalize();
+    let mac = Sha1::new().chain_update(opad).chain_update(inner).finalize();
+    let o = (mac[19] & 0x0f) as usize;
+    let bin = ((mac[o] as u32 & 0x7f) << 24) | ((mac[o + 1] as u32) << 16) | ((mac[o + 2] as u32) << 8) | mac[o + 3] as u32;
+    bin % 1_000_000
+}
+
+const B32: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+pub fn base32_encode(b: &[u8]) -> String {
+    let (mut out, mut buf, mut bits) = (String::new(), 0u32, 0);
+    for &x in b {
+        buf = (buf << 8) | x as u32;
+        bits += 8;
+        while bits >= 5 {
+            out.push(B32[((buf >> (bits - 5)) & 31) as usize] as char);
+            bits -= 5;
+        }
+    }
+    if bits > 0 {
+        out.push(B32[((buf << (5 - bits)) & 31) as usize] as char);
+    }
+    out
+}
+pub fn base32_decode(s: &str) -> Option<Vec<u8>> {
+    let (mut out, mut buf, mut bits) = (Vec::new(), 0u32, 0);
+    for c in s.trim_end_matches('=').bytes() {
+        let v = B32.iter().position(|&x| x == c.to_ascii_uppercase())? as u32;
+        buf = (buf << 5) | v;
+        bits += 5;
+        if bits >= 8 {
+            out.push((buf >> (bits - 8)) as u8);
+            bits -= 8;
+        }
+    }
+    Some(out)
+}
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+fn pct(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 /// Failed attempts allowed before a lock-out.
@@ -219,6 +293,8 @@ impl Users {
                 cameras: vec![],
                 layouts: HashMap::new(),
                 created: Some(Utc::now()),
+                totp: None,
+                recovery: Vec::new(),
             });
             let _ = self.save();
             tracing::info!(
@@ -272,6 +348,8 @@ impl Users {
                 cameras,
                 layouts: HashMap::new(),
                 created: Some(Utc::now()),
+                totp: None,
+                recovery: Vec::new(),
             });
         }
         self.save()?;
@@ -349,6 +427,7 @@ impl Users {
                 username: u.username.clone(),
                 role: u.role,
                 cameras: u.cameras.clone(),
+                two_step: u.totp.is_some(),
             })
             .collect()
     }
@@ -359,11 +438,116 @@ impl Users {
         &self,
         username: &str,
         password: &str,
+        code: Option<&str>,
         remember: bool,
         from: &str,
     ) -> Result<String> {
         let name = self.check(username, password, from)?;
+        if self.has_two_step(&name) {
+            let code = code.map(str::trim).filter(|c| !c.is_empty());
+            let Some(code) = code else { bail!(NEED_CODE) };
+            if !self.check_code(&name, code) {
+                self.failed(&[format!("user:{}", name.to_lowercase()), format!("ip:{from}")]);
+                bail!("that code isn't right — use the 6-digit code from your authenticator app now (or a recovery code)");
+            }
+        }
         Ok(self.new_session(&name, remember))
+    }
+
+    fn failed(&self, keys: &[String]) {
+        let mut f = self.failures.lock().unwrap();
+        for k in keys {
+            let e = f.entry(k.clone()).or_insert((0, Utc::now()));
+            e.0 += 1;
+            e.1 = Utc::now();
+        }
+    }
+
+    pub fn has_two_step(&self, name: &str) -> bool {
+        self.users.read().unwrap().iter().any(|u| u.username == name && u.totp.is_some())
+    }
+
+    /// A code from the authenticator app (this 30 s, or the one before or
+    /// after: phone clocks drift), or an unused recovery code.
+    fn check_code(&self, name: &str, code: &str) -> bool {
+        let mut users = self.users.write().unwrap();
+        let Some(u) = users.iter_mut().find(|u| u.username == name) else { return false };
+        let Some(secret) = u.totp.as_ref().and_then(|s| base32_decode(s)) else { return false };
+        let digits: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.len() == 6 {
+            let step = Utc::now().timestamp() / 30;
+            let mut last = LAST_STEP.lock().unwrap();
+            let used = last.get(name).copied().unwrap_or(i64::MIN);
+            for s in [step - 1, step, step + 1] {
+                // Each code works once (no replaying one seen over a shoulder).
+                if s > used && format!("{:06}", totp(&secret, s as u64)) == digits {
+                    last.insert(name.to_string(), s);
+                    return true;
+                }
+            }
+            return false;
+        }
+        // A recovery code: works once.
+        let h = sha256_hex(&code.to_lowercase().replace([' ', '-'], ""));
+        if let Some(i) = u.recovery.iter().position(|r| *r == h) {
+            u.recovery.remove(i);
+            drop(users);
+            let _ = self.save();
+            return true;
+        }
+        false
+    }
+
+    /// Start turning on two-step sign-in: a new secret, not used until
+    /// confirmed with a code (`finish_two_step`).
+    pub fn start_two_step(&self, name: &str) -> (String, String) {
+        use rand_core::RngCore;
+        let mut k = [0u8; 20];
+        rand_core::OsRng.fill_bytes(&mut k);
+        let secret = base32_encode(&k);
+        PENDING.lock().unwrap().insert(name.to_string(), secret.clone());
+        let uri = format!("otpauth://totp/GAZE:{}?secret={secret}&issuer=GAZE&digits=6&period=30", pct(name));
+        (secret, uri)
+    }
+
+    /// Confirm with a code from the app; returns the recovery codes (shown once).
+    pub fn finish_two_step(&self, name: &str, code: &str) -> Result<Vec<String>> {
+        let secret = PENDING.lock().unwrap().get(name).cloned().ok_or_else(|| anyhow::anyhow!("start again: scan the new QR code"))?;
+        let key = base32_decode(&secret).unwrap_or_default();
+        let step = Utc::now().timestamp() / 30;
+        let digits: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
+        if ![step - 1, step, step + 1].iter().any(|s| format!("{:06}", totp(&key, *s as u64)) == digits) {
+            bail!("that code isn't right — check the phone's clock is set automatically, and type the code the app shows now");
+        }
+        use rand_core::RngCore;
+        let codes: Vec<String> = (0..8)
+            .map(|_| {
+                let mut b = [0u8; 5];
+                rand_core::OsRng.fill_bytes(&mut b);
+                let c = base32_encode(&b).to_lowercase();
+                format!("{}-{}", &c[..4], &c[4..8])
+            })
+            .collect();
+        {
+            let mut users = self.users.write().unwrap();
+            let u = users.iter_mut().find(|u| u.username == name).ok_or_else(|| anyhow::anyhow!("no such user"))?;
+            u.totp = Some(secret);
+            u.recovery = codes.iter().map(|c| sha256_hex(&c.replace('-', ""))).collect();
+        }
+        PENDING.lock().unwrap().remove(name);
+        self.save()?;
+        Ok(codes)
+    }
+
+    /// Turn two-step sign-in off (the user, after their password; or an admin).
+    pub fn stop_two_step(&self, name: &str) -> Result<()> {
+        {
+            let mut users = self.users.write().unwrap();
+            let u = users.iter_mut().find(|u| u.username == name).ok_or_else(|| anyhow::anyhow!("no such user"))?;
+            u.totp = None;
+            u.recovery.clear();
+        }
+        self.save()
     }
 
     /// The user's name (as stored) if the password is right. Counts wrong
@@ -489,6 +673,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn two_step_codes_match_the_standard() {
+        // RFC 6238, SHA-1 example: time 59 s → 94287082 (6 digits: 287082).
+        let key = b"12345678901234567890";
+        assert_eq!(totp(key, 59 / 30), 287082);
+        assert_eq!(totp(key, 1111111109 / 30), 81804);
+        assert_eq!(base32_decode(&base32_encode(key)).unwrap(), key.to_vec());
+        assert_eq!(base32_encode(b"foobar"), "MZXW6YTBOI");
+    }
+
+    #[test]
+    fn signing_in_with_two_step() {
+        let dir = std::env::temp_dir().join(format!("nvr-2s-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let u = Users::open(&dir);
+        u.setup("sam", "a good password").unwrap();
+        let (secret, uri) = u.start_two_step("sam");
+        assert!(uri.starts_with("otpauth://totp/GAZE:sam?secret="));
+        let key = base32_decode(&secret).unwrap();
+        let now = || format!("{:06}", totp(&key, (Utc::now().timestamp() / 30) as u64));
+        let codes = u.finish_two_step("sam", &now()).unwrap();
+        assert_eq!(codes.len(), 8);
+        // The password alone isn't enough any more.
+        assert_eq!(u.login("sam", "a good password", None, false, "1.2.3.4").unwrap_err().to_string(), NEED_CODE);
+        assert!(u.login("sam", "a good password", Some("000000"), false, "1.2.3.4").is_err() || now() == "000000");
+        assert!(u.login("sam", "a good password", Some(&now()), false, "1.2.3.5").is_ok());
+        // The same code doesn't work twice.
+        assert!(u.login("sam", "a good password", Some(&now()), false, "1.2.3.6").is_err());
+        // A recovery code works once.
+        assert!(u.login("sam", "a good password", Some(&codes[0]), false, "1.2.3.7").is_ok());
+        assert!(u.login("sam", "a good password", Some(&codes[0]), false, "1.2.3.8").is_err());
+        u.stop_two_step("sam").unwrap();
+        assert!(u.login("sam", "a good password", None, false, "1.2.3.9").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn accounts_and_sessions() {
         let dir = std::env::temp_dir().join(format!("nvr-users-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -503,8 +724,8 @@ mod tests {
         assert!(u.setup("x", "secret12").is_err());
         u.create("kid", "secret23", Role::Viewer, vec!["front".into()])
             .unwrap();
-        assert!(u.login("kid", "nope", false, "1.2.3.4").is_err());
-        let t2 = u.login("KID", "secret23", false, "1.2.3.4").unwrap();
+        assert!(u.login("kid", "nope", None, false, "1.2.3.4").is_err());
+        let t2 = u.login("KID", "secret23", None, false, "1.2.3.4").unwrap();
         let kid = u.session_user(&t2).unwrap();
         assert!(kid.can_see("front") && !kid.can_see("back"));
         assert!(u.delete("Boss").is_err(), "last admin stays");
