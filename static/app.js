@@ -2520,7 +2520,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {scrub: store.get('tl-scrub', 'timelapse'), quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
@@ -2705,17 +2705,8 @@ function tlStop() { if (tl.playing) tlPlay(false); document.querySelectorAll('#t
 $('tl-play').onclick = () => tlPlay(!tl.playing);
 $('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); };
 $('tl-quality').value = tl.quality;
-// What scrubbing shows: the time-lapse pictures, or the sub-stream or main
-// stream video itself (to compare how quickly each one keeps up).
-if (!TIMELAPSE && tl.scrub === 'timelapse') tl.scrub = 'sub';
-$('tl-scrub').querySelectorAll('button').forEach(b => {
-  b.classList.toggle('on', b.dataset.v === tl.scrub);
-  b.onclick = () => {
-    tl.scrub = b.dataset.v; store.set('tl-scrub', tl.scrub); tl.scrubMs = [];
-    $('tl-scrub').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-    $('tl-scrub-ms').textContent = '';
-  };
-});
+// Scrubbing shows the time-lapse pictures (the video itself when time-lapse
+// is switched off).
 $('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-quality', tl.quality); tlSync(true); };
 $('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
 $('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); prefetchSprites(); };
@@ -3092,11 +3083,10 @@ function previewAll() {
     }
     // The last moments (newer than the preview): the live picture.
     if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; continue; }
-    const asked = performance.now();
     spriteFor(c.camera, s).then(info => {
       if (!info || tl.T !== T) return;
       const off = (T - new Date(s.start).getTime()) / 1000;
-      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) { sp.hidden = false; scrubTiming(performance.now() - asked); }
+      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) sp.hidden = false;
     });
   }
 }
@@ -3108,23 +3098,15 @@ function scrubVideo(el, seg, at) {
   v._want = Math.max(0, at);
   if (!v._scrubWired) {
     v._scrubWired = true;
-    v._go = () => { if (v._want == null || v.readyState < 1 || v.seeking) return; v._askedAt = performance.now(); if (v.fastSeek && tl.scrub === 'main') v.fastSeek(v._want); else v.currentTime = v._want; };
+    v._go = () => { if (v._want == null || v.readyState < 1 || v.seeking) return; if (v.fastSeek && tl.scrub === 'main') v.fastSeek(v._want); else v.currentTime = v._want; };
     v.addEventListener('seeked', () => {
-      if (v._askedAt) { scrubTiming(performance.now() - v._askedAt); v._askedAt = 0; }
       if (v._want != null && Math.abs(v.currentTime - v._want) > 0.3) v._go();
     });
     v.addEventListener('loadedmetadata', () => v._go());
   }
-  if (v.dataset.url !== seg.url) { v.pause(); v.dataset.url = seg.url; v.preload = 'auto'; v.src = seg.url; v._askedAt = performance.now(); return; }
+  if (v.dataset.url !== seg.url) { v.pause(); v.dataset.url = seg.url; v.preload = 'auto'; v.src = seg.url; return; }
   if (!v.paused) v.pause();
   v._go();
-}
-// How quickly scrubbing shows each picture (average of the last few).
-function scrubTiming(ms) {
-  tl.scrubMs = tl.scrubMs || [];
-  tl.scrubMs.push(ms); if (tl.scrubMs.length > 12) tl.scrubMs.shift();
-  const avg = tl.scrubMs.reduce((a, b) => a + b, 0) / tl.scrubMs.length;
-  const e = $('tl-scrub-ms'); if (e) e.textContent = `~${Math.round(avg)} ms a picture`;
 }
 
 // ======================================================================

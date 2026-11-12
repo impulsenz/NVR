@@ -869,7 +869,7 @@ table.where td:first-child { width: 44px; }
 .surface > img { object-fit: fill; }
 
 /* Time-lapse switched off for now: no preview strips or time-lapse choice. */
-.no-timelapse .tlp, .no-timelapse #ctl-tlp, .no-timelapse #tl-scrub [data-v=timelapse] { display: none !important; }
+.no-timelapse .tlp, .no-timelapse #ctl-tlp { display: none !important; }
 .no-timelapse .preview .img { display: none; }
 
 /* People & vehicles: faces recognised as someone, to check and correct. */
