@@ -2085,14 +2085,30 @@ async fn ensure_sprite(
     let page = |p: &std::path::Path, n: u32| PathBuf::from(format!("{}-{n:03}.jpg", p.display()));
     let cfg = m.config();
     let hw = ffmpeg::decode_args(&cfg.hardware, false);
-    let made = ffmpeg::sprite(
-        &cfg.server.ffmpeg_path,
-        &src,
-        &staging,
-        cfg.storage.timelapse_seconds as f64,
-        &hw,
-    )
-    .await;
+    // Put together from the pictures kept as it was recorded (no decoding;
+    // see picturelog); otherwise from the file.
+    let from_log = match (kind, storage::parse_start(name)) {
+        ("rec" | "tl", Some(start)) => {
+            let end = std::fs::metadata(&src).and_then(|x| x.modified()).ok().map(DateTime::<Local>::from);
+            let aspect = match before.as_ref().filter(|b| b.aspect > 0.0) {
+                Some(b) => b.aspect,
+                None => ffmpeg::display_aspect(&cfg.server.ffmpeg_path, &src).await.unwrap_or(16.0 / 9.0),
+            };
+            let (cam_dir, staging2, every) = (c.dir.clone(), staging.clone(), cfg.storage.timelapse_seconds as f64);
+            match end {
+                Some(end) if end > start => tokio::task::spawn_blocking(move || crate::picturelog::sprite(&cam_dir, start, end, every, aspect, &staging2))
+                    .await
+                    .ok()
+                    .flatten(),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let made = match from_log {
+        Some(i) => Ok(i),
+        None => ffmpeg::sprite(&cfg.server.ffmpeg_path, &src, &staging, cfg.storage.timelapse_seconds as f64, &hw).await,
+    };
     let info = match (made, before) {
         // Fewer pictures than before (the end of a file being written
         // couldn't be read this time), or none at all: keep the older one.

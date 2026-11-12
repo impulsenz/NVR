@@ -29,6 +29,7 @@ mod manager;
 mod mp4fix;
 mod notify;
 mod onvif;
+mod picturelog;
 mod onvif_device;
 mod recog;
 mod recorder;

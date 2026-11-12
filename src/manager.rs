@@ -34,6 +34,8 @@ pub struct RuntimeEnv {
     pub live: LiveConfig,
     pub hardware: HardwareConfig,
     pub storage_dir: PathBuf,
+    /// Seconds between time-lapse pictures.
+    pub timelapse_seconds: u32,
 }
 
 impl RuntimeEnv {
@@ -44,6 +46,7 @@ impl RuntimeEnv {
             live: cfg.live.clone(),
             hardware: cfg.hardware.clone(),
             storage_dir: cfg.storage.dir.clone(),
+            timelapse_seconds: cfg.storage.timelapse_seconds,
         }
     }
 }

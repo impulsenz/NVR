@@ -564,6 +564,7 @@ impl Detector {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         let mut pending: std::collections::VecDeque<(Frame, Instant)> = Default::default();
         let mut tint = TintCheck::default();
+        let (mut last_pic, mut last_prune): (Option<i64>, Instant) = (None, Instant::now() - Duration::from_secs(3600));
 
         loop {
             let mut buf = vec![0u8; frame_len];
@@ -646,6 +647,27 @@ impl Detector {
                     // frames; start the motion background afresh afterwards.
                     motion.restart();
                     continue;
+                }
+                // The time-lapse: one picture per interval, as it's recorded
+                // (see picturelog).
+                let shot = Local::now() - CDuration::from_std(at.elapsed()).unwrap_or_default();
+                let step = self.env.timelapse_seconds.max(1) as i64 * 1000;
+                let slot = shot.timestamp_millis() / step;
+                if last_pic != Some(slot) {
+                    last_pic = Some(slot);
+                    if let Some(cam_dir) = self.store.dir().parent().map(|p| p.to_path_buf()) {
+                        let f = frame.clone();
+                        let prune = last_prune.elapsed() > Duration::from_secs(600);
+                        if prune {
+                            last_prune = Instant::now();
+                        }
+                        tokio::task::spawn_blocking(move || {
+                            let _ = crate::picturelog::save(&cam_dir, shot, &f);
+                            if prune {
+                                crate::picturelog::prune(&cam_dir);
+                            }
+                        });
+                    }
                 }
                 let m = motion.feed(&frame.rgb);
                 let moving = d.motion && m.as_ref().is_some_and(|m| m.moving);

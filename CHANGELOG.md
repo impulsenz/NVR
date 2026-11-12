@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.43 — November 2026
+- **Time-lapse made as it's recorded**: motion detection already looks at every camera's stream 2 several times a second; it now keeps one small picture every time-lapse interval, and a recording's time-lapse is put together from those — the recording isn't read and decoded a second time. Much less work for the computer, and time-lapse for new footage is ready straight away. (Footage from before this version, or from a camera without motion detection, is still done the old way.)
+
 ## 0.6.42 — November 2026
 - **Tidy-up**: removed code for features that are no longer there (old notification AI settings, removing PTZ presets from the server, styles for the removed description feature) and the conversions for settings files from very old versions (0.1 to 0.5.7).
 - **New README**: shorter and up to date — what GAZE does, how to install it, a recommended first setup, and how it's put together.

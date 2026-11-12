@@ -744,9 +744,9 @@ async fn sprite_with(
     hw: &[String],
 ) -> Result<SpriteInfo> {
     use tokio::io::AsyncReadExt;
-    const COLS: u32 = 10;
-    const PER_PAGE: u32 = 100;
-    let (tw, th) = (256u32, 144u32);
+    const COLS: u32 = SPRITE_COLUMNS;
+    const PER_PAGE: u32 = SPRITE_PER_PAGE;
+    let (tw, th) = crate::picturelog::TILE;
     let duration = duration(ffmpeg, file).await.unwrap_or(0.0);
     // One picture every `interval` seconds (Settings → Recording & storage),
     // from keyframes only (light on the computer).
@@ -780,26 +780,7 @@ async fn sprite_with(
     let save = |tiles: Vec<Vec<u8>>, n: u32| {
         let p = std::path::PathBuf::from(format!("{}-{n:03}.jpg", prefix.display()));
         async move {
-            tokio::task::spawn_blocking(move || -> Result<()> {
-                let rows = (tiles.len() as u32).div_ceil(COLS);
-                let (w, h) = (COLS * tw, rows * th);
-                let mut img = vec![0u8; (w * h * 3) as usize];
-                for (i, t) in tiles.iter().enumerate() {
-                    let (cx, cy) = ((i as u32 % COLS) * tw, (i as u32 / COLS) * th);
-                    for y in 0..th {
-                        let dst = (((cy + y) * w + cx) * 3) as usize;
-                        let src = (y * tw * 3) as usize;
-                        img[dst..dst + (tw * 3) as usize]
-                            .copy_from_slice(&t[src..src + (tw * 3) as usize]);
-                    }
-                }
-                let jpg = crate::imgutil::encode_jpeg(&img, w, h, 70)?;
-                let tmp = p.with_extension("jpg.tmp");
-                std::fs::write(&tmp, jpg)?;
-                std::fs::rename(&tmp, &p)?;
-                Ok(())
-            })
-            .await?
+            tokio::task::spawn_blocking(move || write_sprite_page(&p, &tiles, (tw, th))).await?
         }
     };
     let timeout = Duration::from_secs(600);
@@ -867,9 +848,43 @@ async fn sprite_with(
     })
 }
 
+/// Pictures per row on a time-lapse page, and per page.
+pub const SPRITE_COLUMNS: u32 = 10;
+pub const SPRITE_PER_PAGE: u32 = 100;
+
+/// One time-lapse page: the pictures (RGB, `tile` size each) in rows.
+fn write_sprite_page(p: &std::path::Path, tiles: &[Vec<u8>], (tw, th): (u32, u32)) -> Result<()> {
+    let rows = (tiles.len() as u32).div_ceil(SPRITE_COLUMNS);
+    let (w, h) = (SPRITE_COLUMNS * tw, rows * th);
+    let mut img = vec![0u8; (w * h * 3) as usize];
+    for (i, t) in tiles.iter().enumerate() {
+        let (cx, cy) = ((i as u32 % SPRITE_COLUMNS) * tw, (i as u32 / SPRITE_COLUMNS) * th);
+        for y in 0..th {
+            let dst = (((cy + y) * w + cx) * 3) as usize;
+            let src = (y * tw * 3) as usize;
+            img[dst..dst + (tw * 3) as usize].copy_from_slice(&t[src..src + (tw * 3) as usize]);
+        }
+    }
+    let jpg = crate::imgutil::encode_jpeg(&img, w, h, 70)?;
+    let tmp = p.with_extension("jpg.tmp");
+    std::fs::write(&tmp, jpg)?;
+    std::fs::rename(&tmp, p)?;
+    Ok(())
+}
+
+/// All the pages for these pictures, as `<prefix>-000.jpg` …: (pictures, pages).
+pub fn write_sprite_pages(prefix: &std::path::Path, tiles: Vec<Vec<u8>>, tile: (u32, u32)) -> Result<(u32, u32)> {
+    let mut pages = 0;
+    for chunk in tiles.chunks(SPRITE_PER_PAGE as usize) {
+        write_sprite_page(&std::path::PathBuf::from(format!("{}-{pages:03}.jpg", prefix.display())), chunk, tile)?;
+        pages += 1;
+    }
+    Ok((tiles.len() as u32, pages))
+}
+
 /// An RGB picture that is (nearly) one flat colour: nothing a camera
 /// really shows, but what a frame that couldn't be decoded turns into.
-fn flat_picture(rgb: &[u8]) -> bool {
+pub fn flat_picture(rgb: &[u8]) -> bool {
     let mut sum = [0f64; 3];
     let mut sq = [0f64; 3];
     let mut n = 0f64;
