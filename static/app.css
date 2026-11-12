@@ -361,8 +361,6 @@ button.label { background: none; border: 0; border-radius: 4px; color: inherit; 
 .rc:hover .thumb .play { opacity: .9; }
 .rc .thumb .dur { bottom: auto; top: auto; }
 /* recordings full screen */
-.sprite-progress { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 6px; }
-.sprite-progress .bar { flex: 1; max-width: 260px; margin: 0; }
 
 /* Timeline legends */
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--muted); align-items: center; }
@@ -373,7 +371,6 @@ button.label { background: none; border: 0; border-radius: 4px; color: inherit; 
 .lg-bar.clip { background: #5b3f8f; }
 .lg-bar.ev { background: rgba(167,139,250,.55); }
 .lg-bar.mo { background: rgba(245,158,11,.55); }
-.legend .lg-tick { display: inline-block; width: 2px; height: 12px; background: var(--amber); }
 .rc .thumb img { transition: transform .2s; }
 .tl-videos.solo .surface.solo { width: min(100%, calc(62vh * 16 / 9)); margin: 0 auto; }
 #sys-legend span { cursor: pointer; user-select: none; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
@@ -751,11 +748,6 @@ table.where td:first-child { width: 44px; }
 .job .job-pause { margin-left: 8px; }
 
 /* Describe one alert with the vision model */
-.ai-try { margin: 8px 0 10px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
-.ai-try textarea { width: 100%; margin-top: 6px; box-sizing: border-box; font: inherit; font-size: 13px; }
-.ai-pics { display: flex; gap: 4px; overflow-x: auto; margin-top: 8px; }
-.ai-pics img { height: 64px; border-radius: 4px; flex: none; }
-.ai-answer { margin-top: 6px; }
 
 /* Recording player: the controls sit on the video (also in full screen) and
    fade out while it plays until the mouse moves. */

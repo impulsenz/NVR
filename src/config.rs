@@ -102,11 +102,6 @@ pub struct Config {
     pub profiles: Vec<Profile>,
     pub cameras: Vec<CameraConfig>,
 
-    // Version 0.1 single-camera format; migrated on load.
-    #[serde(skip_serializing)]
-    camera: Option<LegacyCamera>,
-    #[serde(skip_serializing)]
-    recording: Option<LegacyRecording>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -211,15 +206,6 @@ pub struct DisplayConfig {
     pub clock_format: String,
     /// The on-screen display of every camera without its own.
     pub osd: OsdConfig,
-    /// Before 0.5.7 (now in `osd`): read once, then dropped.
-    #[serde(default, skip_serializing)]
-    pub show_clock: Option<bool>,
-    #[serde(default, skip_serializing)]
-    pub clock_corner: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub show_name: Option<bool>,
-    #[serde(default, skip_serializing)]
-    pub show_fps: Option<bool>,
 }
 
 impl Default for DisplayConfig {
@@ -228,10 +214,6 @@ impl Default for DisplayConfig {
             fullscreen_corners: vec!["tr".into(), "br".into()],
             clock_format: "DD/MM/YYYY HH:mm:ss".into(),
             osd: OsdConfig::default(),
-            show_clock: None,
-            clock_corner: None,
-            show_name: None,
-            show_fps: None,
         }
     }
 }
@@ -370,12 +352,6 @@ pub struct NotifyConfig {
     pub summary: bool,
     /// Address that opens GAZE from the phone (e.g. your Tailscale name).
     pub link: String,
-    /// Before 0.5.6 notifications had their own Gemini settings; they move
-    /// to the vision model for descriptions (AI settings) when loaded.
-    #[serde(default, skip_serializing)]
-    pub gemini: bool,
-    #[serde(default, skip_serializing)]
-    pub gemini_key: String,
 }
 
 impl Default for NotifyConfig {
@@ -401,8 +377,6 @@ impl Default for NotifyConfig {
             night_gap_minutes: 1,
             summary: true,
             link: String::new(),
-            gemini: false,
-            gemini_key: String::new(),
         }
     }
 }
@@ -1139,25 +1113,6 @@ impl CameraConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
-#[serde(default)]
-struct LegacyCamera {
-    name: String,
-    url: String,
-    live_url: String,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
-#[serde(default)]
-struct LegacyRecording {
-    dir: Option<PathBuf>,
-    record_on_start: Option<bool>,
-    segment_seconds: Option<u64>,
-    record_audio: Option<bool>,
-    retention_days: Option<u64>,
-    max_storage_gb: Option<f64>,
-}
-
 impl Config {
     /// Load the config, creating a default one if missing. Returns whether
     /// the file was created or migrated (and so should be saved).
@@ -1184,74 +1139,6 @@ impl Config {
         // cloud services are gone).
         if !AI_PROVIDERS.contains(&self.ai.provider.as_str()) {
             self.ai.provider = "builtin".into();
-            changed = true;
-        }
-        // 0.5.7: the global on-screen display became a full layout.
-        let d = &mut self.display;
-        if d.show_clock.is_some()
-            || d.clock_corner.is_some()
-            || d.show_name.is_some()
-            || d.show_fps.is_some()
-        {
-            if let Some(v) = d.show_clock.take() {
-                d.osd.show_clock = v;
-            }
-            if let Some(v) = d.clock_corner.take() {
-                d.osd.clock_corner = v;
-            }
-            if let Some(v) = d.show_name.take() {
-                d.osd.show_name = v;
-            }
-            if let Some(v) = d.show_fps.take() {
-                d.osd.show_fps = v;
-            }
-            changed = true;
-        }
-        // Before 0.5.6 notifications had their own Gemini settings: no longer used.
-        let n = &mut self.notify;
-        if n.gemini || !n.gemini_key.is_empty() {
-            n.gemini = false;
-            n.gemini_key.clear();
-            changed = true;
-        }
-        let rec = self.recording.take();
-        if let Some(rec) = &rec {
-            if let Some(d) = &rec.dir {
-                self.storage.dir = d.clone();
-            }
-            if let Some(s) = rec.segment_seconds {
-                self.storage.segment_seconds = s;
-            }
-            if let Some(r) = rec.retention_days {
-                self.storage.retention_days = r;
-            }
-            if let Some(m) = rec.max_storage_gb {
-                self.storage.max_storage_gb = m;
-            }
-            changed = true;
-        }
-        if let Some(cam) = self.camera.take() {
-            if !cam.url.is_empty() {
-                let rec = rec.unwrap_or_default();
-                let mut c = CameraConfig {
-                    name: if cam.name.is_empty() {
-                        "Camera 1".into()
-                    } else {
-                        cam.name
-                    },
-                    url: cam.url,
-                    live_url: cam.live_url,
-                    record_audio: rec.record_audio.unwrap_or(false),
-                    record_mode: if rec.record_on_start == Some(false) {
-                        RecordMode::Off
-                    } else {
-                        RecordMode::Continuous
-                    },
-                    ..Default::default()
-                };
-                c.id = self.new_camera_id(&c.name);
-                self.cameras.push(c);
-            }
             changed = true;
         }
         for c in &mut self.cameras {
@@ -1508,55 +1395,11 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v1_config() {
-        let v1 = r#"
-            [server]
-            listen = "0.0.0.0:8080"
-            [camera]
-            name = "Front Door"
-            url = "rtsp://a:b@h/s"
-            [recording]
-            dir = "rec"
-            segment_seconds = 60
-            record_audio = true
-        "#;
-        let (cfg, migrated) = Config::from_toml(v1).unwrap();
-        assert!(migrated);
-        assert_eq!(cfg.cameras.len(), 1);
-        assert_eq!(cfg.cameras[0].id, "front-door");
-        assert!(cfg.cameras[0].record_audio);
-        assert_eq!(cfg.storage.segment_seconds, 60);
-        assert_eq!(cfg.storage.dir, PathBuf::from("rec"));
-    }
-
-    #[test]
     fn other_ai_providers_become_builtin() {
         let (c, changed) =
             super::Config::from_toml("[ai]\nprovider = \"gemini\"\napi_key = \"x\"\n").unwrap();
         assert!(changed);
         assert_eq!(c.ai.provider, "builtin");
-    }
-
-    #[test]
-    fn display_layout() {
-        let (c, changed) = super::Config::from_toml(
-            "[display]\nshow_clock = false\nclock_corner = \"br\"\nshow_name = true\n",
-        )
-        .unwrap();
-        assert!(changed);
-        assert_eq!(
-            (
-                c.display.osd.show_clock,
-                c.display.osd.clock_corner.as_str()
-            ),
-            (false, "br")
-        );
-        assert!(c.display.show_clock.is_none() && c.display.clock_corner.is_none());
-        assert!(c.to_toml().unwrap().contains("[display.osd]"));
-        assert!(super::valid_position("p:12.5,90"));
-        assert!(super::valid_position("mc"));
-        assert!(!super::valid_position("p:120,4"));
-        assert!(!super::valid_position("p:x"));
     }
 
     #[test]

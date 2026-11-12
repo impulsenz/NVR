@@ -187,7 +187,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
             get(ptz_presets).post(ptz_save_preset),
         )
         .route("/api/cameras/{id}/ptz/goto", post(ptz_goto))
-        .route("/api/cameras/{id}/ptz/remove", post(ptz_remove))
         .route("/api/ptz/test", post(ptz_test))
         .route("/api/cameras/{id}/resume", post(resume))
         .route(
@@ -1186,19 +1185,6 @@ async fn ptz_save_preset(
     let res = async {
         m.onvif(&id)
             .set_preset(&ptz_target(&m, &id)?, r.name.trim())
-            .await
-    }
-    .await;
-    match res {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => bad(e),
-    }
-}
-
-async fn ptz_remove(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq>) -> Response {
-    let res = async {
-        m.onvif(&id)
-            .remove_preset(&ptz_target(&m, &id)?, &r.token)
             .await
     }
     .await;

@@ -418,23 +418,6 @@ impl Onvif {
         .await?;
         Ok(())
     }
-
-    pub async fn remove_preset(&self, t: &Target, token: &str) -> Result<()> {
-        let d = self.discover(t).await?;
-        let body = format!(
-            r#"<RemovePreset xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken><PresetToken>{}</PresetToken></RemovePreset>"#,
-            xml_escape(&d.profile),
-            xml_escape(token)
-        );
-        self.call(
-            t,
-            &d.ptz,
-            "http://www.onvif.org/ver20/ptz/wsdl/RemovePreset",
-            &body,
-        )
-        .await?;
-        Ok(())
-    }
 }
 
 /// Presets from a GetPresetsResponse.

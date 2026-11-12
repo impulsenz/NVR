@@ -1,206 +1,73 @@
-# NVR
+# GAZE
 
-A self-hosted network video recorder for home surveillance, written in Rust. It records your IP
-cameras, spots people, vehicles and animals with AI, and gives you a fast web interface for live
-viewing, finding footage, and managing everything, all from the browser.
+GAZE is a network video recorder for home IP cameras. It records your cameras around the clock or on
+alerts, uses on-device object detection to tell people, vehicles and animals apart from swaying trees
+and passing headlights, and gives you one web interface for live viewing, reviewing footage and
+managing the system.
 
-## Features
+It is a single program written in Rust. It runs on Windows (where it sits in the system tray and can run
+as a service), and also builds on Linux and macOS. Everything runs locally: no account, no cloud service,
+and no pictures leave the machine unless you turn on phone notifications or cloud backup.
 
-**Live view**
-- Dashboard of all cameras that you can **drag, drop and resize** (Live → Edit layout).
-- **Camera groups** (Live → Groups…): switch between sets of cameras, or show all.
-- **Full-screen video wall**: fills the whole screen, with its own layout per group, click a camera to
-  enlarge it (HD), arrow keys to switch groups, and optional automatic cycling through groups.
-- Always running: grid pictures come from each camera's sub-stream over one WebSocket and keep
-  updating while you use other pages, so switching back is instant.
-- Full-quality streams are **preloaded in the background**: opening a camera shows HD immediately.
-- Click a camera for a big view with its **recent alerts** beside it (recordings are on the timeline), a **timeline** under it
-  with symbols for what was detected (🚶 person, 🚗 car, 🐈 cat …), **quick quality / frame-rate options**,
-  an **Edit camera** button, and **pan / tilt / zoom** controls with presets (ONVIF).
-- Overlays you can configure globally or per camera (camera settings → On-screen display): camera name,
-  **date & time** (format and corner), recording status, what is moving, **frames per second**, your own
-  text, and **fullscreen buttons** in any corners.
-- Active alerts are highlighted on the tile ("person", "car", …).
-- **Two-way audio / push to talk**: switch it on per camera (camera settings → General → Two-way audio,
-  with a test that beeps on the camera). The live view then has a **🎙️ Push to talk** button: hold it and
-  speak into your phone's or computer's microphone; a quick tap keeps talking until the next tap. For
-  cameras with a speaker and the ONVIF audio back-channel (G.711 — most Dahua, Hikvision, Amcrest, Axis…).
-  Browsers only allow the microphone on https:// pages or on http://localhost.
-- **S1 / S2 button on every live picture** switches between stream 1 (main, full quality) and stream 2
-  (sub-stream), separately for the grid and the opened camera; each browser remembers the choice.
+## Highlights
 
-**Recording**
-- Per-camera modes:
-  - **HD 24/7**
-  - **Sub-stream 24/7** (saves space)
-  - **Substream 24/7 plus HD AI alerts**
-  - **HD on alerts only**
-  - **Off**
-- **Pre-event buffer**: in alert modes, full-quality video is buffered continuously (30 s by default),
-  so every alert clip includes what happened *before* it. Video that doesn't contain an alert is discarded.
-- **File length** per camera: 5 min, 15 min, 30 min, 1 h … or one long file per day.
-- Recording frame rate, audio (on by default), H.264 conversion, and schedules.
-- **Storage folder per camera**: another drive, a NAS (`\\NAS\cameras`, `/mnt/nas`) or a synced cloud
-  folder (Google Drive / OneDrive for desktop).
-- Per-camera **retention days** and **GB limit**, plus global limits and a minimum free disk space.
-- **Choose where recordings go** with a folder browser (any drive, NAS share or synced cloud folder),
-  optionally moving existing recordings there.
-- **Cloud backup** with rclone (Google Drive, OneDrive, Dropbox, S3, B2, …): only verified AI alerts,
-  all alerts, or everything.
-- **Crash and power-cut safe**: recordings are written in small self-contained pieces; after an
-  unexpected stop the NVR cuts any incomplete piece off the end so every file plays. Alert clips are
-  written under a temporary name and only appear when complete. Cameras reconnect automatically.
-- **Recording profiles**: save a camera's recording, motion and AI settings as a named profile and apply
-  it to other cameras in one click.
+**Live view.** A resizable grid of cameras with groups and a full-screen video wall. The grid uses each
+camera's sub-stream, so it stays light; opening a camera switches to the full-quality stream. Each camera
+can show a configurable on-screen display, pan/tilt/zoom controls and presets (ONVIF), and a push-to-talk
+button for cameras with a speaker.
 
-**Motion detection & AI**
-- Motion detection: **min. contrast**, **min. object size** in pixels, **make time**,
-  **object must travel**, and **areas to ignore** painted on the picture. A live readout shows how big
-  the moving objects are, and *Show motion* draws boxes around them. Lighting changes are ignored.
-- AI checks run **only while there is motion**: no motion, nothing is sent to the AI.
-- **AI on the graphics card**: the built-in object recognition and faces & plates run on the
-  GPU (ONNX Runtime with DirectML — any recent NVIDIA, AMD or Intel graphics on Windows; the 25 MB runtime
-  downloads itself the first time), or on the processor if you choose (Settings → Object recognition →
-  Run AI on). If the graphics card can't be used, the processor takes over and the settings say why.
-- **Object recognition** (or off): a built-in YOLOX model runs on this computer — free and private; the
-  model downloads automatically. Five sizes, from Nano (≈30 ms per picture) to Large (≈2 s, for powerful PCs).
-- **Double-check alerts** (built-in AI): when the fast model thinks it sees something worth an alert, a
-  bigger model looks at the same picture and has the final say — fewer false alerts and mix-ups, at little
-  cost because it only runs on those pictures.
-- **Night boost**: dark and infrared pictures are brightened and contrast-stretched before recognition.
-- Choose which objects alert (person, car, dog, …), the minimum confidence, and whether *any motion*
-  or *only recognized objects* make an alert.
-- Each alert gets a **thumbnail of the whole picture** that zooms in on the recognized object.
-- **Detection boxes** on alert pictures (green for recognized objects with their label and confidence,
-  dashed orange for motion) so you can check what triggered an alert; switch them off in the alert details.
-- Damaged video frames (lost network packets, green, pink or smeared pictures) are skipped, so they don't
-  cause false alerts or broken thumbnails.
-- If the same object is recognized as two things (a cat also seen as a person), only the more
-  confident answer is kept.
-- Each recognized object gets a **colour**.
-- "Test on this camera" shows the camera's picture with detection boxes.
-- **Zones** (camera settings → Zones): draw areas and lines on the picture.
-  Alert only for objects inside an area, when something **crosses a line** (in either or one direction),
-  when someone **lingers**, or when an **item is left or taken** (packages on the porch).
-- **Stationary objects** (camera settings → AI): a car parked in the driveway alerts when it arrives,
-  then stays quiet while it stands still (60 s by default; choose which kinds of objects) and alerts
-  again as soon as it moves; remembered across restarts and quiet nights.
-- **Package delivery** (camera settings → AI): drag a box on the camera picture around where parcels are
-  left. GAZE compares that spot before and after each visit and notes items left or taken, with
-  before/after pictures in the alert. Zones can watch for items left or taken too.
-- **Faces & number plates** (Settings → People & vehicles, optional): GAZE finds faces and reads number
-  plates in alerts, using the full-quality recording. Teach it people (upload a few photos, or answer
-  "Who is this?" on a face in an alert) and vehicles (number plate and photos). Alerts then say
-  "Recognized Mum" or "Plate ABC123 — Dad's car", and the Alerts page can show only theirs. If the alert picture shows
-  no face (or nobody known), up to six more moments of the HD recording are searched. Runs on this computer
-  (OpenCV YuNet/SFace and fast-alpr models, about 50 MB, downloaded once).
-  **New faces & number plates** appear in Settings → People & vehicles, grouped (the same person across
-  many alerts is shown once): choose who it is or whose car, and GAZE names all those alerts and learns
-  them; hide passers-by. Vehicle photos teach the plate.
+**Recording.** Per camera: main stream 24/7, sub-stream 24/7, sub-stream 24/7 with full-quality alert clips,
+alert clips only, or off. Alert clips include a pre-event buffer so you see what happened before the
+trigger. Recordings are written as fragmented MP4, so a power cut costs at most the last second or two.
+Each camera can have its own storage folder (another drive, a NAS share, a synced cloud folder),
+retention period and size limit.
 
-**Phone notifications**
-- Through the free **ntfy** app (Android/iPhone), Settings → Notifications: the alert picture as soon
-  as a person or vehicle is seen, then a **summary** when it's over ("Person — 40 s. Recognized Mum;
-  Item left or taken in Porch").
-- **Suspicious** activity — lines crossed, lingering, items taken, people at night — is sent with high
-  priority, even within the quiet time.
-- At most one notification per camera every 5 minutes (1 minute at night, 22:00–06:00), per object type
-  and camera; or only suspicious activity. Tapping a notification opens the alert (set the address,
-  e.g. your Tailscale name).
+**Detection.** Motion detection with minimum size, contrast, travel and painted ignore areas, followed by
+object detection (YOLOX, run on the graphics card through DirectML or on the CPU). New finds can be
+checked against a full-quality picture before they count. Other options:
 
-**Recordings**
-- **Calendar** to pick a single day or a range, optionally limited to a time of day.
-- Filter by **camera(s)** and **alert type** (tick any of Person, Car, Truck, Dog, Motion, Recordings, …).
-- **Search** alerts by what was seen: "red van", "white car", "black cat", "person", or words from the
-  AI's description.
-- Cards with **previews**: the alert thumbnail, or a frame from the recording.
-- Player with a **scrub bar that previews frames as you move along it**, and fast seeking.
-- **Clip export**: mark a start and end (buttons or drag the handles) and download just that part.
-- **Full-screen mode** for browsing recordings.
-- **Multi-camera timeline**: watch several cameras at the same moment (files play on without gaps), scrub across all of them at once
-  (each shows a quick time-lapse preview), jump between alerts, and export the same time range from each camera.
-  Click an alert symbol to watch that alert on that camera. Legends explain the colours and symbols.
-- Time-lapse previews for the last 24 hours are prepared in the background, so they're ready when you
-  open the timeline (older days are prepared when you open them).
+- zones, line crossing and loitering;
+- parked vehicles that stay quiet until they move;
+- a painted package spot that reports parcels left or taken (the change has to stay for a minute);
+- faces and number plates read from the HD footage, so alerts can say who or whose car it was.
 
-**Updates**
-- GAZE checks GitHub for a new version once a day; when there is one, a bar under the header offers
-  **Update now** (⟳ Updates next to your name checks right away). With *Install updates automatically*
-  (Settings → About, off by default) it installs as soon as one is found, when no alert is going on. The new
-  program is downloaded, its checksum verified, swapped in, and GAZE restarts in seconds — also when it
-  runs as a Windows service. The previous version is kept until the next start.
-- **[UPDATES.md](UPDATES.md)** explains downloading, publishing a new version (raise the version number:
-  GitHub builds and publishes it) and hosting your own copy on your own GitHub (your builds then update from your releases).
+**Reviewing footage.** A multi-camera timeline shows recordings, alerts (as thumbnails) and a time-lapse
+strip:
+- Drag across it to scrub every camera at once using the time-lapse pictures.
+- Let go to play from that moment.
+- Playback is streamed in small indexed pieces (HLS), so it starts quickly and plays across file
+  boundaries without reloading.
 
-**System & logs**
-- **Smart load balancing** (on by default): when the GPU is busy (a game, another program) and the
-  processor has room, new live views, conversions and exports run on the CPU, and motion detection moves
-  its decoding to whichever has capacity — and back. The System page shows how often work was moved.
-- **Tasks** (Settings → Tasks): what the AI is doing in the background (faces and plates, model
-  downloads, previews, cloud backup) with progress and how many alerts are waiting, and
-  buttons to rebuild previews, refresh alert pictures from the HD recordings or look for faces &
-  plates again; pause background work.
-- On Windows GAZE runs **without a console window**: an icon by the clock opens it (click) and has a
-  menu (right-click) for the recordings folder, the log, start when you sign in, restart and quit.
-- **Run as a Windows service** (tray menu): one click (Windows asks for permission once) and GAZE starts
-  with the computer — before anyone signs in — keeps recording after you sign out, and is restarted
-  automatically if it ever crashes. The tray icon still appears when you sign in (open GAZE, restart,
-  or turn it back into a normal program).
-- **CPU, GPU and memory** usage with graphs (1 hour to 30 days, kept across restarts), so you can see if
-  the server was overloaded while you were away. NVIDIA GPUs are read via nvidia-smi, AMD on Linux via
-  sysfs, and any GPU on Windows via performance counters.
-- **Disk space** for every storage location, **MB/GB recorded per hour and per day** for each camera, and
-  an estimate of **how many days of recording fit** with your current settings.
-- **Logs page**: errors, warnings, alerts and camera events, filterable by level, type, camera and text.
-  Also saved to `nvr-data/nvr.log`.
-- Click the graph's legend to show or hide lines; memory used by the NVR is shown next to the computer's.
-- **Smart CPU/GPU use**: motion-detection decoding moves to the GPU when the CPU stays overloaded (and
-  back), the built-in AI slows down under heavy load, and background jobs run at low priority.
+An alert list with filters, a calendar and per-alert detail sits alongside. Clips can be marked and
+downloaded from any player, including in full screen.
 
-**Setup**
-- Add, edit, **clone** and delete cameras in the browser.
-- **Restart a camera** from GAZE (camera editor → General), for cameras that answer over ONVIF.
-- **Camera brand quick setup**: pick the brand, enter the IP and login, and the main and sub-stream URLs
-  are filled in for you. Formats for Hikvision, Dahua, Amcrest, Lorex, Imou, Reolink, Tapo, Uniview, Axis, Hanwha, Milesight, Bosch, Vivotek, Panasonic, Foscam, Swann, EZVIZ, INSTAR, D-Link, Eufy, Wyze and generic ONVIF cameras are included.
-- **Test connection** plays both streams live and shows their codec, resolution and frame rate.
-- **Export / import your whole setup** (cameras, settings, layout) to restore after a reinstall.
-- GPU acceleration (NVIDIA, Intel, AMD, Apple) with automatic CPU fallback.
-- Optional login.
-- **Phone friendly**: bottom tab bar, large buttons, and the camera picture stays on screen while you scroll.
-- **Data saver for remote viewing** (Tailscale, VPN, the internet): smaller live pictures at fewer frames
-  per second, no background streams, and recordings streamed as light 480p video (about 0.7 Mbit/s).
-  *Auto* turns it on whenever the browser connects from outside the home network; the 📶 button in the
-  menu switches between Auto, On and Off for that browser.
+**Notifications.** Optional push notifications through the free ntfy app, with the alert picture
+straight away and a summary when the alert ends. Suspicious activity (line crossings, lingering, items
+taken, people at night) is sent with high priority.
 
-## Install
+**System.** CPU, GPU and memory history, disk usage broken down by kind of footage, an estimate of how many
+days of recording fit, a log viewer, background task status, and self-updating from GitHub releases.
 
-**Easiest — download it:** get `nvr-windows-x64.exe` from the
-[latest release](https://github.com/impulsenz/NVR/releases/latest), put it in a folder of its own and
-start it. You also need [ffmpeg](https://ffmpeg.org) (with ffprobe) — on Windows:
-`winget install ffmpeg`. From then on GAZE **updates itself** (Settings → About): one click, or
-automatically at night. See [UPDATES.md](UPDATES.md).
+## Requirements
 
-**Or build it yourself:** you need [Rust](https://rustup.rs) and [ffmpeg](https://ffmpeg.org) (with ffprobe).
+- [ffmpeg](https://ffmpeg.org) with ffprobe on the PATH (on Windows: `winget install Gyan.FFmpeg`).
+- IP cameras with RTSP. A sub-stream is strongly recommended: it is used for the grid, motion detection
+  and the AI, and keeps CPU use low.
+- For GPU object detection on Windows, any reasonably recent NVIDIA, AMD or Intel graphics. The ONNX
+  Runtime (about 25 MB) is downloaded the first time it's needed.
 
-**Windows** (PowerShell; accept the Visual Studio Build Tools when the Rust installer asks):
-```bash
-winget install Git.Git Rustlang.Rustup Gyan.FFmpeg
-```
+## Installing
 
-**Linux (Ubuntu/Debian/Raspberry Pi OS)**:
-```bash
-sudo apt update && sudo apt install -y git ffmpeg build-essential curl
-```
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+### Windows
 
-**macOS**:
-```bash
-brew install git ffmpeg rustup && rustup-init
-```
+Download `nvr-windows-x64.exe` from the [latest release](https://github.com/impulsenz/NVR/releases/latest),
+put it in a folder of its own and run it. GAZE starts in the system tray; click the icon to open it in
+your browser. After that it can update itself (Settings → About).
 
-Then, in a new terminal:
+### Building from source
+
+You need [Rust](https://rustup.rs) and ffmpeg.
+
 ```bash
 git clone https://github.com/impulsenz/NVR.git
 ```
@@ -211,85 +78,80 @@ cd NVR
 cargo build --release
 ```
 
-## Run
+The program is `target/release/nvr` (`nvr.exe` on Windows). Run it from the folder where you want its
+settings and recordings to live.
 
-```bash
-./target/release/nvr
-```
-(Windows: `.\target\release\nvr.exe`)
+## First run
 
-Open <http://localhost:8080> (or `http://<this-computer's-IP>:8080` from a phone) and go to
-**Settings → Cameras → Add camera**.
+Open <http://localhost:8080> (or `http://<computer-ip>:8080` from another device) and create the admin
+account. Then go to **Settings → Cameras → Add camera**: pick the brand, enter the IP address and login,
+and the stream addresses are filled in. **Test connection** shows both streams with their codec and
+resolution.
 
-Files are created next to where you start it:
-- `nvr.toml`: all settings (normally changed from the web page)
-- `nvr-data/`: logs, system history, AI models
-- `recordings/<camera>/`: recordings; `events/` inside holds alert clips and thumbnails
+A setup that works well for most homes:
 
-### Getting started tips
+1. Give every camera both its main stream and its sub-stream.
+2. Use **Sub-stream 24/7 plus HD AI alerts** as the recording mode. It keeps continuous footage small and
+   alert footage sharp.
+3. Turn on object detection (**Settings → Object recognition**), then tick the objects you care about on
+   each camera's AI tab.
+4. Paint ignore areas over trees, roads and anything else that moves but doesn't matter.
+5. After a day, check **System** to see how much space each camera uses and how many days fit.
 
-1. Add each camera with both its **main stream and sub-stream**. The sub-stream is used for the grid,
-   motion detection and AI, and saves a lot of CPU.
-2. For storage-friendly recording, use **Sub-stream 24/7 + HD on alerts**.
-3. Turn on AI: **Settings → Object recognition → Built-in**, then tick *Object recognition* on each camera
-   (*Motion & AI* tab). Choose **Only recognized objects** to ignore trees, shadows and rain.
-4. Check **System** after a day to see how much space each camera uses and how many days fit.
+## Files
 
-### Testing without a camera
+GAZE keeps everything next to the program:
 
-A video file works as a camera URL (it plays in a loop):
+| Path | Contents |
+|---|---|
+| `nvr.toml` | Settings. Normally edited from the web interface; can be exported and imported. |
+| `nvr-data/` | Accounts, logs, system history, downloaded AI models. |
+| `recordings/<camera>/` | Recordings, with alert clips and pictures in `events/` and timeline copies in `timeline/`. |
+
+## Notes
+
+- **Camera connections.** GAZE opens one connection per camera stream and shares it between recording,
+  detection and live view. Many cameras only accept two or three connections at a time. If one reports
+  "Not Enough Bandwidth", close other apps that are viewing it.
+- **H.265.** Not every browser can play H.265. Where a browser can't, GAZE converts on the fly for
+  playback. Recording and detection are unaffected.
+- **Security.** Use the login, and put GAZE behind HTTPS (a reverse proxy, or a VPN such as Tailscale)
+  before exposing it outside your network. The microphone for push-to-talk only works over HTTPS or on
+  localhost.
+- **Updates** are described in [UPDATES.md](UPDATES.md), including how to build and publish your own
+  releases.
+
+## Testing without a camera
+
+A video file works as a camera address and plays in a loop:
+
 ```bash
 ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15 -t 30 -c:v libx264 -pix_fmt yuv420p test.mp4
 ```
 
-## Notes
-
-- **Playing recordings on other devices:** if a browser can't play the camera's format (usually H.265),
-  the NVR converts the recording to H.264 on the fly while it plays (using the GPU if set up). H.265 files
-  are tagged so Apple devices (Safari) can play them directly.
-- **GPU/CPU use:** each camera's sub-stream is decoded once (for motion detection, and reused for the
-  live grid); a full-quality stream is decoded only while you watch that camera. Background HD preloading
-  is off by default (Settings → Live view).
-
-- **One connection per camera stream:** the NVR connects to each stream once and shares it between
-  recording, the alert buffer, motion detection, AI and the live view. Many cameras (TP-Link Tapo, many
-  Hikvision/Dahua models) only allow 2–3 connections at a time and refuse more with errors like
-  *453 Not Enough Bandwidth*. If you still see that, close other apps that view the camera (the
-  manufacturer's app, another NVR, VLC) or restart the camera.
-
-- **H.265 cameras:** recording works, but not every browser plays H.265. Turn on *Convert recordings to
-  H.264* for the camera, or download the file and use VLC. Previews and thumbnails work either way.
-- **Privacy:** object recognition, faces and number plates all run on this computer; no pictures are sent
-  anywhere (except phone notifications, if you turn them on).
-- **Security:** camera passwords are visible in camera settings. Turn on the login if others use your
-  network, and use HTTPS (e.g. a reverse proxy) before exposing it to the internet.
-- **Upgrading:** older `nvr.toml` files are converted automatically.
-
-## How it works
+## How it's put together
 
 ```
-camera ─ main stream ─► relay (1 connection) ─┬► 24/7 files
-                                              ├► .buffer/ (rolling) ─► alert clips
-                                              └► JPEG ─► WebSocket ─► browser (HD view)
-       └ sub-stream ──► relay (1 connection) ─┬► RGB 5 fps ─► motion detector ─► AI ─► alerts + thumbnails
-                                              └► JPEG ─► WebSocket ─► browser grid
+camera ─ main stream ─► relay ─┬► recorder (24/7 files)
+                               ├► rolling buffer ─► alert clips
+                               └► live view / HD checks
+       └ sub-stream ──► relay ─┬► decoder (a few fps) ─► motion ─► object detection ─► alerts
+                               └► live grid
 ```
 
-| File | Purpose |
+| Source | Role |
 |---|---|
-| `src/manager.rs` | Running cameras; applies and saves changes; usage estimates |
-| `src/recorder.rs` | Recording processes: schedule, reconnect, stall detection, GPU fallback |
-| `src/buffer.rs` | Pre-event buffer and alert clips |
-| `src/detect.rs` | Motion detection and event lifecycle |
-| `src/ai.rs` | Object recognition (built-in YOLOX, double-check model) |
-| `src/events.rs` | Alert storage |
-| `src/relay.rs` | One shared connection per camera stream, fanned out to all users |
-| `src/live.rs` | Live JPEG streams |
-| `src/library.rs` | Recording search, timelines, export ranges |
-| `src/storage.rs` | Files, usage, retention |
-| `src/sysmon.rs` | CPU/GPU/RAM monitor and history |
-| `src/logs.rs` | Log page and log file |
-| `src/cloud.rs` | rclone backup |
-| `src/ffmpeg.rs` | ffmpeg commands, GPU options, previews, export |
-| `src/web.rs` | HTTP API and WebSocket |
-| `static/` | Web interface (built into the program) |
+| `src/manager.rs` | Starts and supervises everything per camera; applies setting changes. |
+| `src/relay.rs` | One connection per camera stream, shared by every consumer. |
+| `src/recorder.rs`, `src/buffer.rs` | Continuous recording, the pre-event buffer and alert clips. |
+| `src/detect.rs`, `src/ai.rs`, `src/infer.rs` | Motion detection, object detection, the alert lifecycle. |
+| `src/identify.rs`, `src/recog.rs`, `src/known.rs` | Faces and number plates, and the people and vehicles you've named. |
+| `src/zones.rs`, `src/stationary.rs` | Zones, line crossing, loitering, items left or taken, parked vehicles. |
+| `src/events.rs`, `src/notify.rs` | Alert storage and phone notifications. |
+| `src/library.rs`, `src/hls.rs` | Timelines, and playback of recordings as indexed HLS streams. |
+| `src/storage.rs`, `src/finalize.rs`, `src/cloud.rs` | Files, retention, repair and cloud backup. |
+| `src/web.rs`, `static/` | The HTTP API and the web interface (built into the program). |
+| `src/sysmon.rs`, `src/logs.rs`, `src/update.rs` | System monitoring, logging and self-updates. |
+
+`static/vendor/hls.min.js` is [hls.js](https://github.com/video-dev/hls.js) 1.5.20, used under the Apache
+License 2.0 (see `static/vendor/hls.js-LICENSE.txt`).

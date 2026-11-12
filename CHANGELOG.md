@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.42 — November 2026
+- **Tidy-up**: removed code for features that are no longer there (old notification AI settings, removing PTZ presets from the server, styles for the removed description feature) and the conversions for settings files from very old versions (0.1 to 0.5.7).
+- **New README**: shorter and up to date — what GAZE does, how to install it, a recommended first setup, and how it's put together.
+
 ## 0.6.41 — November 2026
 - **Controls on the picture in full screen**: a Recordings camera in full screen now has the same on-screen controls as the alert player — a scrub bar (with the time-lapse while dragging), play, ±1 frame, previous / next alert, speed, clip start / end with download, and sound. A live camera in full screen has sound, push to talk (two-way audio cameras), snapshot, and clip start / end with download (from the recording). They fade while the mouse is still.
 - **Alerts**: the "HD" tag on every alert is gone; an alert whose AI find was confirmed in full quality shows **HD AI ✓** next to the camera's name (or **HD AI ?** when it wasn't).
