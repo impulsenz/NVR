@@ -79,6 +79,27 @@ function fmtTime(d) {
   return fmtDate(d, m ? m[0] : 'HH:mm:ss');
 }
 
+// A video's frame rate, measured while it plays (15 until known): for
+// stepping one frame at a time.
+function videoFps(v) { return (v && v._fps) || 15; }
+function watchFps(v) {
+  if (!v || !v.requestVideoFrameCallback || v._fpsWatch) return;
+  v._fpsWatch = true;
+  let last = null;
+  const cb = (now, md) => {
+    if (last && md.presentedFrames > last.f && md.mediaTime > last.t) {
+      const fps = (md.presentedFrames - last.f) / (md.mediaTime - last.t);
+      if (fps > 1 && fps < 121) v._fps = v._fps ? v._fps * 0.8 + fps * 0.2 : fps;
+    }
+    last = v.paused ? null : {f: md.presentedFrames, t: md.mediaTime};
+    v.requestVideoFrameCallback(cb);
+  };
+  v.requestVideoFrameCallback(cb);
+}
+// Time-lapse previews are switched off for now (making them kept the
+// computer busy): scrubbing moves the video itself instead.
+const TIMELAPSE = false;
+if (!TIMELAPSE) document.documentElement.classList.add('no-timelapse');
 async function api(path, opts = {}) {
   if (opts.json !== undefined) {
     opts.body = JSON.stringify(opts.json); delete opts.json;
@@ -718,6 +739,7 @@ class Player {
     this.osd.innerHTML = Object.entries(parts).map(([k, v]) => ovBox(k, v.join(''), 'pov-osd')).join('');
   }
   wire(video) {
+    watchFps(video);
     const on = (ev, f) => video.addEventListener(ev, (e) => { if (video === this.video) f(e); });
     video.controls = false;
     on('timeupdate', () => { this.paint(); this.prepareNext(); });
@@ -763,8 +785,8 @@ class Player {
         <div class="head"></div><div class="preview" hidden><div class="img"></div><div class="t"></div></div></div>
       <div class="controls">
         <button type="button" class="p-play primary">▶</button>
-        <button type="button" class="p-back" title="Back 10 s">−10s</button>
-        <button type="button" class="p-fwd" title="Forward 10 s">+10s</button>
+        <button type="button" class="p-back" title="Back one frame (pauses)">−1 frame</button>
+        <button type="button" class="p-fwd" title="Forward one frame (pauses)">+1 frame</button>
         <select class="p-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>
         <span class="timecode p-time"></span>
         <span class="spacer"></span>
@@ -779,8 +801,8 @@ class Player {
     this.el = {scrub: q('.scrub'), fill: q('.fill'), head: q('.head'), sel: q('.sel'), hin: q('.handle.in'), hout: q('.handle.out'),
       prev: q('.preview'), pimg: q('.preview .img'), pt: q('.preview .t'), time: q('.p-time'), play: q('.p-play'), clip: q('.p-clip')};
     q('.p-play').onclick = () => this.video.paused ? this.video.play() : this.video.pause();
-    q('.p-back').onclick = () => this.seekTo(Math.max(0, this.cur() - 10));
-    q('.p-fwd').onclick = () => this.seekTo(Math.min(this.dur(), this.cur() + 10));
+    q('.p-back').onclick = () => this.stepFrame(-1);
+    q('.p-fwd').onclick = () => this.stepFrame(1);
     q('.p-speed').onchange = (e) => this.video.playbackRate = +e.target.value;
     q('.p-in').onclick = () => { this.inT = this.cur(); if (this.outT != null && this.outT <= this.inT) this.outT = null; this.paint(); };
     q('.p-out').onclick = () => { this.outT = this.cur(); if (this.inT == null || this.inT >= this.outT) this.inT = Math.max(0, this.outT - 30); this.paint(); };
@@ -843,7 +865,7 @@ class Player {
     this.lightSegs = [];
     this.findLightCopies(item);
     const kind = item.kind === 'clip' ? 'clip' : 'rec';
-    try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
+    if (TIMELAPSE) try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
   }
   // The light timeline copies around this file: their time-lapse has a
   // picture every second, shown full size while dragging along the bar.
@@ -873,6 +895,15 @@ class Player {
     const v = this.video, t0 = performance.now();
     const check = () => { if ((v.readyState >= 2 && !v.seeking) || performance.now() - t0 > 5000) ov.hidden = true; else setTimeout(check, 80); };
     setTimeout(check, 60);
+  }
+  // One frame back or forward, paused there.
+  stepFrame(n) {
+    if (!this.item) return;
+    const v = this.video;
+    v.pause();
+    const t = Math.min(this.dur(), Math.max(0, this.cur() + n / videoFps(v)));
+    if (this.tc) this.seekTo(t, false); else v.currentTime = t;
+    this.paint();
   }
   stop() {
     for (const v of [this.video, this.alt]) { v.pause(); v.removeAttribute('src'); v.load(); }
@@ -924,7 +955,7 @@ class Player {
         // Seek while dragging (direct playback only; converted playback seeks on release).
         // Time-lapse (the Recordings scrub choice): pictures only, the video
         // is loaded on release; otherwise seek the video itself.
-        if (tl.scrub === 'timelapse' || this.tc) this.showTimelapse(t);
+        if ((TIMELAPSE && tl.scrub === 'timelapse') || this.tc) this.showTimelapse(t);
         else if (performance.now() - lastSeek > 120) { this.video.currentTime = t; lastSeek = performance.now(); }
         this.el.head.style.left = (t / this.dur() * 100) + '%';
       } else if (drag === 'in') { this.inT = Math.min(t, (this.outT ?? this.dur()) - 1); this.paint(); }
@@ -937,7 +968,7 @@ class Player {
       drag = e.target.classList.contains('in') ? 'in' : e.target.classList.contains('out') ? 'out' : 'head';
       if (drag === 'head') {
         this.wasPlaying = !this.video.paused; this.video.pause();
-        if (tl.scrub === 'timelapse' || this.tc) this.showTimelapse(tAt(e)[0]); else this.video.currentTime = tAt(e)[0];
+        if ((TIMELAPSE && tl.scrub === 'timelapse') || this.tc) this.showTimelapse(tAt(e)[0]); else this.video.currentTime = tAt(e)[0];
       }
     });
     const end = (e) => {
@@ -972,7 +1003,7 @@ class Player {
       this.dl.href = pre.url + '?download=1';
       this.paint();
       const kind = 'rec';
-      api(`api/sprite/${enc(this.item.camera)}/${kind}/${enc(pre.name)}`).then(sp => { this.sprite = preloadSprite(sp); }).catch(() => { this.sprite = null; });
+      if (TIMELAPSE) api(`api/sprite/${enc(this.item.camera)}/${kind}/${enc(pre.name)}`).then(sp => { this.sprite = preloadSprite(sp); }).catch(() => { this.sprite = null; });
       return;
     }
     const end = new Date(new Date(this.item.file_start).getTime() + this.dur() * 1000 - 2000);
@@ -1583,6 +1614,7 @@ const camTl = {
   },
   // Load the time-lapse of everything in view, newest first (up to now).
   async prefetch() {
+    if (!TIMELAPSE) return;
     const gen = ++this.pfGen, id = this.id;
     const todo = this.sources().slice().sort((x, y) => new Date(y.start) - new Date(x.start)).slice(0, 300);
     let i = 0, missing = 0;
@@ -2324,7 +2356,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {scrub: store.get('tl-scrub', 'timelapse'), quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {scrub: store.get('tl-scrub', 'sub'), quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
@@ -2362,7 +2394,7 @@ function buildTimelineVideos() {
       <div class="ov tr"><button type="button" class="small solo-off" hidden>▦ All cameras</button><button type="button" class="fsbtn">⛶</button></div>`;
     el.querySelector('.fsbtn').onclick = () => fullscreen(el);
     el.querySelector('.solo-off').onclick = (e) => { e.stopPropagation(); tlSolo(null); };
-    el._vids = [...el.querySelectorAll('video')];
+    el._vids = [...el.querySelectorAll('video')]; el._vids.forEach(watchFps);
     el._active = 0;
     el._tc = dataSaver || noNativePlayback.has(c.camera);
     // Fall back to converted playback if this browser can't play the files.
@@ -2499,6 +2531,7 @@ $('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); };
 $('tl-quality').value = tl.quality;
 // What scrubbing shows: the time-lapse pictures, or the sub-stream or main
 // stream video itself (to compare how quickly each one keeps up).
+if (!TIMELAPSE && tl.scrub === 'timelapse') tl.scrub = 'sub';
 $('tl-scrub').querySelectorAll('button').forEach(b => {
   b.classList.toggle('on', b.dataset.v === tl.scrub);
   b.onclick = () => {
@@ -2511,8 +2544,15 @@ $('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-q
 $('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
 $('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 $('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
-$('tl-back10').onclick = () => { tl.T -= 10000; tlSync(true); };
-$('tl-fwd10').onclick = () => { tl.T += 10000; tlSync(true); };
+// One frame back or forward on every camera (pauses playback).
+const tlStep = (n) => {
+  if (tl.playing) tlPlay(false);
+  const v = document.querySelector('#tl-videos .surface') && activeVideo(document.querySelector('#tl-videos .surface'));
+  tl.T += n * 1000 / videoFps(v);
+  drawHead(); tlSync(true);
+};
+$('tl-back10').onclick = () => tlStep(-1);
+$('tl-fwd10').onclick = () => tlStep(1);
 function allEvents() { return tl.data.flatMap(c => c.events).map(e => new Date(e.start).getTime()).sort((a, b) => a - b); }
 $('tl-prev-ev').onclick = () => { const e = allEvents().filter(t => t < tl.T - 4000).pop(); if (e) jumpTo(e - 3000); };
 $('tl-next-ev').onclick = () => { const e = allEvents().find(t => t > tl.T + 4000); if (e) jumpTo(e - 3000); };
@@ -2678,6 +2718,7 @@ const isGrowing = (seg) => Date.now() - new Date(seg.end).getTime() < 120000;
 // still being recorded is refreshed every 30 s. While asking again, the
 // previous good preview keeps being used.
 async function spriteFor(cam, seg) {
+  if (!TIMELAPSE) return null;
   const key = seg.url, have = tl.sprites.get(key), now = Date.now();
   const again = !have || (have.done && ((isGrowing(seg) && now - have.at > 30000) || (have.failed && now >= have.retryAt)));
   if (again) {
@@ -2748,6 +2789,7 @@ function paintPreviewStrips() {
   }
 }
 function prefetchSprites() {
+  if (!TIMELAPSE) return;
   const gen = tl.pfGen = (tl.pfGen || 0) + 1;
   const a = tl.winStart, b = a + tl.zoom * 1000;
   const list = [];
@@ -3011,6 +3053,20 @@ async function loadWhere() {
   box.innerHTML = `<table class="where"><tbody>${rows.join('')}</tbody></table>`;
 }
 
+// Header: delete all saved footage (for testing), after typing DELETE.
+$('wipe-btn').onclick = async () => {
+  const typed = prompt('Delete ALL saved footage?\n\nEvery recording, timeline copy, alert, clip and alert picture on every camera is removed. This cannot be undone. Cameras, settings and known people stay, and recording carries on.\n\nType DELETE to confirm:');
+  if (typed === null) return;
+  if (typed.trim().toUpperCase() !== 'DELETE') { toast('Not deleted (type DELETE to confirm)'); return; }
+  try {
+    const r = await api('api/maintenance/delete-footage', {method: 'POST'});
+    toast(r.message);
+    tl.sprites.clear(); if (tl.pv) tl.pv.clear();
+    refreshStatus();
+    if (page === 'recordings' || page === 'alerts') reloadRec();
+  } catch (e) { toast(e.message, true); }
+};
+
 // ---------- Settings → Tasks ----------
 const TASK_ACTIONS = [
   ['previews', '🖼️ Rebuild previews', 'Throws away the scrub and time-lapse previews and makes the last 24 hours again. Use it if previews look wrong or black.', null,
@@ -3019,6 +3075,7 @@ const TASK_ACTIONS = [
   ['reidentify', '🧑 Look for faces & plates again', 'Checks the last 7 days of alerts for faces and number plates again — after teaching GAZE new people or vehicles.', {days: 7},
     'Look for faces and number plates in the last 7 days of alerts again?'],
 ];
+if (!TIMELAPSE) TASK_ACTIONS.splice(TASK_ACTIONS.findIndex(a => a[0] === 'previews'), 1);
 function renderTasks(body) {
   body.innerHTML = `<div class="card"><h2>What the AI is doing</h2>
     <p class="muted" style="margin-top:0">Besides recording, GAZE works on alerts in the background: finding faces and number plates, preparing previews, downloading AI models and copying to the cloud. It waits for spare processor time, so it never slows down recording or live view.</p>
@@ -4197,7 +4254,7 @@ async function renderStorage(body) {
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
     <label for="s-max">Maximum storage</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>
     <label for="s-free">Keep free on disk</label><div class="row"><input type="number" id="s-free" min="0" step="0.5" value="${s.min_free_gb}" style="width:110px"><span class="muted">GB (oldest recordings are deleted to keep this free)</span></div>
-    <span></span><div><label class="check"><input type="checkbox" id="s-tl" ${s.prebuild_timelapse !== false ? 'checked' : ''}> Prepare time-lapse previews for the last 24 hours automatically</label>
+    <span ${TIMELAPSE ? '' : 'hidden'}></span><div ${TIMELAPSE ? '' : 'hidden'}><label class="check"><input type="checkbox" id="s-tl" ${s.prebuild_timelapse !== false ? 'checked' : ''}> Prepare time-lapse previews for the last 24 hours automatically</label>
       <div class="hint">The timeline's scrub previews are made in the background (newest first, a little CPU), so they appear instantly. Older days are still made when you open them.</div></div>
   </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>
   <div class="card"><h2>Where each camera saves</h2>

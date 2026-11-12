@@ -24,6 +24,7 @@
   <a id="dl-chip" class="dl-chip admin-only" href="#settings/tasks" hidden></a>
   <span id="clock"></span>
   <button type="button" id="app-fs" class="small" title="Full screen (any page)"><i class="ni">⛶</i><span class="fs-label"> Full screen</span></button>
+  <button type="button" id="wipe-btn" class="small admin-only danger" title="Delete all saved footage (recordings, alerts and clips) — for testing">🗑 <span class="hide-sm">Delete footage</span></button>
   <button type="button" id="upd-btn" class="small admin-only" title="Check for updates">⟳ <span class="hide-sm">Updates</span></button>
   <div class="dropdown user-menu" id="user-menu" hidden>
     <button type="button" id="um-btn" class="small" title="Your account"><i class="ni">👤</i> <span id="um-name"></span><span class="hide-sm"> ▾</span></button>
@@ -114,7 +115,7 @@
             <div class="ctl-lane" id="ctl-lane"><div class="preview" hidden><div class="img"></div><div class="t"></div></div></div>
             <div class="tlp ctl-tlp" id="ctl-tlp" title="Time-lapse previews — blue: ready to scrub · striped: loading · grey: not loaded yet · red: couldn't be made"></div>
             <div class="legend" data-legend="cam"></div>
-            <div class="hint">Drag along the timeline to run through the time-lapse on the picture; let go to play from there. Click a symbol to watch that alert.</div>
+            <div class="hint">Drag along the timeline and let go to play from there. Click a symbol to watch that alert.</div>
           </div>
         </div>
         <div>
@@ -167,8 +168,8 @@
       <div class="controls">
         <button id="tl-back" hidden title="Back to all the cameras you were looking at">← All cameras</button>
         <button id="tl-play" class="primary">▶ Play</button>
-        <button id="tl-back10" title="Back 10 s">−10s</button>
-        <button id="tl-fwd10" title="Forward 10 s">+10s</button>
+        <button id="tl-back10" title="Back one frame (pauses)">−1 frame</button>
+        <button id="tl-fwd10" title="Forward one frame (pauses)">+1 frame</button>
         <button id="tl-prev-ev" title="Previous alert">⏮ Alert</button>
         <button id="tl-next-ev" title="Next alert">Alert ⏭</button>
         <select id="tl-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>

@@ -289,7 +289,9 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(mgr.clone().housekeeping());
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
-    tokio::spawn(web::prebuild_timelapse(mgr.clone()));
+    if web::TIMELAPSE {
+        tokio::spawn(web::prebuild_timelapse(mgr.clone()));
+    }
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));
     tokio::spawn(identify::run(mgr.clone()));

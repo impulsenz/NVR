@@ -155,6 +155,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/notify/status", get(notify_status))
         .route("/api/maintenance/previews", post(rebuild_previews))
         .route("/api/maintenance/reidentify", post(reidentify))
+        .route("/api/maintenance/delete-footage", post(delete_all_footage))
         .route(
             "/api/maintenance/alert-pictures",
             post(refresh_alert_pictures),
@@ -1750,6 +1751,11 @@ fn media_path(
     }
 }
 
+/// Time-lapse previews are switched off for now: making them (in the
+/// background and while scrubbing) kept the computer too busy. Nothing is
+/// made or served while this is false.
+pub const TIMELAPSE: bool = false;
+
 /// Only a couple of preview jobs at a time.
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
@@ -2285,6 +2291,9 @@ async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
 /// Throw away all scrub / time-lapse previews and make those of the last
 /// 24 hours again (older ones are made when looked at).
 async fn rebuild_previews(State(m): App) -> Response {
+    if !TIMELAPSE {
+        return err(StatusCode::BAD_REQUEST, "time-lapse previews are switched off");
+    }
     let mut removed = 0;
     for c in m.cameras() {
         for dir in [
@@ -2302,6 +2311,64 @@ async fn rebuild_previews(State(m): App) -> Response {
     PREBUILD_FORCE.store(true, std::sync::atomic::Ordering::SeqCst);
     PREBUILD_NOW.notify_one();
     Json(json!({"ok": true, "message": "Previews cleared — the last 24 hours are being made again (see Tasks)"})).into_response()
+}
+
+/// Delete all saved footage (for testing): every recording, timeline copy,
+/// alert with its clip and pictures, and the cached previews, for every
+/// camera. Settings, cameras, known people and vehicles stay. The file each
+/// camera is writing right now is left alone (it's still open).
+async fn delete_all_footage(State(m): App) -> Response {
+    let res = tokio::task::spawn_blocking(move || {
+        let (mut files, mut bytes, mut alerts) = (0u64, 0u64, 0usize);
+        let busy = |p: &std::path::Path| {
+            std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20))
+        };
+        for c in m.cameras() {
+            alerts += c.events.remove_where(|_| true);
+            for dir in [
+                c.dir.clone(),
+                crate::storage::timeline_dir(&c.dir),
+                c.events.dir().to_path_buf(),
+            ] {
+                let _ = std::fs::remove_dir_all(dir.join(".thumbs"));
+                let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+                for e in rd.flatten() {
+                    let p = e.path();
+                    let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
+                    // Pictures always; video files unless being written right now.
+                    if !p.is_file()
+                        || !["mp4", "jpg", "ts", "part"].contains(&ext)
+                        || (ext != "jpg" && busy(&p))
+                    {
+                        continue;
+                    }
+                    let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                    if std::fs::remove_file(&p).is_ok() {
+                        files += 1;
+                        bytes += size;
+                    }
+                }
+            }
+        }
+        (files, bytes, alerts)
+    })
+    .await;
+    match res {
+        Ok((files, bytes, alerts)) => {
+            tracing::warn!(
+                "all saved footage deleted from the toolbar: {files} file(s), {:.1} GB, {alerts} alert(s)",
+                bytes as f64 / 1e9
+            );
+            Json(json!({"ok": true, "message": format!(
+                "Deleted {files} file(s) ({:.1} GB) and {alerts} alert(s). Recording carries on.",
+                bytes as f64 / 1e9
+            )}))
+            .into_response()
+        }
+        Err(e) => bad(anyhow::anyhow!(e)),
+    }
 }
 
 #[derive(Deserialize)]
@@ -2326,6 +2393,9 @@ async fn sprite_info(
     State(m): App,
     Path((id, kind, name)): Path<(String, String, String)>,
 ) -> Response {
+    if !TIMELAPSE {
+        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
+    }
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
         Ok((_, info)) => Json(json!({
@@ -2349,6 +2419,9 @@ async fn sprite_image(
     Query(q): Query<PageQuery>,
     req: Request,
 ) -> Response {
+    if !TIMELAPSE {
+        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
+    }
     let c = camera!(m, id);
     // A page already made is served as it is (pages are only ever written
     // over with more pictures); making previews is for the info request.

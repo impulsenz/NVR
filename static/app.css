@@ -848,3 +848,7 @@ table.where td:first-child { width: 44px; }
 /* Live pictures fill their boxes as chosen (Settings → Live view & display). */
 body[data-fit=stretch] .surface > img { object-fit: fill; }
 body[data-fit=crop] .surface > img { object-fit: cover; }
+
+/* Time-lapse switched off for now: no preview strips or time-lapse choice. */
+.no-timelapse .tlp, .no-timelapse #ctl-tlp, .no-timelapse #tl-scrub [data-v=timelapse] { display: none !important; }
+.no-timelapse .preview .img { display: none; }
