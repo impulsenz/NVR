@@ -1046,3 +1046,12 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .fspov .p-in.on { outline: 2px solid var(--amber); }
 .fspov .p-clip { background: var(--amber) !important; border-color: var(--amber) !important; color: #111 !important; }
 .fspov .scrub { position: relative; height: 14px; cursor: pointer; margin-bottom: 4px; }
+/* Recordings in full screen: the timeline in a panel that slides up from the bottom */
+.surface:fullscreen .fspov.tl-panel { padding: 10px 12px 12px; background: rgba(10,12,17,.94); backdrop-filter: blur(6px);
+  border-top: 1px solid rgba(255,255,255,.08); transition: transform .25s ease, opacity .25s ease; }
+.fspov.tl-panel.away { transform: translateY(calc(100% - 4px)); opacity: 0; }
+.fspov.tl-panel .fs-tlslot #tl { max-height: 42vh; overflow-y: auto; margin: 0 0 6px; }
+.fspov.tl-panel .controls { margin-top: 0; }
+.eye-btn { flex: none; margin-left: -1px; padding: 0 9px; min-width: 36px; font-size: 14px; line-height: 1; opacity: .7; }
+.eye-btn.on { opacity: 1; background: var(--accent); border-color: var(--accent); }
+#c-url, #c-live, #c-talk-url { width: calc(100% - 44px); }

@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.45 — November 2026
+- **The whole timeline in full screen**: a Recordings camera in full screen now has the real Recordings timeline — every camera, alert pictures, the time-lapse line, scrubbing, zoom and ◀ ▶ — in a panel that slides up when the mouse comes to the bottom of the screen and away when it leaves, with the play, frame, alert, speed and clip controls under it.
+- **Passwords hidden in stream addresses**: in a camera's settings, the password inside the main, sub-stream and speaker addresses shows as dots; an 👁 button next to each shows it. Editing the rest of the address keeps the password. The camera and ONVIF login passwords have the 👁 too.
+- **Network scan finds cameras on other networks**: the scan now searches every network this computer is on (it only found the main one), sends the ONVIF search out of every network adapter, also searches the networks of the cameras already set up, and has a box for other networks to search (e.g. 192.168.5.0/24 behind another router).
+
 ## 0.6.44 — November 2026
 - **Time-lapse quality settings** (Settings → Recording & storage): choose how often a picture is kept (every 2 s for the smoothest scrubbing, up to every 60 s) and how sharp they are — Standard (256 × 144), Sharp (384 × 216) or Sharpest (512 × 288). Since the pictures come from what motion detection already looks at, more and sharper pictures cost little but disk space (shown as you choose). Changes apply straight away, without restarting the cameras.
 - The old "Prepare time-lapse previews automatically" option is gone: it's always done now (it's cheap).

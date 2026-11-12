@@ -3284,7 +3284,11 @@ function drawHead() {
 // They fade while nothing moves.
 document.addEventListener('fullscreenchange', () => {
   document.querySelectorAll('.fspov').forEach(x => {
-    const s = x.parentElement; x.remove();
+    const s = x.parentElement;
+    // The Recordings timeline goes back to its place under the videos.
+    const tlEl = x.querySelector('#tl');
+    if (tlEl && s._tlHome) { s._tlHome.replaceWith(tlEl); s._tlHome = null; requestAnimationFrame(drawTimeline); }
+    x.remove();
     if (!s.querySelector('.pov')) s.classList.remove('has-pov', 'pov-idle');
   });
   const fe = document.fullscreenElement;
@@ -3301,8 +3305,8 @@ const fsClipHref = (camId, a, b) => `api/export?camera=${enc(camId)}&from=${enc(
 function tlFsBar(el) {
   const camId = el.dataset.cam, c = cam(camId) || {};
   const bar = document.createElement('div');
-  bar.className = 'pov fspov tlbar';
-  bar.innerHTML = `<div class="scrub"><div class="track"></div><div class="sel" hidden></div><div class="fill"></div><div class="head"></div></div>
+  bar.className = 'pov fspov tlbar tl-panel';
+  bar.innerHTML = `<div class="fs-tlslot"></div>
     <div class="controls">
       <button type="button" class="p-play primary">▶</button>
       <button type="button" class="p-back" title="Back one frame">−1 frame</button><button type="button" class="p-fwd" title="Forward one frame">+1 frame</button>
@@ -3311,9 +3315,27 @@ function tlFsBar(el) {
       <span class="timecode p-time"></span><span class="spacer"></span>
       <button type="button" class="p-in" title="Clip starts here">[ Start</button><button type="button" class="p-out" title="Clip ends here">End ]</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
+      <select class="p-zoom" title="Zoom">${[...$('tl-zoom').options].map(o => `<option value="${o.value}" ${o.value === $('tl-zoom').value ? 'selected' : ''}>${o.textContent}</option>`).join('')}</select>
+      <button type="button" class="p-left" title="Earlier">◀</button><button type="button" class="p-right" title="Later">▶</button>
       <button type="button" class="p-mute" title="Sound">🔇</button><button type="button" class="p-fs" title="Leave full screen">⛶</button>
     </div>`;
   el.appendChild(bar); el.classList.add('has-pov');
+  // The Recordings timeline itself (every camera, alert pictures, the
+  // time-lapse line, scrubbing) moves into the panel while in full screen.
+  const tlEl = $('tl');
+  el._tlHome = document.createComment('timeline'); tlEl.before(el._tlHome);
+  bar.querySelector('.fs-tlslot').appendChild(tlEl);
+  requestAnimationFrame(() => { drawTimeline(); drawHead(); });
+  bar.querySelector('.p-zoom').onchange = (e) => { $('tl-zoom').value = e.target.value; $('tl-zoom').dispatchEvent(new Event('change')); };
+  bar.querySelector('.p-left').onclick = () => $('tl-left').click();
+  bar.querySelector('.p-right').onclick = () => $('tl-right').click();
+  // The panel slides up when the mouse comes to the bottom of the screen
+  // (and stays while it's used), and away otherwise.
+  let hideT = null;
+  const show = (on) => { clearTimeout(hideT); if (on) bar.classList.remove('away'); else hideT = setTimeout(() => { if (!tl.dragging && !bar.matches(':hover')) bar.classList.add('away'); }, 700); };
+  el.addEventListener('pointermove', (e) => { if (document.fullscreenElement !== el) return; show(e.clientY > innerHeight - Math.max(140, bar.offsetHeight + 30) || bar.contains(e.target) || tl.dragging); });
+  bar.addEventListener('pointerleave', () => show(false));
+  show(true); hideT = setTimeout(() => { if (!bar.matches(':hover')) bar.classList.add('away'); }, 2500);
   const q = (x) => bar.querySelector(x);
   q('.p-play').onclick = () => $('tl-play').click();
   q('.p-back').onclick = () => tlStep(-1); q('.p-fwd').onclick = () => tlStep(1);
@@ -3325,28 +3347,16 @@ function tlFsBar(el) {
   q('.p-mute').onclick = () => { const m = !vids().every(v => v.muted); vids().forEach(v => v.muted = m); paintMute(); };
   q('.p-fs').onclick = () => document.exitFullscreen().catch(() => {});
   q('.p-clip').download = '';
-  // The scrub bar is the stretch of time the timeline shows.
-  const sc = q('.scrub'), tAt = (e) => { const r = sc.getBoundingClientRect(); return tl.winStart + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * tl.zoom * 1000; };
-  let drag = false, was = false;
-  sc.onpointerdown = (e) => { drag = true; tl.dragging = true; was = tl.playing; if (was) tlPlay(false); sc.setPointerCapture(e.pointerId); tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewAll(); };
-  sc.onpointermove = (e) => { if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewAll(); };
-  sc.onpointerup = sc.onpointercancel = () => {
-    if (!drag) return; drag = false; tl.dragging = false;
-    cutSpriteDownloads(); tlSync(true); if (was) tlPlay(true);
-    hideSpritesWhenReady().then(() => { if (page === 'recordings' && !tl.dragging) prefetchSprites(); });
-  };
-  paintMute(); paintTlBar(); fsIdle(el, bar);
+  paintMute(); paintTlBar();
 }
 function paintTlBar() {
   const bar = document.querySelector('.fspov.tlbar'); if (!bar) return;
-  const span = tl.zoom * 1000, pc = (t) => Math.min(100, Math.max(0, (t - tl.winStart) / span * 100)) + '%';
-  bar.querySelector('.fill').style.width = pc(tl.T); bar.querySelector('.head').style.left = pc(tl.T);
   bar.querySelector('.p-time').textContent = fmtDate(new Date(tl.T));
   bar.querySelector('.p-play').textContent = tl.playing ? '❚❚' : '▶';
-  const has = tl.inT != null && tl.outT != null, sel = bar.querySelector('.sel'), clip = bar.querySelector('.p-clip');
-  sel.hidden = !has; clip.hidden = !has;
+  const z = bar.querySelector('.p-zoom'); if (z && z.value !== $('tl-zoom').value) z.value = $('tl-zoom').value;
+  const has = tl.inT != null && tl.outT != null, clip = bar.querySelector('.p-clip');
+  clip.hidden = !has;
   if (has) {
-    sel.style.left = pc(tl.inT); sel.style.width = `calc(${pc(tl.outT)} - ${pc(tl.inT)})`;
     clip.href = fsClipHref(bar.parentElement.dataset.cam, tl.inT, tl.outT);
     clip.textContent = `⇩ Download clip (${fmtClock((tl.outT - tl.inT) / 1000)})`;
   }
@@ -4218,7 +4228,7 @@ const chk = (id) => $(id).checked;
 // ---------- cameras ----------
 function renderCameras(body) {
   body.innerHTML = `<div class="card">
-    <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><button id="scan-cams" title="Look for cameras on your network (ONVIF and RTSP)">🔍 Scan network</button><button class="primary" id="add-cam">+ Add camera</button></div>
+    <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><input id="scan-nets" placeholder="Also search e.g. 192.168.5.0/24" title="Networks this computer isn't directly on (behind a router), separated by commas. The computer's own networks and your cameras' networks are always searched." style="width:230px" value="${esc(store.get('scan-nets', ''))}"><button id="scan-cams" title="Look for cameras on every network this computer is on, your cameras' networks and any you add (ONVIF and RTSP)">🔍 Scan network</button><button class="primary" id="add-cam">+ Add camera</button></div>
     <div id="scan-out"></div>
     <table><thead><tr><th>Preview</th><th>Name</th><th class="hide-sm">Profile</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead><tbody id="cam-table"></tbody></table>
     ${cameraCfgs.length ? '' : '<div class="empty">No cameras yet. Click “Add camera”.</div>'}</div>`;
@@ -4277,9 +4287,11 @@ async function scanNetwork() {
   btn.disabled = true; btn.textContent = 'Scanning…';
   out.innerHTML = '<div class="hint" style="margin:8px 0"><span class="spinner small"></span> Looking for cameras on your network (about 5 seconds)…</div>';
   let found = [];
-  try { found = await api('api/discover', {method: 'POST'}); } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  const nets = ($('scan-nets') && val('scan-nets').trim()) || '';
+  store.set('scan-nets', nets);
+  try { found = await api('api/discover', {method: 'POST', json: {networks: nets}}); } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   btn.disabled = false; btn.textContent = '🔍 Scan network';
-  if (!found.length) { out.innerHTML = '<div class="hint" style="margin:8px 0">No cameras answered. Check that ONVIF is turned on in the camera, and that it is on the same network as this computer.</div>'; return; }
+  if (!found.length) { out.innerHTML = '<div class="hint" style="margin:8px 0">No cameras answered. Check that ONVIF is turned on in the camera. A camera on a network this computer is not on (behind another router) is found by adding that network, e.g. 192.168.5.0/24, in the box next to Scan network.</div>'; return; }
   out.innerHTML = `<div class="scan-res"><b>Found on the network</b> <span class="muted">(${found.length})</span>
     <table><tbody>${found.map((f, i) => `<tr><td><b>${esc(f.ip)}</b></td><td>${esc([f.manufacturer, f.hardware, f.name].filter(Boolean).join(' · ') || (f.rtsp ? 'Device with a video stream (RTSP)' : 'Device'))}</td>
       <td>${f.onvif_port ? '<span class="tag">ONVIF</span>' : ''}${f.rtsp ? '<span class="tag">RTSP</span>' : ''}</td>
@@ -4611,6 +4623,9 @@ async function openCameraDialog(id, clone, prof) {
   }
   setupZones(c, id && !clone ? id : null);
   setupPackageArea(c, id && !clone ? id : null);
+  // Passwords hidden: in the stream addresses too, with an eye to show them.
+  for (const x of ['c-url', 'c-live', 'c-talk-url']) if ($(x)) maskUrlInput($(x));
+  for (const x of ['q-pass', 'p-pass']) if ($(x)) eyeFor($(x));
   // "More things to watch for": a ticked one joins the list (ticked).
   if ($('d-more')) $('d-more').onchange = (e) => {
     const inp = e.target; if (!inp.checked) return;
@@ -4803,6 +4818,42 @@ function setupPackageArea(c, camId) {
     img.onload = () => { if (m) m.hidden = true; };
     pkgUnbind = Live.bind(img, camId, 'sub');
   }
+}
+
+// A password box with an eye button that shows or hides what's typed.
+function eyeFor(input) {
+  if (input._eye) return;
+  const b = input._eye = document.createElement('button');
+  b.type = 'button'; b.className = 'eye-btn'; b.title = 'Show the password'; b.textContent = '👁';
+  b.onclick = () => { const show = input.type === 'password'; input.type = show ? 'text' : 'password'; b.classList.toggle('on', show); b.title = show ? 'Hide the password' : 'Show the password'; };
+  input.after(b);
+}
+// A stream address box: the password in it shows as dots (the eye shows
+// it). Reading the box (.value) still gives the real address; editing the
+// rest of it keeps the password; typing over the dots replaces it.
+function maskUrlInput(input) {
+  if (input._masked) return;
+  input._masked = true;
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  const re = /^([a-z][a-z0-9+.-]*:\/\/[^:\/@\s]*):([^@\s]*)@/i;
+  let real = desc.get.call(input), shown = false;
+  const dots = (p) => '•'.repeat(Math.min(10, Math.max(6, p.length)));
+  const paint = () => desc.set.call(input, shown ? real : real.replace(re, (m, a, pw) => pw ? `${a}:${dots(pw)}@` : m));
+  Object.defineProperty(input, 'value', {configurable: true, get: () => real, set: (v) => { real = String(v ?? ''); paint(); }});
+  input.addEventListener('input', () => {
+    const typed = desc.get.call(input);
+    if (shown) { real = typed; return; }
+    const m = typed.match(re), r = real.match(re);
+    if (m && r && /^•+$/.test(m[2])) real = typed.replace(re, `${m[1]}:${r[2]}@`);     // password untouched
+    else if (m && m[2].includes('•')) real = typed.replace(re, `${m[1]}:${m[2].replace(/•/g, '')}@`);  // typed over the dots
+    else real = typed;
+  });
+  input.addEventListener('blur', paint);
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'eye-btn'; b.title = 'Show the password in the address'; b.textContent = '👁';
+  b.onclick = () => { shown = !shown; b.classList.toggle('on', shown); b.title = shown ? 'Hide the password' : 'Show the password in the address'; paint(); };
+  input.after(b);
+  paint();
 }
 
 function stopMotionMeter() { clearInterval(meterTimer); meterTimer = null; if (maskUnbind) { maskUnbind(); maskUnbind = null; } }

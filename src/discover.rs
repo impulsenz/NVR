@@ -91,31 +91,99 @@ pub fn parse_match(xml: &str) -> Option<Found> {
     })
 }
 
+/// ONVIF discovery: the probe goes out of every network adapter (sent from
+/// one socket it would only reach the network Windows picks by default).
 async fn ws_discovery(wait: Duration) -> Vec<Found> {
-    let Ok(sock) = UdpSocket::bind("0.0.0.0:0").await else {
-        return vec![];
-    };
-    let _ = sock.set_broadcast(true);
-    let msg = probe_message();
-    let target: SocketAddr = "239.255.255.250:3702".parse().unwrap();
-    for _ in 0..2 {
-        let _ = sock.send_to(msg.as_bytes(), target).await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
+    let mut from: Vec<Ipv4Addr> = crate::web::local_addresses().iter().filter_map(|a| a.parse().ok()).collect();
+    from.push(Ipv4Addr::UNSPECIFIED);
+    let tasks: Vec<_> = from.into_iter().map(|ip| tokio::spawn(ws_discovery_from(ip, wait))).collect();
     let mut out: BTreeMap<String, Found> = BTreeMap::new();
-    let mut buf = vec![0u8; 65536];
-    let end = tokio::time::Instant::now() + wait;
-    while let Ok(Ok((n, _))) = tokio::time::timeout_at(end, sock.recv_from(&mut buf)).await {
-        if let Some(f) = parse_match(&String::from_utf8_lossy(&buf[..n])) {
+    for t in tasks {
+        for f in t.await.unwrap_or_default() {
             out.entry(f.ip.clone()).or_insert(f);
         }
     }
     out.into_values().collect()
 }
 
-/// Hosts on this computer's local /24 networks answering on port 554.
-async fn rtsp_sweep() -> Vec<String> {
-    let mut nets = HashSet::new();
+async fn ws_discovery_from(ip: Ipv4Addr, wait: Duration) -> Vec<Found> {
+    let Ok(sock) = UdpSocket::bind((ip, 0)).await else {
+        return vec![];
+    };
+    let _ = sock.set_broadcast(true);
+    if !ip.is_unspecified() {
+        let _ = sock.set_multicast_loop_v4(false);
+    }
+    let msg = probe_message();
+    let target: SocketAddr = "239.255.255.250:3702".parse().unwrap();
+    for _ in 0..2 {
+        let _ = sock.send_to(msg.as_bytes(), target).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 65536];
+    let end = tokio::time::Instant::now() + wait;
+    while let Ok(Ok((n, _))) = tokio::time::timeout_at(end, sock.recv_from(&mut buf)).await {
+        if let Some(f) = parse_match(&String::from_utf8_lossy(&buf[..n])) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Networks typed by the user ("192.168.5.0/24", "192.168.5.x",
+/// "192.168.5.1" …, separated by commas or spaces): each as a /24.
+pub fn parse_networks(s: &str) -> Vec<[u8; 3]> {
+    s.split([',', ' ', ';', '\n'])
+        .filter_map(|t| {
+            let t = t.trim().split('/').next()?;
+            let p: Vec<&str> = t.split('.').collect();
+            if p.len() < 3 {
+                return None;
+            }
+            Some([p[0].parse().ok()?, p[1].parse().ok()?, p[2].parse().ok()?])
+        })
+        .collect()
+}
+
+/// The networks the cameras already set up are on (from their addresses).
+fn camera_networks(mgr: &Manager) -> Vec<[u8; 3]> {
+    camera_hosts(mgr)
+        .iter()
+        .filter_map(|h| h.parse::<Ipv4Addr>().ok())
+        .filter(|ip| ip.is_private())
+        .map(|ip| {
+            let o = ip.octets();
+            [o[0], o[1], o[2]]
+        })
+        .collect()
+}
+
+/// The host of every camera stream / ONVIF address.
+fn camera_hosts(mgr: &Manager) -> HashSet<String> {
+    mgr.config()
+        .cameras
+        .iter()
+        .flat_map(|c| [c.url.clone(), c.live_url.clone(), c.ptz.host.clone()])
+        .filter_map(|u| {
+            let rest = u.split_once("://").map(|x| x.1).unwrap_or(&u).to_string();
+            let host = rest
+                .rsplit('@')
+                .next()
+                .unwrap_or(&rest)
+                .split(['/', ':', '?'])
+                .next()
+                .unwrap_or("")
+                .to_string();
+            (!host.is_empty()).then_some(host)
+        })
+        .collect()
+}
+
+/// Hosts answering on port 554: on this computer's networks, the
+/// cameras' networks and any others asked for (each as a /24, at most 16).
+async fn rtsp_sweep(extra: Vec<[u8; 3]>) -> Vec<String> {
+    let mut nets: HashSet<[u8; 3]> = extra.into_iter().collect();
     for a in crate::web::local_addresses() {
         if let Ok(ip) = a.parse::<Ipv4Addr>()
             && ip.is_private()
@@ -124,7 +192,7 @@ async fn rtsp_sweep() -> Vec<String> {
             nets.insert([o[0], o[1], o[2]]);
         }
     }
-    sweep(nets.into_iter().collect(), 554).await
+    sweep(nets.into_iter().take(16).collect(), 554).await
 }
 
 async fn sweep(nets: Vec<[u8; 3]>, port: u16) -> Vec<String> {
@@ -155,10 +223,12 @@ async fn sweep(nets: Vec<[u8; 3]>, port: u16) -> Vec<String> {
 }
 
 /// Scan the network now.
-pub async fn scan(mgr: &Manager) -> Vec<Found> {
+pub async fn scan(mgr: &Manager, extra: &[[u8; 3]]) -> Vec<Found> {
     let job = crate::jobs::start("scan", "Looking for cameras on the network");
     job.step("ONVIF discovery and port 554 on local networks");
-    let (onvif, rtsp) = tokio::join!(ws_discovery(Duration::from_secs(3)), rtsp_sweep());
+    let mut nets = camera_networks(mgr);
+    nets.extend_from_slice(extra);
+    let (onvif, rtsp) = tokio::join!(ws_discovery(Duration::from_secs(3)), rtsp_sweep(nets));
     let mut all: BTreeMap<String, Found> = onvif.into_iter().map(|f| (f.ip.clone(), f)).collect();
     for ip in rtsp {
         all.entry(ip.clone())
@@ -169,24 +239,7 @@ pub async fn scan(mgr: &Manager) -> Vec<Found> {
             .rtsp = true;
     }
     // Which are already cameras here (by the address in their stream URLs).
-    let cfg = mgr.config();
-    let known: HashSet<String> = cfg
-        .cameras
-        .iter()
-        .flat_map(|c| [c.url.clone(), c.live_url.clone(), c.ptz.host.clone()])
-        .filter_map(|u| {
-            let rest = u.split_once("://").map(|x| x.1).unwrap_or(&u).to_string();
-            let host = rest
-                .rsplit('@')
-                .next()
-                .unwrap_or(&rest)
-                .split(['/', ':', '?'])
-                .next()
-                .unwrap_or("")
-                .to_string();
-            (!host.is_empty()).then_some(host)
-        })
-        .collect();
+    let known = camera_hosts(mgr);
     let mut list: Vec<Found> = all.into_values().collect();
     for f in &mut list {
         if !f.rtsp && f.onvif_port > 0 {
@@ -204,7 +257,7 @@ pub async fn daily(mgr: Arc<Manager>) {
     tokio::time::sleep(Duration::from_secs(300)).await;
     let file = mgr.data_dir.join("discovered.json");
     loop {
-        let found = scan(&mgr).await;
+        let found = scan(&mgr, &[]).await;
         let seen: HashSet<String> = std::fs::read(&file)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
@@ -263,6 +316,14 @@ mod tests {
         });
         let found = super::sweep(vec![[127, 0, 0]], port).await;
         assert_eq!(found, vec!["127.0.0.1".to_string()]);
+    }
+
+    #[test]
+    fn reads_typed_networks() {
+        assert_eq!(
+            super::parse_networks("192.168.5.0/24, 10.0.2.x 172.16.4.17; nonsense"),
+            vec![[192, 168, 5], [10, 0, 2], [172, 16, 4]]
+        );
     }
 
     #[test]

@@ -1,10 +1,11 @@
 [package]
 name = "nvr"
-version = "0.6.44"
+version = "0.6.45"
 edition = "2024"
 description = "GAZE — network video recorder for IP cameras"
 
 [dependencies]
+if-addrs = "0.15"
 anyhow = "1.0.104"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.23.1"

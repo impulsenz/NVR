@@ -380,6 +380,14 @@ async fn system(State(m): App) -> Response {
 /// This computer's network (IPv4) addresses, main one first.
 pub fn local_addresses() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    // Every network adapter's address (a computer can be on several
+    // networks, e.g. 192.168.1.x and 192.168.5.x).
+    for i in if_addrs::get_if_addrs().unwrap_or_default() {
+        let ip = i.ip();
+        if ip.is_ipv4() && !ip.is_loopback() && !ip.is_unspecified() && !out.contains(&ip.to_string()) {
+            out.push(ip.to_string());
+        }
+    }
     // The address used to reach other networks (no packet is sent).
     for probe in ["8.8.8.8:80", "192.168.1.1:80", "10.0.0.1:80"] {
         if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0")
@@ -487,8 +495,16 @@ async fn alerts_unseen(
     }
 }
 
-async fn discover_now(State(m): App) -> Response {
-    let found = crate::discover::scan(&m).await;
+#[derive(Deserialize, Default)]
+struct DiscoverReq {
+    /// Other networks to search too, e.g. "192.168.5.0/24, 10.0.2.x".
+    #[serde(default)]
+    networks: String,
+}
+
+async fn discover_now(State(m): App, body: Option<Json<DiscoverReq>>) -> Response {
+    let extra = crate::discover::parse_networks(&body.map(|b| b.0).unwrap_or_default().networks);
+    let found = crate::discover::scan(&m, &extra).await;
     *m.new_cameras.lock().unwrap() = found.iter().filter(|f| !f.added).cloned().collect();
     Json(found).into_response()
 }
