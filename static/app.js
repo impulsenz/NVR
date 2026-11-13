@@ -12,7 +12,11 @@ const tip = (text) => `<span class="info" tabindex="0" role="img" aria-label="${
   let card = null, at = null;
   const hide = () => { if (card) card.hidden = true; at = null; };
   const show = (el) => {
-    if (!card) { card = document.createElement('div'); card.id = 'tipcard'; card.setAttribute('role', 'tooltip'); document.body.appendChild(card); }
+    if (!card) { card = document.createElement('div'); card.id = 'tipcard'; card.setAttribute('role', 'tooltip'); }
+    // Inside the open window (or full-screen picture) the icon is in: those
+    // are drawn above the page, and would hide a card on the page itself.
+    const home = el.closest('dialog[open]') || (document.fullscreenElement && document.fullscreenElement.contains(el) ? document.fullscreenElement : null) || document.body;
+    if (card.parentElement !== home) home.appendChild(card);
     at = el; card.textContent = el.dataset.tip; card.hidden = false;
     const r = el.getBoundingClientRect(), w = Math.min(320, innerWidth - 24);
     card.style.maxWidth = w + 'px';
@@ -1687,6 +1691,7 @@ function renderDash() {
   renderGroupSelect();
   const cams = viewCams();
   $('no-cameras').hidden = status.cameras.length > 0;
+  if (!status.cameras.length && page === 'live') setTimeout(autoScanForCameras, 0);
   $('dash-bar').hidden = !status.cameras.length;
   dashIds = dashKey();
   if (!editing) layout = currentLayout();
@@ -1734,6 +1739,13 @@ function renderDash() {
 }
 // Before the first camera: scan the network right from the Live page.
 $('nc-scan').onclick = () => scanNetwork({btn: 'nc-scan', out: 'nc-out', nets: 'nc-nets'});
+// The first time the page shows no cameras, look for them straight away.
+let ncScanned = false;
+function autoScanForCameras() {
+  if (ncScanned || $('no-cameras').hidden || !me || me.role === 'viewer') return;
+  ncScanned = true;
+  scanNetwork({btn: 'nc-scan', out: 'nc-out', nets: 'nc-nets'});
+}
 $('nc-nets').value = store.get('scan-nets', '');
 function dashKey() {
   return status.cameras.map(c => c.id + ':' + c.name + ':' + c.enabled + JSON.stringify(c.osd) + JSON.stringify(c.view)).join(',') + JSON.stringify(status.display) + JSON.stringify(status.dashboard) + groupId + wall + wallSolo;
@@ -5429,6 +5441,13 @@ async function openCameraDialog(id, clone, prof) {
   // A profile: its settings on top of a new camera's.
   if (prof) { Object.assign(c, JSON.parse(JSON.stringify(prof.values || {}))); c.detect = {...c.detect, mask: ''}; c.name = prof.name; }
   const q = parseUrl(c.url) || {};
+  // A new camera: the login of the camera added last (most cameras in one
+  // home share it) — change it if this one's is different.
+  let sameLogin = null;
+  if (!id && !clone && !prof && !q.user) {
+    const last = [...cameraCfgs].reverse().map(x => ({c: x, u: parseUrl(x.url)})).find(x => x.u && x.u.user);
+    if (last) { q.user = last.u.user; q.pass = last.u.pass; sameLogin = last.c.name; }
+  }
   // The usual objects, plus any this camera already watches for.
   const objs = [...new Set([...((sysinfo && sysinfo.ai_objects) || ['person','vehicle','bicycle','dog','cat']), ...canonKinds(c.detect.objects)])];
   const more = ((sysinfo && sysinfo.ai_more) || []).filter(o => !objs.includes(o));
@@ -5455,7 +5474,8 @@ async function openCameraDialog(id, clone, prof) {
         <div><div class="row"><select id="q-brand">${brandOpts.replace('Format…', 'Choose brand…')}</select></div>
           <div class="hint">Fill in the camera's address and login, pick the brand, and the stream URLs are filled in for you.</div></div>
         <label for="q-ip">IP address</label><div class="row"><input type="text" id="q-ip" value="${esc(q.ip || '')}" placeholder="192.168.1.100" style="flex:2"></div>
-        <label for="q-user">Camera login</label><div class="row"><input type="text" id="q-user" value="${esc(q.user || '')}" placeholder="username" style="flex:1" autocomplete="off"><input type="password" id="q-pass" value="${esc(q.pass || '')}" placeholder="password" style="flex:1" autocomplete="new-password"></div>
+        <label for="q-user">Camera login</label><div><div class="row"><input type="text" id="q-user" value="${esc(q.user || '')}" placeholder="username" style="flex:1" autocomplete="off"><input type="password" id="q-pass" value="${esc(q.pass || '')}" placeholder="password" style="flex:1" autocomplete="new-password"></div>
+          ${sameLogin ? `<div class="hint" id="q-same">The same login as ${esc(sameLogin)} — change it if this camera's is different.</div>` : ''}</div>
         <h3>Streams</h3>
         <label for="c-url">Main stream (HD)${tip('The camera’s full-quality video address, usually starting rtsp://. Example: rtsp://admin:password@192.168.1.50:554/stream1 — the brand list fills it in for you.')}</label>
         <div><input type="text" id="c-url" required value="${esc(c.url)}" placeholder="rtsp://user:password@192.168.1.50:554/stream1">
@@ -5926,8 +5946,9 @@ function setupPackageArea(c, camId) {
 }
 
 // A password box with an eye button that shows or hides what's typed.
+// (Every password box has its eye now — see addPasswordEyes.)
 function eyeFor(input) {
-  if (input._eye) return;
+  return;
   const b = input._eye = document.createElement('button');
   b.type = 'button'; b.className = 'eye-btn'; b.title = 'Show the password'; b.textContent = '👁';
   b.onclick = () => { const show = input.type === 'password'; input.type = show ? 'text' : 'password'; b.classList.toggle('on', show); b.title = show ? 'Hide the password' : 'Show the password'; };
@@ -6077,21 +6098,39 @@ async function testCamera() {
   if (!urls.length) { out.innerHTML = '<div class="err" style="margin-top:8px">Enter a stream URL first.</div>'; return; }
   btn.disabled = true; btn.textContent = 'Connecting…';
   out.innerHTML = `<div class="probe-grid">${urls.map((u, i) => `<div><div class="surface"><img id="pv-${i}" alt=""><div class="msg" id="pv-msg-${i}">Connecting…</div></div><div id="pv-info-${i}" class="hint"><b>${u[0]}</b></div></div>`).join('')}</div>`;
-  await Promise.all(urls.map(async ([label, url], i) => {
-    const transport = val('c-transport');
+  // One at a time: many cameras allow only two or three connections at once
+  // (Tapo, Reolink …), and refuse more ("SETUP failed: 500"). Each stream
+  // is checked first, then the live pictures start.
+  const transport = val('c-transport');
+  const busy = (e) => /SETUP failed|\b(500|503|453|454)\b|Server returned 5|too many|session/i.test(e || '');
+  const results = [];
+  for (const [i, [label, url]] of urls.entries()) {
+    let r;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { r = await api('api/probe', {method: 'POST', json: {url, rtsp_transport: transport}}); } catch (e) { r = {ok: false, error: e.message}; }
+      if (r.ok || !busy(r.error)) break;
+      $('pv-msg-' + i).textContent = 'The camera is busy — trying again…';
+      await new Promise(res => setTimeout(res, 1500 * (attempt + 1)));
+    }
+    results.push(r);
+  }
+  for (const [i, [label, url]] of urls.entries()) {
+    const r = results[i];
     try {
-      const [r, pv] = await Promise.all([api('api/probe', {method: 'POST', json: {url, rtsp_transport: transport}}), api('api/preview', {method: 'POST', json: {url, rtsp_transport: transport}})]);
       const info = $('pv-info-' + i), msg = $('pv-msg-' + i);
-      if (!r.ok) { msg.innerHTML = `<span class="err">✗ ${esc(explainError(r.error || 'Could not connect'))}</span>`; info.innerHTML = `<b>${label}</b>`; return; }
+      if (!r.ok) { msg.innerHTML = `<span class="err">✗ ${esc(explainError(r.error || 'Could not connect'))}</span>` + (busy(r.error) ? '<div class="hint">The camera refused another connection — it may allow only a few at once. Once saved, GAZE uses one connection per stream.</div>' : ''); info.innerHTML = `<b>${label}</b>`; continue; }
+      const pv = await api('api/preview', {method: 'POST', json: {url, rtsp_transport: transport}});
       const img = $('pv-' + i);
       img.onload = () => msg.hidden = true;
+      // A busy camera may refuse the picture at first: once more.
+      img.onerror = () => { if (!img._again) { img._again = true; setTimeout(() => { img.src = pv.url + (pv.url.includes('?') ? '&' : '?') + 'r=' + Date.now(); }, 2000); } };
       img.src = pv.url; previewImgs.push(img);
       const v = r.streams.find(s => s.kind === 'video'), a = r.streams.find(s => s.kind === 'audio');
       const hevc = v && /hevc|h265/i.test(v.codec);
       info.innerHTML = `<b>${label}</b> <span class="ok">✓ connected</span><br>${v ? `${String(v.codec).toUpperCase()} ${v.width}×${v.height}${v.fps ? ' @ ' + v.fps + ' fps' : ''}` : ''}${a ? ' · audio ' + esc(a.codec) : ' · no audio'}`
         + (hevc && i === 0 ? '<br><span class="warnc">H.265: many browsers cannot play it. Consider “Convert recordings to H.264” or setting the camera to H.264.</span>' : '');
     } catch (e) { $('pv-msg-' + i).innerHTML = `<span class="err">${esc(e.message)}</span>`; }
-  }));
+  }
   btn.disabled = false; btn.textContent = '▶ Test connection';
 }
 

@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 0.6.74 — November 2026
+- **Test connection works with cameras that allow few connections**: testing a new camera could fail on one stream with "method SETUP failed: 500" even though both streams work once saved — the test opened four connections to the camera at once, more than many cameras (Tapo, Reolink …) allow. It now checks the streams one after another, then shows both pictures, and tries again by itself if the camera says it's busy.
+- **New cameras start with the same login**: adding another camera fills in the username and password of the camera added last (most cameras in one home share them), with a note saying so — change them if this camera's are different.
+- **Cameras are looked for straight away**: on a new GAZE with no cameras, the Live page starts scanning the network by itself as soon as it opens.
+- **Info pop-ups show above windows**: the explanations behind the little ⓘ icons appeared behind the camera window and other pop-up windows; they now show on top.
+- One eye per password box (the camera window showed two).
+
 ## 0.6.73 — November 2026
 - **GAZE is called GAZE on the computer**: the program now carries its name and icon, so Task Manager, the taskbar and the file's properties show **GAZE** with the GAZE eye. Releases offer the program as **GAZE.exe** (new installs download that); the older nvr-windows-x64.exe stays alongside so installed copies keep finding their updates. An installed copy keeps its file name when it updates — rename it to GAZE.exe while GAZE is stopped if you like (then switch "Start with Windows" off and on again in the tray menu, so it points at the new name).
 - **Open in GAZE app**: when GAZE is installed as an app on this computer, the 👤 menu in the browser offers **📲 Open in GAZE app** (where "Install GAZE as an app" was), which opens the same page in the app. The first time, the browser asks whether GAZE may open the app.
