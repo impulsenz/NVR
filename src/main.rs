@@ -135,6 +135,11 @@ fn main() -> Result<()> {
             if mode == Mode::Companion || winservice::installed() {
                 return companion(&path, mode == Mode::Companion);
             }
+            // The program is GAZE.exe (older downloads were called
+            // nvr-windows-x64.exe): a copy under that name takes over.
+            if update::become_gaze_exe() {
+                return Ok(());
+            }
         }
     }
     #[cfg(not(windows))]

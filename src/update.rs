@@ -340,6 +340,39 @@ fn sibling(exe: &Path, suffix: &str) -> PathBuf {
     exe.with_file_name(format!("{name}{suffix}{ext}"))
 }
 
+/// Windows, GAZE running as a normal program under another file name
+/// (older downloads were nvr-windows-x64.exe): copy it to GAZE.exe next to
+/// it, start that, and say so (this one then stops). GAZE.exe deletes the
+/// old file once it has gone (see `clean_old`). Nothing changes if the copy
+/// can't be made.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn become_gaze_exe() -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let named = exe.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if named.eq_ignore_ascii_case("GAZE.exe") {
+        return false;
+    }
+    let target = exe.with_file_name("GAZE.exe");
+    let _ = std::fs::remove_file(&target);
+    if std::fs::copy(&exe, &target).is_err() {
+        return false;
+    }
+    let _ = std::fs::write(exe.with_file_name("GAZE.oldname"), exe.to_string_lossy().as_bytes());
+    match std::process::Command::new(&target).args(std::env::args_os().skip(1)).spawn() {
+        Ok(_) => {
+            info!("now GAZE.exe (was {named})");
+            true
+        }
+        Err(_) => {
+            let _ = std::fs::remove_file(&target);
+            false
+        }
+    }
+}
+
 /// The previous program, left behind by an update (deleted at start-up;
 /// one still in use stays until next time).
 pub fn clean_old() {
@@ -349,6 +382,25 @@ pub fn clean_old() {
             let _ = std::fs::remove_file(sibling(&exe, &format!(".old{n}")));
         }
         let _ = std::fs::remove_file(sibling(&exe, ".new"));
+        // The file this was copied from when it became GAZE.exe: deleted
+        // once that program has stopped (a few tries).
+        let mark = exe.with_file_name("GAZE.oldname");
+        if let Ok(old) = std::fs::read_to_string(&mark) {
+            let old = PathBuf::from(old.trim());
+            if old != exe && old.parent() == exe.parent() {
+                std::thread::spawn(move || {
+                    for _ in 0..20 {
+                        if !old.exists() || std::fs::remove_file(&old).is_ok() {
+                            let _ = std::fs::remove_file(&mark);
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_secs(3));
+                    }
+                });
+            } else {
+                let _ = std::fs::remove_file(&mark);
+            }
+        }
     }
 }
 

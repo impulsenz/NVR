@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.75 — November 2026
+- **The program file is now GAZE.exe on your computer too**: GAZE installed from an older download (nvr-windows-x64.exe) makes itself GAZE.exe in the same folder the next time it starts, carries on from there, and removes the old file. "Start with Windows" is pointed at GAZE.exe. Settings, recordings and everything else stay where they are. (GAZE running as a Windows service keeps its file name, which the service is registered with.)
+
 ## 0.6.74 — November 2026
 - **Test connection works with cameras that allow few connections**: testing a new camera could fail on one stream with "method SETUP failed: 500" even though both streams work once saved — the test opened four connections to the camera at once, more than many cameras (Tapo, Reolink …) allow. It now checks the streams one after another, then shows both pictures, and tries again by itself if the camera says it's busy.
 - **New cameras start with the same login**: adding another camera fills in the username and password of the camera added last (most cameras in one home share them), with a note saying so — change them if this camera's are different.

@@ -107,6 +107,10 @@ mod win {
         if INFO.set((info, on_quit)).is_err() {
             return;
         }
+        // "Start with Windows" points at this program (e.g. after it became GAZE.exe).
+        if autostart_on() {
+            set_autostart(true);
+        }
         std::thread::Builder::new()
             .name("tray".into())
             .spawn(|| unsafe { run() })
