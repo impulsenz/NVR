@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.68 — November 2026
+- **Live button on the Recordings tab**: ● Live shows what's happening now on every camera, with the timeline's playhead kept at now. Press Play to watch the recording from a few seconds ago, or drag or click along the timeline to go back in time.
+- **Sound on the Recordings tab**: the 🔇 Sound button turns sound on or off, and 🔈 on a camera's picture chooses which camera you hear (one at a time). It follows that camera's recording, or its live sound in Live; it goes quiet above 4× speed.
+
 ## 0.6.67 — November 2026
 - **Ready-made layouts for the Live page**: the new ▦ Layouts button offers 15 layouts, each previewed with your own cameras: equal grids (best fit, 2, 3, 4 or 6 across), one big picture with smaller ones around it (1 + 5, 1 + 7, 1 big in the middle with 12 around, 1 + 2 beside, 1 big with a strip below, 1 big + 2 medium), two big (side by side, or stacked with a column beside), three big and four big. Choose which cameras get the big spots; cameras beyond a layout's spots carry on in rows of small pictures below. It's saved for the group you're looking at (and the full-screen view has its own), and Edit layout still lets you fine-tune.
 - **Clear choice when changing time-lapse settings**: saving new time-lapse settings now asks whether they apply **from now on only** (what's already made stays, nothing is rebuilt — the default) or to **remake the older time-lapse** too.

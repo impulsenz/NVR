@@ -625,6 +625,9 @@ function updateSubscriptions() {
       // The sub-stream stands in while the full-quality picture loads.
       if (focusQ === 'main' && !dataSaver) add('sub', gridFps);
     } else if (gridQ === 'sub' && l.preload_hd_streams && !dataSaver) add('main', 1);
+    // Live on the Recordings tab.
+    let recLive = false; try { recLive = page === 'recordings' && tl.live && tl.data.some(x => x.camera === c.id); } catch (_) {}
+    if (recLive) add(tl.quality === 'main' ? 'main' : 'sub', gridFps);
     for (const [q, fps] of want) subs.push({camera: c.id, q, fps});
   }
   if (dataSaver) subs.forEach(x => x.lite = true);
@@ -3487,7 +3490,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {sound: store.get('tl-sound', false), soundCam: null, live: false, scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
@@ -3513,6 +3516,7 @@ function centerWindow() { tl.winStart = tl.T - tl.zoom / 2 * 1000; }
 
 function buildTimelineVideos() {
   const box = $('tl-videos');
+  tlLeaveLive();
   box.querySelectorAll('.surface').forEach(el => { if (el._h) { el._h.hls.destroy(); el._h = null; } });
   box.innerHTML = tl.data.length ? '' : '<div class="empty">No cameras selected.</div>';
   for (const c of tl.data) {
@@ -3524,8 +3528,13 @@ function buildTimelineVideos() {
     el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video><video playsinline muted class="vid" data-hls style="position:absolute;inset:0;visibility:hidden"></video>
       <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div>
       <div class="ov tl"><span class="ovtext name">${esc(c.name)}</span><span class="ovtext tl-t"></span></div>
-      <div class="ov tr"><button type="button" class="small solo-off" hidden>▦ All cameras</button><button type="button" class="fsbtn">⛶</button></div>`;
+      <div class="ov tr"><button type="button" class="small solo-off" hidden>▦ All cameras</button><button type="button" class="tl-snd" title="Hear this camera">🔈</button><button type="button" class="fsbtn">⛶</button></div>`;
     el.querySelector('.fsbtn').onclick = () => fullscreen(el);
+    el.querySelector('.tl-snd').onclick = (e) => {
+      e.stopPropagation();
+      const on = !(tl.sound && tlSoundCam() === c.camera);
+      tl.soundCam = c.camera; tl.sound = on; store.set('tl-sound', on); tlApplySound();
+    };
     el.querySelector('.solo-off').onclick = (e) => { e.stopPropagation(); tlSolo(null); };
     el._vids = [...el.querySelectorAll('video:not([data-hls])')]; el._vids.forEach(watchFps);
     el._hlsV = el.querySelector('video[data-hls]'); watchFps(el._hlsV);
@@ -3629,6 +3638,7 @@ function hlsAt(h, W) {
 function showHls(el) {
   el._hlsV.style.visibility = '';
   el._vids.forEach(v => { v.style.visibility = 'hidden'; if (!v.paused) v.pause(); });
+  tlApplySound();
 }
 function leaveHls(el) {
   if (el._mode !== 'hls') return;
@@ -3688,7 +3698,69 @@ function showVideo(el, i) {
   if (el._hlsV) { el._hlsV.style.visibility = 'hidden'; if (!el._hlsV.paused) el._hlsV.pause(); }
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
+  tlApplySound();
 }
+
+// ---------- sound on the Recordings timeline ----------
+// One camera at a time: the one chosen with 🔈 on its picture, otherwise
+// the one shown on its own, the alert being watched, or the first.
+function tlSoundCam() {
+  const has = (id) => id && tl.data.some(c => c.camera === id);
+  return has(tl.soundCam) ? tl.soundCam : has(tl.onlyCam) ? tl.onlyCam : tl.hd && has(tl.hd.camera) ? tl.hd.camera : (tl.data[0] || {}).camera;
+}
+function tlApplySound() {
+  const cam = tl.sound ? tlSoundCam() : null;
+  // (Fast playback is noise: quiet above 4×.)
+  const audible = cam && !tl.live && tl.speed <= 4;
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    const mine = el.dataset.cam === cam, act = activeVideo(el);
+    for (const v of [...(el._vids || []), el._hlsV].filter(Boolean)) {
+      v.muted = !(audible && mine && v === act);
+      if (!v.muted) v.volume = soundVolume();
+    }
+    const b = el.querySelector('.tl-snd'); if (b) { b.textContent = mine ? '🔊' : '🔈'; b.classList.toggle('on', mine); }
+  }
+  $('tl-sound').textContent = cam ? '🔊 Sound' : '🔇 Sound';
+  $('tl-sound').classList.toggle('on', !!cam);
+  // Live: the camera's live sound.
+  if (tl.live && cam) { if (soundCam !== cam) startSound(cam); } else if (tl.live && soundCam) stopSound();
+}
+$('tl-sound').onclick = () => { tl.sound = !tl.sound; store.set('tl-sound', tl.sound); tlApplySound(); };
+
+// ---------- Live on the Recordings tab ----------
+// Every camera's live picture over its player, the playhead kept at now;
+// Play, dragging or clicking the timeline goes back to the recordings.
+let tlLiveTimer = null;
+function tlGoLive() {
+  if (tl.playing) tlPlay(false);
+  document.querySelectorAll('#tl-videos video').forEach(v => v.pause());
+  tl.live = true;
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    if (el._liveUn) continue;
+    const box = document.createElement('div'); box.className = 'tl-livebox';
+    box.innerHTML = '<img alt=""><span class="tl-livetag">● LIVE</span>';
+    el.querySelector('.ov.tl').before(box);
+    el._liveUn = bindLive(box.querySelector('img'), el.dataset.cam, tl.quality === 'main' ? 'main' : 'sub');
+    el._liveBox = box;
+    el.querySelector('.sprite').hidden = true; el.querySelector('.msg').hidden = true;
+  }
+  const tick = () => { tl.T = Date.now(); if (tl.T > tl.winStart + tl.zoom * 1000 * 0.95) { centerWindow(); tl.winStart = Math.min(tl.winStart, Date.now() - tl.zoom * 1000 * 0.9); drawTimeline(); } else drawHead(); document.querySelectorAll('#tl-videos .tl-t').forEach(t => t.textContent = fmtDate(new Date())); };
+  clearInterval(tlLiveTimer); tlLiveTimer = setInterval(tick, 1000); tick();
+  $('tl-live').classList.add('live-on');
+  updateSubscriptions();
+  tlApplySound();
+}
+function tlLeaveLive() {
+  if (!tl.live) return;
+  tl.live = false;
+  clearInterval(tlLiveTimer); tlLiveTimer = null;
+  for (const el of document.querySelectorAll('#tl-videos .surface')) { if (el._liveUn) { el._liveUn(); el._liveUn = null; } if (el._liveBox) { el._liveBox.remove(); el._liveBox = null; } }
+  $('tl-live').classList.remove('live-on');
+  if (soundCam) stopSound();
+  updateSubscriptions();
+  tlApplySound();
+}
+$('tl-live').onclick = () => tl.live ? (tlLeaveLive(), tlSync(true)) : tlGoLive();
 // Bars on a timeline: pieces of the same kind that follow each other (a
 // recording is saved as a file every few minutes, with a second or two
 // between) are drawn as one solid bar. pieces: {a, b (%), cls, live}.
@@ -3852,14 +3924,16 @@ function tlLoop(ts) {
   requestAnimationFrame(tlLoop);
 }
 function tlPlay(on) {
+  // From Live: play the recording from a few seconds ago.
+  if (on && tl.live) { tlLeaveLive(); tl.T = Date.now() - 15000; drawHead(); }
   tl.playing = on; tl.last = 0;
   $('tl-play').textContent = on ? '❚❚ Pause' : '▶ Play';
   tlSync(false);
   if (on) requestAnimationFrame(tlLoop);
 }
-function tlStop() { if (tl.playing) tlPlay(false); document.querySelectorAll('#tl-videos video').forEach(v => v.pause()); }
+function tlStop() { tlLeaveLive(); if (tl.playing) tlPlay(false); document.querySelectorAll('#tl-videos video').forEach(v => v.pause()); }
 $('tl-play').onclick = () => tlPlay(!tl.playing);
-$('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); };
+$('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); tlApplySound(); };
 $('tl-quality').value = tl.quality;
 // Scrubbing shows the time-lapse pictures (the video itself when time-lapse
 // is switched off).
@@ -3869,6 +3943,7 @@ $('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); pre
 $('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 // One frame back or forward on every camera (pauses playback).
 const tlStep = (n) => {
+  tlLeaveLive();
   if (tl.playing) tlPlay(false);
   const v = document.querySelector('#tl-videos .surface') && activeVideo(document.querySelector('#tl-videos .surface'));
   tl.T += n * 1000 / videoFps(v);
@@ -3943,7 +4018,7 @@ function tlSolo(camId) {
   });
   $('tl').querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
 }
-function jumpTo(T) { tl.T = T; if (T < tl.winStart || T > tl.winStart + tl.zoom * 1000) centerWindow(); drawTimeline(); tlSync(true); }
+function jumpTo(T) { tlLeaveLive(); tl.T = T; if (T < tl.winStart || T > tl.winStart + tl.zoom * 1000) centerWindow(); drawTimeline(); tlSync(true); }
 $('tl-in').onclick = () => { tl.inT = tl.T; if (tl.outT != null && tl.outT <= tl.inT) tl.outT = null; drawTimeline(); };
 $('tl-out').onclick = () => { tl.outT = tl.T; if (tl.inT == null || tl.inT >= tl.outT) tl.inT = tl.outT - 30000; drawTimeline(); };
 $('tl-clear').onclick = () => { tl.inT = tl.outT = null; drawTimeline(); };
@@ -4287,6 +4362,7 @@ function markAt(e) {
     const mark = markAt(e);
     if (mark) { e.preventDefault(); tlShowEvent(mark.dataset.cam, +mark.dataset.t); return; }
     const t = tAt(e); if (t == null || e.clientX < box.querySelector('.lane').getBoundingClientRect().left) return;
+    tlLeaveLive();
     drag = true; tl.dragging = true; was = tl.playing; if (was) tlPlay(false);
     box.setPointerCapture(e.pointerId);
     tl.T = t; drawHead(); previewAll();
