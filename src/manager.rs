@@ -176,7 +176,7 @@ impl CameraRuntime {
             tasks.push(tokio::spawn(r.clone().run()));
         }
 
-        let detector = (cfg.detection_enabled()).then(|| {
+        let detector = (cfg.needs_detector()).then(|| {
             Detector::new(
                 cfg.clone(),
                 env.clone(),

@@ -1377,6 +1377,13 @@ impl CameraConfig {
         self.enabled && (self.detect.motion || self.detect.ai)
     }
 
+    /// Alerts can come from somewhere other than the picture (sounds, the
+    /// camera's own detection): the detector runs for those too, with
+    /// motion detection and AI off if so set.
+    pub fn needs_detector(&self) -> bool {
+        self.detection_enabled() || (self.enabled && ((self.sound.enabled && !self.sound.kinds.is_empty()) || self.onvif_events))
+    }
+
     pub fn segment_seconds(&self, default: u64) -> u64 {
         if self.segment_seconds == 0 {
             default

@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.64 — November 2026
+- **Sound alerts have a picture saying what was heard**: when sound detection sets off an alert, its picture is now taken from the camera at that moment, with what was heard written across the bottom ("HEARD: SMOKE OR FIRE ALARM"). It shows on the alert card, in the alert and in the notification, and stays when the picture is remade in full quality from the recording. If the AI recognised someone or something in the same alert, that picture is used instead.
+- **Sound detection works with motion detection off**: a camera with motion detection and AI switched off still raises sound alerts (and the camera's own detection alerts), and those alerts are no longer marked as motion.
+
 ## 0.6.63 — November 2026
 - **Faster sliding at the timeline's edge**: dragging the time-lapse past either end of the Recordings timeline now slides it twice as fast as before (about two thirds of the view a second at the edge, up to four times that further out).
 

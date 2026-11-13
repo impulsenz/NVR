@@ -306,6 +306,26 @@ pub async fn hd_test(
     Ok((f, out))
 }
 
+/// What set off an alert that has nothing to see (a sound), to write on
+/// its picture: "Heard: smoke or fire alarm".
+pub fn caption_for(e: &Event) -> Option<String> {
+    if !e.labels.iter().any(|l| l.label == "sound") {
+        return None;
+    }
+    let heard: Vec<&str> = e.notes.iter().filter_map(|n| n.strip_prefix("Heard: ")).collect();
+    (!heard.is_empty()).then(|| format!("Heard: {}", heard.join(" - ")))
+}
+
+/// `f` with `text` written along the bottom, big enough to read on a
+/// thumbnail.
+pub fn captioned(f: &Frame, text: &str) -> Frame {
+    let mut px = (*f.rgb).clone();
+    let scale = ((f.width / 200) as i32).clamp(2, 6);
+    let th = 11 * scale;
+    crate::draw::caption(&mut px, f.width, f.height, 4 * scale, f.height as i32 - th - 4 * scale, text, scale);
+    Frame { width: f.width, height: f.height, rgb: Arc::new(px) }
+}
+
 /// A full-quality picture of this moment (at most 1920 px wide).
 async fn hd_frame(relay: &crate::relay::Relay, ffmpeg: &str) -> anyhow::Result<Frame> {
     let _connect = relay.subscribe();
@@ -729,7 +749,9 @@ impl Detector {
                 // What the camera itself reported.
                 let ext: Vec<(String, String)> = std::mem::take(&mut *self.external.lock().unwrap());
                 for (label, note) in ext {
-                    if active.is_none() || active.as_ref().is_some_and(|a| a.thumb_score < 0.0) {
+                    // (Only the camera's own motion detection counts as
+                    // motion; a sound or a doorbell press doesn't.)
+                    if label == "motion" && (active.is_none() || active.as_ref().is_some_and(|a| a.thumb_score < 0.0)) {
                         self.on_motion(active, now, &frame, (0.0, 0.0, 1.0, 1.0), 0.0);
                     }
                     let a = active.get_or_insert_with(|| self.new_event(now));
@@ -739,6 +761,16 @@ impl Detector {
                     }
                     if !note.is_empty() && !a.event.notes.contains(&note) {
                         a.event.notes.push(note.clone());
+                    }
+                    // A picture of the moment, saying what set it off: for a
+                    // sound (replacing a plain motion picture; something the
+                    // AI recognized stays the picture), or anything else
+                    // the camera reported when there's no picture yet.
+                    if a.thumb_score < 0.0 || (label == "sound" && a.thumb_score < 0.01) {
+                        let text = caption_for(&a.event).unwrap_or_else(|| if note.is_empty() { label.clone() } else { note.clone() });
+                        let pic = captioned(&frame.fit(1280), &text);
+                        self.save_thumb(a, &pic, (0.0, 0.0, 1.0, 1.0), 0.0, vec![]);
+                        a.thumb_score = 0.01;
                     }
                     if !a.qualified {
                         a.qualified = true;

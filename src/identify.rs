@@ -519,6 +519,11 @@ pub async fn sharpen(ffmpeg: &str, rt: &CameraRuntime, e: &mut Event) -> bool {
     let name = format!("{}-hd.jpg", e.id);
     let dir = rt.events.dir();
     let tmp = dir.join(format!("{name}.tmp"));
+    // A sound alert keeps what was heard written on its picture.
+    let frame = match crate::detect::caption_for(e) {
+        Some(t) => crate::detect::captioned(&frame.fit(1280), &t),
+        None => frame,
+    };
     let Ok(jpg) = frame.fit(1280).jpeg(85) else {
         return false;
     };
