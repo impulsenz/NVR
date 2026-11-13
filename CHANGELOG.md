@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.56 — November 2026
+- **Time-lapse dragging is much faster**: scrubbing along the timeline (Recordings, and a camera's own timeline) now keeps up with your finger or mouse — working out which recording you're over was being redone for every file at every move, which slowed down as recordings built up (about 17× quicker now), and pictures update once per screen frame.
+- **Live sound no longer stops and starts**: the sound keeps a little more in hand (cameras send sound in bursts) and catches up by playing a touch faster instead of jumping.
+- **Smoother live video on Tapo and other Wi-Fi cameras**: the live player rides out bursts of video instead of skipping ahead, catching up gently when it falls behind.
+- **Correct frame rate on live view**: the fps shown is now the camera's real video frame rate (it counted the still pictures and the video together before).
+
 ## 0.6.55 — November 2026
 - **No more flicker opening the Live tab**: coming back to Live from another page or from a camera keeps each camera's video playing instead of starting it again, so it no longer drops to a still picture or goes blank for a moment.
 - **Full-screen camera timeline fixed**: in a full-screen camera, moving or clicking across an alert on the timeline no longer brings back the old timeline. The alert plays in full screen, and the timeline returns to its place when you leave full screen.

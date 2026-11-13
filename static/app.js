@@ -331,7 +331,12 @@ const Live = {
     // The HD image also shows sub frames until its first HD frame arrives.
     if (q === 'sub') for (const img of this.imgs.get(this.key(id, 'main')) || []) if (!this.urls.has(this.key(id, 'main'))) { img.src = url; img.classList.add('sd-fill'); }
   },
-  fps(id, q) { const s = this.stats.get(this.key(id, q)); return s && performance.now() - s.last < 3000 ? s.fps : 0; },
+  fps(id, q) {
+    const k = this.key(id, q), v = this.vstats.get(k);
+    if (this.mse.has(k) && v && performance.now() - v.last < 3000) return v.fps;
+    const s = this.stats.get(k); return s && performance.now() - s.last < 3000 ? s.fps : 0;
+  },
+  vstats: new Map(),
   // Show a camera in an <img>; returns an unbind function.
   bind(img, id, q) {
     const k = this.key(id, q);
@@ -473,17 +478,31 @@ class LiveVideo {
     });
     // Frames shown, for the frame-rate readout.
     if (v.requestVideoFrameCallback) {
-      const tick = () => { if (this.dead) return; const st = Live.stats.get(this.key) || {n: 0, t: performance.now(), fps: 0, last: 0};
-        st.n++; st.last = performance.now(); if (st.last - st.t > 2000) { st.fps = st.n * 1000 / (st.last - st.t); st.n = 0; st.t = st.last; }
-        Live.stats.set(this.key, st); v.requestVideoFrameCallback(tick); };
+      // Counted on the video's own clock (frames per second of video), so
+      // catching up a little faster, or the still pictures that arrive
+      // alongside, don't change it. Kept apart from the pictures' count.
+      let w = null;
+      const tick = (now, md) => {
+        if (this.dead) return;
+        if (!w || md.mediaTime < w.t) w = {f: md.presentedFrames, t: md.mediaTime};
+        else if (md.mediaTime - w.t >= 2) {
+          const fps = (md.presentedFrames - w.f) / (md.mediaTime - w.t);
+          if (fps > 0 && fps < 121) Live.vstats.set(this.key, {fps, last: performance.now()});
+          w = {f: md.presentedFrames, t: md.mediaTime};
+        } else { const s = Live.vstats.get(this.key); if (s) s.last = performance.now(); }
+        v.requestVideoFrameCallback(tick);
+      };
       v.requestVideoFrameCallback(tick);
     }
-    // Stay close to live: a little faster when behind, a jump when far behind.
+    // Stay close to live: a little faster when behind, a jump only when far
+    // behind. Some cameras (Tapo, many Wi-Fi ones) send video in bursts:
+    // half a second in hand rides those out without skipping, and catching
+    // up gently keeps motion smooth.
     this.timer = setInterval(() => {
       if (!this.sb || !v.buffered.length) return;
       const end = v.buffered.end(v.buffered.length - 1), lag = end - v.currentTime;
-      if (lag > 1.5) v.currentTime = end - 0.4;
-      v.playbackRate = lag > 0.8 ? 1.08 : 1;
+      if (lag > 3.5) { v.currentTime = end - 0.5; v.playbackRate = 1; }
+      else v.playbackRate = lag > 1.6 ? 1.1 : lag > 0.9 ? 1.04 : 1;
       if (v.paused) v.play().catch(() => {});
       if (!this.sb.updating && v.currentTime - v.buffered.start(0) > 20) try { this.sb.remove(0, v.currentTime - 10); } catch (_) {}
     }, 500);
@@ -1313,7 +1332,7 @@ class Player {
   // this file's own. Resolves to [sprite, seconds into it] or null.
   async tlapAt(t) {
     const W = this.wallAt(t).getTime();
-    const seg = (this.lightSegs || []).find(x => new Date(x.start).getTime() <= W && W < (isGrowing(x) ? Date.now() : new Date(x.end).getTime()) + 1000);
+    const seg = (this.lightSegs || []).find(x => segMs(x)._a <= W && W < (isGrowing(x) ? Date.now() : x._b) + 1000);
     const sp = seg && await spriteFor(this.item.camera, seg);
     if (sp) return [sp, (W - new Date(seg.start).getTime()) / 1000];
     return this.sprite ? [this.sprite, t] : null;
@@ -2200,12 +2219,18 @@ const camTl = {
   async scrubTo(T) {
     const el = $('focus-sprite'), surf = $('focus-surface');
     el.querySelector('.scrub-t').textContent = fmtDate(new Date(T));
-    const sg = this.sources().find(s => new Date(s.start).getTime() <= T && T < (isGrowing(s) ? Date.now() + 5000 : new Date(s.end).getTime() + 1000));
+    const sg = this.sources().find(s => segMs(s)._a <= T && T < (isGrowing(s) ? Date.now() + 5000 : s._b + 1000));
     if (Date.now() - T < 15000) { liveStill(el, this.id); el.hidden = false; return; }
     if (!sg) return;
     const sp = await spriteFor(this.id, sg);
     if (!sp || this.scrubT !== T) return;
-    if (spriteStyle(el, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), surf.clientWidth, surf.clientHeight, true)) el.hidden = false;
+    if (spriteStyle(el, sp, Math.floor((T - sg._a) / 1000 / sp.info.interval), surf.clientWidth, surf.clientHeight, true)) el.hidden = false;
+  },
+  // Once per screen frame, for the newest position.
+  scrubSoon(T) {
+    this.scrubT = T; this.paintHead(T);
+    if (this.scrubQueued) return; this.scrubQueued = true;
+    requestAnimationFrame(() => { this.scrubQueued = false; if (this.dragging) this.scrubTo(this.scrubT); });
   },
   // Play the camera's footage at time T in the camera view.
   playAt(T) {
@@ -2265,7 +2290,7 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   lane.addEventListener('pointermove', (e) => {
     if (!camTl.data) return;
     if (!camTl.dragging) return preview(e);
-    const [T] = tAt(e); camTl.scrubT = T; camTl.paintHead(T); camTl.scrubTo(T);
+    camTl.scrubSoon(tAt(e)[0]);
   });
   const up = (e) => {
     if (!camTl.dragging) return;
@@ -2310,14 +2335,19 @@ function startSound(camId) {
   soundCam = camId;
   a.volume = soundVolume();
   a.src = `live/${enc(camId)}/audio.mp3?t=${Date.now()}`;
-  // Live sound: the player builds up a cushion and falls behind; keep it
-  // within about a third of a second of "now".
+  // Live sound: the player builds up a cushion and falls behind. Cameras
+  // send sound in bursts, so keep about 0.8 s in hand (less runs dry and
+  // the sound stops and starts) and catch up by playing a touch faster —
+  // inaudible — rather than jumping, which clicks. Only a big lag (after
+  // the tab was in the background) is skipped.
   clearInterval(soundCatchUp);
+  a.preservesPitch = true; a.playbackRate = 1;
   soundCatchUp = setInterval(() => {
     if (soundCam !== camId || a.paused || !a.buffered.length) return;
-    const end = a.buffered.end(a.buffered.length - 1);
-    if (end - a.currentTime > 0.6) a.currentTime = end - 0.25;
-  }, 500);
+    const lag = a.buffered.end(a.buffered.length - 1) - a.currentTime;
+    if (lag > 4) { a.currentTime = a.buffered.end(a.buffered.length - 1) - 0.8; a.playbackRate = 1; }
+    else a.playbackRate = lag > 1.6 ? 1.08 : lag > 1.1 ? 1.03 : 1;
+  }, 400);
   // The browser only says "no supported source"; ask GAZE why.
   const why = async () => {
     if (soundCam !== camId) return;
@@ -3528,7 +3558,14 @@ function solidBars(pieces, gap, tag = 'div', base = '') {
 const streamOf = (s) => s.stream || (s.kind === 'sub' ? 'sub' : 'main');
 // The streams there's footage of here, and the one shown: the one chosen,
 // or the other when the chosen one wasn't recorded at all.
-function tlStreams() { return new Set(tl.data.flatMap(c => c.segments.map(streamOf))); }
+// (Kept until the timeline's files change: asked for every file while scrubbing.)
+let tlStreamsMemo = null;
+function tlStreams() {
+  const n = tl.data.reduce((a, c) => a + c.segments.length, 0);
+  if (tlStreamsMemo && tlStreamsMemo.data === tl.data && tlStreamsMemo.n === n) return tlStreamsMemo.v;
+  const v = new Set(tl.data.flatMap(c => c.segments.map(streamOf)));
+  tlStreamsMemo = {data: tl.data, n, v}; return v;
+}
 function tlQ() { const have = tlStreams(); return have.has(tl.quality) || !have.size ? tl.quality : [...have][0]; }
 // Footage drawn and played for the chosen stream: main stream = HD only
 // (full-quality 24/7 recording and alert clips); sub-stream = the sub-stream
@@ -3547,12 +3584,18 @@ function paintQualityChoice() {
   for (const el of document.querySelectorAll('#tl-videos .surface .msg'))
     el.textContent = q === 'main' && have.has('sub') ? 'No main-stream (HD) footage at this time' : 'No recorded footage at this time';
 }
+const segLastsCache = new WeakMap();
+function segLasts(segs) {
+  const h = segLastsCache.get(segs); if (h && h.n === segs.length) return h.v;
+  const v = new Set(['recording', 'sub'].map(k => segs.filter(s => s.kind === k).slice(-1)[0]));
+  segLastsCache.set(segs, {n: segs.length, v}); return v;
+}
 function segAt(c, T, force) {
   // The newest file of a camera that was recording when the timeline
   // loaded is still growing: treat it as running up to now.
-  const lasts = new Set(['recording', 'sub'].map(k => c.segments.filter(s => s.kind === k).slice(-1)[0]));
-  const end = (s) => lasts.has(s) && tl.loadedAt - new Date(s.end).getTime() < 90000 ? Date.now() + 5000 : new Date(s.end).getTime() + 1000;
-  const hit = (s) => new Date(s.start).getTime() <= T && T < end(s);
+  const lasts = segLasts(c.segments);
+  const end = (s) => lasts.has(s) && tl.loadedAt - s._b < 90000 ? Date.now() + 5000 : s._b + 1000;
+  const hit = (s) => segMs(s)._a <= T && T < end(s);
   // Normally the light stream 2 copy (opens instantly); after clicking an
   // alert, its full-quality footage until the alert is over.
   const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
@@ -4087,10 +4130,10 @@ function markAt(e) {
       const sel = box.querySelector('.tl-sel'); if (sel) sel.style.cssText = selStyle(pct);
       $('tl-sel-info').textContent = `Clip ${fmtTime(new Date(tl.inT))} – ${fmtTime(new Date(tl.outT))} (${fmtClock((tl.outT - tl.inT) / 1000)})`;
       // Show the picture at the handle while dragging.
-      tl.T = handle === 'in' ? tl.inT : tl.outT; drawHead(); previewAll();
+      tl.T = handle === 'in' ? tl.inT : tl.outT; drawHead(); previewSoon();
       return;
     }
-    if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewAll();
+    if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewSoon();
   });
   const end = () => {
     if (handle) { handle = null; drawTimeline(); tlSync(true); hideSpritesWhenReady(); return; }
@@ -4175,14 +4218,28 @@ function spriteBackoff(key) {
 // showing progress, so scrubbing is instant.
 // The files the time-lapse of a camera comes from: the light timeline
 // copies, and the recordings of any time without a copy.
+// A file's start and end in ms (worked out once: scrubbing asks often).
+function segMs(x) { if (x._a == null) { x._a = Date.parse(x.start); x._b = Date.parse(x.end); } return x; }
+// (Kept per list of files: dragging along the timeline asks many times a second.)
+const pvSrcCache = new WeakMap();
 function previewSources(segs) {
-  const subs = segs.filter(x => x.kind === 'sub').map(x => [new Date(x.start).getTime(), new Date(x.end).getTime()]);
-  return segs.filter(x => {
+  const hit = pvSrcCache.get(segs); if (hit && hit.n === segs.length) return hit.v;
+  const subs = segs.filter(x => x.kind === 'sub').map(x => segMs(x)).sort((p, q) => p._a - q._a);
+  // Is [a, b] covered by one stream 2 file? (sorted: a binary search for
+  // the last one starting by a + 5 s)
+  const covered = (a, b) => {
+    let lo = 0, hi = subs.length - 1, k = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (subs[m]._a <= a + 5000) { k = m; lo = m + 1; } else hi = m - 1; }
+    for (let i = k; i >= 0 && i > k - 4; i--) if (subs[i]._b >= b - 5000) return true;
+    return false;
+  };
+  const v = segs.filter(x => {
     if (x.kind === 'sub') return true;
     if (x.kind !== 'recording') return false;
-    const a = new Date(x.start).getTime(), b = new Date(x.end).getTime();
-    return !subs.some(([s0, s1]) => s0 <= a + 5000 && s1 >= b - 5000);
+    segMs(x); return !covered(x._a, x._b);
   });
+  pvSrcCache.set(segs, {n: segs.length, v});
+  return v;
 }
 // Under each camera's lane: which parts of the time-lapse are loaded and
 // ready to scrub (filled), still loading (striped) or not loaded yet.
@@ -4292,6 +4349,10 @@ function hideSpritesWhenReady() {
   }
   return Promise.all(all);
 }
+// Pointer moves come faster than the screen redraws: show the pictures
+// once per frame, for the newest position.
+let previewQueued = false;
+function previewSoon() { if (previewQueued) return; previewQueued = true; requestAnimationFrame(() => { previewQueued = false; if (tl.dragging || tl.T != null) previewAll(); }); }
 function previewAll() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
@@ -4301,7 +4362,7 @@ function previewAll() {
     // stream is chosen: dragging shows it even where the chosen stream (say
     // Main stream, recorded only for alerts) has no footage; letting go
     // there says so.
-    const ps = c && previewSources(c.segments).find(x => new Date(x.start).getTime() <= T && T < (isGrowing(x) ? Date.now() : new Date(x.end).getTime()) + 1000);
+    const ps = c && previewSources(c.segments).find(x => x._a <= T && T < (isGrowing(x) ? Date.now() : x._b) + 1000);
     // (The pictures don't depend on how the video plays: also for cameras
     // whose HD footage plays converted.)
     const s = (c && segAt(c, T)) || (tl.scrub === 'timelapse' ? ps : null), sp = el.querySelector('.sprite');
