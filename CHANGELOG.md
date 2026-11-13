@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 0.6.55 — November 2026
+- **No more flicker opening the Live tab**: coming back to Live from another page or from a camera keeps each camera's video playing instead of starting it again, so it no longer drops to a still picture or goes blank for a moment.
+- **Full-screen camera timeline fixed**: in a full-screen camera, moving or clicking across an alert on the timeline no longer brings back the old timeline. The alert plays in full screen, and the timeline returns to its place when you leave full screen.
+- **Green tick when settings save**: saving any setting now shows a ✓ on the button you pressed and in the message, so it's clear it worked.
+- **"Open alert" in notifications**: ntfy notifications now have an Open alert button next to the snooze buttons.
+- **Alert pictures show the whole view**: the zoom-in on what the AI found is gone from alert thumbnails; the box around it still shows.
+
 ## 0.6.54 — November 2026
 - **Stream live to YouTube, Facebook or Twitch**: camera → General → Stream live, with the service's RTMP address and stream key. The camera's own video is passed through (H.265 cameras are converted), with sound added when the camera has none; it restarts by itself if the connection drops.
 - **Fisheye (360°) cameras**: camera → General → Fisheye. The live view and snapshots become a normal flat picture — choose where to look and how wide; recordings keep the whole circle.

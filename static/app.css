@@ -290,6 +290,9 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
   border: 1px solid var(--border); padding: 10px 16px; border-radius: 8px; z-index: 100; max-width: 90vw;
   box-shadow: 0 6px 24px rgba(0,0,0,.4); }
 #toast.error { border-color: var(--red); }
+#toast.ok { border-color: var(--green, #2ecc71); }
+.saved-tick { display: inline-block; margin-left: 6px; color: var(--green, #2ecc71); font-weight: 700; animation: tickpop .25s ease-out; }
+@keyframes tickpop { from { transform: scale(.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
 /* full-screen video wall */
 .wall-only { display: none !important; }

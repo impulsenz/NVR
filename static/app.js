@@ -153,8 +153,29 @@ async function api(path, opts = {}) {
 }
 
 let toastTimer;
+let lastButton = null;
+document.addEventListener('click', (e) => { const el = e.target.closest && e.target.closest('button'); if (el) { const home = el.closest('[id]'); lastButton = {el, at: Date.now(), home: home && home.id, text: el.textContent.trim()}; } }, true);
 function toast(msg, isError) {
-  const t = $('toast'); t.textContent = msg; t.className = isError ? 'error' : ''; t.hidden = false;
+  const t = $('toast'), ok = !isError && /^saved|\bsaved\b/i.test(msg);
+  t.textContent = (ok ? '✓ ' : '') + msg; t.className = isError ? 'error' : ok ? 'ok' : ''; t.hidden = false;
+  // A green tick on the button that saved it, so it's clear it worked.
+  const lb = ok && lastButton && Date.now() - lastButton.at < 15000 ? lastButton : null;
+  if (lb) {
+    lastButton = null;
+    // The page may redraw the form after saving: then tick the same button
+    // in the new form.
+    const find = () => {
+      if (lb.el.isConnected) return lb.el;
+      const box = lb.home && document.getElementById(lb.home);
+      return box && [...box.querySelectorAll('button')].find(x => x.textContent.trim() === lb.text);
+    };
+    const tick = () => {
+      const b = find(); if (!b || b.querySelector('.saved-tick')) return;
+      const k = document.createElement('span'); k.className = 'saved-tick'; k.textContent = '✓'; b.append(k);
+      setTimeout(() => k.remove(), 2200);
+    };
+    tick(); setTimeout(tick, 400); setTimeout(tick, 1200);
+  }
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, isError ? Math.max(7000, msg.length * 60) : 3500);
 }
 
@@ -210,14 +231,7 @@ function singleClick(fn, delay = 260) {
     t = setTimeout(() => fn(e), delay);
   };
 }
-
 // Zoom a whole-picture thumbnail into the recognized object (the box stays the same size).
-function zoomStyle(f) {
-  if (!f) return '';
-  const [x, y, w, h] = f, s = Math.min(3, Math.max(1, 0.55 / Math.max(w, h * 0.9, 0.01)));
-  if (s < 1.05) return '';
-  return `--z:${s.toFixed(2)};transform-origin:${((x + w / 2) * 100).toFixed(1)}% ${((y + h / 2) * 100).toFixed(1)}%;transform:scale(${s.toFixed(2)})`;
-}
 // Boxes around what was detected in an alert picture, for review. The
 // picture is the whole camera view, so boxes are placed in % of it.
 let showBoxes = store_get('show-boxes', true);
@@ -411,6 +425,15 @@ class LiveVideo {
     img.after(v);
     this.open();
   }
+  // Move to another picture of the same camera (a rebuilt tile): the video
+  // carries on from what it has, with no new connection and no flash.
+  attach(img) {
+    this.img = img; img.after(this.video);
+    if (Live.mse.has(this.key)) {
+      const s = img.parentElement; if (s) { s.classList.add('mse'); const m = s.querySelector(':scope > .msg'); if (m) m.hidden = true; }
+      this.video.play().catch(() => {});
+    }
+  }
   open() {
     if (this.dead) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -504,10 +527,24 @@ function mp4Codec(b) {
 }
 // A live picture: the picture stream, with smooth video on top when the
 // browser can play it. Returns the unbind function.
+// Players of pictures just taken off the page, kept a few seconds for the
+// same camera's next picture (switching pages rebuilds the tiles).
+const lvParked = new Map();
 function bindLive(img, id, q) {
-  const un = Live.bind(img, id, q);
-  const lv = liveVideoOn() && !Live.noMse.has(Live.key(id, q)) ? new LiveVideo(img, id, q) : null;
-  return () => { un(); if (lv) lv.close(); };
+  const un = Live.bind(img, id, q), key = Live.key(id, q);
+  let lv = null;
+  if (liveVideoOn() && !Live.noMse.has(key)) {
+    const parked = lvParked.get(key);
+    if (parked && !parked.lv.dead) { clearTimeout(parked.timer); lvParked.delete(key); lv = parked.lv; lv.attach(img); }
+    else lv = new LiveVideo(img, id, q);
+  }
+  return () => {
+    un();
+    if (!lv || lv.dead) return;
+    const old = lvParked.get(key); if (old) { clearTimeout(old.timer); old.lv.close(); }
+    lv.video.remove();
+    lvParked.set(key, {lv, timer: setTimeout(() => { if (lvParked.get(key) && lvParked.get(key).lv === lv) { lvParked.delete(key); lv.close(); } }, 5000)});
+  };
 }
 
 // Which streams the page needs right now. The dashboard keeps running in the
@@ -2050,7 +2087,8 @@ function openAlertPicker(anchor, g, pick) {
   pop.className = 'evt-pop';
   pop.innerHTML = g.evs.map((e, i) => `<button type="button" class="it cat-${evCat(e)}" data-i="${i}"><img src="media/${enc(g.cam)}/events/${enc(e.thumb)}" alt="">
     <span class="cap">${e.labels.map(l => labelIcon(l.label)).join('')} ${esc(e.labels.map(l => l.label).join(', '))}<b>${fmtTime(e.start)}</b></span></button>`).join('');
-  document.body.appendChild(pop);
+  // In full screen only what's inside the full-screen picture shows.
+  (document.fullscreenElement || document.body).appendChild(pop);
   const r = anchor.getBoundingClientRect(), pr = pop.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(innerWidth - pr.width - 8, r.left + r.width / 2 - pr.width / 2)) + 'px';
   pop.style.top = (r.bottom + pr.height + 8 > innerHeight ? Math.max(8, r.top - pr.height - 6) : r.bottom + 6) + 'px';
@@ -2884,7 +2922,7 @@ function renderRecordings() {
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
     const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''} ${hdClass(l)}" title="${esc(l.label)} ${Math.round(l.score * 100)}% — ${hdTip(l)}">${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
-    card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw" style="${zoomStyle(it.event && it.event.focus)}"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
+    card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
         <div class="tags">${it.kind === 'event' && !it.seen ? '<span class="tag newtag">NEW</span>' : ''}${icons}</div>
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small op-only" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
@@ -3661,6 +3699,16 @@ async function tlShowEvent(camId, T) {
   const clip = c && c.segments.find(s => s.kind === 'clip' && new Date(s.start).getTime() <= T && new Date(s.end).getTime() > T);
   const until = clip ? new Date(clip.end).getTime() : (e ? new Date(e.end).getTime() + 10000 : T + 30000);
   tl.hd = {camera: camId, from: T - 3000, until};
+  // In full screen: stay there and play the alert in full quality on the
+  // same picture (rebuilding the page would end full screen).
+  const fe = document.fullscreenElement;
+  if (fe && fe.closest('#tl-videos')) {
+    if (fe.dataset.cam !== camId) return;
+    if (tl.playing) tlPlay(false);
+    jumpTo(T - 3000);
+    tlPlay(true);
+    return;
+  }
   if (!(rec.cameras.size === 1 && rec.cameras.has(camId))) {
     if (!rec.prevCameras) rec.prevCameras = new Set(rec.cameras);
     rec.cameras = new Set([camId]);
@@ -3765,7 +3813,16 @@ function drawHead() {
 // end and download, sound; a live camera — sound, push to talk (two-way
 // audio), snapshot, clip start / end and download (from the recording).
 // They fade while nothing moves.
+// Timelines lent to a full-screen panel: [element, its place-holder].
+const fsLent = [];
 document.addEventListener('fullscreenchange', () => {
+  // Put back what the full-screen panel borrowed — also when that picture
+  // was taken off the page meanwhile (the panel then can't be found).
+  if (!document.fullscreenElement) {
+    for (const [el, home] of fsLent.splice(0)) {
+      if (home.isConnected) { home.replaceWith(el); if (el.id === 'tl') { tl.onlyCam = null; requestAnimationFrame(drawTimeline); } else requestAnimationFrame(() => camTl.draw()); }
+    }
+  }
   document.querySelectorAll('.fspov').forEach(x => {
     const s = x.parentElement;
     // The Recordings timeline goes back to its place under the videos.
@@ -3816,6 +3873,7 @@ function tlFsBar(el) {
   const tlEl = $('tl');
   tl.onlyCam = camId;
   el._tlHome = document.createComment('timeline'); tlEl.before(el._tlHome);
+  fsLent.push([tlEl, el._tlHome]);
   bar.querySelector('.fs-tlslot').appendChild(tlEl);
   requestAnimationFrame(() => { drawTimeline(); drawHead(); });
   bar.querySelector('.p-zoom').onchange = (e) => { $('tl-zoom').value = e.target.value; $('tl-zoom').dispatchEvent(new Event('change')); };
@@ -3893,6 +3951,7 @@ function liveFsBar(el, camId) {
     // back; it plays here, in full screen.
     const ctl = $('cam-tl');
     el._ctlHome = document.createComment('camera timeline'); ctl.before(el._ctlHome);
+    fsLent.push([ctl, el._ctlHome]);
     q('.fs-tlslot').appendChild(ctl);
     requestAnimationFrame(() => camTl.draw());
     q('.p-golive').onclick = () => stopFocusPlayback();

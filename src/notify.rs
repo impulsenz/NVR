@@ -450,9 +450,12 @@ impl Notifier {
                         click: link(n, &cfg.server.listen, &e),
                         picture: alert_picture(&rt, &e).or(Some(pic)),
                         // Snooze this camera straight from the notification.
+                        // Open the alert, or snooze this camera, straight
+                        // from the notification.
                         actions: base(n, &cfg.server.listen).map(|b| {
                             let l = |m| snooze_link(&mgr.data_dir, &b, &rt.cfg.id, m);
-                            format!("http, Snooze 1 hour, {}, method=POST, clear=true; http, Snooze until tomorrow, {}, method=POST, clear=true", l(60), l(until_morning()))
+                            let open = link(n, &cfg.server.listen, &e).map(|u| format!("view, Open alert, {u}; ")).unwrap_or_default();
+                            format!("{open}http, Snooze 1 hour, {}, method=POST, clear=true; http, Snooze until tomorrow, {}, method=POST, clear=true", l(60), l(until_morning()))
                         }),
                     };
                     if self.report(send(n, msg).await) {
