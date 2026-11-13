@@ -65,6 +65,19 @@ pub fn key(data_dir: &std::path::Path, renew: bool) -> String {
     k
 }
 
+/// One camera's private link key: made from the overview key, so a new
+/// overview link also stops every camera link; each camera's key opens only
+/// that camera's picture.
+pub fn camera_key(data_dir: &std::path::Path, camera: &str) -> String {
+    crate::notify::hmac(key(data_dir, false).as_bytes(), &format!("camera|{camera}"))[..32].to_string()
+}
+
+/// Does this request carry camera `camera`'s private link key?
+pub fn camera_key_ok(data_dir: &std::path::Path, camera: &str, given: &str) -> bool {
+    let want = camera_key(data_dir, camera);
+    want.len() == given.len() && want.bytes().zip(given.bytes()).fold(0, |a, (x, y)| a | (x ^ y)) == 0
+}
+
 /// Does this request carry the private overview key?
 pub fn key_ok(data_dir: &std::path::Path, given: &str) -> bool {
     let want = key(data_dir, false);

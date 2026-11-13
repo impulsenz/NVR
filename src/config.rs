@@ -692,6 +692,10 @@ pub enum RecordMode {
     ContinuousSub,
     /// Sub-stream 24/7, plus full-quality clips around motion/alerts.
     SubPlusEvents,
+    /// Full-quality stream 24/7, plus full-quality clips around alerts kept
+    /// as their own files: they stay (Storage → keep alerts for) after the
+    /// 24/7 footage around them is deleted to make room.
+    ContinuousPlusEvents,
     /// Full-quality clips around motion/alerts only.
     Events,
     /// No recording (live view and detection only).
@@ -705,7 +709,7 @@ impl RecordMode {
     /// Stream recorded around the clock, if any: (use sub-stream?).
     pub fn continuous_stream(self) -> Option<bool> {
         match self {
-            RecordMode::Continuous | RecordMode::Scheduled => Some(false),
+            RecordMode::Continuous | RecordMode::ContinuousPlusEvents | RecordMode::Scheduled => Some(false),
             RecordMode::ContinuousSub | RecordMode::SubPlusEvents => Some(true),
             RecordMode::Events | RecordMode::Off => None,
         }
@@ -713,7 +717,7 @@ impl RecordMode {
 
     /// Whether full-quality event clips with a pre-event buffer are recorded.
     pub fn event_clips(self) -> bool {
-        matches!(self, RecordMode::SubPlusEvents | RecordMode::Events)
+        matches!(self, RecordMode::SubPlusEvents | RecordMode::ContinuousPlusEvents | RecordMode::Events)
     }
 }
 
@@ -1681,6 +1685,93 @@ pub fn private_file(path: &Path) {
     let _ = path;
 }
 
+/// A backup without passwords: what stands in for a camera's password.
+const PW_HOLE: &str = "PASSWORD";
+/// … and for a live-streaming key (the end of the RTMP address).
+const KEY_HOLE: &str = "STREAM-KEY";
+
+/// The password in `scheme://user:password@host/…`, if any.
+fn url_password(url: &str) -> Option<&str> {
+    let rest = &url[url.find("://")? + 3..];
+    let auth = &rest[..rest.find('/').unwrap_or(rest.len())];
+    let at = auth.rfind('@')?;
+    auth[..at].split_once(':').map(|(_, p)| p)
+}
+
+/// `url` with its password replaced by `pw`.
+fn with_password(url: &str, pw: &str) -> String {
+    match (url.find("://"), url_password(url)) {
+        (Some(s), Some(old)) => {
+            let rest = &url[s + 3..];
+            let at = rest[..rest.find('/').unwrap_or(rest.len())].rfind('@').unwrap_or(0);
+            let user = &rest[..at - old.len() - 1];
+            format!("{}://{user}:{pw}@{}", &url[..s], &rest[at + 1..])
+        }
+        _ => url.to_string(),
+    }
+}
+
+impl Config {
+    /// For a backup without passwords: every stored secret is taken out
+    /// (camera passwords become "PASSWORD", a streaming key "STREAM-KEY").
+    pub fn remove_secrets(&mut self) {
+        self.server.password.clear();
+        self.server.username.clear();
+        self.notify.token.clear();
+        self.cloud.password.clear();
+        self.mqtt.password.clear();
+        for r in &mut self.remotes {
+            r.token.clear();
+        }
+        for c in &mut self.cameras {
+            for u in [&mut c.url, &mut c.live_url, &mut c.talk_url] {
+                if url_password(u).is_some_and(|p| !p.is_empty()) {
+                    *u = with_password(u, PW_HOLE);
+                }
+            }
+            c.ptz.password.clear();
+            if let Some(i) = c.stream_url.trim_end_matches('/').rfind('/')
+                && !c.stream_url.trim().is_empty()
+            {
+                c.stream_url = format!("{}/{KEY_HOLE}", &c.stream_url[..i]);
+            }
+        }
+    }
+
+    /// Importing a backup made without passwords: the secrets it left out
+    /// are kept from the settings in use (same camera, same server), so
+    /// cameras don't lose their passwords.
+    pub fn keep_secrets_from(&mut self, old: &Config) {
+        let keep = |new: &mut String, old: &str| {
+            if new.is_empty() {
+                *new = old.to_string();
+            }
+        };
+        keep(&mut self.notify.token, &old.notify.token);
+        keep(&mut self.cloud.password, &old.cloud.password);
+        keep(&mut self.mqtt.password, &old.mqtt.password);
+        for r in &mut self.remotes {
+            if let Some(o) = old.remotes.iter().find(|o| o.url.trim() == r.url.trim()) {
+                keep(&mut r.token, &o.token);
+            }
+        }
+        for c in &mut self.cameras {
+            let Some(o) = old.cameras.iter().find(|o| o.id == c.id) else { continue };
+            for (u, ou) in [(&mut c.url, &o.url), (&mut c.live_url, &o.live_url), (&mut c.talk_url, &o.talk_url)] {
+                if url_password(u) == Some(PW_HOLE)
+                    && let Some(pw) = url_password(ou)
+                {
+                    *u = with_password(u, pw);
+                }
+            }
+            keep(&mut c.ptz.password, &o.ptz.password);
+            if c.stream_url.ends_with(&format!("/{KEY_HOLE}")) {
+                c.stream_url = o.stream_url.clone();
+            }
+        }
+    }
+}
+
 pub fn mask_url(url: &str) -> String {
     if let Some(scheme_end) = url.find("://") {
         let rest = &url[scheme_end + 3..];
@@ -1729,6 +1820,32 @@ mod tests {
         assert!(decode_mask("160x90:10,5").is_none());
         assert!(decode_mask("160x90:99999").is_none());
         assert!(decode_mask("hello").is_none());
+    }
+
+    #[test]
+    fn backup_secrets_out_and_back() {
+        let mut c = Config::default();
+        let mut cam = CameraConfig { id: "front".into(), ..Default::default() };
+        cam.url = "rtsp://admin:s3cr:et@10.0.0.5:554/Streaming/101".into();
+        cam.live_url = "rtsp://10.0.0.5/sub".into();
+        cam.stream_url = "rtmp://a.rtmp.youtube.com/live2/abcd-efgh".into();
+        cam.ptz.password = "p".into();
+        c.cameras.push(cam);
+        c.mqtt.password = "m".into();
+        let old = c.clone();
+        let mut b = c.clone();
+        b.remove_secrets();
+        let text = b.to_toml().unwrap();
+        for s in ["s3cr", "abcd-efgh", "\"m\"", "\"p\""] {
+            assert!(!text.contains(s), "{s} left in the backup");
+        }
+        assert_eq!(b.cameras[0].url, "rtsp://admin:PASSWORD@10.0.0.5:554/Streaming/101");
+        assert_eq!(b.cameras[0].live_url, "rtsp://10.0.0.5/sub");
+        b.keep_secrets_from(&old);
+        assert_eq!(b.cameras[0].url, old.cameras[0].url);
+        assert_eq!(b.cameras[0].stream_url, old.cameras[0].stream_url);
+        assert_eq!(b.cameras[0].ptz.password, "p");
+        assert_eq!(b.mqtt.password, "m");
     }
 
     #[test]

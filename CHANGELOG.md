@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.58 — November 2026
+- **New recording mode: HD 24/7 plus HD alert clips**: camera → Recording. Full quality around the clock, and each alert also saved as its own full-quality clip (with the seconds before it). The clips are kept for as long as Storage → "Keep alerts for" says, even after the 24/7 footage around them is deleted to make room.
+- **A private link for each camera**: Settings → Smart home → Overview → Each camera on its own. Choose the stream (low resolution or full quality), how many pictures a second, and a moving picture (MJPEG) or the newest still (JPEG), then copy or open the link. Each camera's link has its own key and opens only that camera's picture; "New link" replaces them all.
+- **Backups now include everything you've set up**: Settings → Backup now downloads one .zip with every camera and setting (profiles, zones, masks, modes, notifications, smart-home links), users with their camera access and layouts, and People & vehicles with their faces, plates and photos. Without "Include passwords", every password, key and token is left out (live-streaming keys, MQTT and other GAZE servers' tokens too). Importing keeps the passwords this computer already has, so cameras don't lose theirs; older .toml backups still import.
+
 ## 0.6.57 — November 2026
 - **Work goes back to the graphics card when it's quiet**: with smart load balancing on, video work that moved to the processor because the graphics card was busy (live view decoding, recording conversion) now moves back once the graphics card has been quiet for a minute, instead of staying on the processor until GAZE restarts. A recording being converted finishes its file and carries on in a new one.
 - **Faces you confirm or correct teach GAZE**: an alert's recognised face now has a ✓ Right button. Confirming it adds that face to the person's faces, so they're recognised more surely, and it shows as confirmed. Choosing who it really is still adds the face to the right person and stops GAZE taking it for the wrong one.

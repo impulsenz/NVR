@@ -294,7 +294,7 @@ function camState(c) {
   return {cls: 'idle', text: 'Idle'};
 }
 const pillHtml = (c) => { const s = camState(c); return `<span class="pill st-${s.cls}"><span class="dot"></span>${esc(s.text)}</span>`; };
-const MODE_TEXT = {continuous: 'HD 24/7', continuous_sub: 'Sub-stream 24/7', sub_plus_events: 'Sub-stream 24/7 plus HD alerts', events: 'HD on alerts only', off: 'Not recording'};
+const MODE_TEXT = {continuous: 'HD 24/7', continuous_plus_events: 'HD 24/7 plus HD alert clips', continuous_sub: 'Sub-stream 24/7', sub_plus_events: 'Sub-stream 24/7 plus HD alerts', events: 'HD on alerts only', off: 'Not recording'};
 
 // ======================================================================
 // Live video over one WebSocket
@@ -5141,6 +5141,7 @@ async function openCameraDialog(id, clone, prof) {
         <label>Recording mode</label>
         <div class="radio-cards" style="grid-template-columns:1fr">
           ${[['continuous', 'HD 24/7', 'Records the main stream around the clock.'],
+             ['continuous_plus_events', 'HD 24/7 plus HD alert clips', 'Full quality around the clock, and each alert also saved as its own full-quality clip — kept for as long as Storage → “Keep alerts for” says, even after the 24/7 footage around it is deleted to make room. Uses a little more space.'],
              ['continuous_sub', 'Sub-stream 24/7', 'Records the low-resolution stream around the clock. Uses much less space.'],
              ['sub_plus_events', 'Sub-stream 24/7 plus HD alerts', 'Low-res around the clock, plus full-quality clips around motion/AI alerts.'],
              ['events', 'HD on alerts only', 'Only full-quality clips around motion/AI alerts. Uses the least space.'],
@@ -5948,7 +5949,7 @@ function setupProfiles(cfg) {
 // ---------- Settings → Profiles ----------
 // Recording, motion and AI settings shared by cameras: edit a profile and
 // every camera following it changes too.
-const REC_MODE_NAMES = {continuous: 'Records all the time (full quality)', continuous_sub: 'Records all the time (sub-stream)', sub_plus_events: 'Sub-stream all the time + full-quality alerts', events: 'Records alerts only', off: 'Not recording'};
+const REC_MODE_NAMES = {continuous: 'Records all the time (full quality)', continuous_plus_events: 'Records all the time + alert clips (full quality)', continuous_sub: 'Records all the time (sub-stream)', sub_plus_events: 'Sub-stream all the time + full-quality alerts', events: 'Records alerts only', off: 'Not recording'};
 function renderProfiles(body) {
   const list = settings.profiles || [];
   const followers = (name) => cameraCfgs.filter(c => (c.profile || '').toLowerCase() === name.toLowerCase());
@@ -6480,12 +6481,12 @@ async function paintCloudStatus() {
 // ---------- backup ----------
 function renderBackup(body) {
   body.innerHTML = `<div class="card"><h2>Export setup</h2>
-    <p class="muted" style="margin-top:0">Save all cameras, settings and your dashboard layout to a file, to restore after reinstalling or to copy to another computer. Recordings are not included.</p>
-    <label class="check"><input type="checkbox" id="bk-pw"> Include passwords and API keys (keep the file somewhere safe)</label>
-    <div class="actions"><button class="primary" id="bk-export">⇩ Download setup file</button></div></div>
+    <p class="muted" style="margin-top:0">One file with everything you've set up, to restore after reinstalling or to copy to another computer: every camera and its settings, profiles, zones and masks, modes, notifications, smart-home links, users with their camera access and layouts, and People &amp; vehicles with their faces, plates and photos. Recordings and alerts are not included.</p>
+    <label class="check"><input type="checkbox" id="bk-pw"> Include passwords, keys and tokens${tip('Camera passwords, users’ passwords (stored scrambled) and two-step sign-in, API tokens, notification and MQTT passwords, live-streaming keys. Without them, importing on this computer keeps the passwords it has now; on a new computer you type them in again.')} (keep the file somewhere safe)</label>
+    <div class="actions"><button class="primary" id="bk-export">⇩ Download backup</button></div></div>
     <div class="card"><h2>Import setup</h2>
-    <p class="muted" style="margin-top:0">Replaces all cameras and settings with the ones in the file. Cameras not in the file are removed (their recordings stay on disk).</p>
-    <input type="file" id="bk-file" accept=".toml,text/plain">
+    <p class="muted" style="margin-top:0">Replaces all cameras and settings with the ones in the backup. Cameras not in it are removed (their recordings stay on disk). Users and People &amp; vehicles in the backup are added or updated; others here are kept. Passwords the backup doesn't have are kept from this computer.</p>
+    <input type="file" id="bk-file" accept=".zip,.toml,application/zip,text/plain">
     <label class="check"><input type="checkbox" id="bk-keep" checked> Keep this NVR's login and web address</label>
     <div class="actions"><button id="bk-import" class="danger">Import</button></div><div id="bk-result"></div></div>`;
   $('bk-export').onclick = () => location.href = 'api/config/export?passwords=' + chk('bk-pw');
@@ -6494,9 +6495,10 @@ function renderBackup(body) {
     if (!f) return toast('Choose a setup file first.', true);
     if (!confirm('Replace all cameras and settings with the imported file?')) return;
     try {
-      const r = await api('api/config/import?keep_login=' + chk('bk-keep'), {method: 'POST', body: await f.text(), headers: {'Content-Type': 'text/plain'}});
-      toast(`Imported ${r.cameras} camera(s).` + (r.restart_required ? ' Restart the NVR to use the new web address.' : ''));
-      await refreshStatus(); location.hash = '#settings/cameras';
+      const r = await api('api/config/import?keep_login=' + chk('bk-keep'), {method: 'POST', body: await f.arrayBuffer(), headers: {'Content-Type': 'application/octet-stream'}});
+      $('bk-result').innerHTML = `<div class="ok" style="margin-top:8px">✓ ${esc(r.message)}${r.restart_required ? ' Restart GAZE to use the new web address.' : ''}</div>`;
+      toast(r.message);
+      await loadSettings(); await refreshStatus(); await loadKnownPeople().catch(() => {});
     } catch (e) { $('bk-result').innerHTML = `<div class="err" style="margin-top:8px">${esc(e.message)}</div>`; }
   };
 }
@@ -6938,15 +6940,41 @@ function renderSmartHome(body) {
     <label class="check" style="margin-top:10px"><input type="checkbox" id="ov-active"> Only cameras with something going on</label>
     <label style="margin-top:10px;display:block">Private link (works without signing in — keep it to yourself)</label>
     <div class="row"><input type="text" id="ov-link" readonly style="flex:1"><button type="button" id="ov-copy">📋 Copy</button><button type="button" id="ov-new" title="Make a new link: the old one stops working">New link</button></div>
-    <div class="hint">Open it on a tablet, or in Home Assistant: Settings → Devices → Add integration → MJPEG IP Camera, and paste it as the MJPEG URL.</div></div>`);
-  let ovKey = '';
+    <div class="hint">Open it on a tablet, or in Home Assistant: Settings → Devices → Add integration → MJPEG IP Camera, and paste it as the MJPEG URL.</div>
+    <h3 style="margin:18px 0 4px">Each camera on its own</h3>
+    <div class="hint" style="margin-top:0">A private link to one camera, with its own key: it opens that camera's picture and nothing else. “New link” above also replaces these.</div>
+    <div id="ov-cams" class="ov-cams"></div></div>`);
+  let ovKey = '', ovCamKeys = {};
+  // One camera's link: which stream, how smooth, moving or a still picture.
+  const ovCams = () => {
+    const box = $('ov-cams'); if (!box) return;
+    const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+    const cams = cameraCfgs.filter(c => ovCamKeys[c.id]);
+    if (!box.children.length) box.innerHTML = cams.map(c => `<div class="ov-cam" data-id="${esc(c.id)}">
+        <b>${esc(c.name)}</b>
+        <select class="oc-q" title="Which stream">${(c.live_url || '').trim() ? '<option value="sub">Low resolution (sub-stream)</option>' : ''}<option value="main">Full quality (main stream)</option></select>
+        <select class="oc-fps" title="Pictures per second">${[[0, 'Live view rate'], [1, '1 fps'], [2, '2 fps'], [5, '5 fps'], [10, '10 fps'], [15, '15 fps']].map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>
+        <select class="oc-kind" title="Moving picture or one picture"><option value="stream.mjpeg">Moving picture (MJPEG)</option><option value="frame.jpg">Still picture (JPEG, newest)</option></select>
+        <div class="row"><input type="text" class="oc-link" readonly style="flex:1"><button type="button" class="oc-copy">📋 Copy</button><a class="btn oc-open" target="_blank" rel="noopener">Open</a></div></div>`).join('') || '<div class="muted">No cameras yet.</div>';
+    box.querySelectorAll('.ov-cam').forEach(el => {
+      const id = el.dataset.id, kind = el.querySelector('.oc-kind'), fps = el.querySelector('.oc-fps');
+      const make = () => {
+        fps.disabled = kind.value !== 'stream.mjpeg';
+        const q = el.querySelector('.oc-q').value, f = +fps.value;
+        const url = `${base}live/${enc(id)}/${kind.value}?k=${ovCamKeys[id]}&q=${q}${f && kind.value === 'stream.mjpeg' ? '&fps=' + f : ''}`;
+        el.querySelector('.oc-link').value = url; el.querySelector('.oc-open').href = url;
+      };
+      el.querySelectorAll('select').forEach(x => x.onchange = make); make();
+      el.querySelector('.oc-copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(el.querySelector('.oc-link').value).then(() => toast('Link copied')).catch(() => el.querySelector('.oc-link').select());
+    });
+  };
   const ovLink = () => { const base = location.origin + location.pathname.replace(/[^/]*$/, ''); $('ov-link').value = `${base}overview.mjpeg?k=${ovKey}${chk('ov-active') ? '&active=true' : ''}`; };
-  api('api/overview/key').then(r => { ovKey = r.key; ovLink(); }).catch(() => {});
+  api('api/overview/key').then(r => { ovKey = r.key; ovCamKeys = r.cameras || {}; ovLink(); ovCams(); }).catch(() => {});
   const ovPic = () => { if (!$('ov-img') || !$('ov-img').isConnected) return; $('ov-img').src = `overview.jpg?w=960${chk('ov-active') ? '&active=true' : ''}&t=${Date.now()}`; setTimeout(ovPic, 2000); };
   ovPic();
   $('ov-active').onchange = ovLink;
   $('ov-copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(val('ov-link')).then(() => toast('Link copied')).catch(() => { $('ov-link').select(); });
-  $('ov-new').onclick = async () => { if (!confirm('Make a new link? The old one stops working (update it wherever you used it).')) return; ovKey = (await api('api/overview/key', {method: 'POST'})).key; ovLink(); toast('New link made'); };
+  $('ov-new').onclick = async () => { if (!confirm('Make a new link? The old one stops working (update it wherever you used it).')) return; const r = await api('api/overview/key', {method: 'POST'}); ovKey = r.key; ovCamKeys = r.cameras || {}; ovLink(); $('ov-cams').innerHTML = ''; ovCams(); toast('New links made'); };
   $('wh-add').onclick = () => { hooks.push({name: '', enabled: true, url: '', cameras: [], objects: [], picture: false}); draw(); };
   $('wh-save').onclick = () => saveSettings({webhooks: hooks}, 'Webhooks saved');
   $('f-mqtt').onsubmit = async (e) => {

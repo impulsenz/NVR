@@ -99,6 +99,47 @@ impl KnownStore {
         Ok(())
     }
 
+    /// For a backup: the list (with faceprints) and every photo, as
+    /// (path inside the backup, bytes).
+    pub fn export(&self) -> (Vec<u8>, Vec<(String, Vec<u8>)>) {
+        let items = self.items.read().unwrap().clone();
+        let mut photos = Vec::new();
+        for k in &items {
+            for p in &k.photos {
+                if let Ok(b) = std::fs::read(self.dir.join(&k.id).join(p)) {
+                    photos.push((format!("known/{}/{p}", k.id), b));
+                }
+            }
+        }
+        (serde_json::to_vec_pretty(&items).unwrap_or_default(), photos)
+    }
+
+    /// From a backup: people and vehicles in it replace those with the same
+    /// id here (others here are kept); `photo(id, name)` gives a photo's
+    /// bytes. Returns how many were brought in.
+    pub fn import(&self, json: &[u8], photo: impl Fn(&str, &str) -> Option<Vec<u8>>) -> Result<usize> {
+        let incoming: Vec<Known> = serde_json::from_slice(json)?;
+        let ok = |s: &str| !s.is_empty() && s.len() <= 80 && !s.contains(['/', '\\', ':']) && !s.starts_with('.');
+        let mut n = 0;
+        {
+            let mut items = self.items.write().unwrap();
+            for mut k in incoming {
+                if !ok(&k.id) {
+                    continue;
+                }
+                let dir = self.dir.join(&k.id);
+                k.photos.retain(|p| {
+                    ok(p) && photo(&k.id, p).is_some_and(|b| std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(p), b)).is_ok())
+                });
+                items.retain(|x| x.id != k.id);
+                items.push(k);
+                n += 1;
+            }
+        }
+        self.save()?;
+        Ok(n)
+    }
+
     pub fn list(&self) -> Vec<KnownInfo> {
         self.items
             .read()

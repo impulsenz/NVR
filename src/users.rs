@@ -276,6 +276,59 @@ impl Users {
         Ok(())
     }
 
+    /// For a backup: every account with its role, cameras and layouts;
+    /// with `secrets`, also passwords (as stored: hashed), two-step sign-in
+    /// and API tokens.
+    pub fn export(&self, secrets: bool) -> Vec<u8> {
+        let mut users = self.users.read().unwrap().clone();
+        if !secrets {
+            for u in &mut users {
+                u.hash.clear();
+                u.totp = None;
+                u.recovery.clear();
+                u.tokens.clear();
+            }
+        }
+        serde_json::to_vec_pretty(&users).unwrap_or_default()
+    }
+
+    /// From a backup: accounts here are updated (role, cameras, layouts —
+    /// and the password etc. when the backup has them); new ones are added
+    /// when the backup has their password. Returns (updated or added,
+    /// skipped for want of a password).
+    pub fn import(&self, json: &[u8]) -> Result<(usize, usize)> {
+        let incoming: Vec<User> = serde_json::from_slice(json)?;
+        let (mut n, mut skipped) = (0, 0);
+        {
+            let mut users = self.users.write().unwrap();
+            for mut u in incoming {
+                let Ok(name) = check_name(&u.username) else { continue };
+                u.username = name;
+                match users.iter_mut().find(|x| x.username.eq_ignore_ascii_case(&u.username)) {
+                    Some(x) => {
+                        x.role = u.role;
+                        x.cameras = u.cameras;
+                        x.layouts = u.layouts;
+                        if !u.hash.is_empty() {
+                            x.hash = u.hash;
+                            x.totp = u.totp;
+                            x.recovery = u.recovery;
+                            x.tokens = u.tokens;
+                        }
+                        n += 1;
+                    }
+                    None if !u.hash.is_empty() => {
+                        users.push(u);
+                        n += 1;
+                    }
+                    None => skipped += 1,
+                }
+            }
+        }
+        self.save()?;
+        Ok((n, skipped))
+    }
+
     fn save_sessions(&self) {
         let s = self.sessions.lock().unwrap();
         if let Ok(b) = serde_json::to_vec(&*s) {

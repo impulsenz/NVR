@@ -101,7 +101,7 @@ fn key(data_dir: &std::path::Path) -> Vec<u8> {
     k
 }
 
-fn hmac(key: &[u8], msg: &str) -> String {
+pub fn hmac(key: &[u8], msg: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut k = [0u8; 64];
     k[..key.len().min(64)].copy_from_slice(&key[..key.len().min(64)]);

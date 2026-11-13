@@ -1184,3 +1184,8 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 #remotes .remote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
 #remotes .remote-tile { aspect-ratio: 16/9; display: block; color: inherit; text-decoration: none; }
 .tok-new { background: rgba(34,197,94,.1); border: 1px solid rgba(34,197,94,.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+
+.ov-cams { display: grid; gap: 10px; margin-top: 8px; }
+.ov-cam { display: grid; grid-template-columns: minmax(110px, auto) repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.ov-cam > .row { grid-column: 1 / -1; }
+@media (max-width: 760px) { .ov-cam { grid-template-columns: 1fr; } }

@@ -166,7 +166,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/alerts/seen-all", post(alerts_seen_all))
         .route("/api/alerts/unseen", post(alerts_unseen))
         .route("/api/config/export", get(export_config))
-        .route("/api/config/import", post(import_config))
+        .route("/api/config/import", post(import_config).layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         .route("/api/cameras", get(list_cameras).post(add_camera))
         .route(
             "/api/cameras/{id}",
@@ -1034,34 +1034,43 @@ struct ExportCfgQuery {
     passwords: bool,
 }
 
-/// Download the whole setup (cameras, settings, layout) as a file.
+/// Download the whole setup as one backup file (.zip): settings, cameras
+/// and profiles (settings.toml), users with their layouts (users.json), and
+/// people & vehicles with their photos (known.json, known/). Without
+/// `passwords`, every password, key and token is left out.
 async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Response {
     let mut cfg = m.config();
     if !q.passwords {
-        cfg.server.password.clear();
-        cfg.server.username.clear();
-        // Every stored secret: API keys, notification tokens, camera logins.
-        cfg.notify.token.clear();
-        cfg.cloud.password.clear();
-        for c in &mut cfg.cameras {
-            c.url = mask_url(&c.url).replace(":****@", ":PASSWORD@");
-            c.live_url = mask_url(&c.live_url).replace(":****@", ":PASSWORD@");
-            c.talk_url = mask_url(&c.talk_url).replace(":****@", ":PASSWORD@");
-            c.ptz.password.clear();
-        }
+        cfg.remove_secrets();
     }
-    match cfg.to_toml() {
-        Ok(text) => {
-            let name = format!("nvr-backup-{}.toml", Local::now().format("%Y-%m-%d"));
+    let res = (|| {
+        use std::io::Write;
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opt = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        z.start_file("settings.toml", opt)?;
+        z.write_all(cfg.to_toml()?.as_bytes())?;
+        z.start_file("users.json", opt)?;
+        z.write_all(&m.users.export(q.passwords))?;
+        let (known, photos) = m.known.export();
+        z.start_file("known.json", opt)?;
+        z.write_all(&known)?;
+        // Photos are JPEGs already: stored as they are.
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, b) in photos {
+            z.start_file(name, stored)?;
+            z.write_all(&b)?;
+        }
+        anyhow::Ok(z.finish()?.into_inner())
+    })();
+    match res {
+        Ok(bytes) => {
+            let name = format!("gaze-backup-{}.zip", Local::now().format("%Y-%m-%d"));
             (
                 [
-                    (header::CONTENT_TYPE, "application/toml".to_string()),
-                    (
-                        header::CONTENT_DISPOSITION,
-                        format!("attachment; filename=\"{name}\""),
-                    ),
+                    (header::CONTENT_TYPE, "application/zip".to_string()),
+                    (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
                 ],
-                text,
+                bytes,
             )
                 .into_response()
         }
@@ -1078,15 +1087,60 @@ fn yes() -> bool {
     true
 }
 
-async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: String) -> Response {
-    let cfg = match Config::from_toml(&body) {
-        Ok((c, _)) => c,
-        Err(e) => return bad(e),
-    };
-    let n = cfg.cameras.len();
-    match m.import(cfg, q.keep_login).await {
-        Ok(restart) => {
-            Json(json!({ "ok": true, "cameras": n, "restart_required": restart })).into_response()
+/// Restore a backup: the .zip from Export, or an older settings-only .toml.
+/// Passwords the backup left out are kept from the settings in use.
+async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: Bytes) -> Response {
+    let res = async {
+        // Every file in the backup (at most 500 MB unpacked).
+        let is_zip = body.starts_with(b"PK");
+        let mut files: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+        if is_zip {
+            use std::io::Read;
+            let mut z = zip::ZipArchive::new(std::io::Cursor::new(body.to_vec()))?;
+            let mut total = 0u64;
+            for i in 0..z.len() {
+                let f = z.by_index(i)?;
+                if !f.is_file() {
+                    continue;
+                }
+                let name = f.name()?.to_string();
+                let mut b = Vec::new();
+                f.take(500 * 1024 * 1024 - total).read_to_end(&mut b)?;
+                total += b.len() as u64;
+                anyhow::ensure!(total < 500 * 1024 * 1024, "the backup is too big");
+                files.insert(name, b);
+            }
+        }
+        let read = |name: &str| files.get(name).cloned();
+        let text = match read("settings.toml") {
+            Some(b) => String::from_utf8(b)?,
+            None if is_zip => anyhow::bail!("this .zip isn't a GAZE backup (no settings.toml in it)"),
+            None => String::from_utf8(body.to_vec()).map_err(|_| anyhow::anyhow!("choose the backup file made by Export (.zip or .toml)"))?,
+        };
+        let (mut cfg, _) = Config::from_toml(&text)?;
+        cfg.keep_secrets_from(&m.config());
+        let users = read("users.json");
+        let known = read("known.json");
+        let n = cfg.cameras.len();
+        let restart = m.import(cfg, q.keep_login).await?;
+        let mut parts = vec![format!("{n} camera(s) and all settings")];
+        if let Some(u) = users {
+            let (got, skipped) = m.users.import(&u)?;
+            parts.push(format!("{got} user(s) with their layouts"));
+            if skipped > 0 {
+                parts.push(format!("{skipped} new user(s) skipped — the backup has no passwords; add them in Settings → Users"));
+            }
+        }
+        if let Some(k) = known {
+            let got = m.known.import(&k, |id, p| read(&format!("known/{id}/{p}")))?;
+            parts.push(format!("{got} people & vehicles"));
+        }
+        anyhow::Ok((n, restart, parts.join(", ")))
+    }
+    .await;
+    match res {
+        Ok((n, restart, what)) => {
+            Json(json!({ "ok": true, "cameras": n, "restart_required": restart, "message": format!("Imported {what}.") })).into_response()
         }
         Err(e) => bad(e),
     }
@@ -3111,6 +3165,9 @@ fn mjpeg_response(
 struct QualityQuery {
     #[serde(default = "sub")]
     q: Quality,
+    /// At most this many pictures a second (a camera's private link).
+    #[serde(default)]
+    fps: Option<f32>,
 }
 fn sub() -> Quality {
     Quality::Sub
@@ -3124,12 +3181,20 @@ async fn live_mjpeg(
     let c = camera!(m, id);
     let mut rx = c.live(q.q).subscribe();
     drop(c);
+    let every = q.fps.filter(|f| *f > 0.0).map(|f| Duration::from_secs_f32(1.0 / f.clamp(0.2, 30.0)));
     let (tx, mut out) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
     tokio::spawn(async move {
+        let mut last: Option<Instant> = None;
         while rx.changed().await.is_ok() {
             let Some((_, frame)) = rx.borrow_and_update().clone() else {
                 continue;
             };
+            if let (Some(e), Some(l)) = (every, last)
+                && l.elapsed() < e
+            {
+                continue;
+            }
+            last = Some(Instant::now());
             if tx.send(Ok(multipart_part(&frame))).await.is_err() {
                 break;
             }
@@ -3640,11 +3705,17 @@ async fn overview_mjpeg(State(m): App, user: Option<axum::Extension<CurrentUser>
 }
 
 async fn overview_key(State(m): App) -> Response {
-    Json(json!({ "key": crate::overview::key(&m.data_dir, false) })).into_response()
+    let cams: serde_json::Map<String, serde_json::Value> = m
+        .cameras()
+        .iter()
+        .map(|c| (c.cfg.id.clone(), json!(crate::overview::camera_key(&m.data_dir, &c.cfg.id))))
+        .collect();
+    Json(json!({ "key": crate::overview::key(&m.data_dir, false), "cameras": cams })).into_response()
 }
 
 async fn overview_key_renew(State(m): App) -> Response {
-    Json(json!({ "key": crate::overview::key(&m.data_dir, true) })).into_response()
+    crate::overview::key(&m.data_dir, true);
+    overview_key(State(m)).await
 }
 
 /// Two-way audio: the browser sends 16-bit mono PCM at 8 kHz (binary
@@ -4142,9 +4213,19 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
         return next.run(req).await;
     }
     // The private overview link: its key opens the overview, nothing else.
+    let link_key = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("k=")));
     if (path == "/overview.jpg" || path == "/overview.mjpeg")
-        && let Some(k) = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("k=")))
+        && let Some(k) = link_key
         && crate::overview::key_ok(&m.data_dir, k)
+    {
+        return next.run(req).await;
+    }
+    // A camera's private link: its own key opens its picture and nothing else.
+    if let Some(k) = link_key
+        && let Some(rest) = path.strip_prefix("/live/")
+        && let Some((cam, what)) = rest.split_once('/')
+        && (what == "stream.mjpeg" || what == "frame.jpg")
+        && crate::overview::camera_key_ok(&m.data_dir, cam, k)
     {
         return next.run(req).await;
     }
