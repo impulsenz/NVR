@@ -1235,3 +1235,6 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 .ov .snd-wrap.p-tools { display: inline-flex; align-items: center; }
 .ov .ov-btns { display: inline-flex; gap: 4px; align-items: center; flex-direction: row; }
 .ov.tr .ov-btns, .ov.mr .ov-btns, .ov.br .ov-btns { justify-content: flex-end; }
+
+#no-cameras .nc-more { margin-top: 10px; }
+#no-cameras .nc-out { max-width: 760px; margin: 12px auto 0; text-align: left; }

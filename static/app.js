@@ -1689,6 +1689,9 @@ function renderDash() {
     : cams.length ? `${cams.length} camera${cams.length > 1 ? 's' : ''}` + (g ? '' : '') : (g ? 'No cameras in this group — use Groups… to add some.' : '');
   toggleEditButtons();
 }
+// Before the first camera: scan the network right from the Live page.
+$('nc-scan').onclick = () => scanNetwork({btn: 'nc-scan', out: 'nc-out', nets: 'nc-nets'});
+$('nc-nets').value = store.get('scan-nets', '');
 function dashKey() {
   return status.cameras.map(c => c.id + ':' + c.name + ':' + c.enabled + JSON.stringify(c.osd) + JSON.stringify(c.view)).join(',') + JSON.stringify(status.display) + JSON.stringify(status.dashboard) + groupId + wall + wallSolo;
 }
@@ -5219,7 +5222,7 @@ function renderCameras(body) {
     <table><thead><tr><th>Preview</th><th>Name</th><th class="hide-sm">Profile</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead><tbody id="cam-table"></tbody></table>
     ${cameraCfgs.length ? '' : '<div class="empty">No cameras yet. Click “Add camera”.</div>'}</div>`;
   $('add-cam').onclick = () => openCameraDialog();
-  $('scan-cams').onclick = scanNetwork;
+  $('scan-cams').onclick = () => scanNetwork();
   if (status && status.new_cameras) scanNetwork();
   const tb = $('cam-table');
   for (const cfg of cameraCfgs) {
@@ -5268,15 +5271,17 @@ function guessBrand(f) {
   const m = map.find(([k]) => t.includes(k));
   return m ? m[1] : (f.onvif_port ? 'onvif' : 'generic');
 }
-async function scanNetwork() {
-  const out = $('scan-out'), btn = $('scan-cams');
+// Look for cameras (Settings → Cameras, or the Live page before the first
+// camera); `ids`: the button, the results box and the extra-networks box.
+async function scanNetwork(ids = {btn: 'scan-cams', out: 'scan-out', nets: 'scan-nets'}) {
+  const out = $(ids.out), btn = $(ids.btn), label = btn.textContent;
   btn.disabled = true; btn.textContent = 'Scanning…';
   out.innerHTML = '<div class="hint" style="margin:8px 0"><span class="spinner small"></span> Looking for cameras on your network (about 5 seconds)…</div>';
   let found = [];
-  const nets = ($('scan-nets') && val('scan-nets').trim()) || '';
+  const nets = ($(ids.nets) && val(ids.nets).trim()) || '';
   store.set('scan-nets', nets);
   try { found = await api('api/discover', {method: 'POST', json: {networks: nets}}); } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-  btn.disabled = false; btn.textContent = '🔍 Scan network';
+  btn.disabled = false; btn.textContent = label;
   if (!found.length) { out.innerHTML = '<div class="hint" style="margin:8px 0">No cameras answered. Check that ONVIF is turned on in the camera. A camera on a network this computer is not on (behind another router) is found by adding that network, e.g. 192.168.5.0/24, in the box next to Scan network.</div>'; return; }
   out.innerHTML = `<div class="scan-res"><b>Found on the network</b> <span class="muted">(${found.length})</span>
     <table><tbody>${found.map((f, i) => `<tr><td><b>${esc(f.ip)}</b></td><td>${esc([f.manufacturer, f.hardware, f.name].filter(Boolean).join(' · ') || (f.rtsp ? 'Device with a video stream (RTSP)' : 'Device'))}</td>

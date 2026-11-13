@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.72 — November 2026
+- **Scan for cameras from the Live page**: on a new GAZE with no cameras yet, the Live page now has a **🔍 Scan network for cameras** button (as in Settings → Cameras) next to adding one by hand. Cameras found are listed there; **+ Add** opens the camera window with its address, brand and a name filled in, ready for the camera's login. Cameras on another network can be found by adding it (e.g. 192.168.5.0/24) under "Cameras on another network?".
+
 ## 0.6.71 — November 2026
 - **Updates install more reliably on Windows**: installing an update could fail with "could not move the running program aside: Access is denied". GAZE now tries a few times (antivirus programs often hold a new file for a moment), uses another name for the old copy when an earlier one is still in use, and — if Windows still says no, e.g. because the program file was put there by an administrator or by the GAZE service — asks once for permission with the usual Windows prompt on the computer's screen, then finishes the update. If that's refused too, it says why and how to update by hand.
 
