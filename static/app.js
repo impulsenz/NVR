@@ -2272,7 +2272,7 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
     }
     if (!camTl.data || markAt(e)) return;
     e.preventDefault();
-    camTl.dragging = true; lane.setPointerCapture(e.pointerId);
+    camTl.dragging = true; lane.setPointerCapture(e.pointerId); $('focus-surface').classList.add('scrub');
     lane.querySelector('.preview').hidden = true;
     const [T] = tAt(e); camTl.scrubT = T; camTl.paintHead(T); camTl.scrubTo(T);
   };
@@ -2294,7 +2294,7 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   });
   const up = (e) => {
     if (!camTl.dragging) return;
-    camTl.dragging = false;
+    camTl.dragging = false; $('focus-surface').classList.remove('scrub');
     const [T] = tAt(e); camTl.playAt(T); camTl.draw();
   };
   lane.addEventListener('pointerup', up); lane.addEventListener('pointercancel', up);
@@ -3224,6 +3224,7 @@ $('f-tlx').onclick = () => {
   dlg.innerHTML = `<div class="head"><h2>🎞 Time-lapse video</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
     <div class="body form">
       <label for="tx-cam">Camera</label><div><select id="tx-cam">${cams.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></div>
+      <label>Quick</label><div class="row tx-quick">${[24, 12, 6, 3, 1].map(h => `<button type="button" class="small" data-h="${h}">Last ${h} hour${h === 1 ? '' : 's'}</button>`).join('')}</div>
       <label for="tx-from">From</label><div><input type="datetime-local" id="tx-from" value="${local(day)}"></div>
       <label for="tx-to">To</label><div><input type="datetime-local" id="tx-to" value="${local(new Date(Math.min(Date.now(), day.getTime() + 86400000)))}"></div>
       <label for="tx-fps">Speed${tip('How many time-lapse pictures are shown each second. With one picture every 10 seconds (the standard), 30 per second turns a whole day into about 5 minutes; 60 into about 2½.')}</label><div><select id="tx-fps"><option value="10">Slow (10 pictures a second)</option><option value="30" selected>Normal (30 a second)</option><option value="60">Fast (60 a second)</option></select><div class="hint" id="tx-len"></div></div>
@@ -3238,6 +3239,13 @@ $('f-tlx').onclick = () => {
     $('tx-go').href = `api/timelapse-export?camera=${enc(val('tx-cam'))}&from=${enc(a.toISOString())}&to=${enc(b.toISOString())}&fps=${val('tx-fps')}`;
   };
   ['tx-cam', 'tx-from', 'tx-to', 'tx-fps'].forEach(i => $(i).oninput = upd); upd();
+  // Last 24 / 12 / 6 / 3 / 1 hours, up to now.
+  dlg.querySelectorAll('.tx-quick [data-h]').forEach(b => b.onclick = () => {
+    const now = new Date();
+    $('tx-from').value = local(new Date(now - b.dataset.h * 3600e3)); $('tx-to').value = local(now);
+    dlg.querySelectorAll('.tx-quick button').forEach(x => x.classList.toggle('primary', x === b));
+    upd();
+  });
   $('tx-go').onclick = () => { toast('Making the video — it downloads in a moment'); setTimeout(close, 300); };
 };
 
@@ -4178,7 +4186,7 @@ function markAt(e) {
     if (ws !== tl.winStart) {
       tl.winStart = ws;
       tl.T = Math.min(ws + Math.min(Math.max((lastX - r.left) / r.width, 0), 1) * span, Date.now());
-      drawTimeline(); previewSoon();
+      drawTimeline(); previewSoon(); knownPreviewsSoon();
     }
     edgeRaf = requestAnimationFrame(edgeStep);
   };
@@ -4292,6 +4300,8 @@ async function previewReady(cam, sg) {
 // they show as ready at once, e.g. after the page is reloaded.
 async function knownPreviews(cam, segs, pv) {
   const kindOf = (sg) => ({clip: 'clip', sub: 'tl'}[sg.kind] || 'rec');
+  // Already here: on the line at once.
+  for (const sg of segs) { const e = tl.sprites.get(sg.url); if (e && e.ok && pv === tl.pv) markPreviewReady(sg.url, e.ok); }
   const want = segs.filter(sg => { const e = tl.sprites.get(sg.url); return !(e && e.ok); });
   if (!TIMELAPSE || !want.length) return;
   let r = {};
@@ -4360,16 +4370,38 @@ function paintPreviewStrips() {
     el.innerHTML = solidBars(h, 15000 / span * 100, 'i');
   }
 }
+// A file's time-lapse showed while scrubbing: its part of the blue line
+// fills in now, not only after letting go.
+let stripsQueued = false;
+function stripsSoon() { if (stripsQueued) return; stripsQueued = true; requestAnimationFrame(() => { stripsQueued = false; paintPreviewStrips(); }); }
+function markPreviewReady(url, sp) {
+  tl.pv = tl.pv || new Map();
+  const had = tl.pv.get(url);
+  if (had && had.state === 'ready') return;
+  tl.pv.set(url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
+  stripsSoon();
+}
+// While the timeline slides along (dragging past its end): what's already
+// made in the part coming into view, asked a few times a second.
+let knownSoonT = 0;
+function knownPreviewsSoon() {
+  if (knownSoonT) return;
+  knownSoonT = setTimeout(async () => {
+    knownSoonT = 0;
+    const a = tl.winStart, b = a + tl.zoom * 1000;
+    tl.pv = tl.pv || new Map();
+    await Promise.all(tl.data.map(c => knownPreviews(c.camera, previewSources(c.segments).filter(sg => segMs(sg)._b >= a && sg._a <= b), tl.pv)));
+    stripsSoon();
+  }, 250);
+}
 async function prefetchSprites() {
   if (!TIMELAPSE) return;
   const gen = tl.pfGen = (tl.pfGen || 0) + 1;
   tl.pv = tl.pv || new Map();
   {
     const a0 = tl.winStart, b0 = a0 + tl.zoom * 1000;
-    for (const c of tl.data) {
-      const segs = previewSources(c.segments).filter(sg => new Date(sg.end).getTime() >= a0 && new Date(sg.start).getTime() <= b0);
-      await knownPreviews(c.camera, segs, tl.pv);
-    }
+    // Every camera asked at once (one after another took a while with many).
+    await Promise.all(tl.data.map(c => knownPreviews(c.camera, previewSources(c.segments).filter(sg => new Date(sg.end).getTime() >= a0 && new Date(sg.start).getTime() <= b0), tl.pv)));
     if (gen !== tl.pfGen) return;
     paintPreviewStrips();
   }
@@ -4479,6 +4511,7 @@ function previewAll() {
     if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; continue; }
     const src = ps || s;
     spriteFor(c.camera, src).then(info => {
+      if (info) markPreviewReady(src.url, info);
       if (!info || tl.T !== T) return;
       const off = (T - new Date(src.start).getTime()) / 1000;
       if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) sp.hidden = false;
@@ -4938,7 +4971,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'profiles', 'storage', 'display', 'ai', 'known', 'notify', 'smarthome', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'logs', 'info'];
+const SECTIONS = ['cameras', 'profiles', 'storage', 'display', 'ai', 'known', 'faces', 'notify', 'smarthome', 'tasks', 'hardware', 'cloud', 'backup', 'users', 'system', 'logs', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -4966,7 +4999,7 @@ function drawSettings() {
   // The log view is kept, and lent to the Logs section while it's open.
   const lb = $('logs-box'); if (lb.parentElement !== $('page-logs')) $('page-logs').appendChild(lb);
   ({cameras: renderCameras, profiles: renderProfiles, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, notify: renderNotify, smarthome: renderSmartHome, tasks: renderTasks, system: renderSystemSettings, info: renderInfo,
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, faces: renderFaces, notify: renderNotify, smarthome: renderSmartHome, tasks: renderTasks, system: renderSystemSettings, info: renderInfo,
     logs: (b) => { b.innerHTML = ''; b.appendChild($('logs-box')); showLogs(); }})[section](body);
 }
 function settingsTick() {
@@ -6891,6 +6924,68 @@ function photoToJpeg(file, max = 1600) {
     img.src = URL.createObjectURL(file);
   });
 }
+// ---------- check faces ----------
+// Every face found in alerts, to go through: confirm the right ones (they
+// join that person's faces, so GAZE knows them better) and correct the
+// wrong ones (GAZE won't take that face for them again).
+const facesView = {who: store_get('faces-who', ''), show: store_get('faces-show', 'check'), days: +store_get('faces-days', 30)};
+async function renderFaces(body) {
+  body.innerHTML = '<div class="card"><h2>Check faces</h2><div class="muted">Loading…</div></div>';
+  const [all, list] = await Promise.all([api('api/faces?days=' + facesView.days).catch(() => []), api('api/known').catch(() => [])]);
+  if (section !== 'faces') return;
+  const people = list.filter(k => k.kind === 'person');
+  const v = facesView;
+  const shown = all.filter(f => (v.show === 'check' ? f.name && !f.confirmed : v.show === 'done' ? f.confirmed && f.name : v.show === 'unknown' ? !f.name : true)
+    && (!v.who || f.name === v.who));
+  const toCheck = all.filter(f => f.name && !f.confirmed).length;
+  const names = [...new Set(all.map(f => f.name).filter(Boolean))].sort();
+  body.innerHTML = `<div class="card"><div class="row" style="margin-bottom:6px;flex-wrap:wrap;gap:8px"><h2 style="margin:0;flex:1">Check faces <span class="muted small">${toCheck ? `${toCheck} to check` : ''}</span></h2>
+      <select id="fc-show"><option value="check">To check</option><option value="done">Confirmed</option><option value="unknown">Not named</option><option value="all">All faces</option></select>
+      <select id="fc-who"><option value="">Everyone</option>${names.map(n => `<option ${n === v.who ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+      <select id="fc-days">${[[1, 'Today and yesterday'], [7, 'Last 7 days'], [30, 'Last 30 days'], [90, 'Last 90 days']].map(([d, t]) => `<option value="${d}" ${d === v.days ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      ${v.show === 'check' && shown.length ? `<button type="button" class="op-only" id="fc-all" title="Confirm every face shown here is who GAZE says">✓ All ${shown.length} are right</button>` : ''}</div>
+    <p class="muted" style="margin-top:0">Every face GAZE found in alerts. <b>✓ Right</b> adds the face to that person, so GAZE knows them better; <b>✎ Wrong?</b> says who it really is (or nobody you know), and GAZE won't make that mistake again. Click a face to open its alert.</p>
+    ${shown.length ? '' : `<div class="hint">${v.show === 'check' ? 'Nothing to check — every named face here has been confirmed.' : 'No faces for these choices.'}</div>`}
+    <div class="fc-grid">${shown.slice(0, 600).map((f, i) => `<div class="fc ${f.confirmed ? 'fc-done' : ''}" data-i="${i}">
+        <a href="#alerts?open=${enc(f.camera)}~${enc(f.event)}" title="Open the alert"><img src="${esc(f.picture)}" alt="" loading="lazy"></a>
+        <b>${f.name ? esc(f.name) : '<span class="muted">Not named</span>'}</b>
+        <div class="muted small">${esc(f.camera_name)} · ${esc(fmtAgo(f.time))}</div>
+        <div class="row op-only">${f.name && !f.confirmed ? '<button type="button" class="small fc-ok">✓ Right</button>' : f.confirmed ? '<span class="muted small">✓ confirmed</span>' : ''}
+          <select class="small fc-fix"><option value="">${f.name ? '✎ Wrong?' : 'Who is this?'}</option>${people.filter(p => p.name !== f.name).map(p => `<option value="${esc(p.id)}">${f.name ? "It's " : ''}${esc(p.name)}</option>`).join('')}<option value="+">New person…</option>${f.name ? '<option value="none">Not anyone I know</option>' : ''}</select></div></div>`).join('')}</div>
+    ${shown.length > 600 ? `<div class="hint">Showing the newest 600 of ${shown.length}: choose fewer days or one person to see the rest.</div>` : ''}</div>`;
+  $('fc-show').value = v.show;
+  const redraw = () => renderFaces(body);
+  $('fc-show').onchange = () => { v.show = val('fc-show'); store.set('faces-show', v.show); redraw(); };
+  $('fc-who').onchange = () => { v.who = val('fc-who'); store.set('faces-who', v.who); redraw(); };
+  $('fc-days').onchange = () => { v.days = +val('fc-days'); store.set('faces-days', v.days); redraw(); };
+  const learn = (f, id) => api(`api/known/${enc(id)}/learn`, {method: 'POST', json: {camera: f.camera, event: f.event, face: f.face}});
+  const idOf = (name) => (people.find(p => p.name === name) || {}).id;
+  body.querySelectorAll('.fc').forEach(el => {
+    const f = shown[+el.dataset.i];
+    const ok = el.querySelector('.fc-ok');
+    if (ok) ok.onclick = async () => {
+      const id = idOf(f.name); if (!id) { toast(`${f.name} isn't in People & vehicles any more`, true); return; }
+      try { await learn(f, id); f.confirmed = true; el.classList.add('fc-done'); ok.outerHTML = '<span class="muted small">✓ confirmed</span>'; if (v.show === 'check') setTimeout(() => el.remove(), 400); }
+      catch (e) { toast(e.message, true); }
+    };
+    el.querySelector('.fc-fix').onchange = async (ev) => {
+      let id = ev.target.value; if (!id) return;
+      if (id === '+') {
+        const name = (prompt('Name of this person:') || '').trim(); if (!name) { ev.target.value = ''; return; }
+        try { id = (await api('api/known', {method: 'POST', json: {kind: 'person', name}})).id; } catch (e) { toast(e.message, true); return; }
+      }
+      try { const r = await learn(f, id); toast(r.message); await loadKnownPeople().catch(() => {}); redraw(); } catch (e) { toast(e.message, true); }
+    };
+  });
+  const all1 = $('fc-all');
+  if (all1) all1.onclick = async () => {
+    if (!confirm(`Confirm all ${shown.length} faces shown are who GAZE says? Each is added to that person's faces.`)) return;
+    all1.disabled = true; let n = 0;
+    for (const f of shown) { const id = idOf(f.name); if (!id) continue; try { await learn(f, id); n++; all1.textContent = `✓ ${n} of ${shown.length}…`; } catch (_) {} }
+    toast(`Saved — ${n} face${n === 1 ? '' : 's'} confirmed`); redraw();
+  };
+}
+
 async function renderKnown(body) {
   const [list, inbox, seen] = await Promise.all([api('api/known').catch(() => []), api('api/known-inbox').catch(() => ({faces: [], plates: []})), api('api/known-seen').catch(() => ({}))]);
   const a = settings.ai;

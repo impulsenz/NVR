@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.66 — November 2026
+- **Check faces page**: Settings → Check faces shows every face GAZE found in alerts, so you can go through them in one place. Choose what to see (to check, confirmed, not named, or all), one person or everyone, and how many days. **✓ Right** adds a face to that person so GAZE knows them better; **✎ Wrong?** says who it really is (or nobody you know); **✓ All are right** confirms every face shown at once. Click a face to open its alert. The ✓ Right button in each alert stays too.
+- **The time-lapse "ready" line fills in faster**: on the Recordings tab the blue line under each camera now appears sooner (every camera is asked at once instead of one after another), fills in as soon as a time-lapse shows while you drag, and keeps up while the timeline slides past its edge.
+- **Quick times for time-lapse videos**: the Time-lapse video window has Last 24, 12, 6, 3 and 1 hour buttons.
+- **PTZ controls only on the live picture**: the pan / tilt / zoom pad is hidden while a recording plays in the camera view, or while you drag along its timeline.
+
 ## 0.6.65 — November 2026
 - **A preview for each camera link**: Settings → Smart home → Each camera on its own now shows a small live picture beside each camera, from the stream chosen for its link, refreshed every 2 seconds while it's on screen. Click it to open the link.
 

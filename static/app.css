@@ -1194,3 +1194,16 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 
 .ds-bar { margin-bottom: 10px; gap: 8px; flex-wrap: wrap; }
 .ds-bar input[type=search] { flex: 1; min-width: 220px; }
+
+.tx-quick { gap: 6px; flex-wrap: wrap; }
+
+/* PTZ controls only on the live picture: not while a recording plays or the
+   time-lapse is being scrubbed. */
+#focus-surface.pb .ptz-ov, #focus-surface.scrub .ptz-ov { display: none !important; }
+
+.fc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.fc { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.fc.fc-done { border-color: color-mix(in srgb, var(--green) 55%, var(--border)); }
+.fc img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; display: block; }
+.fc .row { gap: 6px; flex-wrap: wrap; align-items: center; }
+.fc select { max-width: 100%; }

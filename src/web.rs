@@ -158,6 +158,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/known/{id}/learn", post(known_learn))
         .route("/api/known-inbox", get(inbox_list))
         .route("/api/known-seen", get(known_seen))
+        .route("/api/faces", get(all_faces))
         .route("/api/known-inbox/assign", post(inbox_assign))
         .route("/api/known-inbox/dismiss", post(inbox_dismiss))
         .route("/api/cloud/status", get(cloud_status))
@@ -815,6 +816,41 @@ fn recent_events(m: &Manager, days: i64) -> Vec<crate::events::Event> {
         .iter()
         .flat_map(|c| c.events.between(now - chrono::Duration::days(days), now))
         .collect()
+}
+
+#[derive(Deserialize)]
+struct FacesQuery {
+    #[serde(default)]
+    days: Option<i64>,
+}
+
+/// Every face found in alerts (Settings → Check faces), newest first: who
+/// GAZE took it for, and whether someone has confirmed it.
+async fn all_faces(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<FacesQuery>) -> Response {
+    let vis = visible(&user);
+    let names: std::collections::HashMap<String, String> = m.cameras().iter().map(|c| (c.cfg.id.clone(), c.cfg.name.clone())).collect();
+    let mut evs = recent_events(&m, q.days.unwrap_or(30).clamp(1, 365));
+    evs.retain(|e| !e.faces.is_empty() && vis.as_ref().is_none_or(|v| v.contains(&e.camera)));
+    evs.sort_by(|a, b| b.start.cmp(&a.start));
+    let mut out = Vec::new();
+    for e in &evs {
+        for (i, f) in e.faces.iter().enumerate() {
+            out.push(json!({
+                "camera": e.camera,
+                "camera_name": names.get(&e.camera).cloned().unwrap_or_else(|| e.camera.clone()),
+                "event": e.id,
+                "face": i,
+                "time": e.start,
+                "name": f.name,
+                "confirmed": f.confirmed,
+                "picture": format!("media/{}/events/{}", e.camera, f.file),
+            }));
+            if out.len() >= 3000 {
+                break;
+            }
+        }
+    }
+    Json(out).into_response()
 }
 
 /// For each known person: the faces in the last 30 days of alerts that were
