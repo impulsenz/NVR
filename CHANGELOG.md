@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.67 — November 2026
+- **Ready-made layouts for the Live page**: the new ▦ Layouts button offers 15 layouts, each previewed with your own cameras: equal grids (best fit, 2, 3, 4 or 6 across), one big picture with smaller ones around it (1 + 5, 1 + 7, 1 big in the middle with 12 around, 1 + 2 beside, 1 big with a strip below, 1 big + 2 medium), two big (side by side, or stacked with a column beside), three big and four big. Choose which cameras get the big spots; cameras beyond a layout's spots carry on in rows of small pictures below. It's saved for the group you're looking at (and the full-screen view has its own), and Edit layout still lets you fine-tune.
+- **Clear choice when changing time-lapse settings**: saving new time-lapse settings now asks whether they apply **from now on only** (what's already made stays, nothing is rebuilt — the default) or to **remake the older time-lapse** too.
+
 ## 0.6.66 — November 2026
 - **Check faces page**: Settings → Check faces shows every face GAZE found in alerts, so you can go through them in one place. Choose what to see (to check, confirmed, not named, or all), one person or everyone, and how many days. **✓ Right** adds a face to that person so GAZE knows them better; **✎ Wrong?** says who it really is (or nobody you know); **✓ All are right** confirms every face shown at once. Click a face to open its alert. The ✓ Right button in each alert stays too.
 - **The time-lapse "ready" line fills in faster**: on the Recordings tab the blue line under each camera now appears sooner (every camera is asked at once instead of one after another), fills in as soon as a time-lapse shows while you drag, and keeps up while the timeline slides past its edge.

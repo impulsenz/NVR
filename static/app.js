@@ -1728,9 +1728,87 @@ $('dash-save').onclick = async () => {
   try { await saveDashboard(d); editing = false; renderDash(); toast(wall ? 'Full-screen layout saved' : 'Layout saved'); }
   catch (e) { toast(e.message, true); }
 };
+// ---------- ready-made layouts ----------
+// Each makes the spots for n cameras on the 12-column grid (a w × w tile
+// is a 16:9 picture), big spots first; cameras beyond a layout's spots
+// carry on in rows of small pictures underneath.
+const SLOT = (x, y, w, h) => ({x, y, w, h});
+const rowsOf = (y0, n, w) => Array.from({length: Math.max(0, n)}, (_, i) => SLOT((i % (12 / w)) * w, y0 + Math.floor(i / (12 / w)) * w, w, w));
+const LAYOUTS = [
+  {id: 'auto', name: 'Equal grid (best fit)', big: 0, make: (n) => { const c = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : 6; return rowsOf(0, n, 12 / c); }},
+  {id: 'g2', name: '2 across', big: 0, make: (n) => rowsOf(0, n, 6)},
+  {id: 'g3', name: '3 across', big: 0, make: (n) => rowsOf(0, n, 4)},
+  {id: 'g4', name: '4 across', big: 0, make: (n) => rowsOf(0, n, 3)},
+  {id: 'g6', name: '6 across', big: 0, make: (n) => rowsOf(0, n, 2)},
+  {id: '1+5', name: '1 big + 5 around', big: 1, make: (n) => [SLOT(0, 0, 8, 8), SLOT(8, 0, 4, 4), SLOT(8, 4, 4, 4), SLOT(0, 8, 4, 4), SLOT(4, 8, 4, 4), SLOT(8, 8, 4, 4), ...rowsOf(12, n - 6, 4)]},
+  {id: '1+7', name: '1 big + 7 around', big: 1, make: (n) => [SLOT(0, 0, 9, 9), SLOT(9, 0, 3, 3), SLOT(9, 3, 3, 3), SLOT(9, 6, 3, 3), SLOT(0, 9, 3, 3), SLOT(3, 9, 3, 3), SLOT(6, 9, 3, 3), SLOT(9, 9, 3, 3), ...rowsOf(12, n - 8, 3)]},
+  {id: '1c12', name: '1 big in the middle + 12 around', big: 1, make: (n) => [SLOT(3, 3, 6, 6),
+    ...[0, 3, 6, 9].map(x => SLOT(x, 0, 3, 3)), SLOT(0, 3, 3, 3), SLOT(9, 3, 3, 3), SLOT(0, 6, 3, 3), SLOT(9, 6, 3, 3), ...[0, 3, 6, 9].map(x => SLOT(x, 9, 3, 3)), ...rowsOf(12, n - 13, 3)]},
+  {id: '1+2', name: '1 big + 2 beside', big: 1, make: (n) => [SLOT(0, 0, 8, 8), SLOT(8, 0, 4, 4), SLOT(8, 4, 4, 4), ...rowsOf(8, n - 3, 4)]},
+  {id: '1top', name: '1 big + strip below', big: 1, make: (n) => [SLOT(0, 0, 12, 12), ...rowsOf(12, n - 1, 3)]},
+  {id: '1+2m', name: '1 big + 2 medium + small', big: 3, make: (n) => [SLOT(0, 0, 8, 8), SLOT(8, 0, 4, 4), SLOT(8, 4, 4, 4), ...rowsOf(8, n - 3, 3)]},
+  {id: '2+', name: '2 big + small below', big: 2, make: (n) => [SLOT(0, 0, 6, 6), SLOT(6, 0, 6, 6), ...rowsOf(6, n - 2, 3)]},
+  {id: '2col', name: '2 big stacked + column', big: 2, make: (n) => [SLOT(0, 0, 8, 8), SLOT(0, 8, 8, 8), SLOT(8, 0, 4, 4), SLOT(8, 4, 4, 4), SLOT(8, 8, 4, 4), SLOT(8, 12, 4, 4), ...rowsOf(16, n - 6, 4)]},
+  {id: '3+', name: '3 big + small below', big: 3, make: (n) => [SLOT(0, 0, 4, 4), SLOT(4, 0, 4, 4), SLOT(8, 0, 4, 4), ...rowsOf(4, n - 3, 3)]},
+  {id: '4+', name: '4 big + small below', big: 4, make: (n) => [SLOT(0, 0, 6, 6), SLOT(6, 0, 6, 6), SLOT(0, 6, 6, 6), SLOT(6, 6, 6, 6), ...rowsOf(12, n - 4, 3)]},
+];
+// The cameras in the order they fill a layout's spots: the biggest
+// pictures now first (so a camera you made big stays big), then top to
+// bottom, left to right.
+function layoutOrder() {
+  const cams = viewCams(), cur = currentLayout();
+  const at = (id) => cur.find(t => t.camera === id);
+  return [...cams].sort((a, b) => { const p = at(a.id), q = at(b.id); if (!p || !q) return !p - !q; return q.w * q.h - p.w * p.h || p.y - q.y || p.x - q.x; });
+}
+// The layout's whole shape: its own spots (dashed where a camera would be
+// missing) and the rows your other cameras go in.
+function layoutPreview(L, n) {
+  const own = L.make(0).length, spots = L.make(Math.max(n, 1)).slice(0, Math.max(n, own, 1)), H = Math.max(...spots.map(s => s.y + s.h));
+  return `<svg viewBox="-0.3 -0.3 12.6 ${H + 0.6}" preserveAspectRatio="xMidYMin meet">${spots.map((s, i) => `<rect x="${s.x + 0.15}" y="${s.y + 0.15}" width="${s.w - 0.3}" height="${s.h - 0.3}" rx="0.3" class="${i >= n ? 'empty' : i < L.big ? 'big' : ''}"/>`).join('')}</svg>`;
+}
+$('dash-layouts').onclick = () => {
+  const cams = viewCams(), n = cams.length;
+  if (!n) return;
+  const order = layoutOrder();
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg lay-dlg';
+  dlg.innerHTML = `<div class="head"><h2>▦ Layouts</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+    <div class="body"><p class="muted" style="margin-top:0">Shown with your ${n} camera${n === 1 ? '' : 's'}${group() ? ` in “${esc(group().name)}”` : ''}${wall ? ', for the full-screen view' : ''}. Pick one, choose which cameras get the big spots, and it's saved — use Edit layout afterwards to fine-tune.</p>
+      <div class="lay-grid">${LAYOUTS.map(L => `<button type="button" class="lay" data-id="${L.id}">${layoutPreview(L, n)}<span>${esc(L.name)}${L.make(0).length > n ? `<br><small class="muted">${L.make(0).length - n} spot${L.make(0).length - n === 1 ? '' : 's'} left empty</small>` : ''}</span></button>`).join('')}</div>
+      <div id="lay-big" class="lay-big" hidden></div>
+      <div class="actions"><button type="button" data-x>Cancel</button><button type="button" class="primary" id="lay-go" disabled>Use this layout</button></div></div>`;
+  document.body.appendChild(dlg); dlg.showModal();
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+  let pick = null;
+  const camOpts = (sel) => order.map(c => `<option value="${esc(c.id)}" ${c.id === sel ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  dlg.querySelectorAll('.lay').forEach(b => b.onclick = () => {
+    pick = LAYOUTS.find(L => L.id === b.dataset.id);
+    dlg.querySelectorAll('.lay').forEach(x => x.classList.toggle('on', x === b));
+    const big = Math.min(pick.big, n), box = $('lay-big');
+    box.hidden = !big;
+    box.innerHTML = big ? `<b>Big spot${big === 1 ? '' : 's'}:</b> ${Array.from({length: big}, (_, i) => `<select data-i="${i}">${camOpts(order[i].id)}</select>`).join('')}` : '';
+    $('lay-go').disabled = false;
+  });
+  $('lay-go').onclick = async () => {
+    if (!pick) return;
+    // The chosen cameras first, the rest in their usual order.
+    const chosen = [...dlg.querySelectorAll('#lay-big select')].map(s => s.value).filter((v, i, a) => a.indexOf(v) === i);
+    const seq = [...chosen.map(id => order.find(c => c.id === id)), ...order.filter(c => !chosen.includes(c.id))];
+    const spots = pick.make(n);
+    layout = seq.map((c, i) => ({camera: c.id, ...spots[i]}));
+    close();
+    if (editing) { renderDash(); return; }
+    const d = JSON.parse(JSON.stringify(status.dashboard));
+    const owner = groupId ? d.groups.find(g => g.id === groupId) : d;
+    owner[layoutKey()] = layout.map(t => ({...t}));
+    try { await saveDashboard(d); renderDash(); updateSubscriptions(); toast(`Layout saved: ${pick.name}`); } catch (e) { toast(e.message, true); }
+  };
+};
+
 function toggleEditButtons() {
   $('dash-edit').hidden = editing || !!wallSolo;
   for (const id of ['dash-auto', 'dash-cancel', 'dash-save']) $(id).hidden = !editing;
+  $('dash-layouts').hidden = !!wallSolo;
   for (const id of ['grp-sel', 'grp-prev', 'grp-next', 'grp-manage', 'wall-btn']) $(id).disabled = editing;
   $('wall-btn').textContent = wall ? '✕ Exit full screen' : '⛶ Full screen';
 }
@@ -6247,7 +6325,7 @@ async function renderStorage(body) {
         <select id="s-tlsec">${[...new Set([2, 5, 10, 20, 30, 60, s.timelapse_seconds || 10])].sort((a, b) => a - b).map(n => `<option value="${n}" ${n === (s.timelapse_seconds || 10) ? 'selected' : ''}>One every ${n} seconds${n === 2 ? ' — smoothest' : n === 10 ? ' — standard' : n === 60 ? ' — lightest' : ''}</option>`).join('')}</select>
         <select id="s-tlw">${[[256, 'Standard (256 × 144)'], [384, 'Sharp (384 × 216)'], [512, 'Sharpest (512 × 288)']].map(([w, t]) => `<option value="${w}" ${w === (s.timelapse_width || 256) ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <span class="muted" id="s-tlsec-info"></span></div>
-      <div class="hint">Kept as the camera records (from what motion detection already looks at), so more and sharper pictures cost little — mainly some disk space. A change applies to new footage; what's already made stays as it is.</div>
+      <div class="hint">Kept as the camera records (from what motion detection already looks at), so more and sharper pictures cost little — mainly some disk space. <b>A change applies to new footage from now on</b>; the time-lapse already made stays as it is (you can choose to remake it when you save).</div>
       <button type="button" class="small" id="s-tlremake" style="margin-top:8px">🖼️ Remake time-lapse with these settings…</button></div>
   </div><div class="actions"><button class="primary">Save</button><a class="btn" href="#system">See space &amp; days of recording →</a></div></form>
   <div class="card"><h2>Where each camera saves</h2>
@@ -6267,18 +6345,36 @@ async function renderStorage(body) {
   $('s-tlsec').onchange = $('s-tlw').onchange = tlInfo; tlInfo();
   const tlOn = () => ['s-tlsec', 's-tlw', 's-tlremake'].forEach(x => $(x).disabled = !chk('s-tlon'));
   $('s-tlon').onchange = tlOn; tlOn();
-  // Remake what's already made, at the settings chosen (saved first).
+  // New time-lapse settings: from now on only (what's made stays), or
+  // remake what's already made too. Resolves 'new', 'remake' or null.
+  const tlChoice = (remakeFirst) => new Promise(done => {
+    const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg';
+    dlg.innerHTML = `<div class="head"><h2>🖼️ New time-lapse settings</h2></div><div class="body">
+      <label class="tl-opt"><input type="radio" name="tlc" value="new" ${remakeFirst ? '' : 'checked'}><span><b>From now on only</b><br><span class="muted">New footage gets time-lapse pictures at the new settings. What's already made stays as it is — nothing is rebuilt and the computer isn't kept busy.</span></span></label>
+      <label class="tl-opt"><input type="radio" name="tlc" value="remake" ${remakeFirst ? 'checked' : ''}><span><b>Also remake the older time-lapse</b><br><span class="muted">All time-lapse pictures are thrown away and made again at the new settings: the last 24 hours first, older days when you open them. Footage older than a few hours is read again from the recordings, which can keep the computer busy for a while (System → Tasks).</span></span></label>
+      <div class="actions"><button type="button" data-v="">Cancel</button><button type="button" class="primary" data-v="ok">Save</button></div></div>`;
+    document.body.appendChild(dlg); dlg.showModal();
+    dlg.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { const v = b.dataset.v && dlg.querySelector('input[name=tlc]:checked').value; dlg.close(); dlg.remove(); done(v || null); });
+    dlg.addEventListener('cancel', () => { dlg.remove(); done(null); });
+  });
+  const remakeTimelapse = async () => { try { const r = await api('api/maintenance/previews', {method: 'POST'}); toast(r.message || 'Remaking the time-lapse'); } catch (e) { toast(e.message, true); } };
+  let tlRemake = false;
   $('s-tlremake').onclick = async () => {
-    if (!confirm('Remake the time-lapse at these settings?\n\nAll time-lapse previews are thrown away and made again: the last 24 hours first, older days when you open them. Footage older than a few hours has to be read again from the recordings, which can keep the computer busy for a while (see System → Tasks).')) return;
-    $('f-storage').requestSubmit();
-    setTimeout(async () => { try { const r = await api('api/maintenance/previews', {method: 'POST'}); toast(r.message || 'Remaking the time-lapse'); } catch (e) { toast(e.message, true); } }, 800);
+    const v = await tlChoice(true); if (!v) return;
+    tlRemake = v === 'remake'; tlAsked = true; $('f-storage').requestSubmit();
   };
+  let tlAsked = false;
   $('s-browse').onclick = async () => { const p = await pickFolder(val('s-dir'), 'Default recordings folder'); if (p) { $('s-dir').value = p; $('s-dir').oninput(); } };
   $('f-storage').onsubmit = async (e) => {
     e.preventDefault();
+    // Time-lapse settings changed: say what happens to what's already made.
+    const tlChanged = chk('s-tlon') && ((+val('s-tlsec') || 10) !== (s.timelapse_seconds || 10) || (+val('s-tlw') || 256) !== (s.timelapse_width || 256));
+    if (tlChanged && !tlAsked) { const v = await tlChoice(false); if (!v) return; tlRemake = v === 'remake'; }
+    const remake = tlRemake; tlAsked = false; tlRemake = false;
     const moving = !$('s-move-row').hidden && chk('s-move');
     if (moving) toast('Saving and moving recordings… this can take a while for large folders.');
     await saveSettings({move_recordings: moving, storage: {dir: val('s-dir').trim(), segment_seconds: num('s-seg'), retention_days: Math.round(num('s-ret')), alert_retention_days: Math.max(0, Math.round(num('s-aret')) || 0), max_storage_gb: num('s-max'), min_free_gb: num('s-free'), timelapse: chk('s-tlon'), timelapse_seconds: Math.min(120, Math.max(1, Math.round(num('s-tlsec')) || 10)), timelapse_width: +val('s-tlw') || 256}});
+    if (remake) await remakeTimelapse();
     renderStorage(body);
   };
   const changeCam = async (id, dir) => {
