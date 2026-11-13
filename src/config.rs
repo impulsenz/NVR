@@ -179,6 +179,27 @@ impl ModesConfig {
     }
 }
 
+/// Listening for sounds (camera → Audio): glass breaking, alarms, screams …
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SoundConfig {
+    pub enabled: bool,
+    /// What to listen for (ids from `sound::KINDS`).
+    pub kinds: Vec<String>,
+    /// 1 (only clear, loud sounds) … 10 (the faintest).
+    pub sensitivity: u8,
+}
+
+impl Default for SoundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            kinds: ["glass", "alarm", "scream", "gunshot"].map(String::from).to_vec(),
+            sensitivity: 6,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct DewarpConfig {
@@ -1151,6 +1172,8 @@ pub struct CameraConfig {
     /// A fisheye (360°) camera: the live view is turned into a normal,
     /// flat picture (recordings keep the whole circle).
     pub dewarp: DewarpConfig,
+    /// Listen for sounds and alert on them.
+    pub sound: SoundConfig,
     pub stream_live: bool,
     pub stream_url: String,
     pub privacy: Vec<[f32; 4]>,
@@ -1195,6 +1218,7 @@ impl Default for CameraConfig {
             max_storage_gb: 0.0,
             timeline_copy: true,
             dewarp: DewarpConfig::default(),
+            sound: SoundConfig::default(),
             stream_live: false,
             stream_url: String::new(),
             privacy: Vec::new(),

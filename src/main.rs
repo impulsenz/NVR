@@ -35,6 +35,7 @@ mod onvif;
 mod picturelog;
 mod onvif_device;
 mod onvif_events;
+mod sound;
 mod overview;
 mod ptz_auto;
 mod recog;
@@ -327,6 +328,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(mqtt::run(mgr.clone()));
     tokio::spawn(hooks::run(mgr.clone()));
     tokio::spawn(onvif_events::run(mgr.clone()));
+    tokio::spawn(sound::run(mgr.clone()));
     tokio::spawn(ptz_auto::run(mgr.clone()));
     tokio::spawn(rtmp::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));

@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.59 — November 2026
+- **Sound detection**: camera → Audio → Sound detection. GAZE listens to the camera's microphone and alerts on what you tick — glass breaking, a smoke or fire alarm, screaming or shouting, a gunshot or bang, a dog barking, a baby crying, a siren, a car alarm, knocking or the doorbell, or talking — even when nothing moves in the picture. A sensitivity slider sets how faint a sound counts, and the tab shows live what the camera is hearing. Sound alerts carry a 🔊 label, say what was heard, and send a notification. It uses YAMNet (by Google, open source), which knows hundreds of everyday sounds and downloads by itself the first time (16 MB). It runs on this computer every half second, and the sound never leaves it.
+
 ## 0.6.58 — November 2026
 - **New recording mode: HD 24/7 plus HD alert clips**: camera → Recording. Full quality around the clock, and each alert also saved as its own full-quality clip (with the seconds before it). The clips are kept for as long as Storage → "Keep alerts for" says, even after the 24/7 footage around them is deleted to make room.
 - **A private link for each camera**: Settings → Smart home → Overview → Each camera on its own. Choose the stream (low resolution or full quality), how many pictures a second, and a moving picture (MJPEG) or the newest still (JPEG), then copy or open the link. Each camera's link has its own key and opens only that camera's picture; "New link" replaces them all.

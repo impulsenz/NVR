@@ -410,7 +410,7 @@ impl Notifier {
             for mut e in rt.events.between(now - chrono::Duration::minutes(15), now) {
                 // Only what the full-quality check didn't turn down.
                 if e.notified == DONE
-                    || !e.labels.iter().any(|l| (n.objects.contains(&l.label) || l.label == "doorbell") && l.hd != Some(false))
+                    || !e.labels.iter().any(|l| (n.objects.contains(&l.label) || l.label == "doorbell" || l.label == "sound") && l.hd != Some(false))
                 {
                     continue;
                 }

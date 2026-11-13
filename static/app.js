@@ -635,7 +635,7 @@ function updateSubscriptions() {
 // Overlays (name, clock, fps, status, fullscreen) for a live surface.
 // Little symbols for what was detected (also used on timelines).
 const LABEL_ICON = {person: '🚶', car: '🚗', truck: '🚚', bus: '🚌', motorcycle: '🏍️', bicycle: '🚲', dog: '🐕', cat: '🐈', bird: '🐦',
-  horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', package: '📦', motion: '〰️'};
+  horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', package: '📦', motion: '〰️', sound: '🔊', doorbell: '🔔'};
 const labelIcon = (l) => LABEL_ICON[l] || '🔷';
 // The full-quality (HD) check of what the AI found: ✓ confirmed, ? not.
 const hdMark = (l) => l.hd === true ? ' <b class="hdc">HD✓</b>' : l.hd === false ? ' <b class="hdc no">HD?</b>' : '';
@@ -2372,6 +2372,24 @@ function stopSound() {
   a.onerror = a.onended = null;
   a.pause(); a.removeAttribute('src'); a.load();
   paintSound();
+}
+
+// ---------- sound detection (camera → Audio) ----------
+// The kinds of sound to tick, and (for a saved camera) what it hears now.
+function wireSoundDetect(camId) {
+  const box = $('c-snd-kinds'); if (!box) return;
+  $('c-snd-on').onchange = () => { $('c-snd-box').hidden = !chk('c-snd-on'); };
+  $('c-snd-sens').oninput = () => { $('c-snd-sens-v').textContent = val('c-snd-sens'); };
+  const chosen = new Set(JSON.parse(box.dataset.kinds));
+  const paint = (r) => {
+    if (!box.children.length) box.innerHTML = r.kinds.map(k => `<label class="check"><input type="checkbox" value="${esc(k.id)}" ${chosen.has(k.id) ? 'checked' : ''}> ${esc(k.name)}</label>`).join('');
+    const st = camId && r.cameras[camId], el = $('c-snd-now'); if (!el) return;
+    el.innerHTML = !st ? (chk('c-snd-on') ? 'Starts listening once saved.' : '')
+      : st.error ? `<span class="err">Not listening: ${esc(st.error)}</span>`
+      : `Hearing now: ${st.now.map(([n, v]) => `${esc(n)} ${Math.round(v * 100)}%`).join(' · ') || '…'}${st.last_heard ? ` — last alert: <b>${esc(st.last_heard)}</b> at ${fmtTime(new Date(st.last_at))}` : ''}`;
+  };
+  const tick = () => { if (!box.isConnected) return; api('api/sound').then(paint).catch(() => {}); setTimeout(tick, 1500); };
+  tick();
 }
 
 // ---------- two-way audio ----------
@@ -5221,6 +5239,14 @@ async function openCameraDialog(id, clone, prof) {
           <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there (and a short "goodbye" tune when you stop)</label>
           <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
           <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
+        <label>Sound detection</label>
+        <div><label class="check"><input type="checkbox" id="c-snd-on" ${c.sound && c.sound.enabled ? 'checked' : ''}> Listen for sounds and alert on them${tip('GAZE listens to the camera’s microphone with a small AI model (YAMNet, by Google; downloads once, 16 MB) that knows hundreds of everyday sounds. What you tick below makes an alert with a notification, even when nothing moves in the picture — e.g. glass breaking round the back, or the smoke alarm while you’re out. Runs on this computer; the sound never leaves it.')}</label>
+          <div id="c-snd-box" ${c.sound && c.sound.enabled ? '' : 'hidden'}>
+            <div class="checks" id="c-snd-kinds" style="margin-top:6px" data-kinds="${esc(JSON.stringify((c.sound && c.sound.kinds) || ['glass', 'alarm', 'scream', 'gunshot']))}"></div>
+            <label for="c-snd-sens" style="margin-top:8px;display:block">Sensitivity: <b id="c-snd-sens-v">${(c.sound && c.sound.sensitivity) || 6}</b></label>
+            <input type="range" id="c-snd-sens" min="1" max="10" value="${(c.sound && c.sound.sensitivity) || 6}" style="width:240px">
+            <div class="hint">Lower: only clear, loud sounds. Higher: fainter ones too (more false alerts).</div>
+            <div class="hint" id="c-snd-now"></div></div></div>
       </div>
       <div data-tab="ai" class="form" hidden>
         <span></span><div><label class="check"><input type="checkbox" id="d-ai" ${c.detect.ai ? 'checked' : ''}> Object recognition (AI)</label>
@@ -5304,6 +5330,7 @@ async function openCameraDialog(id, clone, prof) {
   $('d-trig').value = c.detect.trigger;
   const f = $('f-cam');
   f.querySelectorAll('[data-close]').forEach(b => b.onclick = closeCameraDialog);
+  wireSoundDetect(c.id);
   f.querySelectorAll('#c-tabs button').forEach(b => b.onclick = () => {
     f.querySelectorAll('#c-tabs button').forEach(x => x.classList.toggle('active', x === b));
     f.querySelectorAll('[data-tab]').forEach(t => t.hidden = t.dataset.tab !== b.dataset.t);
@@ -5780,6 +5807,8 @@ function collectCamera() {
     rtsp_transport: val('c-transport'), record_mode: mode, schedule_enabled: chk('c-sched-on'),
     schedule: {days, start: val('c-start') || '00:00', end: val('c-end') || '00:00'},
     talk: chk('c-talk'), talk_chime: chk('c-chime'), talk_url: val('c-talk-url').trim(), live_sound: chk('c-sound'),
+    sound: {enabled: chk('c-snd-on'), sensitivity: +val('c-snd-sens') || 6,
+      kinds: $('c-snd-kinds').children.length ? [...document.querySelectorAll('#c-snd-kinds input:checked')].map(i => i.value) : JSON.parse($('c-snd-kinds').dataset.kinds)},
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, profile: camProfile, zones: dlgZones.map(z => ({...z})),

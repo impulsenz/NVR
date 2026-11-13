@@ -184,6 +184,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/where", get(where_work_runs))
         .route("/api/https", get(https_status))
         .route("/api/mode", post(set_mode))
+        .route("/api/sound", get(sound_status))
         .route("/api/remotes", get(remotes_list))
         .route("/remote/{i}/{cam}/frame.jpg", get(remote_frame))
         .route("/api/safe-mode/config", get(safe_config_get).post(safe_config_save))
@@ -3702,6 +3703,13 @@ async fn overview_mjpeg(State(m): App, user: Option<axum::Extension<CurrentUser>
         }
     });
     mjpeg_response(futures_util::stream::poll_fn(move |cx| out.poll_recv(cx)))
+}
+
+/// What can be listened for, and what each camera is hearing now.
+async fn sound_status() -> Response {
+    let kinds: Vec<_> = crate::sound::KINDS.iter().map(|k| json!({"id": k.0, "name": k.1})).collect();
+    let status = crate::sound::STATUS.lock().unwrap().clone();
+    Json(json!({ "kinds": kinds, "cameras": status })).into_response()
 }
 
 async fn overview_key(State(m): App) -> Response {
