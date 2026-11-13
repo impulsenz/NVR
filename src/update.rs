@@ -337,12 +337,45 @@ fn sibling(exe: &Path, suffix: &str) -> PathBuf {
     exe.with_file_name(format!("{name}{suffix}{ext}"))
 }
 
-/// The previous program, left behind by an update (deleted at start-up).
+/// The previous program, left behind by an update (deleted at start-up;
+/// one still in use stays until next time).
 pub fn clean_old() {
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::fs::remove_file(sibling(&exe, ".old"));
+        for n in 2..10 {
+            let _ = std::fs::remove_file(sibling(&exe, &format!(".old{n}")));
+        }
         let _ = std::fs::remove_file(sibling(&exe, ".new"));
     }
+}
+
+/// Put the downloaded program (`new`) in the place of the running one
+/// (`exe`): the running one is renamed aside (allowed on Windows too, not
+/// overwriting). Tried a few times — antivirus programs often hold a new
+/// file for a moment — and with another name for the old copy when an
+/// earlier one is still in use (by a copy of GAZE that hasn't restarted).
+pub fn swap_in(new: &Path, exe: &Path) -> Result<()> {
+    let mut last = None;
+    for attempt in 0..6 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        let old = (1..10)
+            .map(|n| sibling(exe, &if n == 1 { ".old".to_string() } else { format!(".old{n}") }))
+            .find(|p| !p.exists() || std::fs::remove_file(p).is_ok());
+        let Some(old) = old else { bail!("old copies of GAZE next to it are still in use: restart the computer, then try again") };
+        match std::fs::rename(exe, &old) {
+            Ok(()) => {
+                if let Err(e) = std::fs::rename(new, exe) {
+                    let _ = std::fs::rename(&old, exe);
+                    return Err(anyhow::Error::from(e).context("could not put the new program in place"));
+                }
+                return Ok(());
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(anyhow::Error::from(last.unwrap()).context("could not move the running program aside"))
 }
 
 /// Download, check and install the newest release, then restart.
@@ -421,13 +454,30 @@ pub async fn install() -> Result<()> {
             std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755))?;
         }
         with(|s| s.state = "installing".into());
-        // A running program can be renamed (also on Windows), not overwritten.
-        let old = sibling(&exe, ".old");
-        let _ = std::fs::remove_file(&old);
-        std::fs::rename(&exe, &old).context("could not move the running program aside")?;
-        if let Err(e) = std::fs::rename(&new, &exe) {
-            let _ = std::fs::rename(&old, &exe);
-            return Err(anyhow::Error::from(e).context("could not put the new program in place"));
+        let (n2, e2) = (new.clone(), exe.clone());
+        let swapped = tokio::task::spawn_blocking(move || swap_in(&n2, &e2)).await?;
+        if let Err(e) = swapped {
+            // Windows said no (the program file belongs to an administrator,
+            // or to the GAZE service, e.g. it was installed or last updated
+            // by one): ask once for permission (the usual Windows prompt, on
+            // this computer's screen) and let that do the swap.
+            #[cfg(windows)]
+            {
+                info!("update: {e:#} — asking Windows for permission");
+                let args = format!("--swap-update \"{}\" \"{}\"", new.display(), exe.display());
+                let code = tokio::task::spawn_blocking(move || crate::winservice::elevate(&args, true)).await?;
+                if code == Some(0) {
+                    return anyhow::Ok(());
+                }
+                bail!(
+                    "Windows didn't let GAZE replace its own program file ({}){}. Close any other copy of GAZE and try again, \
+                     or install it by hand: download nvr-windows-x64.exe from the releases page and put it in place of the old one while GAZE is stopped.",
+                    exe.display(),
+                    if code.is_none() { " and the permission prompt was refused" } else { "" }
+                );
+            }
+            #[cfg(not(windows))]
+            return Err(e);
         }
         anyhow::Ok(())
     }

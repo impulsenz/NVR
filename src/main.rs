@@ -85,6 +85,13 @@ fn main() -> Result<()> {
     #[cfg(windows)]
     use winservice::Mode;
     let _ = EXE.set(std::env::current_exe()?);
+    // An update GAZE wasn't allowed to put in place itself, with an
+    // administrator's permission: `--swap-update <new> <program>`.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--swap-update") && args.len() >= 4 {
+        let ok = update::swap_in(std::path::Path::new(&args[2]), std::path::Path::new(&args[3]));
+        std::process::exit(if ok.is_ok() { 0 } else { 1 });
+    }
     let (mode, path, dir) = winservice::parse_args();
     if let Some(d) = &dir {
         let _ = std::env::set_current_dir(d);

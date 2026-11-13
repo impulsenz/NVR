@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.71 — November 2026
+- **Updates install more reliably on Windows**: installing an update could fail with "could not move the running program aside: Access is denied". GAZE now tries a few times (antivirus programs often hold a new file for a moment), uses another name for the old copy when an earlier one is still in use, and — if Windows still says no, e.g. because the program file was put there by an administrator or by the GAZE service — asks once for permission with the usual Windows prompt on the computer's screen, then finishes the update. If that's refused too, it says why and how to update by hand.
+
 ## 0.6.70 — November 2026
 - **Cars, trucks, buses and motorbikes are now all "vehicle"**: the AI often mixes these up (a car taken for a bus), which could stop an alert from going off. GAZE now treats them as one kind — vehicle — everywhere: what each camera watches for, alerts and the Alerts filter, notifications, smart-home and webhook choices, zones, PTZ following, number plates, the HD check, and parked (stationary) vehicles, so a parked car later seen as a truck is still the same parked vehicle. Two boxes on the same vehicle (one "car", one "truck") become one. Your settings are changed over by themselves, and older alerts show and filter as vehicles too. Bicycles stay separate.
 
