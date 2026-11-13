@@ -2779,7 +2779,7 @@ function alertsChanged() {
   const sig = (status.alerts_unseen || 0) + '|' + status.cameras.map(c => c.detect ? `${c.detect.last_event || ''}${c.detect.event_active ? '*' : ''}` : '').join(',');
   if (sig !== alertSig) { const first = !alertSig; alertSig = sig; if (!first) refreshAlertList(); }
 }
-$('f-refresh').onclick = () => rec.mode === 'list' ? loadRecordings() : loadTimeline();
+$('f-refresh').onclick = () => loadRecordings();
 // Full screen for the whole app, from the header (any page, phones too
 // where the browser allows it).
 (function wireAppFullscreen() {
@@ -3790,19 +3790,30 @@ const tlStep = (n) => {
 };
 $('tl-back10').onclick = () => tlStep(-1);
 $('tl-fwd10').onclick = () => tlStep(1);
-function allEvents() { return tl.data.flatMap(c => c.events).map(e => new Date(e.start).getTime()).sort((a, b) => a - b); }
-$('tl-prev-ev').onclick = () => { const e = allEvents().filter(t => t < tl.T - 4000).pop(); if (e) jumpTo(e - 3000); };
-$('tl-next-ev').onclick = () => { const e = allEvents().find(t => t > tl.T + 4000); if (e) jumpTo(e - 3000); };
+// Previous / next alert: played like clicking it — in full quality (main
+// stream) from just before it, the other cameras carrying on as they are.
+function allAlerts() { return tl.data.flatMap(c => c.events.map(e => ({cam: c.camera, t: new Date(e.start).getTime()}))).sort((a, b) => a.t - b.t); }
+function tlGoAlert(a) {
+  if (!a) return;
+  tl.hd = {camera: a.cam, from: a.t - 3000, until: tlHdUntil(a.cam, a.t)};
+  jumpTo(a.t - 3000);
+}
+$('tl-prev-ev').onclick = () => tlGoAlert(allAlerts().filter(a => a.t < tl.T - 4000).pop());
+$('tl-next-ev').onclick = () => tlGoAlert(allAlerts().find(a => a.t > tl.T + 4000));
 // Watch one alert: that camera's video large (others hidden), from just before it.
 // Watch one alert: just that camera (the camera choice follows; "← All
 // cameras" goes back), in full quality from just before the alert, then on
 // into the light stream 2 recording without a break.
-async function tlShowEvent(camId, T) {
+// Until when an alert at T plays in full quality: its clip, or the alert
+// and 10 s after it.
+function tlHdUntil(camId, T) {
   const c = tl.data.find(x => x.camera === camId);
   const e = c && c.events.find(x => Math.abs(new Date(x.start).getTime() - T) < 1000);
   const clip = c && c.segments.find(s => s.kind === 'clip' && new Date(s.start).getTime() <= T && new Date(s.end).getTime() > T);
-  const until = clip ? new Date(clip.end).getTime() : (e ? new Date(e.end).getTime() + 10000 : T + 30000);
-  tl.hd = {camera: camId, from: T - 3000, until};
+  return clip ? new Date(clip.end).getTime() : (e ? new Date(e.end).getTime() + 10000 : T + 30000);
+}
+async function tlShowEvent(camId, T) {
+  tl.hd = {camera: camId, from: T - 3000, until: tlHdUntil(camId, T)};
   // In full screen: stay there and play the alert in full quality on the
   // same picture (rebuilding the page would end full screen).
   const fe = document.fullscreenElement;

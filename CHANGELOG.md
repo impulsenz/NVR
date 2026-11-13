@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.61 — November 2026
+- **Previous / next alert plays in full quality**: on the Recordings tab, ⏮ Alert and Alert ⏭ now play the alert from the main stream (as clicking it on the timeline does), instead of the low-resolution sub-stream copy. Other cameras on the timeline carry on as they were.
+- **No Refresh button on the Recordings tab**: the timeline keeps itself up to date. Alerts still has it.
+
 ## 0.6.60 — November 2026
 - **Search alerts by description**: switch it on in Settings → Object recognition → Search alerts by description. Then type what you're looking for on the Alerts page — "a man in a white shirt", "someone carrying a box", "a van" — and GAZE shows the alerts whose picture looks like it, without anyone having labelled them. The camera, date and type filters still apply. It uses CLIP (by OpenAI, open source), which downloads once (420 MB) and then looks at each alert picture on this computer. New alerts are ready within a minute; older ones (the last 30 days) are done in the background when the computer is quiet. When nothing matches clearly, it says so and shows the closest few.
 - **Sound filter on the Alerts page**: alerts from sound detection have their own 🔊 Sound chip.
