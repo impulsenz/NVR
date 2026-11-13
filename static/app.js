@@ -7097,6 +7097,8 @@ function showAuth(mode) {
     } catch (err) { fail(err.message); } finally { $('auth-go').disabled = false; }
   };
   setTimeout(() => (val('auth-user') ? $('auth-pass') : $('auth-user')).focus(), 50);
+  let idleOut = null; try { idleOut = sessionStorage.getItem('gaze-idle-out'); sessionStorage.removeItem('gaze-idle-out'); } catch (_) {}
+  if (idleOut) { $('auth-err').hidden = false; $('auth-err').textContent = `Signed out after ${idleOut} minute${idleOut === '1' ? '' : 's'} with no activity. Sign in again to carry on.`; }
 }
 async function boot() {
   let st;
@@ -7105,6 +7107,7 @@ async function boot() {
   if (st.setup_needed) return showAuth('setup');
   if (!st.user) return showAuth('login');
   me = st.user;
+  watchIdle(st.idle_minutes || 0);
   $('auth').hidden = true;
   document.body.classList.remove('signed-out');
   document.body.classList.remove('role-admin', 'role-operator', 'role-viewer');
@@ -7124,6 +7127,23 @@ async function boot() {
   // Recordings loads in the background meanwhile (ready when you go there).
   setTimeout(preloadRecordings, 2500);
 }
+// Sign out after no activity (Settings → Users → Signing in): no mouse,
+// keyboard or touch for that long on this page. (GAZE also signs out a
+// session nothing has used for that long, e.g. with the app closed.)
+let idleTimer = null, idleLimit = 0, idleLast = Date.now();
+function watchIdle(minutes) {
+  idleLimit = minutes; idleLast = Date.now();
+  clearInterval(idleTimer); idleTimer = null;
+  if (!minutes) return;
+  idleTimer = setInterval(async () => {
+    if (Date.now() - idleLast < idleLimit * 60000) return;
+    clearInterval(idleTimer); idleTimer = null;
+    try { await fetch('api/auth/logout', {method: 'POST'}); } catch (_) {}
+    try { sessionStorage.setItem('gaze-idle-out', String(idleLimit)); } catch (_) {}
+    location.reload();
+  }, 15000);
+}
+for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) addEventListener(ev, () => { idleLast = Date.now(); }, {passive: true, capture: true});
 const isAdmin = () => me && me.role === 'admin';
 $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $('um-pop').hidden = !$('um-pop').hidden; };
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
@@ -7573,6 +7593,12 @@ async function renderUsers(body) {
     ${users.map(u => `<tr data-u="${esc(u.username)}"><td><b>${esc(u.username)}</b>${me && u.username === me.username ? ' <span class="muted">(you)</span>' : ''}</td><td>${roleSel(u.role)}</td><td>${camPick(u.cameras)}</td>
       <td style="text-align:right;white-space:nowrap"><button type="button" class="small u-save">Save</button> <button type="button" class="small u-pw">Set password</button> ${u.two_step ? '<button type="button" class="small u-2fa" title="Two-step sign-in is on. Turn it off for someone who lost their phone and recovery codes.">🔐 Turn off two-step</button> ' : ''}<button type="button" class="small danger u-del" ${me && u.username === me.username ? 'disabled' : ''}>Delete</button></td></tr>`).join('')}
     </tbody></table></div>
+    <form class="card" id="u-signin"><h2>Signing in</h2><div class="form">
+      <label for="si-days">Stay signed in for${tip('With “Keep me signed in” ticked when signing in, how long GAZE remembers this browser or app — also while it’s closed. After that it asks for the password again. Without the tick, GAZE forgets it when the browser is closed.')}</label>
+        <div class="row"><select id="si-days">${[[1, '1 day'], [3, '3 days'], [7, '1 week'], [14, '2 weeks'], [30, '30 days'], [90, '90 days'], [365, '1 year']].map(([d, t]) => `<option value="${d}" ${d === (settings.server.remember_days || 30) ? 'selected' : ''}>${t}</option>`).join('')}</select><span class="muted">with “Keep me signed in”</span></div>
+      <label for="si-idle">Sign out when not used${tip('Signs out after this long with no mouse, keyboard or touch on GAZE’s page, and when GAZE hasn’t been used at all for that long (the app or browser closed). Handy on a shared or wall-mounted screen. Note: just watching the Live page without touching it counts as not used.')}</label>
+        <div class="row"><select id="si-idle">${[[0, 'Never'], [5, 'After 5 minutes'], [10, 'After 10 minutes'], [15, 'After 15 minutes'], [30, 'After 30 minutes'], [60, 'After 1 hour'], [120, 'After 2 hours'], [480, 'After 8 hours']].map(([m, t]) => `<option value="${m}" ${m === (settings.server.idle_minutes || 0) ? 'selected' : ''}>${t}</option>`).join('')}</select><span class="muted">with no activity</span></div>
+    </div><div class="actions"><button class="primary">Save</button></div></form>
     <form class="card" id="u-new"><h2>Add a user</h2><div class="form">
       <label for="un-name">User name</label><div><input type="text" id="un-name" required autocomplete="off"></div>
       <label for="un-pass">Password</label><div><input type="password" id="un-pass" required minlength="8" autocomplete="new-password"><div class="hint">At least 8 characters. They can change it later from the 👤 menu.</div></div>
@@ -7597,6 +7623,11 @@ async function renderUsers(body) {
       try { await api(`api/users/${enc(name)}`, {method: 'DELETE'}); renderUsers(body); } catch (e) { toast(e.message, true); }
     };
   });
+  $('u-signin').onsubmit = async (e) => {
+    e.preventDefault();
+    const remember_days = +val('si-days'), idle_minutes = +val('si-idle');
+    if (await saveSettings({sign_in: {remember_days, idle_minutes}}, 'Saved — applies from the next sign-in (“no activity” applies now)')) watchIdle(idle_minutes);
+  };
   $('u-new').onsubmit = async (e) => {
     e.preventDefault();
     try {

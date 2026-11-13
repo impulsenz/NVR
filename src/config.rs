@@ -320,6 +320,10 @@ pub struct ServerConfig {
     /// (browsers warn about it once).
     pub https_cert: String,
     pub https_key: String,
+    /// "Keep me signed in": for this many days (also with the app closed).
+    pub remember_days: u32,
+    /// Sign out after this many minutes with no activity (0 = never).
+    pub idle_minutes: u32,
 }
 
 impl Default for ServerConfig {
@@ -333,6 +337,8 @@ impl Default for ServerConfig {
             https_port: 8443,
             https_cert: String::new(),
             https_key: String::new(),
+            remember_days: 30,
+            idle_minutes: 0,
         }
     }
 }

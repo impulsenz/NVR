@@ -220,7 +220,13 @@ mod win {
                 let Some((info, _)) = INFO.get() else { return };
                 let exe = std::env::current_exe().unwrap_or_default();
                 let cfg = std::path::absolute(&info.config).unwrap_or(info.config.clone());
-                let cmd = w(&format!("\"{}\" \"{}\"", exe.display(), cfg.display()));
+                // The folder too: Windows starts it in its own system folder.
+                // ("C:\\" would end in \" and swallow the quote: "C:\\.").
+                let mut dir = cfg.parent().map(|p| p.display().to_string()).unwrap_or_default();
+                if dir.ends_with('\\') {
+                    dir.push('.');
+                }
+                let cmd = w(&format!("\"{}\" --dir \"{}\" \"{}\"", exe.display(), dir, cfg.display()));
                 RegSetKeyValueW(
                     HKEY_CURRENT_USER,
                     k.as_ptr(),

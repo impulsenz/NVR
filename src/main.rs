@@ -95,6 +95,21 @@ fn main() -> Result<()> {
     let (mode, path, dir) = winservice::parse_args();
     if let Some(d) = &dir {
         let _ = std::env::set_current_dir(d);
+    } else {
+        // Started by Windows (at sign-in, from a shortcut): the working
+        // folder is then e.g. C:\Windows\System32, where "recordings" and
+        // the other relative paths can't go. Work in the settings' folder.
+        let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf()));
+        let base = if path.is_absolute() {
+            path.parent().map(|p| p.to_path_buf())
+        } else if !path.exists() {
+            exe_dir.filter(|d| d.join(&path).exists())
+        } else {
+            None
+        };
+        if let Some(b) = base {
+            let _ = std::env::set_current_dir(b);
+        }
     }
     #[cfg(windows)]
     match mode {

@@ -284,6 +284,8 @@ impl CameraRuntime {
 #[derive(Debug, Deserialize, Default)]
 pub struct SettingsUpdate {
     pub server: Option<ServerUpdate>,
+    /// Signing in: how long "Keep me signed in" lasts, and sign-out after no activity.
+    pub sign_in: Option<SignInUpdate>,
     pub storage: Option<StorageConfig>,
     pub live: Option<LiveConfig>,
     pub display: Option<DisplayConfig>,
@@ -301,6 +303,12 @@ pub struct SettingsUpdate {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SignInUpdate {
+    pub remember_days: u32,
+    pub idle_minutes: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ServerUpdate {
     pub name: String,
     pub listen: String,
@@ -397,6 +405,7 @@ impl Manager {
         crate::infer::set_use_gpu(config.ai.device != "cpu");
         crate::picturelog::configure(&config.storage);
         crate::load::set_balance(config.hardware.balance);
+        crate::users::set_sign_in_policy(config.server.remember_days, config.server.idle_minutes);
         let _ = std::fs::create_dir_all(data_dir.join("tmp"));
         let ai = Arc::new(AiHandle::new(config.ai.clone(), &data_dir));
         let data_dir_c = data_dir.clone();
@@ -700,6 +709,11 @@ impl Manager {
             if let Some(k) = s.https_key {
                 cfg.server.https_key = k.trim().to_string();
             }
+        }
+        if let Some(s) = up.sign_in {
+            cfg.server.remember_days = s.remember_days.clamp(1, 365);
+            cfg.server.idle_minutes = s.idle_minutes.min(24 * 60);
+            crate::users::set_sign_in_policy(cfg.server.remember_days, cfg.server.idle_minutes);
         }
         if let Some(s) = up.storage {
             cfg.storage = s;

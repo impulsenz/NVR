@@ -86,6 +86,27 @@ pub struct Me {
 struct Session {
     user: String,
     expires: DateTime<Utc>,
+    /// When it was last used (for "sign out after no activity").
+    #[serde(default = "Utc::now")]
+    last_seen: DateTime<Utc>,
+}
+
+/// Signing in (Settings → Users): days "Keep me signed in" lasts, and
+/// minutes of no activity before signing out (0 = never).
+static REMEMBER_DAYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(30);
+static IDLE_MINUTES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_sign_in_policy(remember_days: u32, idle_minutes: u32) {
+    REMEMBER_DAYS.store(remember_days.clamp(1, 365), std::sync::atomic::Ordering::Relaxed);
+    IDLE_MINUTES.store(idle_minutes.min(24 * 60), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn remember_days() -> u32 {
+    REMEMBER_DAYS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn idle_minutes() -> u32 {
+    IDLE_MINUTES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub struct Users {
@@ -675,7 +696,7 @@ impl Users {
 
     pub fn new_session(&self, user: &str, remember: bool) -> String {
         let t = token();
-        let days = if remember { 30 } else { 1 };
+        let days = if remember { remember_days() as i64 } else { 1 };
         {
             let mut s = self.sessions.lock().unwrap();
             s.retain(|_, x| x.expires > Utc::now());
@@ -684,6 +705,7 @@ impl Users {
                 Session {
                     user: user.to_string(),
                     expires: Utc::now() + Duration::days(days),
+                    last_seen: Utc::now(),
                 },
             );
         }
@@ -740,12 +762,31 @@ impl Users {
 
     pub fn session_user(&self, token: &str) -> Option<User> {
         let name = {
-            let s = self.sessions.lock().unwrap();
-            let sess = s.get(&digest(token))?;
-            if sess.expires < Utc::now() {
+            let mut s = self.sessions.lock().unwrap();
+            let key = digest(token);
+            let sess = s.get_mut(&key)?;
+            let now = Utc::now();
+            if sess.expires < now {
                 return None;
             }
-            sess.user.clone()
+            // Nothing for longer than allowed (the app or browser closed,
+            // the computer asleep): signed out.
+            let idle = idle_minutes();
+            if idle > 0 && now - sess.last_seen > Duration::minutes(idle as i64) {
+                s.remove(&key);
+                drop(s);
+                self.save_sessions();
+                return None;
+            }
+            // (Kept on disk now and then, for a restart.)
+            let save = now - sess.last_seen > Duration::minutes(5);
+            sess.last_seen = now;
+            let user = sess.user.clone();
+            drop(s);
+            if save {
+                self.save_sessions();
+            }
+            user
         };
         self.users
             .read()

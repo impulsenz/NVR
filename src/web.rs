@@ -4080,7 +4080,7 @@ fn https(headers: &axum::http::HeaderMap) -> bool {
 }
 
 fn session_cookie(token: &str, remember: bool, secure: bool) -> HeaderValue {
-    let age = if remember { "; Max-Age=2592000" } else { "" };
+    let age = if remember { format!("; Max-Age={}", crate::users::remember_days() as u64 * 86400) } else { String::new() };
     let sec = if secure { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(
         "{}={token}; Path=/; HttpOnly; SameSite=Lax{age}{sec}",
@@ -4347,7 +4347,7 @@ async fn auth_state(State(m): App, headers: axum::http::HeaderMap) -> Response {
             role: u.role,
             cameras: u.cameras,
         });
-    Json(json!({ "setup_needed": m.users.setup_needed(), "user": me, "name": m.config().server.name })).into_response()
+    Json(json!({ "setup_needed": m.users.setup_needed(), "user": me, "name": m.config().server.name, "idle_minutes": crate::users::idle_minutes() })).into_response()
 }
 
 #[derive(Deserialize)]

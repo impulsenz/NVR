@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.76 — November 2026
+- **"Start with Windows" works**: GAZE set to start with Windows didn't start — Windows starts programs in its own system folder, where GAZE couldn't find or write its files. GAZE now always works in its own folder, and the start-up entry says which folder (it's corrected by itself the next time GAZE starts).
+- **Old copies of GAZE are tidied away**: the copy replaced by an update (GAZE.old.exe, nvr-windows-x64.old.exe …) is now deleted once it has closed, whatever its name — before, it could stay behind.
+- **"Try again" shows it's trying**: on the "GAZE can't be reached" page, the button shows a spinning ring and "Connecting…" while it tries, and the page keeps trying by itself every few seconds — GAZE opens as soon as it answers.
+- **Sign-in settings**: Settings → Users → Signing in. **Stay signed in for** sets how long "Keep me signed in" lasts (1 day to 1 year; was always 30 days), also while the app or browser is closed. **Sign out when not used** (off by default; 5 minutes to 8 hours) signs out after that long with no mouse, keyboard or touch on the page, and ends a sign-in nothing has used for that long (e.g. the app closed). The sign-in page then says why.
+
 ## 0.6.75 — November 2026
 - **The program file is now GAZE.exe on your computer too**: GAZE installed from an older download (nvr-windows-x64.exe) makes itself GAZE.exe in the same folder the next time it starts, carries on from there, and removes the old file. "Start with Windows" is pointed at GAZE.exe. Settings, recordings and everything else stay where they are. (GAZE running as a Windows service keeps its file name, which the service is registered with.)
 

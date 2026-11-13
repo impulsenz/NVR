@@ -377,11 +377,23 @@ pub fn become_gaze_exe() -> bool {
 /// one still in use stays until next time).
 pub fn clean_old() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(sibling(&exe, ".old"));
-        for n in 2..10 {
-            let _ = std::fs::remove_file(sibling(&exe, &format!(".old{n}")));
+        // Left-over copies of GAZE's program next to it (the one replaced by
+        // an update, a download that didn't finish), under any of its names
+        // (GAZE, nvr-windows-x64 …). The one replaced may still be closing
+        // while this starts: tried again for a minute.
+        let leftovers = left_over_programs(&exe);
+        if !leftovers.is_empty() {
+            std::thread::spawn(move || {
+                let mut left = leftovers;
+                for _ in 0..20 {
+                    left.retain(|p| p.exists() && std::fs::remove_file(p).is_err());
+                    if left.is_empty() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+            });
         }
-        let _ = std::fs::remove_file(sibling(&exe, ".new"));
         // The file this was copied from when it became GAZE.exe: deleted
         // once that program has stopped (a few tries).
         let mark = exe.with_file_name("GAZE.oldname");
@@ -402,6 +414,30 @@ pub fn clean_old() {
             }
         }
     }
+}
+
+/// Old and half-downloaded copies of GAZE's program in its folder:
+/// "<name>.old.exe", "<name>.old2.exe" …, "<name>.new.exe" (no ".exe"
+/// elsewhere), for this program's name and the names GAZE has had.
+fn left_over_programs(exe: &Path) -> Vec<PathBuf> {
+    let Some(dir) = exe.parent() else { return vec![] };
+    let ext = exe.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+    let own = exe.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let names: Vec<String> = [own.as_str(), "gaze", "nvr", "nvr-windows-x64"].iter().map(|s| s.to_string()).collect();
+    let Ok(rd) = std::fs::read_dir(dir) else { return vec![] };
+    rd.flatten()
+        .map(|e| e.path())
+        .filter(|p| p != exe && p.is_file())
+        .filter(|p| {
+            let f = p.file_name().and_then(|f| f.to_str()).unwrap_or("").to_lowercase();
+            let Some(base) = f.strip_suffix(&ext.to_lowercase()) else { return false };
+            names.iter().any(|n| {
+                base.strip_prefix(n.as_str()).is_some_and(|rest| {
+                    rest == ".new" || rest.strip_prefix(".old").is_some_and(|d| d.chars().all(|c| c.is_ascii_digit()))
+                })
+            })
+        })
+        .collect()
 }
 
 /// Put the downloaded program (`new`) in the place of the running one
@@ -611,6 +647,20 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn finds_left_over_copies() {
+        let d = std::env::temp_dir().join(format!("gaze-left-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for f in ["GAZE.exe", "nvr-windows-x64.old.exe", "GAZE.old2.exe", "GAZE.new.exe", "notes.old.exe", "GAZE.oldx.exe", "nvr.toml"] {
+            std::fs::write(d.join(f), b"x").unwrap();
+        }
+        let mut got: Vec<String> = super::left_over_programs(&d.join("GAZE.exe")).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        got.sort();
+        assert_eq!(got, ["GAZE.new.exe", "GAZE.old2.exe", "nvr-windows-x64.old.exe"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// Against the real GitHub: GAZE_TEST_GITHUB=impulsenz/NVR cargo test finds_latest
     #[tokio::test]
     async fn finds_latest_release_without_the_api() {
