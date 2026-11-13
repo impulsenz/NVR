@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.65 — November 2026
+- **A preview for each camera link**: Settings → Smart home → Each camera on its own now shows a small live picture beside each camera, from the stream chosen for its link, refreshed every 2 seconds while it's on screen. Click it to open the link.
+
 ## 0.6.64 — November 2026
 - **Sound alerts have a picture saying what was heard**: when sound detection sets off an alert, its picture is now taken from the camera at that moment, with what was heard written across the bottom ("HEARD: SMOKE OR FIRE ALARM"). It shows on the alert card, in the alert and in the notification, and stays when the picture is remade in full quality from the recording. If the AI recognised someone or something in the same alert, that picture is used instead.
 - **Sound detection works with motion detection off**: a camera with motion detection and AI switched off still raises sound alerts (and the camera's own detection alerts), and those alerts are no longer marked as motion.

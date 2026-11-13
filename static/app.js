@@ -7053,6 +7053,7 @@ function renderSmartHome(body) {
     const base = location.origin + location.pathname.replace(/[^/]*$/, '');
     const cams = cameraCfgs.filter(c => ovCamKeys[c.id]);
     if (!box.children.length) box.innerHTML = cams.map(c => `<div class="ov-cam" data-id="${esc(c.id)}">
+        <div class="oc-pic" title="Open the link"><img alt=""></div>
         <b>${esc(c.name)}</b>
         <select class="oc-q" title="Which stream">${(c.live_url || '').trim() ? '<option value="sub">Low resolution (sub-stream)</option>' : ''}<option value="main">Full quality (main stream)</option></select>
         <select class="oc-fps" title="Pictures per second">${[[0, 'Live view rate'], [1, '1 fps'], [2, '2 fps'], [5, '5 fps'], [10, '10 fps'], [15, '15 fps']].map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>
@@ -7066,9 +7067,25 @@ function renderSmartHome(body) {
         const url = `${base}live/${enc(id)}/${kind.value}?k=${ovCamKeys[id]}&q=${q}${f && kind.value === 'stream.mjpeg' ? '&fps=' + f : ''}`;
         el.querySelector('.oc-link').value = url; el.querySelector('.oc-open').href = url;
       };
-      el.querySelectorAll('select').forEach(x => x.onchange = make); make();
+      el.querySelectorAll('select').forEach(x => x.onchange = () => { make(); el._pic(); }); make();
+      // A preview of what the link shows (a still every 2 s, on screen only).
+      const img = el.querySelector('.oc-pic img');
+      el._pic = () => { img.src = `live/${enc(id)}/frame.jpg?q=${el.querySelector('.oc-q').value}&t=${Date.now()}`; };
+      el.querySelector('.oc-pic').onclick = () => window.open(el.querySelector('.oc-link').value, '_blank', 'noopener');
       el.querySelector('.oc-copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(el.querySelector('.oc-link').value).then(() => toast('Link copied')).catch(() => el.querySelector('.oc-link').select());
     });
+    // Refresh the previews that are on screen.
+    if (!box._seen) {
+      const seen = box._seen = new Set();
+      const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { seen.add(e.target); e.target._pic(); } else seen.delete(e.target); }));
+      box.querySelectorAll('.ov-cam').forEach(el => io.observe(el));
+      const tick = () => {
+        if (!box.isConnected || box._seen !== seen) { io.disconnect(); return; }
+        if (!document.hidden) seen.forEach(el => el._pic());
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
+    }
   };
   const ovLink = () => { const base = location.origin + location.pathname.replace(/[^/]*$/, ''); $('ov-link').value = `${base}overview.mjpeg?k=${ovKey}${chk('ov-active') ? '&active=true' : ''}`; };
   api('api/overview/key').then(r => { ovKey = r.key; ovCamKeys = r.cameras || {}; ovLink(); ovCams(); }).catch(() => {});
@@ -7076,7 +7093,7 @@ function renderSmartHome(body) {
   ovPic();
   $('ov-active').onchange = ovLink;
   $('ov-copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(val('ov-link')).then(() => toast('Link copied')).catch(() => { $('ov-link').select(); });
-  $('ov-new').onclick = async () => { if (!confirm('Make a new link? The old one stops working (update it wherever you used it).')) return; const r = await api('api/overview/key', {method: 'POST'}); ovKey = r.key; ovCamKeys = r.cameras || {}; ovLink(); $('ov-cams').innerHTML = ''; ovCams(); toast('New links made'); };
+  $('ov-new').onclick = async () => { if (!confirm('Make a new link? The old one stops working (update it wherever you used it).')) return; const r = await api('api/overview/key', {method: 'POST'}); ovKey = r.key; ovCamKeys = r.cameras || {}; ovLink(); $('ov-cams').innerHTML = ''; $('ov-cams')._seen = null; ovCams(); toast('New links made'); };
   $('wh-add').onclick = () => { hooks.push({name: '', enabled: true, url: '', cameras: [], objects: [], picture: false}); draw(); };
   $('wh-save').onclick = () => saveSettings({webhooks: hooks}, 'Webhooks saved');
   $('f-mqtt').onsubmit = async (e) => {

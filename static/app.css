@@ -1186,9 +1186,11 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 .tok-new { background: rgba(34,197,94,.1); border: 1px solid rgba(34,197,94,.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
 
 .ov-cams { display: grid; gap: 10px; margin-top: 8px; }
-.ov-cam { display: grid; grid-template-columns: minmax(110px, auto) repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
-.ov-cam > .row { grid-column: 1 / -1; }
-@media (max-width: 760px) { .ov-cam { grid-template-columns: 1fr; } }
+.ov-cam { display: grid; grid-template-columns: 160px minmax(110px, auto) repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.ov-cam > .row { grid-column: 2 / -1; }
+.ov-cam .oc-pic { grid-row: 1 / span 2; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; overflow: hidden; cursor: pointer; }
+.ov-cam .oc-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+@media (max-width: 760px) { .ov-cam { grid-template-columns: 1fr; } .ov-cam > .row { grid-column: auto; } .ov-cam .oc-pic { grid-row: auto; } }
 
 .ds-bar { margin-bottom: 10px; gap: 8px; flex-wrap: wrap; }
 .ds-bar input[type=search] { flex: 1; min-width: 220px; }
