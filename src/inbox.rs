@@ -186,6 +186,7 @@ mod tests {
                 file: format!("{id}-{i}.jpg"),
                 print: pack(p),
                 name: n.map(String::from),
+                confirmed: false,
             })
             .collect();
         e.plates = plates.iter().map(|s| s.to_string()).collect();

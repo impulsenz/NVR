@@ -294,6 +294,10 @@ impl Recorder {
                     continue;
                 }
             };
+            // Converting on the CPU only because the GPU was busy: go back
+            // to the GPU once it's quiet again.
+            let moved_off_gpu = use_gpu && self.cam.reencode() && gpu_desc.is_none();
+            let mut back = crate::load::BackToGpu::default();
             self.update(|s| {
                 s.gpu = gpu_desc;
                 s.recorded_seconds = 0.0;
@@ -322,6 +326,9 @@ impl Recorder {
                         if self.inner.lock().unwrap().last_progress.elapsed() > STALL_TIMEOUT {
                             break Exit::Stalled;
                         }
+                        if moved_off_gpu && back.ready(&format!("{} recording conversion", self.cam.name)) {
+                            break Exit::BackToGpu;
+                        }
                     }
                 }
             };
@@ -335,6 +342,11 @@ impl Recorder {
                     if matches!(outcome, Exit::Cancelled) {
                         return;
                     }
+                    continue;
+                }
+                // Finish the file cleanly and start again at once, on the GPU.
+                Exit::BackToGpu => {
+                    graceful_stop(&mut child, &stop_feed).await;
                     continue;
                 }
                 Exit::Died(status) => format!("ffmpeg exited ({status})"),
@@ -457,6 +469,7 @@ enum Exit {
     Stalled,
     Stopped,
     Cancelled,
+    BackToGpu,
 }
 
 /// Ask ffmpeg to quit cleanly (so the current file is finalized), then kill it.

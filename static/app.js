@@ -3099,7 +3099,7 @@ async function playItem(it, card) {
     ${e && it.thumb ? `<div class="review"><img src="${esc(it.thumb)}" alt="">${boxesHtml(e, true)}</div>
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     ${e && e.faces && e.faces.length ? `<div class="faces"><div class="muted small">Faces</div>${e.faces.map((f, i) => `<div class="face"><img src="media/${enc(it.camera)}/events/${enc(f.file)}" alt="">
-      ${f.name ? `<b>${esc(f.name)}</b><button type="button" class="op-only face-fix" data-face="${i}" title="Wrong person? Choose who it really is, or make a new person">✎ Wrong?</button>` : ''}
+      ${f.name ? `<b>${esc(f.name)}</b>${f.confirmed ? '<span class="muted small" title="Added to this person’s faces">✓ confirmed</span>' : `<button type="button" class="op-only face-ok" data-face="${i}" title="Right person: add this face to ${esc(f.name)}’s faces, so GAZE knows them better">✓ Right</button>`}<button type="button" class="op-only face-fix" data-face="${i}" title="Wrong person? Choose who it really is, or make a new person">✎ Wrong?</button>` : ''}
       <select class="who op-only" data-face="${i}" ${f.name ? 'hidden' : ''}><option value="">${f.name ? `Not ${esc(f.name)}? Who is it?` : 'Who is this?'}</option>${knownPeople.filter(k => k.name !== f.name).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">New person…</option>${f.name ? '<option value="none">Not anyone I know</option>' : ''}</select></div>`).join('')}</div>` : ''}
     ${e && e.items && e.items.length ? `<div class="items">${e.items.map(x => `<div class="item"><div class="muted small">${esc(x.zone)}: before → after</div><div class="row"><img src="media/${enc(it.camera)}/events/${enc(x.before)}" alt=""><span>→</span><img src="media/${enc(it.camera)}/events/${enc(x.after)}" alt=""></div></div>`).join('')}</div>` : ''}
     ${e && e.plates && e.plates.length ? `<div class="plates">${e.plates.map(p => `<span class="plate">${esc(p)}</span>`).join('')}</div>` : ''}
@@ -3115,6 +3115,15 @@ async function playItem(it, card) {
     const sel = $('rp-info').querySelector(`.who[data-face="${b.dataset.face}"]`);
     sel.hidden = false; b.hidden = true; sel.focus();
   });
+  // The right person: confirm it (the face joins their profile).
+  $('rp-info').querySelectorAll('.face-ok').forEach(b => b.onclick = async () => {
+    const f = e.faces[+b.dataset.face], k = knownPeople.find(x => x.name === f.name);
+    if (!k) { toast(`${f.name} isn't in People & vehicles any more`, true); return; }
+    try {
+      const r = await api(`api/known/${enc(k.id)}/learn`, {method: 'POST', json: {camera: it.camera, event: e.id, face: +b.dataset.face}});
+      toast(r.message); f.confirmed = true; if (r.notes) e.notes = r.notes; playItem(it, card);
+    } catch (err) { toast(err.message, true); }
+  });
   $('rp-info').querySelectorAll('.who').forEach(sel => sel.onchange = async () => {
     let id = sel.value; if (!id) return;
     if (id === '+') {
@@ -3125,6 +3134,7 @@ async function playItem(it, card) {
       const r = await api(`api/known/${enc(id)}/learn`, {method: 'POST', json: {camera: it.camera, event: e.id, face: +sel.dataset.face}});
       toast(r.message); await loadKnownPeople();
       e.faces[+sel.dataset.face].name = id === 'none' ? null : (knownPeople.find(k => k.id === id) || {}).name;
+      e.faces[+sel.dataset.face].confirmed = true;
       // Keep the alert's notes in step (what the server now has).
       if (r.notes) e.notes = r.notes;
       playItem(it, card);
@@ -6287,9 +6297,30 @@ function renderAi(body) {
     btn.disabled = true; btn.textContent = 'Checking…'; out.innerHTML = '<span class="muted">Sending the camera\'s current picture to the AI… (the built-in model may need to download first)</span>';
     try {
       const r = await api('api/ai/test', {method: 'POST', json: {camera: val('ai-cam'), ai: form()}});
-      const boxes = (r.detections || []).map(d => `<div class="box" style="left:${d.x * 100}%;top:${d.y * 100}%;width:${d.w * 100}%;height:${d.h * 100}%"><span>${esc(d.label)} ${Math.round(d.score * 100)}%</span></div>`).join('');
-      out.innerHTML = (r.ok ? `<div class="ok" style="margin-bottom:6px">✓ ${r.detections.length ? r.detections.length + ' object(s) found' : 'Working — nothing recognized in this picture'} (${r.ms} ms)</div>`
-        : `<div class="err" style="margin-bottom:6px">✗ ${esc(r.error)}</div>`) + (r.image ? `<div class="ai-test"><img src="${r.image}" alt="">${boxes}</div>` : '');
+      const watched = new Set(r.watched || []);
+      const boxes = (ds, hd) => (ds || []).map(d => `<div class="box ${hd ? (d.ok ? 'hd-ok' : 'hd-no') : watched.has(d.label) ? '' : 'unwatched'}" style="left:${d.x * 100}%;top:${d.y * 100}%;width:${d.w * 100}%;height:${d.h * 100}%"><span>${esc(d.label)}${hd ? '' : ' ' + Math.round(d.score * 100) + '%'}</span></div>`).join('');
+      const modelName = (k) => ({yolox_nano: 'Nano', yolox_tiny: 'Tiny', yolox_s: 'Small', yolox_m: 'Medium', yolox_l: 'Large', custom: 'your own'})[k] || k;
+      // Each step GAZE takes before an alert, on the same moment: the quick
+      // model on the sub-stream picture, the bigger model double-checking
+      // it, then what was found looked at again in a full-quality picture.
+      const stages = r.stages || [], img0 = stages.length && stages[0].image;
+      const card = (st, i) => {
+        const title = st.kind === 'fast' ? `1. Quick check — ${esc(modelName(st.model))} model`
+          : st.kind === 'verify' ? `${i + 1}. Double-check — ${esc(modelName(st.model))} model`
+          : `${i + 1}. HD check — full-quality picture`;
+        const note = st.kind === 'fast' ? (stages.length > 1 ? 'Runs on every look while there is motion.' : 'Its answer is used for alerts.')
+          : st.kind === 'verify' ? 'Looks again when the quick check finds something; its answer is used.'
+          : st.setting === 'off' ? 'Off for this camera (camera → AI → Check in HD) — shown here so you can see what it would do.' : st.setting === 'drop' ? 'Finds not seen in HD are left out of the alert.' : 'Finds not seen in HD are marked as not confirmed.';
+        const im = st.kind === 'hd' ? st.image : img0;
+        const n = (st.detections || []).length;
+        return `<figure class="ai-stage"><figcaption><b>${title}</b> <span class="muted small">${st.ms != null ? st.ms + ' ms' : ''}</span>
+          <div class="small ${st.error ? 'err' : ''}">${st.error ? esc(st.error) : st.kind === 'hd' ? (n ? (st.detections.map(d => esc(d.label)).join(' · ')) : 'Nothing to check') : n ? n + ' found' : 'Nothing recognized'}</div><div class="muted small">${note}</div></figcaption>
+          ${im ? `<div class="ai-test"><img src="${im}" alt="">${boxes(st.detections, st.kind === 'hd')}</div>` : ''}</figure>`;
+      };
+      out.innerHTML = (r.ok ? `<div class="ok" style="margin-bottom:6px">✓ ${r.detections.length ? r.detections.length + ' object(s) found' : 'Working — nothing recognized in this picture'} (${r.ms} ms in all)</div>`
+        : `<div class="err" style="margin-bottom:6px">✗ ${esc(r.error)}</div>`)
+        + (stages.length ? `<div class="ai-stages">${stages.map(card).join('')}</div>${stages.some(st => st.kind !== 'hd' && (st.detections || []).some(d => !watched.has(d.label))) ? '<div class="hint">Faint boxes: things this camera isn’t watching for (only watched things are checked in HD).</div>' : ''}`
+          : r.image ? `<div class="ai-test"><img src="${r.image}" alt=""></div>` : '');
     } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
     finally { btn.disabled = false; btn.textContent = 'Test on this camera'; }
   };

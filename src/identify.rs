@@ -224,6 +224,7 @@ async fn faces_in(
                 file,
                 print: crate::known::pack(&print),
                 name,
+                confirmed: false,
             });
             found += 1;
         }

@@ -277,6 +277,35 @@ async fn hd_verify(ai: &crate::ai::Ai, f: &Frame, label: &str, b: [f32; 4], min_
     }
 }
 
+/// For the test in Settings: a full-quality picture now, and each find
+/// checked in it as during an alert ("confirmed", "seen as …", "not seen").
+pub async fn hd_test(
+    ai: &crate::ai::Ai,
+    cam: &crate::config::CameraConfig,
+    relay: &crate::relay::Relay,
+    ffmpeg: &str,
+    finds: &[Detection],
+) -> anyhow::Result<(Frame, Vec<(Detection, String)>)> {
+    let mut f = hd_frame(relay, ffmpeg).await?;
+    if !cam.privacy.is_empty() {
+        let mut px = (*f.rgb).clone();
+        cam.paint_privacy(&mut px, f.width, f.height);
+        f.rgb = Arc::new(px);
+    }
+    let d = &cam.detect;
+    let mut out = Vec::new();
+    for x in finds.iter().filter(|x| x.score >= d.min_confidence) {
+        let v = match hd_verify(ai, &f, &x.label, [x.x, x.y, x.w, x.h], d.min_confidence, &d.objects).await {
+            HdVerdict::Confirmed(s) => format!("✓ {} confirmed {:.0}%", x.label, s * 100.0),
+            HdVerdict::Relabel(l, s) => format!("↻ really a {l} {:.0}%", s * 100.0),
+            HdVerdict::NotSeen => format!("✗ {} not seen in HD", x.label),
+            HdVerdict::Failed => "couldn't check".to_string(),
+        };
+        out.push((x.clone(), v));
+    }
+    Ok((f, out))
+}
+
 /// A full-quality picture of this moment (at most 1920 px wide).
 async fn hd_frame(relay: &crate::relay::Relay, ffmpeg: &str) -> anyhow::Result<Frame> {
     let _connect = relay.subscribe();

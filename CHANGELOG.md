@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.57 — November 2026
+- **Work goes back to the graphics card when it's quiet**: with smart load balancing on, video work that moved to the processor because the graphics card was busy (live view decoding, recording conversion) now moves back once the graphics card has been quiet for a minute, instead of staying on the processor until GAZE restarts. A recording being converted finishes its file and carries on in a new one.
+- **Faces you confirm or correct teach GAZE**: an alert's recognised face now has a ✓ Right button. Confirming it adds that face to the person's faces, so they're recognised more surely, and it shows as confirmed. Choosing who it really is still adds the face to the right person and stops GAZE taking it for the wrong one.
+- **Object recognition test shows every step**: Settings → Object recognition → Test on this camera now shows the picture from each step GAZE takes before an alert, with what it found and how long it took: the quick check (your chosen model), the double-check (the bigger model), and the HD check on a full-quality picture, where each find is shown confirmed, seen as something else, or not seen. Things the camera isn't watching for show faintly.
+
 ## 0.6.56 — November 2026
 - **Time-lapse dragging is much faster**: scrubbing along the timeline (Recordings, and a camera's own timeline) now keeps up with your finger or mouse — working out which recording you're over was being redone for every file at every move, which slowed down as recordings built up (about 17× quicker now), and pictures update once per screen frame.
 - **Live sound no longer stops and starts**: the sound keeps a little more in hand (cameras send sound in bursts) and catches up by playing a touch faster instead of jumping.

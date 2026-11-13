@@ -61,6 +61,32 @@ pub fn gpu_too_busy(what: &str) -> bool {
     busy
 }
 
+/// Video work moved off the GPU (see [`gpu_too_busy`]) goes back once the
+/// GPU has been quiet (under 50 %) for a minute, so the CPU is free again.
+/// Asked every few seconds by the job that moved.
+#[derive(Default)]
+pub struct BackToGpu {
+    since: Option<Instant>,
+}
+
+impl BackToGpu {
+    pub fn ready(&mut self, what: &str) -> bool {
+        if !(balance() && gpu().is_some_and(|g| g < 50)) {
+            self.since = None;
+            return false;
+        }
+        if self.since.get_or_insert_with(Instant::now).elapsed() < std::time::Duration::from_secs(60) {
+            return false;
+        }
+        self.since = None;
+        tracing::info!(
+            "load balancing: GPU quiet ({}%), {what} moves back to the GPU",
+            gpu().unwrap_or(0)
+        );
+        true
+    }
+}
+
 /// Wait (up to `max`) while the CPU is busier than `limit` %.
 pub async fn wait_for_cpu(limit: u32, max: std::time::Duration) {
     let start = Instant::now();
@@ -136,6 +162,14 @@ mod tests {
         assert_eq!(pick_decoder(Pick::Gpu), Pick::Gpu);
         update(50.0, None);
         assert_eq!(pick_decoder(Pick::Cpu), Pick::Cpu);
+        // Moved off a busy GPU: back once it has been quiet for a minute.
+        update(55.0, Some(70.0));
+        let mut back = BackToGpu::default();
+        assert!(!back.ready("test"));
+        update(55.0, Some(30.0));
+        assert!(!back.ready("test"), "not at once");
+        back.since = Some(Instant::now() - std::time::Duration::from_secs(61));
+        assert!(back.ready("test"));
         assert_eq!(ai_slowdown(), 1.0);
         // New video work: CPU when the GPU is busy and the CPU has room.
         update(40.0, Some(92.0));

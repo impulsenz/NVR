@@ -335,9 +335,14 @@ impl Live {
         let url = self.url().to_string();
         let mut cmd = crate::load::cmd(&self.env.ffmpeg_path);
         cmd.args(["-hide_banner", "-loglevel", "error"]);
-        if use_gpu && !crate::load::gpu_too_busy("live view decoding") {
+        // Decoding on the CPU only because the GPU was busy: back to the
+        // GPU once it's quiet again.
+        let moved_off_gpu = use_gpu && crate::load::gpu_too_busy("live view decoding");
+        if use_gpu && !moved_off_gpu {
             cmd.args(ffmpeg::decode_args(&self.env.hardware, false));
         }
+        let mut back = crate::load::BackToGpu::default();
+        let mut back_tick = tokio::time::interval(Duration::from_secs(5));
         let mut child = cmd
             .args([
                 "-fflags",
@@ -394,6 +399,13 @@ impl Live {
                 _ = self.view_changed.notified() => {
                     let _ = child.kill().await;
                     return Ok(true);
+                }
+                _ = back_tick.tick(), if moved_off_gpu => {
+                    if back.ready(&format!("{} live view decoding", self.cam.name)) {
+                        let _ = child.kill().await;
+                        return Ok(true);
+                    }
+                    continue;
                 }
             };
             if n == 0 {

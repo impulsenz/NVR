@@ -446,6 +446,46 @@ impl Ai {
         res
     }
 
+    /// For the test in Settings: the fast model and (when chosen) the
+    /// double-check model each on the same picture, with how long each
+    /// took — normally the second only looks when the first finds
+    /// something, and only its answer is used.
+    pub async fn detect_stages(&self, frame: &Frame) -> Result<Vec<(String, Vec<Detection>, u64)>, AiError> {
+        if !self.enabled() {
+            return Ok(vec![]);
+        }
+        let model = self.model.lock().unwrap().clone();
+        if model.is_none() {
+            // Not loaded yet: the usual message (downloading / loading).
+            self.detect_builtin(frame).await?;
+        }
+        let Some(model) = self.model.lock().unwrap().clone() else {
+            return Err(AiError::NotReady("AI model is loading".into()));
+        };
+        let f = if self.cfg.night_boost {
+            crate::imgutil::low_light_boost(frame).unwrap_or_else(|| frame.clone())
+        } else {
+            frame.clone()
+        };
+        let run = |m: Arc<Yolox>, f: Frame| async move {
+            let t = Instant::now();
+            let d = tokio::task::spawn_blocking(move || m.detect(&f, 0.25))
+                .await
+                .map_err(|e| AiError::Failed(e.into()))?
+                .map_err(AiError::Failed)?;
+            Ok::<_, AiError>((d, t.elapsed().as_millis() as u64))
+        };
+        let _permit = self.busy.acquire().await.map_err(|e| AiError::Failed(e.into()))?;
+        let (d, ms) = run(model, f.clone()).await?;
+        let mut out = vec![(self.cfg.builtin_model.clone(), d, ms)];
+        let verifier = self.verifier.lock().unwrap().clone();
+        if let (Some(v), Some(name)) = (verifier, self.verify_name()) {
+            let (d, ms) = run(v, f).await?;
+            out.push((name, d, ms));
+        }
+        Ok(out)
+    }
+
     async fn detect_builtin(&self, frame: &Frame) -> Result<Vec<Detection>, AiError> {
         let model = self.model.lock().unwrap().clone();
         let Some(model) = model else {

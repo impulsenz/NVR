@@ -721,10 +721,17 @@ async fn known_learn(
         if let Some(o) = &old {
             m.known.not_this(o, &print)?;
         }
-        if let Some(k) = &k {
+        // Confirming a name GAZE gave ("✓ Right"): the face is added to
+        // that person's profile too, so they're recognised more surely.
+        let again = f.confirmed && f.name == new_name;
+        let confirming = !f.confirmed && f.name.is_some() && f.name == new_name;
+        if let Some(k) = &k
+            && !again
+        {
             let photo = std::fs::read(c.events.dir().join(&f.file)).ok();
             m.known.add(&k.id, Some(&print), None, photo.as_deref())?;
         }
+        f.confirmed = true;
         f.name = new_name.clone();
         // The alert's notes: who was recognised, and whether a face is unknown.
         let names: Vec<String> = e.faces.iter().filter_map(|f| f.name.clone()).collect();
@@ -751,7 +758,9 @@ async fn known_learn(
                 (Some(n), Some(o)) => format!(
                     "Corrected — this is {n}, not {o}. GAZE won't take this face for {o} again."
                 ),
-                (Some(n), None) => format!("Learned — this is {n}"),
+                (Some(n), None) if again => format!("Already confirmed — this is {n}"),
+                (Some(n), None) if confirming => format!("Confirmed — this is {n}. Added to {n}'s faces, so GAZE knows them better."),
+                (Some(n), None) => format!("Learned — this is {n}. Added to {n}'s faces."),
                 (None, Some(o)) => {
                     format!("Corrected — not {o}. GAZE won't take this face for {o} again.")
                 }
@@ -1531,24 +1540,53 @@ async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
     };
     // A freshly created built-in engine needs a moment to load its model.
     let t = Instant::now();
-    let mut res = ai.detect(&frame).await;
+    let mut res = ai.detect_stages(&frame).await;
     while matches!(res, Err(crate::ai::AiError::NotReady(_)))
         && t.elapsed() < Duration::from_secs(120)
     {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        res = ai.detect(&frame).await;
+        res = ai.detect_stages(&frame).await;
     }
-    let image = frame.jpeg(85).map(|j| {
-        format!(
-            "data:image/jpeg;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(j)
-        )
-    });
-    match res {
-        Ok(d) => Json(json!({ "ok": true, "detections": d, "image": image.ok(), "ms": t.elapsed().as_millis() as u64 }))
-            .into_response(),
-        Err(e) => Json(json!({ "ok": false, "error": e.to_string(), "image": image.ok() })).into_response(),
+    let data_url = |f: &crate::imgutil::Frame| {
+        f.jpeg(85).ok().map(|j| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(j)))
+    };
+    let image = data_url(&frame);
+    let stages = match res {
+        Ok(s) => s,
+        Err(e) => return Json(json!({ "ok": false, "error": e.to_string(), "image": image })).into_response(),
+    };
+    // As during an alert: the double-check model's answer counts when it
+    // ran, and what it found is checked in a full-quality picture (when
+    // the camera has the HD check on, or always here when it has a main
+    // stream to check with).
+    let finds = stages.last().map(|s| s.1.clone()).unwrap_or_default();
+    let mut out: Vec<serde_json::Value> = stages
+        .iter()
+        .enumerate()
+        .map(|(i, (model, d, ms))| {
+            json!({"kind": if i == 0 { "fast" } else { "verify" }, "model": model, "detections": d, "ms": ms,
+                   "image": if i == 0 { image.clone() } else { None }})
+        })
+        .collect();
+    let watched: Vec<crate::ai::Detection> = finds
+        .iter()
+        .filter(|d| c.cfg.detect.objects.contains(&d.label))
+        .cloned()
+        .collect();
+    if c.cfg.has_sub() {
+        let t = Instant::now();
+        let ffmpeg = m.config().server.ffmpeg_path;
+        match crate::detect::hd_test(&ai, &c.cfg, &c.relay_main, &ffmpeg, &watched).await {
+            Ok((f, checks)) => out.push(json!({
+                "kind": "hd", "image": data_url(&f), "ms": t.elapsed().as_millis() as u64, "setting": c.cfg.detect.hd_check,
+                "detections": checks.iter().map(|(d, v)| json!({"x": d.x, "y": d.y, "w": d.w, "h": d.h, "label": v, "score": d.score, "ok": v.starts_with('✓')})).collect::<Vec<_>>(),
+            })),
+            Err(e) => out.push(json!({"kind": "hd", "error": format!("{e:#}"), "setting": c.cfg.detect.hd_check, "detections": []})),
+        }
     }
+    Json(json!({ "ok": true, "detections": finds, "image": image, "ms": t.elapsed().as_millis() as u64, "stages": out,
+                 "watched": c.cfg.detect.objects }))
+    .into_response()
 }
 
 /// One decoded RGB frame from the sub-stream, for AI tests when detection is off.

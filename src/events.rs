@@ -103,6 +103,10 @@ pub struct FaceSeen {
     /// Who it is, if known.
     #[serde(default)]
     pub name: Option<String>,
+    /// Someone said who it is (named, corrected or confirmed): its print
+    /// is in that person's profile.
+    #[serde(default)]
+    pub confirmed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
