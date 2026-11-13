@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.63 — November 2026
+- **Faster sliding at the timeline's edge**: dragging the time-lapse past either end of the Recordings timeline now slides it twice as fast as before (about two thirds of the view a second at the edge, up to four times that further out).
+
 ## 0.6.62 — November 2026
 - **Scrub past the edge of the timeline**: on the Recordings tab, dragging the time-lapse to the left or right end of the timeline now slides the timeline along instead of stopping there. Hold at the edge to move slowly; go further past it to move faster. It moves back as far as the dates you've chosen and forward up to now, and stops as soon as you move back inside the timeline.
 

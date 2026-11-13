@@ -4170,11 +4170,11 @@ function markAt(e) {
     const r = lane.getBoundingClientRect(), span = tl.zoom * 1000;
     const out = lastX < r.left + EDGE ? lastX - (r.left + EDGE) : lastX > r.right - EDGE ? lastX - (r.right - EDGE) : 0;
     if (!out) return;
-    // Up to 4× at a pointer well past the edge: about a third of the view
+    // Up to 4× at a pointer well past the edge: about two thirds of the view
     // a second at the edge itself.
     const speed = Math.sign(out) * Math.min(Math.abs(out) / EDGE, 4);
     const min = Math.min(tl.winStart, rec.from.getTime()), max = Math.max(tl.winStart, Date.now() - span * 0.95);
-    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.006));
+    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.012));
     if (ws !== tl.winStart) {
       tl.winStart = ws;
       tl.T = Math.min(ws + Math.min(Math.max((lastX - r.left) / r.width, 0), 1) * span, Date.now());
