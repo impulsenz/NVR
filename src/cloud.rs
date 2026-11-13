@@ -367,6 +367,7 @@ mod tests {
             notified: 0,
             suspicious: String::new(),
             hd_checking: false,
+            meaning: None,
         };
         store.save_detected(ev(
             "ev-person",

@@ -515,6 +515,8 @@ pub struct AiConfig {
     pub faces: bool,
     /// Read number plates of vehicles in alerts.
     pub plates: bool,
+    /// Search alerts by description (CLIP: downloads 420 MB the first time).
+    pub search: bool,
 }
 
 impl Default for AiConfig {
@@ -530,6 +532,7 @@ impl Default for AiConfig {
             device: "gpu".into(),
             faces: true,
             plates: true,
+            search: false,
         }
     }
 }

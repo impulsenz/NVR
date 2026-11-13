@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.60 — November 2026
+- **Search alerts by description**: switch it on in Settings → Object recognition → Search alerts by description. Then type what you're looking for on the Alerts page — "a man in a white shirt", "someone carrying a box", "a van" — and GAZE shows the alerts whose picture looks like it, without anyone having labelled them. The camera, date and type filters still apply. It uses CLIP (by OpenAI, open source), which downloads once (420 MB) and then looks at each alert picture on this computer. New alerts are ready within a minute; older ones (the last 30 days) are done in the background when the computer is quiet. When nothing matches clearly, it says so and shows the closest few.
+- **Sound filter on the Alerts page**: alerts from sound detection have their own 🔊 Sound chip.
+
 ## 0.6.59 — November 2026
 - **Sound detection**: camera → Audio → Sound detection. GAZE listens to the camera's microphone and alerts on what you tick — glass breaking, a smoke or fire alarm, screaming or shouting, a gunshot or bang, a dog barking, a baby crying, a siren, a car alarm, knocking or the doorbell, or talking — even when nothing moves in the picture. A sensitivity slider sets how faint a sound counts, and the tab shows live what the camera is hearing. Sound alerts carry a 🔊 label, say what was heard, and send a notification. It uses YAMNet (by Google, open source), which knows hundreds of everyday sounds and downloads by itself the first time (16 MB). It runs on this computer every half second, and the sound never leaves it.
 

@@ -88,6 +88,7 @@ pub struct Input {
 pub enum Data {
     F32(Vec<f32>),
     U8(Vec<u8>),
+    I64(Vec<i64>),
 }
 
 impl Input {
@@ -95,6 +96,12 @@ impl Input {
         Self {
             shape: shape.to_vec(),
             data: Data::F32(data),
+        }
+    }
+    pub fn i64(shape: &[usize], data: Vec<i64>) -> Self {
+        Self {
+            shape: shape.to_vec(),
+            data: Data::I64(data),
         }
     }
     pub fn u8(shape: &[usize], data: Vec<u8>) -> Self {
@@ -131,6 +138,7 @@ fn run_tract(plan: &Plan, input: Input) -> Result<Vec<Vec<f32>>> {
     let t: Tensor = match input.data {
         Data::F32(d) => Tensor::from_shape(&input.shape, &d),
         Data::U8(d) => Tensor::from_shape(&input.shape, &d),
+        Data::I64(d) => Tensor::from_shape(&input.shape, &d),
     }
     .map_err(|e| anyhow!("{e}"))?;
     let out = plan.run(tvec!(t.into())).map_err(|e| anyhow!("{e}"))?;
@@ -153,6 +161,7 @@ fn run_ort(s: &mut ort::session::Session, input: Input) -> Result<Vec<Vec<f32>>>
     let value: ort::session::SessionInputValue = match input.data {
         Data::F32(d) => Tensor::from_array((shape, d))?.into(),
         Data::U8(d) => Tensor::from_array((shape, d))?.into(),
+        Data::I64(d) => Tensor::from_array((shape, d))?.into(),
     };
     let outputs = s.run([value])?;
     let mut res = Vec::new();

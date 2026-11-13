@@ -34,7 +34,7 @@ const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehic
 // The Alerts filter chips. Faces and number plates show alerts where one
 // was found.
 const FILTER_BASE = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],
-  ['motorcycle','Motorcycle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken'],
+  ['motorcycle','Motorcycle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken'],['sound','Sound'],
   ['face','Faces'],['plate','Number plates']];
 // Only the kinds some camera can raise: a camera or profile that starts
 // watching for dogs makes the Dog chip appear.
@@ -2710,7 +2710,7 @@ function setRecMode(mode) {
   $('f-types').hidden = mode !== 'list';
   document.querySelectorAll('#page-recordings .list-only').forEach(e => e.hidden = mode !== 'list');
   document.querySelectorAll('#page-recordings .tl-only').forEach(e => e.hidden = mode === 'list' || !TIMELAPSE);
-  if (mode === 'list') { tlStop(); loadRecordings(); }
+  if (mode === 'list') { tlStop(); loadRecordings(); wireDescribeSearch(); }
   else { closeAlert(); if (!resumeTimeline()) loadTimeline(); }
 }
 // What the timeline shows (cameras and days): coming back to the same, it
@@ -2761,7 +2761,7 @@ $('f-seen-all').onclick = async () => {
 // Refreshed as soon as the status shows a new or changed alert (it comes
 // every 2 s), and every 8 s anyway (for pictures and details added later).
 async function refreshAlertList() {
-  if (page !== 'recordings' || rec.mode !== 'list' || rec.loading || rec.who === '__new' || refreshAlertList.busy) return;
+  if (page !== 'recordings' || rec.mode !== 'list' || rec.loading || rec.who === '__new' || refreshAlertList.busy || rec.describe) return;
   // "Today" moves on at midnight on a page left open.
   if (rec.today && rec.to.getTime() < Date.now()) { rec.from = startOfDay(new Date()); rec.to = endOfDay(new Date()); renderFilters(); }
   // ("Last 24 hours" moves on with the clock.)
@@ -2901,6 +2901,30 @@ const Calendar = {
   },
 };
 
+// ---------- search by description ----------
+// Shown when it's switched on (Settings → Object recognition).
+async function wireDescribeSearch() {
+  const st = await api('api/search/status').catch(() => null);
+  const on = !!(st && st.on);
+  $('ds-bar').hidden = !on;
+  if (!on) return;
+  $('ds-info').textContent = st.downloading ? 'Downloading the search model…' : st.error ? 'Search unavailable: ' + st.error : '';
+  $('ds-bar').onsubmit = async (e) => {
+    e.preventDefault();
+    const q = val('ds-q').trim(); if (!q) return;
+    const days = Math.max(1, Math.ceil((Date.now() - rec.from.getTime()) / 864e5));
+    $('ds-go').disabled = true; $('ds-info').textContent = 'Searching…';
+    try {
+      const r = await api(`api/search?q=${enc(q)}&days=${days}`);
+      rec.describe = {q, hits: r.hits, waiting: r.waiting, closest: r.closest};
+      $('ds-clear').hidden = false; $('ds-info').textContent = '';
+      await loadRecordings();
+    } catch (err) { $('ds-info').textContent = err.message; }
+    finally { $('ds-go').disabled = false; }
+  };
+  $('ds-clear').onclick = () => { rec.describe = null; $('ds-q').value = ''; $('ds-clear').hidden = true; loadRecordings(); };
+}
+
 // ---------- list ----------
 // The alert list for the current filters (shares the query with loadRecordings).
 async function fetchRecordings() {
@@ -2929,9 +2953,18 @@ async function loadRecordings() {
     const r = await fetch('api/recordings?' + recQuery());
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
     rec.items = await r.json();
+    // Searching by description: only the alerts that match (in time order).
+    if (rec.describe) {
+      const hit = new Set(rec.describe.hits.map(h => h.id));
+      rec.items = rec.items.filter(i => i.event && hit.has(i.event.id));
+    }
   } catch (e) { rec.items = []; toast(e.message, true); }
   rec.loading = false;
   renderRecordings();
+  if (rec.describe) $('rec-count').textContent = (!rec.items.length ? `No alerts here look like “${rec.describe.q}”. Try other words, or more days.`
+      : rec.describe.closest
+      ? `Nothing clearly looks like “${rec.describe.q}” — the ${rec.items.length} closest. Try describing what's special (“a man in a red jacket”); for any person or car use the filters above.`
+      : `${rec.items.length} alert${rec.items.length === 1 ? '' : 's'} look like “${rec.describe.q}”`) + (rec.describe.waiting ? ` (${rec.describe.waiting} older alert pictures still being looked at)` : '');
   if (openAlertId) {
     const it = rec.items.find(i => i.event && i.event.id === openAlertId);
     openAlertId = null;
@@ -6296,6 +6329,8 @@ function renderAi(body) {
         <option value="">Off</option>
         ${[['yolox_s', 'Small model (≈350 ms)'], ['yolox_m', 'Medium model (≈0.9 s) — recommended'], ['yolox_l', 'Large model (≈2 s)']].map(([k, t]) => `<option value="${k}" ${a.verify_model === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <div class="hint">A bigger model confirms each find before it alerts: fewer false alerts.</div></div>
+      <span class="p-builtin"></span><div class="p-builtin"><label class="check"><input type="checkbox" id="ai-search" ${a.search ? 'checked' : ''}> Search alerts by description${tip('Type what you’re looking for on the Alerts page — “a red car”, “someone carrying a box”, “a dog at night”, “a man in a white shirt” — and GAZE finds the alerts whose picture looks like it, without anyone having labelled them. Uses CLIP (by OpenAI, open source), which downloads once (420 MB) and then looks at each alert picture on this computer (about a second each; older alerts are done in the background when the computer is quiet).')}</label>
+        <div class="hint" id="ai-search-st">Find alerts by what's in them: “a red car”, “someone with a ladder”.</div></div>
       <span class="p-builtin"></span><div class="p-builtin"><label class="check"><input type="checkbox" id="ai-night" ${a.night_boost !== false ? 'checked' : ''}> Night boost${tip('Dark and infrared (black & white) pictures are brightened and their contrast stretched before the AI looks at them, so people and animals are recognised better at night. Recordings aren’t changed.')}</label>
         <div class="hint">Better recognition in dark and infrared pictures.</div></div>
     </div>
@@ -6311,7 +6346,8 @@ function renderAi(body) {
   };
   document.querySelectorAll('input[name=ai-p]').forEach(r => r.onchange = sync); sync();
   $('ai-model').onchange = () => { $('ai-custom').hidden = val('ai-model') !== 'custom'; };
-  const form = () => ({provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'),
+  api('api/search/status').then(s => { const el = $('ai-search-st'); if (el && a.search) el.textContent = s.downloading ? 'Downloading the search model (420 MB)…' : s.error ? 'Problem: ' + s.error : s.waiting ? `Looking at alert pictures: ${s.waiting} to go.` : s.ready ? 'Ready — search on the Alerts page.' : 'Starting…'; }).catch(() => {});
+  const form = () => ({...settings.ai, search: chk('ai-search'), provider: document.querySelector('input[name=ai-p]:checked').value, builtin_model: val('ai-model'),
     custom_model: val('ai-cpath').trim(), custom_size: +val('ai-csize') || 640, custom_labels: val('ai-clabels').split('\n').map(x => x.trim()).filter(Boolean),
     verify_model: val('ai-verify'), night_boost: chk('ai-night'), device: val('ai-device')});
   const showStatus = () => {

@@ -14,6 +14,7 @@ use std::sync::Arc;
 /// Objects with their own button in the Alerts filter; "Other objects"
 /// is everything else.
 pub const FILTER_LABELS: &[&str] = &[
+    "sound",
     "person",
     "car",
     "truck",

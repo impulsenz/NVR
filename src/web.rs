@@ -185,6 +185,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/https", get(https_status))
         .route("/api/mode", post(set_mode))
         .route("/api/sound", get(sound_status))
+        .route("/api/search", get(describe_search))
+        .route("/api/search/status", get(describe_status))
         .route("/api/remotes", get(remotes_list))
         .route("/remote/{i}/{cam}/frame.jpg", get(remote_frame))
         .route("/api/safe-mode/config", get(safe_config_get).post(safe_config_save))
@@ -798,6 +800,9 @@ fn alert_kinds(c: &crate::config::CameraConfig, ai: &crate::config::AiConfig) ->
         if ai.plates && d.objects.iter().any(|o| vehicles.contains(&o.as_str())) {
             k.push("plate");
         }
+    }
+    if c.sound.enabled && !c.sound.kinds.is_empty() {
+        k.push("sound");
     }
     k
 }
@@ -3703,6 +3708,34 @@ async fn overview_mjpeg(State(m): App, user: Option<axum::Extension<CurrentUser>
         }
     });
     mjpeg_response(futures_util::stream::poll_fn(move |cx| out.poll_recv(cx)))
+}
+
+#[derive(Deserialize)]
+struct DescribeQuery {
+    q: String,
+    #[serde(default)]
+    days: Option<i64>,
+}
+
+/// Alerts found by description ("a red car", "someone with a ladder").
+async fn describe_search(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<DescribeQuery>) -> Response {
+    let vis = visible(&user);
+    match crate::clip::search(&m, vis.as_deref(), &q.q, q.days.unwrap_or(30)).await {
+        Ok((hits, looked, closest)) => Json(json!({
+            "closest": closest,
+            "hits": hits.iter().map(|(c, id, s)| json!({"camera": c, "id": id, "score": s})).collect::<Vec<_>>(),
+            "looked": looked,
+            "waiting": crate::clip::STATUS.lock().unwrap().waiting,
+        }))
+        .into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn describe_status(State(m): App) -> Response {
+    let mut s = serde_json::to_value(crate::clip::STATUS.lock().unwrap().clone()).unwrap_or_default();
+    s["on"] = json!(m.config().ai.search);
+    Json(s).into_response()
 }
 
 /// What can be listened for, and what each camera is hearing now.

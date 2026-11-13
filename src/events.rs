@@ -76,6 +76,18 @@ pub struct Event {
     /// (notifications wait for it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hd_checking: bool,
+    /// What the alert picture shows, as CLIP numbers (description search).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meaning: Option<Meaning>,
+}
+
+/// An alert picture's meaning for description search.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Meaning {
+    /// The picture it's of (a newer picture is looked at again).
+    pub thumb: String,
+    /// 512 numbers, packed.
+    pub v: String,
 }
 
 fn is_zero(n: &u8) -> bool {
@@ -247,6 +259,9 @@ impl EventStore {
                 e.plates = old.plates;
             }
             e.identified |= old.identified;
+            if e.meaning.is_none() {
+                e.meaning = old.meaning;
+            }
             for n in old.notes {
                 if !e.notes.contains(&n) {
                     e.notes.push(n);
@@ -287,6 +302,16 @@ impl EventStore {
         if let Some(slot) = ev.iter_mut().find(|x| x.id == e.id) {
             self.append_line(&e);
             *slot = e;
+        }
+    }
+
+    /// Store an alert's meaning (description search) without touching the
+    /// rest of it (the alert may be changing meanwhile).
+    pub fn set_meaning(&self, id: &str, m: Meaning) {
+        let mut ev = self.events.write().unwrap();
+        if let Some(slot) = ev.iter_mut().find(|x| x.id == id) {
+            slot.meaning = Some(m);
+            self.append_line(slot);
         }
     }
 
@@ -371,6 +396,7 @@ mod tests {
             notified: 0,
             suspicious: String::new(),
             hd_checking: false,
+            meaning: None,
         };
         s.save_detected(e.clone());
         e.labels.push(Label {

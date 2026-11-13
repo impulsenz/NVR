@@ -847,6 +847,7 @@ impl Detector {
                 notified: 0,
                 suspicious: String::new(),
                 hd_checking: false,
+                meaning: None,
             },
             last_activity: now,
             qualified: false,

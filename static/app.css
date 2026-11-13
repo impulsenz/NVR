@@ -1189,3 +1189,6 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 .ov-cam { display: grid; grid-template-columns: minmax(110px, auto) repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
 .ov-cam > .row { grid-column: 1 / -1; }
 @media (max-width: 760px) { .ov-cam { grid-template-columns: 1fr; } }
+
+.ds-bar { margin-bottom: 10px; gap: 8px; flex-wrap: wrap; }
+.ds-bar input[type=search] { flex: 1; min-width: 220px; }
