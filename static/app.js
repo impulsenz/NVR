@@ -672,26 +672,45 @@ function osdFor(c) {
   if (c.osd && c.osd.custom) return c.osd;
   return {...status.display.osd, clock_format: status.display.osd.clock_format || ''};
 }
-function overlayHtml(c, q, noFs) {
-  const d = status.display, o = osdFor(c);
+// The same on-screen display on every picture, live or recorded: the
+// camera's items where its display settings put them, and one cluster of
+// buttons in one corner — stream (live only), sound with volume, full
+// screen. `opts.rec`: a recording (the clock shows its time and a ▶
+// PLAYBACK tag stands where live shows REC); `opts.tools`: that view's own
+// sound button(s) instead of the live one; `opts.extra`: a class for the boxes.
+function overlayHtml(c, q, noFs, opts = {}) {
+  const d = status.display, o = osdFor(c), rec = !!opts.rec;
   const parts = Object.fromEntries(SPOTS.map(([k]) => [k, []]));
   // A spot that isn't one of the nine ("p:X,Y") gets its own box.
   for (const k of ['name_corner', 'text_corner', 'status_corner', 'detections_corner', 'clock_corner', 'fps_corner', 'res_corner']) if (o[k] && !parts[o[k]]) parts[o[k]] = [];
   if (o.show_name) parts[o.name_corner].push(`<span class="ovtext name" data-osd="name">${esc(c.name)}</span>`);
   if (o.text) parts[o.text_corner].push(`<span class="ovtext" data-osd="text">${esc(o.text)}</span>`);
-  if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill" data-osd="status">${pillHtml(c)}</span>`);
-  if (o.show_detections) parts[o.detections_corner].push('<span class="ov-alert" data-osd="detections"></span>');
-  if (o.show_clock) parts[o.clock_corner].push(`<span class="ovtext ov-clock" data-osd="clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}">${esc(fmtDate(new Date(), o.clock_format || d.clock_format || undefined))}</span>`);
-  if (o.show_fps) parts[o.fps_corner].push('<span class="ovtext ov-fps" data-osd="fps"></span>');
-  if (o.show_res) parts[o.res_corner || 'tl'].push('<span class="ovtext ov-res" data-osd="res"></span>');
-  // Stream 1 / Stream 2 switch, next to the first fullscreen button (or top right).
+  // Live: the camera's state (REC / armed / offline); a recording: ▶ PLAYBACK, always.
+  if (rec) parts[o.status_corner || 'tl'].push('<span class="ov-tag pb-tag">▶ PLAYBACK</span>');
+  else if (o.show_status) parts[o.status_corner].push(`<span class="ov-pill" data-osd="status">${pillHtml(c)}</span>`);
+  if (o.show_detections && !rec) parts[o.detections_corner].push('<span class="ov-alert" data-osd="detections"></span>');
+  const fmt = o.clock_format || d.clock_format || '';
+  if (o.show_clock) parts[o.clock_corner].push(rec ? `<span class="ovtext ov-rclock tl-t p-clock" data-fmt="${esc(fmt)}"></span>`
+    : `<span class="ovtext ov-clock" data-osd="clock" data-fmt="${esc(fmt)}">${esc(fmtDate(new Date(), fmt || undefined))}</span>`);
+  if (o.show_fps && !rec) parts[o.fps_corner].push('<span class="ovtext ov-fps" data-osd="fps"></span>');
+  if (o.show_res && !rec) parts[o.res_corner || 'tl'].push('<span class="ovtext ov-res" data-osd="res"></span>');
+  // The buttons: the first full-screen corner (top right unless chosen otherwise).
   const corners = noFs ? [] : d.fullscreen_corners;
   const sc = corners[0] || 'tr';
-  // Live sound: speaker (click: on/off; hover: volume).
-  if (c.sound !== false) parts[sc].push(`<span class="snd-wrap"><button type="button" class="fsbtn snd" data-cam="${esc(c.id)}" title="Sound on/off">${soundCam === c.id ? '🔊' : '🔇'}</button><input type="range" class="snd-vol" min="0" max="1" step="0.05" value="${soundVolume()}" title="Volume"></span>`);
-  parts[sc].push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
-  for (const corner of corners) parts[corner].push('<button type="button" class="fsbtn" title="Fullscreen (or double-click the picture)">⛶</button>');
-  return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => ovBox(k, v.join(''))).join('');
+  // One row of buttons, in the same order everywhere.
+  const row = [];
+  if (opts.tools != null) row.push(opts.tools);
+  else {
+    // Live sound: speaker (click: on/off; hover: volume).
+    if (c.sound !== false) row.push(`<span class="snd-wrap"><button type="button" class="fsbtn snd" data-cam="${esc(c.id)}" title="Sound on/off">${soundCam === c.id ? '🔊' : '🔇'}</button><input type="range" class="snd-vol" min="0" max="1" step="0.05" value="${soundVolume()}" title="Volume"></span>`);
+    row.push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
+  }
+  const fsBtn = '<button type="button" class="fsbtn fs-go" title="Full screen (or double-click the picture)">⛶</button>';
+  const fsAt = corners.length ? corners : opts.rec ? ['tr'] : [];
+  if (fsAt.includes(sc) || !fsAt.length) { if (fsAt.length) row.push(fsBtn); }
+  parts[sc].unshift(`<span class="ov-btns">${row.join('')}</span>`);
+  for (const corner of fsAt) if (corner !== sc) parts[corner].push(fsBtn);
+  return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => ovBox(k, v.join(''), opts.extra || '')).join('');
 }
 // One on-screen display box: at one of the nine places, or anywhere
 // ("p:X,Y", per cent of the picture; the box stays inside the picture).
@@ -751,12 +770,12 @@ function wireOverlay(surface) {
     b.ondblclick = (e) => e.stopPropagation();
     b.onclick = (e) => { e.stopPropagation(); soundCam === b.dataset.cam ? stopSound() : startSound(b.dataset.cam); };
   });
-  surface.querySelectorAll('.snd-vol').forEach(r => {
+  surface.querySelectorAll('.snd-wrap:not(.p-tools) .snd-vol').forEach(r => {
     r.onpointerdown = (e) => e.stopPropagation();
     r.onclick = (e) => e.stopPropagation();
     r.oninput = (e) => { e.stopPropagation(); setSoundVolume(+r.value); };
   });
-  surface.querySelectorAll('.fsbtn:not(.sbtn):not(.snd)').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(surface); });
+  surface.querySelectorAll('.fs-go').forEach(b => { if (!b.closest('.pov-osd')) b.onclick = (e) => { e.stopPropagation(); fullscreen(surface); }; });
   surface.querySelectorAll('.sbtn').forEach(b => {
     b.onpointerdown = (e) => e.stopPropagation();
     b.onclick = (e) => { e.stopPropagation(); switchStream(surface); };
@@ -788,7 +807,7 @@ function updateOverlay(surface, c, q) {
   const sig = JSON.stringify([osdFor(c), status.display.fullscreen_corners, c.name, q]);
   if (surface.dataset.osd !== sig) {
     surface.querySelectorAll(':scope > .ov').forEach(o => o.remove());
-    surface.insertAdjacentHTML('beforeend', overlayHtml(c, q, surface.id === 'focus-surface'));
+    surface.insertAdjacentHTML('beforeend', overlayHtml(c, q));
     wireOverlay(surface);
     surface.dataset.osd = sig;
   }
@@ -1149,15 +1168,13 @@ class Player {
   // time in the recording.
   buildOsd() {
     const c = status && status.cameras.find(x => x.id === this.item.camera);
+    // (Sound and full screen go back in the bar meanwhile.)
+    if (this.ptools && this.el) this.box.querySelector('.controls').appendChild(this.ptools);
     if (!c) { this.osd.innerHTML = ''; return; }
-    const o = osdFor(c), d = status.display;
-    const parts = {};
-    const add = (corner, html) => (parts[corner] = parts[corner] || []).push(html);
-    if (o.show_name) add(o.name_corner, `<span class="ovtext name">${esc(c.name)}</span>`);
-    if (o.text) add(o.text_corner, `<span class="ovtext">${esc(o.text)}</span>`);
-    if (o.show_clock) add(o.clock_corner, `<span class="ovtext p-clock" data-fmt="${esc(o.clock_format || d.clock_format || '')}"></span>`);
-    add(o.show_clock ? o.clock_corner : 'tl', '<span class="ovtext p-rec">▶ Recording</span>');
-    this.osd.innerHTML = Object.entries(parts).map(([k, v]) => ovBox(k, v.join(''), 'pov-osd')).join('');
+    this.osd.innerHTML = overlayHtml(c, null, false, {rec: true, tools: '<span class="p-toolslot"></span>', extra: 'pov-osd'});
+    const slot = this.osd.querySelector('.p-toolslot');
+    if (slot && this.ptools) slot.replaceWith(this.ptools);
+    this.osd.querySelectorAll('.fs-go').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(this.surface); });
   }
   wire(video) {
     watchFps(video);
@@ -1215,8 +1232,7 @@ class Player {
         <button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
         <button type="button" class="p-clip" hidden>⇩ Download clip</button>
         <a class="btn p-dl" title="Download the whole file">⇩ File</a>
-        <span class="vol"><button type="button" class="p-mute" title="Mute / unmute">🔊</button><input type="range" class="p-vol" min="0" max="1" step="0.05" value="1" title="Volume"></span>
-        <button type="button" class="p-fs" title="Fullscreen">⛶</button>
+        <span class="vol snd-wrap p-tools"><button type="button" class="fsbtn p-mute" title="Mute / unmute">🔊</button><input type="range" class="snd-vol p-vol" min="0" max="1" step="0.05" value="1" title="Volume"></span>
       </div>`;
     const q = (s) => this.box.querySelector(s);
     this.el = {scrub: q('.scrub'), fill: q('.fill'), head: q('.head'), sel: q('.sel'), hin: q('.handle.in'), hout: q('.handle.out'),
@@ -1234,7 +1250,7 @@ class Player {
     mute.onclick = () => { const m = !this.video.muted; for (const v of [this.video, this.alt]) v.muted = m; if (!m && this.video.volume === 0) this.video.volume = this.alt.volume = 0.5; paintVol(); };
     vol.oninput = () => { for (const v of [this.video, this.alt]) { v.volume = +vol.value; v.muted = +vol.value === 0; } store.set('volume', +vol.value); paintVol(); };
     paintVol();
-    q('.p-fs').onclick = () => fullscreen(this.surface);
+    this.ptools = q('.p-tools');
     this.el.clip.onclick = () => this.downloadClip();
     this.dl = q('.p-dl');
     this.wireScrub();
@@ -1394,13 +1410,24 @@ class Player {
     }
     this.paintButtons();
   }
+  // The time-lapse picture of that moment, as big as its detail allows: up
+  // to the time-lapse picture's own size (Recording & storage → Time-lapse
+  // pictures), and a third of the player's width.
   showPreview(t, x) {
     const p = this.el.prev;
     p.hidden = false;
-    p.style.left = Math.min(Math.max(x, 100), this.el.scrub.clientWidth - 100) + 'px';
     this.el.pt.textContent = fmtTime(this.wallAt(t)) + ' · ' + fmtClock(t);
     const want = this.prevWant = t;
-    this.tlapAt(t).then(r => { if (r && this.prevWant === want) spriteStyle(this.el.pimg, r[0], Math.floor(r[1] / r[0].info.interval), 192, 108); });
+    const place = (w) => { p.style.left = Math.min(Math.max(x, w / 2 + 4), this.el.scrub.clientWidth - w / 2 - 4) + 'px'; };
+    place(this.prevW || 192);
+    this.tlapAt(t).then(r => {
+      if (!r || this.prevWant !== want) return;
+      const i = r[0].info, a = i.aspect || i.tile_width / i.tile_height || 16 / 9;
+      const w = Math.round(Math.max(192, Math.min(i.tile_width || 256, this.surface.clientWidth / 3, 480))), h = Math.round(w / a);
+      Object.assign(this.el.pimg.style, {width: w + 'px', height: h + 'px'});
+      this.prevW = w; place(w);
+      spriteStyle(this.el.pimg, r[0], Math.floor(r[1] / i.interval), w, h);
+    });
   }
   wireScrub() {
     const sc = this.el.scrub;
@@ -1986,7 +2013,7 @@ let loadingTimer = null;
 function bindFocusImage(c) {
   const surf = $('focus-surface'), q = feedQ(c, 'focus');
   surf.querySelectorAll(':scope > .ov').forEach(o => o.remove());
-  surf.insertAdjacentHTML('beforeend', overlayHtml(c, q, true));
+  surf.insertAdjacentHTML('beforeend', overlayHtml(c, q));
   delete surf.dataset.osd;
   wireOverlay(surf);
   if (focusUnbind) focusUnbind();
@@ -2340,7 +2367,12 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
     const sg = camTl.segAt(T), im = pv.querySelector('.img');
     if (!sg) { im.style.backgroundImage = ''; return; }
     const sp = await spriteFor(camTl.id, sg);
-    if (sp) spriteStyle(im, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / sp.info.interval), 192, 108);
+    if (sp) {
+      // As big as the time-lapse picture's detail (up to 384 px wide).
+      const i = sp.info, w = Math.round(Math.max(192, Math.min(i.tile_width || 256, 384))), h = Math.round(w / (i.aspect || i.tile_width / i.tile_height || 16 / 9));
+      Object.assign(im.style, {width: w + 'px', height: h + 'px'});
+      spriteStyle(im, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / i.interval), w, h);
+    }
   };
   const down = (e) => {
     const pic = e.target.closest('.evt');
@@ -3514,6 +3546,14 @@ async function loadTimeline() {
 }
 function centerWindow() { tl.winStart = tl.T - tl.zoom / 2 * 1000; }
 
+// A Recordings picture's on-screen display: the same as live (the camera's
+// display settings), with the recording's time, ▶ PLAYBACK, and its sound.
+function tlOverlay(c) {
+  const tools = '<button type="button" class="small solo-off" hidden>▦ All cameras</button><button type="button" class="fsbtn tl-snd" title="Hear this camera">🔈</button>';
+  const sc = cam(c.camera);
+  if (!sc) return `<div class="ov tl"><span class="ovtext name">${esc(c.name)}</span><span class="ovtext tl-t"></span></div><div class="ov tr">${tools}<button type="button" class="fsbtn fs-go">⛶</button></div>`;
+  return overlayHtml(sc, null, false, {rec: true, tools});
+}
 function buildTimelineVideos() {
   const box = $('tl-videos');
   tlLeaveLive();
@@ -3527,9 +3567,8 @@ function buildTimelineVideos() {
     // other, so moving from file to file doesn't blank the picture.
     el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video><video playsinline muted class="vid" data-hls style="position:absolute;inset:0;visibility:hidden"></video>
       <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div>
-      <div class="ov tl"><span class="ovtext name">${esc(c.name)}</span><span class="ovtext tl-t"></span></div>
-      <div class="ov tr"><button type="button" class="small solo-off" hidden>▦ All cameras</button><button type="button" class="tl-snd" title="Hear this camera">🔈</button><button type="button" class="fsbtn">⛶</button></div>`;
-    el.querySelector('.fsbtn').onclick = () => fullscreen(el);
+      ${tlOverlay(c)}`;
+    el.querySelectorAll('.fs-go').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(el); });
     el.querySelector('.tl-snd').onclick = (e) => {
       e.stopPropagation();
       const on = !(tl.sound && tlSoundCam() === c.camera);
@@ -3744,7 +3783,7 @@ function tlGoLive() {
     el._liveBox = box;
     el.querySelector('.sprite').hidden = true; el.querySelector('.msg').hidden = true;
   }
-  const tick = () => { tl.T = Date.now(); if (tl.T > tl.winStart + tl.zoom * 1000 * 0.95) { centerWindow(); tl.winStart = Math.min(tl.winStart, Date.now() - tl.zoom * 1000 * 0.9); drawTimeline(); } else drawHead(); document.querySelectorAll('#tl-videos .tl-t').forEach(t => t.textContent = fmtDate(new Date())); };
+  const tick = () => { tl.T = Date.now(); if (tl.T > tl.winStart + tl.zoom * 1000 * 0.95) { centerWindow(); tl.winStart = Math.min(tl.winStart, Date.now() - tl.zoom * 1000 * 0.9); drawTimeline(); } else drawHead(); document.querySelectorAll('#tl-videos .tl-t').forEach(t => t.textContent = fmtDate(new Date(), t.dataset.fmt || undefined)); };
   clearInterval(tlLiveTimer); tlLiveTimer = setInterval(tick, 1000); tick();
   $('tl-live').classList.add('live-on');
   updateSubscriptions();
@@ -3846,7 +3885,7 @@ function tlSync(force) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
     const msg = el.querySelector('.msg');
     let v = activeVideo(el);
-    el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
+    el.querySelectorAll('.tl-t').forEach(t => t.textContent = fmtDate(new Date(tl.T), t.dataset.fmt || undefined));
     const s = c && segAt(c, tl.T);
     if (!s) { msg.hidden = false; el.querySelector('.sprite').hidden = true; [...el._vids, el._hlsV].forEach(x => { x.pause(); x.style.visibility = 'hidden'; }); continue; }
     msg.hidden = true;
@@ -4141,7 +4180,6 @@ function tlFsBar(el) {
       <a class="btn p-clip" hidden>⇩ Download clip</a>
       <select class="p-zoom" title="Zoom">${[...$('tl-zoom').options].map(o => `<option value="${o.value}" ${o.value === $('tl-zoom').value ? 'selected' : ''}>${o.textContent}</option>`).join('')}</select>
       <button type="button" class="p-left" title="Earlier">◀</button><button type="button" class="p-right" title="Later">▶</button>
-      <button type="button" class="p-mute" title="Sound">🔇</button><button type="button" class="p-fs" title="Leave full screen">⛶</button>
     </div>`;
   el.appendChild(bar); el.classList.add('has-pov');
   // The Recordings timeline itself (every camera, alert pictures, the
@@ -4162,12 +4200,8 @@ function tlFsBar(el) {
   q('.p-pev').onclick = () => $('tl-prev-ev').click(); q('.p-nev').onclick = () => $('tl-next-ev').click();
   q('.p-speed').onchange = (e) => { $('tl-speed').value = e.target.value; $('tl-speed').dispatchEvent(new Event('change')); };
   q('.p-in').onclick = () => $('tl-in').click(); q('.p-out').onclick = () => $('tl-out').click();
-  const vids = () => [...el._vids, el._hlsV];
-  const paintMute = () => { q('.p-mute').textContent = vids().every(v => v.muted) ? '🔇' : '🔊'; };
-  q('.p-mute').onclick = () => { const m = !vids().every(v => v.muted); vids().forEach(v => v.muted = m); paintMute(); };
-  q('.p-fs').onclick = () => document.exitFullscreen().catch(() => {});
   q('.p-clip').download = '';
-  paintMute(); paintTlBar();
+  paintTlBar();
 }
 // A full-screen panel that slides up when the mouse comes to the bottom of
 // the screen (and stays while it's used), and away otherwise. Above the
@@ -4207,7 +4241,6 @@ function liveFsBar(el, camId) {
       <select class="p-pspeed play-only">${[0.5, 1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === 1 ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
       ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk live-only" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button>' : ''}
-      ${c.live_sound !== false ? '<button type="button" class="p-snd live-only" title="Sound">🔇</button>' : ''}
       <a class="btn p-snap live-only" title="Save a full-quality picture">📷 Snapshot</a>
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
@@ -4215,7 +4248,6 @@ function liveFsBar(el, camId) {
       ${inView ? `<button type="button" class="p-golive play-only" title="Back to the live picture">● Back to live</button>
       <select class="p-zoom" title="Zoom">${[...$('ctl-zoom').options].map(o => `<option value="${o.value}" ${o.value === $('ctl-zoom').value ? 'selected' : ''}>${o.textContent}</option>`).join('')}</select>
       <button type="button" class="p-left" title="Earlier">◀</button><button type="button" class="p-right" title="Later">▶</button>` : ''}
-      <button type="button" class="p-fs" title="Leave full screen">⛶</button>
     </div>`;
   el.appendChild(bar); el.classList.add('has-pov');
   const q = (x) => bar.querySelector(x);
@@ -4246,12 +4278,6 @@ function liveFsBar(el, camId) {
   const snap = q('.p-snap');
   snap.href = 'snapshot/' + enc(camId);
   snap.onclick = () => { snap.download = `${c.name} ${stamp(new Date())}.jpg`; };
-  const snd = q('.p-snd');
-  if (snd) {
-    const paint = () => { snd.textContent = soundCam === camId ? '🔊' : '🔇'; };
-    snd.onclick = () => { if (soundCam === camId) stopSound(); else startSound(camId); paintSound(); paint(); };
-    paint();
-  }
   if (q('.p-talk')) setupTalkButton(c, q('.p-talk'));
   // Clip marks: of what's playing (the player's), or of the live picture
   // (from the recording, between the marks).
@@ -4271,7 +4297,6 @@ function liveFsBar(el, camId) {
   q('.p-in').onclick = () => { if (playing()) { pq('.p-in').click(); return paintClip(); } a = Date.now(); b = null; paintClip(); toast(`Clip start marked — press ${CLIP_OUT} to finish it`); };
   q('.p-out').onclick = () => { if (playing()) { pq('.p-out').click(); return paintClip(); } if (!a) a = Date.now() - 30000; b = Date.now(); paintClip(); };
   clip.onclick = (e) => { if (playing()) { e.preventDefault(); focusPlayer.downloadClip(); } };
-  q('.p-fs').onclick = () => document.exitFullscreen().catch(() => {});
   const refresh = () => {
     const pl = playing();
     bar.classList.toggle('playing', pl);
@@ -4640,7 +4665,7 @@ function previewSoon() { if (previewQueued) return; previewQueued = true; reques
 function previewAll() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
-    el.querySelector('.tl-t').textContent = fmtDate(new Date(tl.T));
+    el.querySelectorAll('.tl-t').forEach(t => t.textContent = fmtDate(new Date(tl.T), t.dataset.fmt || undefined));
     const T = tl.T;
     // The time-lapse is of the 24/7 recording (the blue line), whichever
     // stream is chosen: dragging shows it even where the chosen stream (say

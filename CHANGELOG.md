@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.69 — November 2026
+- **Every picture's on-screen display works the same way**: the live grid, a camera's view, the Recordings tab, an alert's player and full screen now all use one on-screen display. Your display settings (camera name, extra text, date and time, status, in the places you chose) apply everywhere, including recordings. A recording shows its own time in the clock's place and a blue **▶ PLAYBACK** tag where live shows the camera's state (REC, armed, offline), so it's always clear which you're looking at.
+- **The buttons are in the same place everywhere**: one row in the same corner (top right, or the corner chosen for the full-screen button) — stream 1 / 2 (live only), 🔊 sound with its volume, and ⛶ full screen. Players keep their playback bar (play, frames, speed, time, clip, download) along the bottom; the full-screen bars no longer repeat the sound and full-screen buttons. A camera's own view now has the full-screen button on its picture too.
+- **Bigger, sharper previews when hovering a player's bar**: the picture shown while you point along a recording's bar (and along a camera's timeline) is the time-lapse picture at its full size — up to 480 pixels wide with "Sharpest" time-lapse pictures — instead of a small 192-pixel one.
+
 ## 0.6.68 — November 2026
 - **Live button on the Recordings tab**: ● Live shows what's happening now on every camera, with the timeline's playhead kept at now. Press Play to watch the recording from a few seconds ago, or drag or click along the timeline to go back in time.
 - **Sound on the Recordings tab**: the 🔇 Sound button turns sound on or off, and 🔈 on a camera's picture chooses which camera you hear (one at a time). It follows that camera's recording, or its live sound in Live; it goes quiet above 4× speed.
