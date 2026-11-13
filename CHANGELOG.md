@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.62 — November 2026
+- **Scrub past the edge of the timeline**: on the Recordings tab, dragging the time-lapse to the left or right end of the timeline now slides the timeline along instead of stopping there. Hold at the edge to move slowly; go further past it to move faster. It moves back as far as the dates you've chosen and forward up to now, and stops as soon as you move back inside the timeline.
+
 ## 0.6.61 — November 2026
 - **Previous / next alert plays in full quality**: on the Recordings tab, ⏮ Alert and Alert ⏭ now play the alert from the main stream (as clicking it on the timeline does), instead of the low-resolution sub-stream copy. Other cameras on the timeline carry on as they were.
 - **No Refresh button on the Recordings tab**: the timeline keeps itself up to date. Alerts still has it.

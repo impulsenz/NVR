@@ -4158,6 +4158,31 @@ function markAt(e) {
     return tl.winStart + Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1) * tl.zoom * 1000;
   };
   let handle = null;
+  // Dragging up to (or past) either end of the timeline slides it along, so
+  // you can keep going back (or forward up to now) without letting go —
+  // slowly at the edge, faster the further out you go.
+  const EDGE = 32;
+  let lastX = null, edgeRaf = 0;
+  const edgeStep = () => {
+    edgeRaf = 0;
+    if (!drag || lastX == null) return;
+    const lane = box.querySelector('.lane'); if (!lane) return;
+    const r = lane.getBoundingClientRect(), span = tl.zoom * 1000;
+    const out = lastX < r.left + EDGE ? lastX - (r.left + EDGE) : lastX > r.right - EDGE ? lastX - (r.right - EDGE) : 0;
+    if (!out) return;
+    // Up to 4× at a pointer well past the edge: about a third of the view
+    // a second at the edge itself.
+    const speed = Math.sign(out) * Math.min(Math.abs(out) / EDGE, 4);
+    const min = Math.min(tl.winStart, rec.from.getTime()), max = Math.max(tl.winStart, Date.now() - span * 0.95);
+    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.006));
+    if (ws !== tl.winStart) {
+      tl.winStart = ws;
+      tl.T = Math.min(ws + Math.min(Math.max((lastX - r.left) / r.width, 0), 1) * span, Date.now());
+      drawTimeline(); previewSoon();
+    }
+    edgeRaf = requestAnimationFrame(edgeStep);
+  };
+  const edgeWatch = (e) => { lastX = e.clientX; if (drag && !edgeRaf) edgeRaf = requestAnimationFrame(edgeStep); };
   box.addEventListener('pointerdown', (e) => {
     // Clip start / end handles: drag to change the clip.
     const hd = e.target.closest('.tl-h');
@@ -4205,11 +4230,12 @@ function markAt(e) {
       tl.T = handle === 'in' ? tl.inT : tl.outT; drawHead(); previewSoon();
       return;
     }
-    if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewSoon();
+    if (!drag) return; tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewSoon(); edgeWatch(e);
   });
   const end = () => {
     if (handle) { handle = null; drawTimeline(); tlSync(true); hideSpritesWhenReady(); return; }
     if (!drag) return; drag = false; tl.dragging = false;
+    cancelAnimationFrame(edgeRaf); edgeRaf = 0; lastX = null;
     document.querySelectorAll('#tl-videos video').forEach(v => { v._want = null; });
     // Let go: the videos come first. Dragging asked for the time-lapse of
     // every file passed over (each can take a while to make), and those
