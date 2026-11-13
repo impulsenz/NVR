@@ -256,7 +256,7 @@ fn tags(e: &Event, sus: bool) -> &'static str {
     } else if e
         .labels
         .iter()
-        .any(|l| ["car", "truck", "bus", "motorcycle"].contains(&l.label.as_str()))
+        .any(|l| crate::ai::canon(&l.label) == "vehicle")
     {
         "car"
     } else {

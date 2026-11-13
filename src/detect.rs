@@ -265,7 +265,7 @@ async fn hd_verify(ai: &crate::ai::Ai, f: &Frame, label: &str, b: [f32; 4], min_
         .map(|d| Detection { x: (x0 + d.x * sw) / fw, y: (y0 + d.y * sh) / fh, w: d.w * sw / fw, h: d.h * sh / fh, ..d })
         .filter(|d| d.score >= min_conf * 0.85 && same_spot(d, b))
         .collect();
-    const VEHICLES: [&str; 4] = ["car", "truck", "bus", "motorcycle"];
+    const VEHICLES: [&str; 5] = ["vehicle", "car", "truck", "bus", "motorcycle"];
     let alike = |l: &str| l == label || (VEHICLES.contains(&l) && VEHICLES.contains(&label));
     let best = |pick: &dyn Fn(&Detection) -> bool| found.iter().filter(|d| pick(d)).max_by(|a, b| a.score.total_cmp(&b.score)).cloned();
     if let Some(d) = best(&|d| alike(&d.label)) {

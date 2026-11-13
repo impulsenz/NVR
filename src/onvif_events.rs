@@ -40,7 +40,7 @@ pub fn meaning(topic: &str, motion_too: bool) -> Option<(&'static str, &'static 
     } else if has(&["people", "person", "human", "face"]) {
         Some(("person", "The camera detected a person"))
     } else if has(&["vehicle", "car", "licenseplate"]) {
-        Some(("car", "The camera detected a vehicle"))
+        Some(("vehicle", "The camera detected a vehicle"))
     } else if has(&["pet", "animal", "dog", "cat"]) {
         Some(("dog", "The camera detected an animal"))
     } else if has(&["linedetector", "linecross", "crossed", "tripwire"]) {

@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.70 — November 2026
+- **Cars, trucks, buses and motorbikes are now all "vehicle"**: the AI often mixes these up (a car taken for a bus), which could stop an alert from going off. GAZE now treats them as one kind — vehicle — everywhere: what each camera watches for, alerts and the Alerts filter, notifications, smart-home and webhook choices, zones, PTZ following, number plates, the HD check, and parked (stationary) vehicles, so a parked car later seen as a truck is still the same parked vehicle. Two boxes on the same vehicle (one "car", one "truck") become one. Your settings are changed over by themselves, and older alerts show and filter as vehicles too. Bicycles stay separate.
+
 ## 0.6.69 — November 2026
 - **Every picture's on-screen display works the same way**: the live grid, a camera's view, the Recordings tab, an alert's player and full screen now all use one on-screen display. Your display settings (camera name, extra text, date and time, status, in the places you chose) apply everywhere, including recordings. A recording shows its own time in the clock's place and a blue **▶ PLAYBACK** tag where live shows the camera's state (REC, armed, offline), so it's always clear which you're looking at.
 - **The buttons are in the same place everywhere**: one row in the same corner (top right, or the corner chosen for the full-screen button) — stream 1 / 2 (live only), 🔊 sound with its volume, and ⛶ full screen. Players keep their playback bar (play, frames, speed, time, clip, download) along the bottom; the full-screen bars no longer repeat the sound and full-screen buttons. A camera's own view now has the full-screen button on its picture too.

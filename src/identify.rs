@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
-const VEHICLES: &[&str] = &["car", "truck", "bus", "motorcycle"];
+const VEHICLES: &[&str] = &["vehicle", "car", "truck", "bus", "motorcycle"];
 
 /// The full-quality file and position for a moment of an alert.
 fn hd_source(

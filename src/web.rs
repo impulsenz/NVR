@@ -797,7 +797,7 @@ fn alert_kinds(c: &crate::config::CameraConfig, ai: &crate::config::AiConfig) ->
         if ai.faces && d.objects.iter().any(|o| o == "person") {
             k.push("face");
         }
-        let vehicles = ["car", "truck", "bus", "motorcycle"];
+        let vehicles = ["vehicle", "car", "truck", "bus", "motorcycle"];
         if ai.plates && d.objects.iter().any(|o| vehicles.contains(&o.as_str())) {
             k.push("plate");
         }
@@ -2846,7 +2846,7 @@ async fn jobs_list(State(m): App) -> Response {
                 && !e.identified
                 && e.start > now - chrono::Duration::days(7)
                 && e.boxes.iter().any(|b| {
-                    ["person", "car", "truck", "bus", "motorcycle"].contains(&b.label.as_str())
+                    ["person", "vehicle", "car", "truck", "bus", "motorcycle"].contains(&b.label.as_str())
                 })
             {
                 identify += 1;

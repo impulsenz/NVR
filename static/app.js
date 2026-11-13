@@ -28,13 +28,16 @@ const tip = (text) => `<span class="info" tabindex="0" role="img" aria-label="${
   addEventListener('scroll', hide, true);
 })();
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const LABEL_GROUP = {person:'person', car:'vehicle', truck:'vehicle', bus:'vehicle', motorcycle:'vehicle', bicycle:'vehicle',
+// Car, truck, bus and motorcycle are all one "vehicle" (as GAZE now names them).
+const VEHICLE_KINDS = ['car', 'truck', 'bus', 'motorcycle', 'van'];
+const canonKind = (k) => VEHICLE_KINDS.includes(k) ? 'vehicle' : k;
+const canonKinds = (list) => [...new Set((list || []).map(canonKind))];
+const LABEL_GROUP = {person:'person', vehicle:'vehicle', car:'vehicle', truck:'vehicle', bus:'vehicle', motorcycle:'vehicle', bicycle:'vehicle',
   dog:'animal', cat:'animal', bird:'animal', horse:'animal', cow:'animal', sheep:'animal', bear:'animal'};
 // Alert types. Plain recordings aren't listed: they are on the timeline.
 // The Alerts filter chips. Faces and number plates show alerts where one
 // was found.
-const FILTER_BASE = [['motion','Motion'],['person','Person'],['car','Car'],['truck','Truck'],
-  ['motorcycle','Motorcycle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken'],['sound','Sound'],
+const FILTER_BASE = [['motion','Motion'],['person','Person'],['vehicle','Vehicle'],['dog','Dog'],['cat','Cat'],['package','Item left/taken'],['sound','Sound'],
   ['face','Faces'],['plate','Number plates']];
 // Only the kinds some camera can raise: a camera or profile that starts
 // watching for dogs makes the Dog chip appear.
@@ -637,7 +640,7 @@ function updateSubscriptions() {
 
 // Overlays (name, clock, fps, status, fullscreen) for a live surface.
 // Little symbols for what was detected (also used on timelines).
-const LABEL_ICON = {person: '🚶', car: '🚗', truck: '🚚', bus: '🚌', motorcycle: '🏍️', bicycle: '🚲', dog: '🐕', cat: '🐈', bird: '🐦',
+const LABEL_ICON = {person: '🚶', vehicle: '🚗', car: '🚗', truck: '🚚', bus: '🚌', motorcycle: '🏍️', bicycle: '🚲', dog: '🐕', cat: '🐈', bird: '🐦',
   horse: '🐎', cow: '🐄', sheep: '🐑', bear: '🐻', backpack: '🎒', suitcase: '🧳', handbag: '👜', umbrella: '☂️', package: '📦', motion: '〰️', sound: '🔊', doorbell: '🔔'};
 const labelIcon = (l) => LABEL_ICON[l] || '🔷';
 // The full-quality (HD) check of what the AI found: ✓ confirmed, ? not.
@@ -2786,12 +2789,12 @@ $('focus-back').onclick = () => location.hash = '#live';
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const endOfDay = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
 // The Alerts filter starts on the usual things (remembered per browser).
-const DEFAULT_TYPES = ['person', 'car', 'truck', 'motorcycle', 'package', 'face', 'plate'];
+const DEFAULT_TYPES = ['person', 'vehicle', 'package', 'face', 'plate'];
 // "Last 24 hours" (the default): from the start of the hour a day ago
 // (so it only moves once an hour), up to the end of today.
 const last24From = () => { const h = new Date(); h.setMinutes(0, 0, 0); return new Date(h.getTime() - 86400000); };
 const rec = {mode: 'list', today: false, last24: true, cameras: new Set(), from: last24From(), to: endOfDay(new Date()), todFrom: '', todTo: '',
-  types: new Set(store.get('alert-types', DEFAULT_TYPES)), items: [], who: ''};
+  types: new Set(canonKinds(store.get('alert-types', DEFAULT_TYPES))), items: [], who: ''};
 const saveTypes = () => store.set('alert-types', [...rec.types]);
 // The Alerts filters as they start: the last 24 hours, every camera, the usual kinds,
 // new and viewed, anyone.
@@ -3369,7 +3372,7 @@ $('f-tlx').onclick = () => {
 // can't be handed a file from a web page get the picture saved first and
 // open with the message filled in.
 let shareIt = null;
-const SHARE_NAMES = {person: 'Person', car: 'Car', truck: 'Truck', bus: 'Bus', motorcycle: 'Motorbike', bicycle: 'Bicycle', dog: 'Dog', cat: 'Cat', bird: 'Bird', package: 'Parcel'};
+const SHARE_NAMES = {person: 'Person', vehicle: 'Vehicle', car: 'Car', truck: 'Truck', bus: 'Bus', motorcycle: 'Motorbike', bicycle: 'Bicycle', dog: 'Dog', cat: 'Cat', bird: 'Bird', package: 'Parcel'};
 function shareWhat(it) {
   const e = it.event || {}, kinds = [...new Set((e.labels || []).map(l => l.label))];
   const names = kinds.map(k => SHARE_NAMES[k] || k[0].toUpperCase() + k.slice(1));
@@ -5373,13 +5376,13 @@ async function openCameraDialog(id, clone, prof) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','car','truck','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, join_seconds: 30, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','vehicle','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, join_seconds: 30, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   // A profile: its settings on top of a new camera's.
   if (prof) { Object.assign(c, JSON.parse(JSON.stringify(prof.values || {}))); c.detect = {...c.detect, mask: ''}; c.name = prof.name; }
   const q = parseUrl(c.url) || {};
   // The usual objects, plus any this camera already watches for.
-  const objs = [...new Set([...((sysinfo && sysinfo.ai_objects) || ['person','car','truck','motorcycle','bicycle','dog','cat']), ...c.detect.objects])];
+  const objs = [...new Set([...((sysinfo && sysinfo.ai_objects) || ['person','vehicle','bicycle','dog','cat']), ...canonKinds(c.detect.objects)])];
   const more = ((sysinfo && sysinfo.ai_more) || []).filter(o => !objs.includes(o));
   const aiOn = settings && settings.ai.provider !== 'none';
   const brandOpts = '<option value="">Format…</option>' + BRANDS.map(b => `<option value="${b[0]}">${esc(b[1])}</option>`).join('');
@@ -5554,7 +5557,7 @@ async function openCameraDialog(id, clone, prof) {
         <label>Stationary objects</label>
         <div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Stop alerting for objects that stay in one place${tip('A car parked in the driveway alerts when it arrives, then stays quiet while it stands still (people walking past still alert). It alerts again as soon as it moves or drives off.')}</label>
           <div class="row" style="margin-top:4px"><span class="muted">after</span><input type="number" id="d-parked-s" min="10" max="3600" value="${c.detect.parked_seconds || 60}" style="width:90px"><span class="muted">seconds without moving, for:</span></div>
-          <div class="chips" id="d-parked-objs" style="margin-top:4px">${[...new Set([...objs, ...(c.detect.parked_objects || [])])].map(o => `<label><input type="checkbox" value="${o}" ${(c.detect.parked_objects || ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'boat']).includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
+          <div class="chips" id="d-parked-objs" style="margin-top:4px">${[...new Set([...objs, ...canonKinds(c.detect.parked_objects || [])])].map(o => `<label><input type="checkbox" value="${o}" ${canonKinds(c.detect.parked_objects || ['vehicle', 'bicycle', 'boat']).includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
 </div>
         <label>Package delivery</label>
         <div><label class="check"><input type="checkbox" id="d-pkg" ${c.detect.packages ? 'checked' : ''}> Notice parcels delivered or picked up</label>
@@ -5596,7 +5599,7 @@ async function openCameraDialog(id, clone, prof) {
         <div><div class="chips" id="p-patrol"><span class="muted small">${id && !clone ? 'Loading presets…' : 'Save the camera first.'}</span></div>
           <div class="row" style="margin-top:6px"><span class="muted">stay</span><input type="number" id="p-patrol-s" min="5" max="3600" value="${c.ptz.patrol_seconds || 30}" style="width:90px"><span class="muted">seconds at each</span></div></div>
         <span></span><div><label class="check"><input type="checkbox" id="p-follow" ${c.ptz.follow ? 'checked' : ''}> Follow people (auto-tracking)${tip('When the AI finds a person (or what you choose below) away from the middle of the picture, the camera turns to keep them in view. When they\u2019re gone, it goes back to its first patrol preset, or its home position. Needs object recognition on for this camera.')}</label>
-          <div class="chips" id="p-follow-objs" style="margin-top:4px">${['person', 'car', 'dog', 'cat'].map(o => `<label><input type="checkbox" value="${o}" ${(c.ptz.follow_objects && c.ptz.follow_objects.length ? c.ptz.follow_objects : ['person']).includes(o) ? 'checked' : ''}>${labelIcon(o)} ${o}</label>`).join('')}</div></div>
+          <div class="chips" id="p-follow-objs" style="margin-top:4px">${['person', 'vehicle', 'dog', 'cat'].map(o => `<label><input type="checkbox" value="${o}" ${canonKinds(c.ptz.follow_objects && c.ptz.follow_objects.length ? c.ptz.follow_objects : ['person']).includes(o) ? 'checked' : ''}>${labelIcon(o)} ${o}</label>`).join('')}</div></div>
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
       <div data-tab="zones" hidden>
@@ -6130,7 +6133,7 @@ async function setupRestartButton(id) {
 // ---------- zones ----------
 let dlgZones = [], zoneDraft = null, zoneUnbind = null;
 const ZONE_COLORS = ['#22c55e', '#4f8cff', '#f59e0b', '#ec4899', '#a78bfa', '#14b8a6', '#ef4444', '#eab308'];
-const ZONE_OBJECTS = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat', 'bird'];
+const ZONE_OBJECTS = ['person', 'vehicle', 'bicycle', 'dog', 'cat', 'bird'];
 function setupZones(c, camId) {
   dlgZones = JSON.parse(JSON.stringify(c.zones || []));
   zoneDraft = null;
@@ -7286,7 +7289,7 @@ async function renderKnown(body) {
 }
 
 // ---------- Settings → Notifications ----------
-const NOTIFY_OBJECTS = [['person', 'People'], ['car', 'Cars'], ['truck', 'Trucks'], ['bus', 'Buses'], ['motorcycle', 'Motorbikes'], ['bicycle', 'Bicycles'], ['package', 'Packages'], ['dog', 'Dogs'], ['cat', 'Cats']];
+const NOTIFY_OBJECTS = [['person', 'People'], ['vehicle', 'Vehicles'], ['bicycle', 'Bicycles'], ['package', 'Packages'], ['dog', 'Dogs'], ['cat', 'Cats']];
 function randomTopic() {
   const a = new Uint8Array(16); crypto.getRandomValues(a);
   return 'gaze-' + Array.from(a, b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
@@ -7295,7 +7298,7 @@ function randomTopic() {
 function renderSmartHome(body) {
   const q = settings.mqtt || {}, st = q.status || {};
   const hooks = JSON.parse(JSON.stringify(settings.webhooks || []));
-  const objs = [...new Set(['person', 'car', 'truck', 'motorcycle', 'bicycle', 'dog', 'cat', 'package', ...status.cameras.flatMap(c => c.watch || [])]), 'motion'];
+  const objs = [...new Set(['person', 'vehicle', 'bicycle', 'dog', 'cat', 'package', ...status.cameras.flatMap(c => c.watch || [])]), 'motion'];
   body.innerHTML = `<form class="card" id="f-mqtt"><h2>Home Assistant (MQTT)${tip('MQTT is how home automation systems talk to each other. Home Assistant gets a sensor for motion and for each object on every camera, the last alert picture, an \u201calert\u201d event, whether each camera is online, and a Home / Away / Night switch. Example automation: turn the porch light on when Front Door sees a person after dark.')}</h2>
     <p class="muted" style="margin-top:0">${st.connected ? '<span class="okc">● Connected</span>' : q.enabled ? `<span class="errc">● Not connected${st.error ? ': ' + esc(st.error) : ''}</span>` : 'Off.'} In Home Assistant, install the <b>Mosquitto broker</b> add-on and the MQTT integration, then enter its address here.</p>
     <div class="form">

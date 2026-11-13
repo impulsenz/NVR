@@ -15,6 +15,7 @@ use std::sync::Arc;
 /// is everything else.
 pub const FILTER_LABELS: &[&str] = &[
     "sound",
+    "vehicle",
     "person",
     "car",
     "truck",

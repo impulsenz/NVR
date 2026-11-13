@@ -93,6 +93,31 @@ pub const COCO: [&str; 80] = [
     "toothbrush",
 ];
 
+/// The kinds of vehicle the built-in model tells apart (and often mixes up):
+/// all one "vehicle" in GAZE, so a car taken for a bus still alerts, and a
+/// parked car seen now as a truck is still the same parked vehicle.
+pub const VEHICLE_KINDS: &[&str] = &["car", "truck", "bus", "motorcycle", "van"];
+
+/// A detected kind as GAZE uses it ("truck" → "vehicle").
+pub fn canon(label: &str) -> &str {
+    if VEHICLE_KINDS.contains(&label) { "vehicle" } else { label }
+}
+
+/// A list of kinds with the vehicle kinds as one "vehicle" (in order, no
+/// repeats). Returns whether it changed.
+pub fn canon_list(list: &mut Vec<String>) -> bool {
+    let mut out: Vec<String> = Vec::new();
+    for l in list.iter() {
+        let c = canon(l).to_string();
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    let changed = out != *list;
+    *list = out;
+    changed
+}
+
 /// Animals the built-in model knows ("ignore motion set off by animals").
 pub const ANIMALS: &[&str] = &[
     "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
@@ -102,9 +127,7 @@ pub const ANIMALS: &[&str] = &[
 /// Shown on every camera's AI tab (and the Alerts filter).
 pub const MAIN_OBJECTS: &[&str] = &[
     "person",
-    "car",
-    "truck",
-    "motorcycle",
+    "vehicle",
     "bicycle",
     "dog",
     "cat",
@@ -114,7 +137,6 @@ pub const MAIN_OBJECTS: &[&str] = &[
 /// most useful for a home camera first.
 pub fn more_objects() -> Vec<&'static str> {
     const FIRST: &[&str] = &[
-        "bus",
         "bird",
         "horse",
         "cow",
@@ -138,13 +160,14 @@ pub fn more_objects() -> Vec<&'static str> {
     let mut v: Vec<&str> = FIRST.to_vec();
     v.extend(
         COCO.iter()
-            .filter(|o| !FIRST.contains(o) && !MAIN_OBJECTS.contains(o)),
+            .filter(|o| !FIRST.contains(o) && !MAIN_OBJECTS.contains(o) && !VEHICLE_KINDS.contains(o)),
     );
     v
 }
 
 pub const SECURITY_OBJECTS: &[&str] = &[
     "person",
+    "vehicle",
     "car",
     "truck",
     "bus",
@@ -647,7 +670,9 @@ impl Yolox {
                     let x0 = ((cx - w / 2.0) / fw).clamp(0.0, 1.0);
                     let y0 = ((cy - h / 2.0) / fh).clamp(0.0, 1.0);
                     dets.push(Detection {
-                        label: COCO[class].into(),
+                        // (Before overlapping boxes are merged: a car box and
+                        // a truck box on the same thing become one vehicle.)
+                        label: canon(COCO[class]).into(),
                         score,
                         x: x0,
                         y: y0,
@@ -799,6 +824,16 @@ pub fn nms(mut dets: Vec<Detection>, thr: f32) -> Vec<Detection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vehicles_are_one_kind() {
+        assert_eq!(canon("truck"), "vehicle");
+        assert_eq!(canon("bicycle"), "bicycle");
+        let mut l: Vec<String> = ["person", "car", "truck", "dog", "bus"].map(String::from).to_vec();
+        assert!(canon_list(&mut l));
+        assert_eq!(l, ["person", "vehicle", "dog"]);
+        assert!(!canon_list(&mut l));
+    }
 
     #[test]
     fn reads_your_own_yolov8_model() {

@@ -90,6 +90,26 @@ pub struct Meaning {
     pub v: String,
 }
 
+/// An alert's kinds with every vehicle kind as one "vehicle".
+fn canon_labels(e: &mut Event) {
+    if !e.labels.iter().any(|l| crate::ai::canon(&l.label) != l.label) && !e.boxes.iter().any(|b| crate::ai::canon(&b.label) != b.label) {
+        return;
+    }
+    let mut out: Vec<Label> = Vec::new();
+    for mut l in std::mem::take(&mut e.labels) {
+        l.label = crate::ai::canon(&l.label).to_string();
+        match out.iter_mut().find(|o| o.label == l.label) {
+            Some(o) if o.score < l.score => *o = l,
+            Some(_) => {}
+            None => out.push(l),
+        }
+    }
+    e.labels = out;
+    for b in &mut e.boxes {
+        b.label = crate::ai::canon(&b.label).to_string();
+    }
+}
+
 fn is_zero(n: &u8) -> bool {
     *n == 0
 }
@@ -162,6 +182,11 @@ impl EventStore {
         idx.sort();
         events = idx.into_iter().map(|i| events[i].clone()).collect();
         events.sort_by_key(|e| e.start);
+        // Alerts from before car, truck, bus and motorcycle were one
+        // "vehicle": shown and found as vehicles (the best score kept).
+        for e in &mut events {
+            canon_labels(e);
+        }
         // Alerts whose picture and clip are both gone (deleted, while the
         // list of alerts couldn't be rewritten): left out, and the list
         // tidied.

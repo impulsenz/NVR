@@ -589,10 +589,7 @@ impl Default for NotifyConfig {
             token: String::new(),
             objects: vec![
                 "person".into(),
-                "car".into(),
-                "truck".into(),
-                "bus".into(),
-                "motorcycle".into(),
+                "vehicle".into(),
                 "bicycle".into(),
                 "package".into(),
             ],
@@ -873,8 +870,7 @@ impl Default for DetectConfig {
             ai: false,
             objects: vec![
                 "person".into(),
-                "car".into(),
-                "truck".into(),
+                "vehicle".into(),
                 "dog".into(),
                 "cat".into(),
             ],
@@ -1502,6 +1498,26 @@ impl Config {
         if !AI_PROVIDERS.contains(&self.ai.provider.as_str()) {
             self.ai.provider = "builtin".into();
             changed = true;
+        }
+        // 0.6.70: car, truck, bus and motorcycle are one "vehicle".
+        {
+            let v = crate::ai::canon_list;
+            changed |= v(&mut self.notify.objects);
+            for w in &mut self.webhooks {
+                changed |= v(&mut w.objects);
+            }
+            for p in &mut self.profiles {
+                changed |= v(&mut p.detect.objects);
+                changed |= v(&mut p.detect.parked_objects);
+            }
+            for c in &mut self.cameras {
+                changed |= v(&mut c.detect.objects);
+                changed |= v(&mut c.detect.parked_objects);
+                changed |= v(&mut c.ptz.follow_objects);
+                for z in &mut c.zones {
+                    changed |= v(&mut z.objects);
+                }
+            }
         }
         for c in &mut self.cameras {
             // Object recognition only runs on motion now.

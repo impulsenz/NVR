@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Kinds that can park, by default.
-pub const PARKING: &[&str] = &["car", "truck", "bus", "motorcycle", "bicycle", "boat"];
+pub const PARKING: &[&str] = &["vehicle", "bicycle", "boat"];
 /// Misses (AI runs without finding it) before a parked object is forgotten.
 const FORGET_AFTER: u32 = 10;
 /// Sightings in a row somewhere else before a parked object counts as
@@ -67,12 +67,10 @@ fn iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     i / (a[2] * a[3] + b[2] * b[3] - i).max(1e-6)
 }
 
-/// Car, truck and bus are often mistaken for one another: same group.
+/// Car, truck and bus are often mistaken for one another: all one vehicle
+/// (also what was remembered from before they were one kind).
 fn group(label: &str) -> &str {
-    match label {
-        "car" | "truck" | "bus" => "vehicle",
-        l => l,
-    }
+    crate::ai::canon(label)
 }
 
 impl Stationary {
@@ -101,7 +99,7 @@ impl Stationary {
         self.items
             .iter()
             .filter(|i| i.parked)
-            .map(|i| i.label.clone())
+            .map(|i| group(&i.label).to_string())
             .collect()
     }
 
@@ -129,7 +127,7 @@ impl Stationary {
         let mut seen = vec![false; self.items.len()];
         let mut changed = false;
         for d in dets {
-            if !kinds.iter().any(|k| k == &d.label) {
+            if !kinds.iter().any(|k| group(k) == group(&d.label)) {
                 keep.push(d);
                 continue;
             }
@@ -276,7 +274,7 @@ mod tests {
                 .len();
         }
         assert_eq!(alerts, 0);
-        assert_eq!(s.parked(), ["car"]);
+        assert_eq!(s.parked(), ["vehicle"]);
     }
 
     fn det(label: &str, x: f32) -> Detection {
