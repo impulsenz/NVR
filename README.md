@@ -60,7 +60,7 @@ days of recording fit, a log viewer, background task status, and self-updating f
 
 ### Windows
 
-Download `nvr-windows-x64.exe` from the [latest release](https://github.com/impulsenz/NVR/releases/latest),
+Download `GAZE.exe` from the [latest release](https://github.com/impulsenz/NVR/releases/latest),
 put it in a folder of its own and run it. GAZE starts in the system tray; click the icon to open it in
 your browser. After that it can update itself (Settings → About).
 

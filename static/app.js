@@ -366,7 +366,50 @@ if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWor
 let installPrompt = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; $('um-install').hidden = false; });
 addEventListener('appinstalled', () => { installPrompt = null; $('um-install').hidden = true; toast('GAZE is installed — open it from your home screen or Start menu'); });
-$('um-install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice.catch(() => {}); installPrompt = null; $('um-install').hidden = true; };
+$('um-install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice.catch(() => {}); installPrompt = null; $('um-install').hidden = true; paintOpenApp(); };
+// Installed already (the browser then stops offering to install it): open
+// this page in the app instead. Asked of the browser where it can tell, and
+// remembered when GAZE was installed from this browser. The app opens on a
+// web+gaze: link (its manifest's protocol handler).
+const inApp = () => matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay), (display-mode: minimal-ui)').matches || navigator.standalone === true;
+async function paintOpenApp() {
+  const b = $('um-openapp'); if (!b) return;
+  let installed = false;
+  try { installed = store.get('app-installed', false); } catch (_) {}
+  if (!installed && navigator.getInstalledRelatedApps) { try { installed = (await navigator.getInstalledRelatedApps()).length > 0; } catch (_) {} }
+  b.hidden = inApp() || !installed || !window.isSecureContext;
+  if (!b.hidden) $('um-install').hidden = true;
+}
+$('um-openapp').onclick = (e) => { e.preventDefault(); location.href = 'web+gaze:' + (location.hash || '#live'); };
+addEventListener('appinstalled', () => { store.set('app-installed', true); paintOpenApp(); });
+paintOpenApp();
+// Opened from that link in the app: go to the page it was about.
+{
+  const o = new URLSearchParams(location.search).get('open');
+  if (o) {
+    const h = decodeURIComponent(o).replace(/^web\+gaze:/, '');
+    history.replaceState(null, '', location.pathname + (/^#[\w\/~?=&.-]*$/.test(h) ? h : '#live'));
+    dispatchEvent(new HashChangeEvent('hashchange'));
+  }
+}
+
+// Password fields: an eye to see what was typed.
+function addPasswordEyes(root = document) {
+  root.querySelectorAll('input[type=password]:not([data-eye])').forEach(i => {
+    i.dataset.eye = '1';
+    const wrap = document.createElement('span'); wrap.className = 'pw-wrap';
+    // The box keeps its place and size in the row (its width / flex move to the wrapper).
+    for (const k of ['flex', 'width', 'minWidth', 'maxWidth', 'marginTop']) if (i.style[k]) { wrap.style[k] = i.style[k]; i.style[k] = ''; }
+    if (wrap.style.width || wrap.style.flex) wrap.style.display = 'inline-flex';
+    i.replaceWith(wrap); wrap.appendChild(i);
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'pw-eye'; b.tabIndex = -1; b.title = 'Show the password'; b.textContent = '👁';
+    b.onclick = () => { const show = i.type === 'password'; i.type = show ? 'text' : 'password'; b.textContent = show ? '🙈' : '👁'; b.title = show ? 'Hide the password' : 'Show the password'; i.focus(); };
+    wrap.appendChild(b);
+  });
+}
+addPasswordEyes();
+new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) addPasswordEyes(n.matches && n.matches('input[type=password]') ? n.parentElement : n); }).observe(document.body, {childList: true, subtree: true});
 
 // Home / Away / Night: which cameras send phone notifications (recording
 // and alerts carry on in every mode).

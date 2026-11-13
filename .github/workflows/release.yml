@@ -81,9 +81,12 @@ jobs:
         shell: bash
         run: |
           mkdir dist
+          # GAZE.exe for new installs; the older name too, for installs
+          # from before 0.6.73 to find their update.
+          cp "${{ matrix.exe }}" "dist/GAZE.exe"
           cp "${{ matrix.exe }}" "dist/${{ matrix.asset }}"
           cd dist
-          sha256sum "${{ matrix.asset }}" | cut -d' ' -f1 > "${{ matrix.asset }}.sha256"
+          for f in GAZE.exe "${{ matrix.asset }}"; do sha256sum "$f" | cut -d' ' -f1 > "$f.sha256"; done
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}

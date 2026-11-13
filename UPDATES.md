@@ -17,7 +17,7 @@ This guide covers:
 ## 1. For users: download and update
 
 1. Open the latest release: <https://github.com/impulsenz/NVR/releases/latest>
-2. Download `nvr-windows-x64.exe` (rename it to `nvr.exe` if you like).
+2. Download `GAZE.exe`.
 3. Put it in a folder of its own, e.g. `C:\GAZE`. Settings, logs and AI
    models are kept next to it; recordings go in a `recordings` folder there
    unless you choose another.
@@ -77,7 +77,9 @@ The workflow that does it is `.github/workflows/release.yml`.
 4. On GitHub, open **Actions** → *Release* to follow the build. It takes
    about 10–15 minutes. When it's done, **Releases** has *GAZE v0.6.0* with
    these files:
-   - `nvr-windows-x64.exe` and `nvr-windows-x64.exe.sha256`
+   - `GAZE.exe` and `GAZE.exe.sha256`
+   - `nvr-windows-x64.exe` and `nvr-windows-x64.exe.sha256` (the same program, for
+     installs from before 0.6.73 to find their update)
 5. Installed copies see the new version within a minute.
 
 Other pushes don't start a release (a change to `Cargo.toml` in a commit

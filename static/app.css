@@ -1238,3 +1238,11 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 
 #no-cameras .nc-more { margin-top: 10px; }
 #no-cameras .nc-out { max-width: 760px; margin: 12px auto 0; text-align: left; }
+
+/* Password fields: the eye to show what was typed. */
+.pw-wrap { position: relative; display: inline-flex; align-items: center; width: 100%; }
+.row > .pw-wrap { width: auto; }
+label .pw-wrap, .form .pw-wrap { display: flex; }
+.pw-wrap > input { flex: 1; min-width: 0; padding-right: 36px; }
+.pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: none; border: 0; padding: 4px 6px; cursor: pointer; opacity: .65; font-size: 15px; line-height: 1; }
+.pw-eye:hover { opacity: 1; background: none; }

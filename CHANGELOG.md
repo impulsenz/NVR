@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.73 — November 2026
+- **GAZE is called GAZE on the computer**: the program now carries its name and icon, so Task Manager, the taskbar and the file's properties show **GAZE** with the GAZE eye. Releases offer the program as **GAZE.exe** (new installs download that); the older nvr-windows-x64.exe stays alongside so installed copies keep finding their updates. An installed copy keeps its file name when it updates — rename it to GAZE.exe while GAZE is stopped if you like (then switch "Start with Windows" off and on again in the tray menu, so it points at the new name).
+- **Open in GAZE app**: when GAZE is installed as an app on this computer, the 👤 menu in the browser offers **📲 Open in GAZE app** (where "Install GAZE as an app" was), which opens the same page in the app. The first time, the browser asks whether GAZE may open the app.
+- **See the password you typed**: every password box (sign-in, users, camera logins, notifications …) has an 👁 to show or hide what you typed.
+
 ## 0.6.72 — November 2026
 - **Scan for cameras from the Live page**: on a new GAZE with no cameras yet, the Live page now has a **🔍 Scan network for cameras** button (as in Settings → Cameras) next to adding one by hand. Cameras found are listed there; **+ Add** opens the camera window with its address, brand and a name filled in, ready for the camera's login. Cameras on another network can be found by adding it (e.g. 192.168.5.0/24) under "Cameras on another network?".
 

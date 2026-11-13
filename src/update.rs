@@ -46,12 +46,13 @@ pub fn repo(cfg: &crate::config::UpdateConfig) -> String {
 }
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The release file for this system.
-fn asset_name() -> Option<&'static str> {
+/// The release file for this system: GAZE.exe, or the name it had before
+/// 0.6.73 (releases carry both).
+fn asset_names() -> &'static [&'static str] {
     if cfg!(all(windows, target_arch = "x86_64")) {
-        Some("nvr-windows-x64.exe")
+        &["GAZE.exe", "nvr-windows-x64.exe"]
     } else {
-        None
+        &[]
     }
 }
 
@@ -241,25 +242,27 @@ pub async fn check(repo: &str) -> Result<Status> {
         let version = tag.trim_start_matches('v').to_string();
         let newer =
             matches!((parse_version(&tag), parse_version(VERSION)), (Some(l), Some(c)) if l > c);
-        let name = match asset_name() {
-            Some(n) => n,
-            None if newer => bail!("no ready-made updates for this kind of computer"),
-            None => "",
-        };
+        if asset_names().is_empty() && newer {
+            bail!("no ready-made updates for this kind of computer");
+        }
         let known = with(|s| s.latest.as_deref() == Some(version.as_str()) && s.checked.is_some());
         if known {
             with(|s| s.checked = Some(Local::now()));
             return anyhow::Ok(());
         }
-        let url = format!("{web}/{repo}/releases/download/{tag}/{name}");
         // A new version: is the program for this computer attached?
         // (its small checksum file; GitHub's file storage refuses HEAD requests)
-        let has_asset = newer
-            && client()?
-                .get(format!("{url}.sha256"))
-                .send()
-                .await
-                .is_ok_and(|r| r.status().is_success());
+        let mut url = String::new();
+        let mut has_asset = false;
+        if newer {
+            for name in asset_names() {
+                let u = format!("{web}/{repo}/releases/download/{tag}/{name}");
+                if client()?.get(format!("{u}.sha256")).send().await.is_ok_and(|r| r.status().is_success()) {
+                    (url, has_asset) = (u, true);
+                    break;
+                }
+            }
+        }
         // Release notes and date (optional; the API may be rate-limited).
         let (mut notes, mut published) = (String::new(), None);
         if newer
@@ -471,7 +474,7 @@ pub async fn install() -> Result<()> {
                 }
                 bail!(
                     "Windows didn't let GAZE replace its own program file ({}){}. Close any other copy of GAZE and try again, \
-                     or install it by hand: download nvr-windows-x64.exe from the releases page and put it in place of the old one while GAZE is stopped.",
+                     or install it by hand: download GAZE.exe from the releases page and put it in place of the old one while GAZE is stopped.",
                     exe.display(),
                     if code.is_none() { " and the permission prompt was refused" } else { "" }
                 );
