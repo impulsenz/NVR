@@ -222,6 +222,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
             get(ptz_presets).post(ptz_save_preset),
         )
         .route("/api/cameras/{id}/ptz/goto", post(ptz_goto))
+        .route("/api/cameras/{id}/ptz/patrol", get(ptz_patrol_get).put(ptz_patrol_put))
         .route("/api/ptz/test", post(ptz_test))
         .route("/api/cameras/{id}/resume", post(resume))
         .route(
@@ -1507,6 +1508,33 @@ async fn ptz_goto(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq
     .await;
     match res {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize, serde::Serialize)]
+struct PatrolReq {
+    /// Preset tokens visited in turn (empty = not roaming).
+    patrol: Vec<String>,
+    patrol_seconds: u32,
+}
+
+async fn ptz_patrol_get(State(m): App, Path(id): Path<String>) -> Response {
+    match m.config().cameras.iter().find(|c| c.id == id) {
+        Some(c) => Json(PatrolReq { patrol: c.ptz.patrol.clone(), patrol_seconds: c.ptz.patrol_seconds }).into_response(),
+        None => err(StatusCode::NOT_FOUND, "no such camera"),
+    }
+}
+
+/// The preset overlay's "Roam between presets": which, and how long at each.
+async fn ptz_patrol_put(State(m): App, Path(id): Path<String>, Json(r): Json<PatrolReq>) -> Response {
+    let Some(mut cam) = m.config().cameras.iter().find(|c| c.id == id).cloned() else {
+        return err(StatusCode::NOT_FOUND, "no such camera");
+    };
+    cam.ptz.patrol = r.patrol.into_iter().take(64).collect();
+    cam.ptz.patrol_seconds = r.patrol_seconds.clamp(5, 3600);
+    match m.update_camera(&id, cam, false).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
     }
 }

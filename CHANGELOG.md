@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.83 — November 2026
+- **Presets from the keyboard**: on a pan / tilt / zoom camera's live view, press **1–9** (and 0 for the tenth) to go to that preset. The preset list shows each one's number.
+- **Roam between presets** right from the camera's picture: the new ⟲ button next to ☆ lets you turn roaming on or off, tick which presets to visit and set how long to stay at each. It lights up while roaming. The same settings are in the camera's Pan / tilt / zoom tab.
+- The "Moving to the preset…" message is gone.
+- **Day colours**: the camera name and clock on live pictures, and the coloured person / vehicle tags, are now really readable in day mode (0.6.79 missed a spot).
+
 ## 0.6.82 — November 2026
 - **Settings → Voice & talking** for 💬 Say…: choose the **voice** (every voice on the computer, including the newer natural Windows voices you add in Windows Settings → Time & language → Speech), the **speed** and **loudness**, an optional **chime** before speaking, and your own **ready phrases** (the buttons under the text box). **Hear it here** plays the voice in your browser exactly as the camera gets it; **Say on camera** tries it on a camera.
 - **Plain motion alerts no longer count as new**: the Alerts tab's number and "Dismiss all new" count only alerts where something was recognised (people, vehicles, sounds…). Motion-only alerts are still there to look up and filter, just without the NEW mark.

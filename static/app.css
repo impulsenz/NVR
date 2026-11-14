@@ -1275,12 +1275,12 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 :root[data-theme="light"] :is(.surface, .thumb, .tl-videos, .auth-card, .pov, .fspov, #tipcard),
 :root[data-theme="light"] :is(.rc .tags, .ov, .tag.person, .tag.vehicle, .tag.animal, .tag.motion, .tag.package, .tag.other) { --bg: #0e1014; --panel: #161920; --panel2: #1d212a; --panel3: #252a35; --border: #2a2f3a;
   --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --accent2: rgba(79,140,255,.16);
-  --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa; color-scheme: dark; }
+  --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa; color-scheme: dark; color: var(--text); }
 @media (prefers-color-scheme: light) {
   :root[data-theme="auto"] :is(.surface, .thumb, .tl-videos, .auth-card, .pov, .fspov, #tipcard),
   :root[data-theme="auto"] :is(.rc .tags, .ov, .tag.person, .tag.vehicle, .tag.animal, .tag.motion, .tag.package, .tag.other) { --bg: #0e1014; --panel: #161920; --panel2: #1d212a; --panel3: #252a35; --border: #2a2f3a;
   --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --accent2: rgba(79,140,255,.16);
-  --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa; color-scheme: dark; }
+  --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa; color-scheme: dark; color: var(--text); }
 }
 
 #cam-dialog .foot .c-err { flex: 1; margin: 0 8px 0 0; font-size: 13px; text-align: left; }
@@ -1330,3 +1330,13 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 .say-pop .row input { flex: 1; min-width: 0; }
 .say-quick { display: flex; flex-wrap: wrap; gap: 4px; }
 .say-pop .say-msg:empty { display: none; }
+
+/* Roam between presets (on the PTZ overlay) */
+.ptz-presets #ptz-roam.on { background: rgba(79,140,255,.35); color: #fff; }
+.ptz-roam { margin-top: 6px; padding: 8px; border-radius: 10px; background: rgba(10,12,16,.82); color: #e6e8ec; font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; max-width: 240px; }
+.ptz-roam .row { display: flex; align-items: center; gap: 6px; }
+.ptz-roam input[type=number] { width: 70px; height: 28px; min-height: 0; }
+.ptz-roam-list { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto; }
+.ptz-roam .check { margin: 0; color: inherit; }
+.ptz-roam .hint { color: #9aa3b2; margin: 0; }
+.ptz-roam button { min-height: 0 !important; height: 28px; padding: 0 10px; }

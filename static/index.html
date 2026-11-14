@@ -118,7 +118,14 @@
                 </div>
                 <div class="ptz-zoom"><button type="button" data-ptz="0,0,1" title="Zoom in (+ or scroll)">＋</button><span>ZOOM</span><button type="button" data-ptz="0,0,-1" title="Zoom out (− or scroll)">－</button></div>
               </div>
-              <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button></div>
+              <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button><button type="button" id="ptz-roam" title="Roam between presets">⟲</button></div>
+              <div class="ptz-roam" id="ptz-roam-box" hidden>
+                <label class="check"><input type="checkbox" id="ptz-roam-on"> Roam between presets</label>
+                <div class="ptz-roam-list" id="ptz-roam-list"></div>
+                <div class="row"><span>Stay</span><input type="number" id="ptz-roam-s" min="5" max="3600" value="30"><span>s at each</span></div>
+                <div class="hint">Pauses while something's going on, and for 2 minutes after you steer it. Keys 1–9 go to presets.</div>
+                <div class="row"><span class="spacer"></span><button type="button" id="ptz-roam-cancel">Cancel</button><button type="button" class="primary" id="ptz-roam-save">Save</button></div>
+              </div>
               <div class="ptz-msg" id="ptz-msg"></div>
             </div>
           </div>

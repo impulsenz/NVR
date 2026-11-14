@@ -2160,6 +2160,7 @@ let ptzCam = null;
 function setupPtz(c) {
   const pad = $('ptz-pad'), surf = $('focus-surface');
   ptzCam = c.ptz ? c.id : null;
+  ptzPresets = []; ptzGoto = null;
   pad.hidden = !c.ptz;
   surf.classList.toggle('has-ptz', !!c.ptz);
   if (!c.ptz) return;
@@ -2180,10 +2181,41 @@ function setupPtz(c) {
   const loadPresets = async () => {
     try {
       const p = await api(`api/cameras/${enc(id)}/ptz/presets`);
-      $('ptz-presets').innerHTML = `<option value="">Presets (${p.length})…</option>` + p.map(x => `<option value="${esc(x.token)}">${esc(x.name)}</option>`).join('');
+      if (ptzCam !== id) return;
+      ptzPresets = p;
+      // Numbered: keys 1–9 (and 0 for the tenth) go to them.
+      $('ptz-presets').innerHTML = `<option value="">Presets (${p.length})…</option>` + p.map((x, i) => `<option value="${esc(x.token)}">${i < 10 ? ((i + 1) % 10) + ' · ' : ''}${esc(x.name)}</option>`).join('');
     } catch (e) { msg(e.message, true); }
   };
-  $('ptz-presets').onchange = () => { const t = $('ptz-presets').value; if (t) api(`api/cameras/${enc(id)}/ptz/goto`, {method: 'POST', json: {token: t}}).then(() => msg('Moving to the preset…')).catch(e => msg(e.message, true)); };
+  ptzGoto = (t) => api(`api/cameras/${enc(id)}/ptz/goto`, {method: 'POST', json: {token: t}}).catch(e => msg(e.message, true));
+  $('ptz-presets').onchange = () => { const t = $('ptz-presets').value; if (t) ptzGoto(t); };
+  // Roam between presets: which, and how long at each.
+  const box = $('ptz-roam-box');
+  box.hidden = true;
+  box.onpointerdown = (e) => e.stopPropagation(); box.ondblclick = (e) => e.stopPropagation();
+  const paintRoam = (on) => $('ptz-roam').classList.toggle('on', on);
+  api(`api/cameras/${enc(id)}/ptz/patrol`).then(r => paintRoam(r.patrol.length > 0)).catch(() => {});
+  $('ptz-roam').onclick = async () => {
+    if (!box.hidden) { box.hidden = true; return; }
+    let cur = {patrol: [], patrol_seconds: 30};
+    try { cur = await api(`api/cameras/${enc(id)}/ptz/patrol`); } catch (_) {}
+    const on = cur.patrol.length > 0;
+    $('ptz-roam-on').checked = on;
+    $('ptz-roam-s').value = cur.patrol_seconds || 30;
+    $('ptz-roam-list').innerHTML = ptzPresets.length ? ptzPresets.map((p, i) => `<label class="check"><input type="checkbox" value="${esc(p.token)}" ${!on || cur.patrol.includes(p.token) ? 'checked' : ''}> ${i < 10 ? ((i + 1) % 10) + ' · ' : ''}${esc(p.name)}</label>`).join('')
+      : '<span class="muted small">No presets yet: save some with ☆ first.</span>';
+    box.hidden = false;
+  };
+  $('ptz-roam-cancel').onclick = () => { box.hidden = true; };
+  $('ptz-roam-save').onclick = async () => {
+    const on = $('ptz-roam-on').checked, list = [...$('ptz-roam-list').querySelectorAll('input:checked')].map(i => i.value);
+    if (on && list.length < 2) return msg('Tick at least two presets to roam between', true);
+    try {
+      await api(`api/cameras/${enc(id)}/ptz/patrol`, {method: 'PUT', json: {patrol: on ? list : [], patrol_seconds: Math.max(5, Math.round(+$('ptz-roam-s').value) || 30)}});
+      paintRoam(on); box.hidden = true;
+      toast(on ? `Roaming between ${list.length} presets` : 'Roaming off');
+    } catch (e) { msg(e.message, true); }
+  };
   $('ptz-save').onclick = async () => {
     const name = (prompt('Name for this position (e.g. Driveway, Gate):') || '').trim();
     if (!name) return;
@@ -2192,7 +2224,7 @@ function setupPtz(c) {
   };
   loadPresets();
 }
-let ptzMove = null, ptzStop = null;
+let ptzMove = null, ptzStop = null, ptzGoto = null, ptzPresets = [];
 // Drag on the picture to pan / tilt.
 (function wirePtzDrag() {
   const surf = $('focus-surface');
@@ -2225,7 +2257,14 @@ let ptzMove = null, ptzStop = null;
   const held = new Set();
   const keyVec = {ArrowUp: [0, 1, 0], ArrowDown: [0, -1, 0], ArrowLeft: [-1, 0, 0], ArrowRight: [1, 0, 0], '+': [0, 0, 1], '=': [0, 0, 1], '-': [0, 0, -1]};
   document.addEventListener('keydown', (e) => {
-    if (!ptzCam || page !== 'live' || focusId !== ptzCam || focusPlayback || e.target.closest('input, select, textarea, dialog') || !keyVec[e.key] || held.has(e.key)) return;
+    if (!ptzCam || page !== 'live' || focusId !== ptzCam || focusPlayback || e.target.closest('input, select, textarea, dialog')) return;
+    // 1–9 (and 0): go to that preset.
+    if (/^[0-9]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey && ptzGoto) {
+      const p = ptzPresets[(+e.key + 9) % 10];
+      if (p) { e.preventDefault(); ptzGoto(p.token); $('ptz-presets').value = p.token; }
+      return;
+    }
+    if (!keyVec[e.key] || held.has(e.key)) return;
     e.preventDefault(); held.add(e.key); ptzMove(keyVec[e.key]);
   });
   document.addEventListener('keyup', (e) => { if (held.delete(e.key) && ptzStop) ptzStop(); });
