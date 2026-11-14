@@ -319,6 +319,23 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
 #toast.ok { border-color: var(--green, #2ecc71); }
 .saved-tick { display: inline-block; margin-left: 6px; color: var(--green, #2ecc71); font-weight: 700; animation: tickpop .25s ease-out; }
 @keyframes tickpop { from { transform: scale(.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+/* Every button gives a little when pressed. */
+button, a.btn { transition: transform .08s ease, box-shadow .2s ease, background-color .2s ease; }
+button:not(:disabled):active, a.btn:active { transform: scale(.95); }
+/* Save buttons: a ring on the click, a spinner while saving, green when done,
+   a shake when it failed. */
+button.save-pulse { animation: savepulse .5s ease-out; }
+@keyframes savepulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent, #3b82f6) 60%, transparent); } 100% { box-shadow: 0 0 0 12px transparent; } }
+button.saving { position: relative; color: transparent !important; pointer-events: none; }
+button.saving::after { content: ''; position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -8px 0 0 -8px;
+  border: 2px solid var(--text, #fff); border-right-color: transparent; border-radius: 50%; animation: savespin .7s linear infinite; }
+@keyframes savespin { to { transform: rotate(360deg); } }
+button.save-ok { animation: saveok 1.4s ease-out; }
+@keyframes saveok { 0% { background-color: var(--green, #2ecc71); border-color: var(--green, #2ecc71); color: #fff; box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #2ecc71) 70%, transparent); }
+  30% { box-shadow: 0 0 0 10px transparent; } 60% { background-color: var(--green, #2ecc71); border-color: var(--green, #2ecc71); color: #fff; } }
+button.save-bad { animation: savebad .6s ease; border-color: var(--red, #e74c3c) !important; }
+@keyframes savebad { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+@media (prefers-reduced-motion: reduce) { button.save-pulse, button.save-ok, button.save-bad { animation-duration: .01s; } button:not(:disabled):active { transform: none; } }
 
 /* full-screen video wall */
 .wall-only { display: none !important; }

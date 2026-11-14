@@ -119,6 +119,17 @@ pub enum Net {
 }
 
 impl Net {
+    /// Loaded somewhere other than where it should run now: on the
+    /// processor while the GPU has become ready (it was loaded before the
+    /// GPU runtime), or on the GPU after the processor was chosen. Kept
+    /// models check this and load again.
+    pub fn misplaced(&self) -> bool {
+        match self {
+            Net::Cpu(_) => use_gpu() && RUNTIME.get().is_some() && RUNTIME_ERR.lock().unwrap().is_none(),
+            Net::Gpu(_) => !use_gpu(),
+        }
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn on_gpu(&self) -> bool {
         matches!(self, Net::Gpu(_))

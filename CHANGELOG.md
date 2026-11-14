@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.94 — November 2026
+- **Save buttons show that they worked**: every button gives a little when pressed. Save buttons (Save, Apply, Add, Import…) also pulse when clicked, show a spinner while saving, then flash green with a ✓ — or shake red if the save failed (the message says why). The tick finds the button again even when the page redraws after saving.
+- **Profiles update their cameras straight away**: saving a profile now applies its live-view and display changes to every camera using it at once, as the camera's own window does; other changes restart those cameras with the new settings, as before.
+- **Sound detection (and faces & plates, description search) moves to the GPU once it's ready**: a model loaded before the GPU was ready used to stay on the processor until GAZE restarted ("the GPU runtime wasn't ready yet…"). It now loads again on the GPU by itself — and back on the processor if that's chosen.
+- **Default recordings folder removed** from Settings → Recording & storage: each camera's folder is set in its Recording tab (or by its profile). Cameras without their own folder carry on where they were.
+
 ## 0.6.93 — November 2026
 - **Shorter recording files**: Default file length (Settings → Recording & storage) and each camera's File length now also offer **1 second, 5 seconds, 10 seconds and 15 seconds**. Very short files make thousands of files a day, so browsing and time-lapse previews get slower; a file also can't be shorter than the camera's keyframe interval (often 1–4 seconds).
 

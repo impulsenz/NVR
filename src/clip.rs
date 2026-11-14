@@ -209,7 +209,9 @@ static MODEL: LazyLock<tokio::sync::Mutex<Option<Arc<Clip>>>> = LazyLock::new(De
 
 pub async fn model(models_dir: &Path) -> Result<Arc<Clip>> {
     let mut m = MODEL.lock().await;
-    if let Some(c) = m.as_ref() {
+    if let Some(c) = m.as_ref()
+        && !c.vision.misplaced()
+    {
         return Ok(c.clone());
     }
     for (src, name, sum) in FILES {

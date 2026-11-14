@@ -793,9 +793,15 @@ impl Manager {
                 "[{}] settings updated from profile \"{}\"",
                 cam.name, cam.profile
             );
-            let old = self.camera(&cam.id).map(|c| c.cfg.clone());
-            if old.as_ref().is_none_or(|o| cam.needs_restart(o)) {
-                self.restart_camera(&cam).await;
+            let rt = self.camera(&cam.id);
+            match &rt {
+                Some(rt) if !cam.needs_restart(&rt.cfg) => {
+                    // (As from the camera's own window: display and live
+                    // options apply without interrupting recording.)
+                    rt.live_sub.set_view(cam.view.clone());
+                    rt.live_main.set_view(cam.view.clone());
+                }
+                _ => self.restart_camera(&cam).await,
             }
         }
         Ok(())

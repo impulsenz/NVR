@@ -112,6 +112,11 @@ impl Recog {
         {
             let mut l = self.loaded.lock().unwrap();
             l.used = Some(Instant::now());
+            // (Loaded before the GPU was ready, or the place changed: again.)
+            let slot = pick(&mut l);
+            if slot.as_ref().is_some_and(|p| p.misplaced()) {
+                *slot = None;
+            }
             if let Some(p) = pick(&mut l) {
                 return Ok(p.clone());
             }

@@ -112,7 +112,9 @@ static MODEL: LazyLock<tokio::sync::Mutex<Option<Arc<Yamnet>>>> = LazyLock::new(
 
 async fn model(models_dir: &Path) -> Result<Arc<Yamnet>> {
     let mut m = MODEL.lock().await;
-    if let Some(y) = m.as_ref() {
+    if let Some(y) = m.as_ref()
+        && !y.net.misplaced()
+    {
         return Ok(y.clone());
     }
     let path = models_dir.join("yamnet.onnx");
@@ -216,6 +218,11 @@ async fn listen(mgr: &Arc<Manager>, cam: &CameraConfig) -> Result<()> {
             if checked.elapsed() > Duration::from_secs(5) {
                 checked = Instant::now();
                 if mgr.config().cameras.iter().find(|c| c.id == cam.id) != Some(cam) {
+                    return Ok(());
+                }
+                // The GPU became ready (or the processor was chosen): start
+                // again with the model in its place.
+                if y.net.misplaced() {
                     return Ok(());
                 }
             }
