@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.80 — November 2026
+- **Installs like a normal Windows program**: run a freshly downloaded GAZE.exe and it puts itself in its own program folder (your user's Programs\GAZE folder, no administrator needed), with a **GAZE** shortcut in the Start menu and one on the desktop. An existing set-up (settings next to the program) stays where it is and just gets the shortcuts.
+- **The GAZE shortcut** starts GAZE when it isn't running, and then opens it: in the installed GAZE app if you have one, otherwise in your web browser. Opening GAZE again while it's already running no longer shows an error; it simply opens it.
+
 ## 0.6.79 — November 2026
 - **Live view, more reliable**:
   - A live picture that freezes now starts again by itself within a few seconds (with the still pictures standing in meanwhile), instead of needing a page refresh.

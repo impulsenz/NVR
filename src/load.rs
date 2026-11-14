@@ -134,6 +134,19 @@ pub fn cmd(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     c
 }
 
+/// The same for programs run and waited on outside tokio.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn std_cmd(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut c = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
+}
+
 /// Lower the priority of a background ffmpeg (previews, thumbnails), so it
 /// never slows down recording or live view.
 pub fn background(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {

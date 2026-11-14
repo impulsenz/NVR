@@ -21,6 +21,7 @@ mod identify;
 mod imgutil;
 mod inbox;
 mod infer;
+mod launch;
 mod jobs;
 mod known;
 mod library;
@@ -147,14 +148,33 @@ fn main() -> Result<()> {
             return Ok(());
         }
         Mode::Companion | Mode::Normal => {
+            if mode == Mode::Normal {
+                // Already running (double-clicked again, or the shortcut):
+                // open it instead of complaining that the port is taken.
+                // Started by Windows at sign-in (--dir): nothing to do.
+                let port = launch::port_of(&path);
+                if launch::running(port) {
+                    if dir.is_none() {
+                        launch::open_ui(port, &std::path::absolute("nvr-data").unwrap_or_default());
+                    }
+                    return Ok(());
+                }
+            }
             // GAZE runs as a service (now, or about to): just the icon.
             if mode == Mode::Companion || winservice::installed() {
                 return companion(&path, mode == Mode::Companion);
             }
             // The program is GAZE.exe (older downloads were called
             // nvr-windows-x64.exe): a copy under that name takes over.
+            // A fresh download installs itself in its own program folder.
+            if launch::install_if_downloaded(dir.is_some() || path != std::path::Path::new("nvr.toml")) {
+                return Ok(());
+            }
             if update::become_gaze_exe() {
                 return Ok(());
+            }
+            if args.iter().any(|a| a == "--open") {
+                launch::OPEN_WHEN_READY.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         }
     }
@@ -185,7 +205,7 @@ fn main() -> Result<()> {
             }
             #[cfg(not(unix))]
             std::process::Command::new(exe)
-                .args(std::env::args_os().skip(1))
+                .args(std::env::args_os().skip(1).filter(|a| a != "--open"))
                 .spawn()?;
         }
         Some(tray::Action::BecomeService) => {
@@ -390,6 +410,18 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
                 QUIT.notify_one();
             }),
         );
+    }
+    #[cfg(windows)]
+    if with_tray {
+        launch::make_shortcuts(&std::path::absolute(&mgr.data_dir).unwrap_or(mgr.data_dir.clone()));
+    }
+    // Started from the shortcut: open GAZE now it's ready.
+    if launch::OPEN_WHEN_READY.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let (p, d): (u16, std::path::PathBuf) = (port.parse().unwrap_or(8080), mgr.data_dir.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            launch::open_ui(p, &std::path::absolute(&d).unwrap_or(d.clone()));
+        });
     }
 
     tokio::select! {
