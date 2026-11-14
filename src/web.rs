@@ -144,6 +144,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/usage", get(usage))
         .route("/api/usage/kinds", get(usage_kinds))
         .route("/api/logs", get(get_logs))
+        .route("/api/playback-report", post(playback_report))
         .route("/api/logs/download", get(download_logs))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/dashboard", put(put_dashboard))
@@ -2275,6 +2276,45 @@ async fn serve_video(path: PathBuf, req: Request, download: Option<String>) -> R
     res
 }
 
+#[derive(Deserialize)]
+struct PlaybackReport {
+    #[serde(default)]
+    report: Vec<PlaybackCam>,
+    #[serde(default)]
+    speed: f64,
+    #[serde(default)]
+    stream: String,
+}
+#[derive(Deserialize)]
+struct PlaybackCam {
+    camera: String,
+    #[serde(default)]
+    codecs: String,
+    #[serde(default)]
+    counts: HashMap<String, u32>,
+}
+
+/// What went wrong for a browser playing recordings (stalls, holes in the
+/// footage, restarts), per camera, written to the log.
+async fn playback_report(State(m): App, Json(r): Json<PlaybackReport>) -> Response {
+    for c in r.report.into_iter().take(64) {
+        let Some(rt) = m.camera(&c.camera) else { continue };
+        let what: Vec<String> = c.counts.iter().take(12).map(|(k, n)| format!("{} ×{n}", k.chars().take(60).collect::<String>())).collect();
+        if what.is_empty() {
+            continue;
+        }
+        tracing::warn!(
+            "[{}] playing recordings ({} stream, {}×): {}{}",
+            rt.cfg.name,
+            if r.stream == "main" { "main" } else { "sub" },
+            r.speed,
+            what.join(", "),
+            if c.codecs.is_empty() { String::new() } else { format!(" — format {}", c.codecs.chars().take(60).collect::<String>()) }
+        );
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 /// Requests GAZE takes long to start answering are written to the log (what
 /// and how long), to find out what's slow on a particular computer: the
 /// disk, a NAS, or GAZE itself. At most one line every 10 s per kind.
@@ -2483,6 +2523,7 @@ async fn hls_playlist(
             };
             files.push(crate::hls::PlaylistFile { path, url: s.url, start: s.start });
         }
+        crate::vstore::set_next(&files.iter().map(|f| f.path.clone()).collect::<Vec<_>>());
         crate::hls::playlist_as(&files, 8.0, "../../../", live && to > Local::now())
     })
     .await
@@ -5199,6 +5240,10 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         || path.contains("/device/")
     {
         return false;
+    }
+    // A browser telling how playing recordings went (logged): anyone.
+    if path == "/api/playback-report" {
+        return true;
     }
     // Talking through a camera's speaker: not for viewers.
     if path.ends_with("/talk") || path.ends_with("/say") || path.ends_with("/siren") || path.ends_with("/siren/stop") {

@@ -212,9 +212,42 @@ fn block(path: &Path, n: u64, len: u64, modified: SystemTime) -> std::io::Result
     Ok(b)
 }
 
-/// Read the next few blocks in the background.
+/// The recording after each one (from the playlists): when playback nears
+/// the end of a file, the start of the next is read too, so crossing into
+/// it doesn't wait for the NAS.
+static NEXT: LazyLock<Mutex<HashMap<PathBuf, PathBuf>>> = LazyLock::new(Default::default);
+
+pub fn set_next(files: &[PathBuf]) {
+    let mut n = NEXT.lock().unwrap();
+    if n.len() > 50_000 {
+        n.clear();
+    }
+    for w in files.windows(2) {
+        n.insert(w[0].clone(), w[1].clone());
+    }
+}
+
+/// Read the next few blocks in the background (into the next recording
+/// when this one ends).
 fn read_ahead(path: &Path, from: u64, len: u64, modified: SystemTime) {
     let last = len.saturating_sub(1) / BLOCK;
+    if from + AHEAD > last + 1 && !growing(modified) {
+        let next = NEXT.lock().unwrap().get(path).cloned();
+        if let Some(next) = next {
+            let left = (from + AHEAD).saturating_sub(last + 1).min(2);
+            if left > 0 {
+                std::thread::spawn(move || {
+                    if let Ok((l2, m2)) = meta(&next) {
+                        for n in 0..left {
+                            if n * BLOCK < l2 {
+                                let _ = block(&next, n, l2, m2);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
     for n in from..=(from + AHEAD - 1).min(last) {
         let key = (path.to_path_buf(), n);
         {

@@ -4177,7 +4177,10 @@ function hlsFor(el, cam) {
   if (el._h) return el._h;
   // Loaded well ahead (a minute of the light sub-stream, half a minute of
   // HD), so a camera doesn't freeze when the disk or NAS is slow for a moment.
-  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: tlQ() === 'main' ? 30 : 60, maxMaxBufferLength: 120, backBufferLength: 30, maxBufferHole: 1,
+  // Small holes in what's loaded (some cameras' recordings have them) are
+  // stepped over by the player itself, quickly, instead of waiting.
+  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: tlQ() === 'main' ? 30 : 60, maxMaxBufferLength: 120, backBufferLength: 30, maxBufferHole: 2,
+    highBufferWatchdogPeriod: 1, nudgeMaxRetry: 10, nudgeOffset: 0.2,
     startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1});
   hls.attachMedia(el._hlsV);
   const h = el._h = {hls, cam, frags: [], ready: false};
@@ -4191,6 +4194,7 @@ function hlsFor(el, cam) {
     tlSync(true);
   });
   hls.on(hlsLib.Events.ERROR, (_, d) => {
+    playbackNote(cam, d.details + (d.fatal ? ' (fatal)' : ''), hls);
     if (!d.fatal) return;
     // Can't be played this way (e.g. a picture or sound format the browser
     // can't stream): this camera goes back to playing the files.
@@ -4200,6 +4204,22 @@ function hlsFor(el, cam) {
   });
   return h;
 }
+// What went wrong while playing recordings, per camera, sent to GAZE's log
+// once a minute (Settings → Logs: "playback"), to find out why a camera
+// struggles: holes in its recordings, slow loading, its video format.
+const playbackNotes = new Map();
+function playbackNote(cam, what, hls) {
+  let n = playbackNotes.get(cam);
+  if (!n) { n = {counts: {}, codecs: ''}; playbackNotes.set(cam, n); }
+  n.counts[what] = (n.counts[what] || 0) + 1;
+  try { const l = hls && hls.levels && hls.levels[0]; if (l) n.codecs = [l.videoCodec, l.audioCodec].filter(Boolean).join(' + '); } catch (_) {}
+}
+setInterval(() => {
+  if (!playbackNotes.size) return;
+  const report = [...playbackNotes].map(([camera, n]) => ({camera, codecs: n.codecs, counts: n.counts}));
+  playbackNotes.clear();
+  api('api/playback-report', {method: 'POST', json: {report, speed: tl.speed, stream: tlQ()}}).catch(() => {});
+}, 60000);
 function hlsLoad(h, T, stream) {
   const now = Date.now();
   // Reaching now: a growing playlist that keeps up with the recording
@@ -4768,8 +4788,8 @@ function paintLoaded() {
       const t = v.currentTime, wait = Date.now() - el._waitSince;
       let next = null;
       for (let i = 0; i < v.buffered.length; i++) { const a = v.buffered.start(i), b = v.buffered.end(i); if (a <= t && t < b - 0.1) { next = null; break; } if (a > t && a - t < 15 && next == null) next = a; }
-      if (wait > 2000 && next != null) { v.currentTime = next + 0.05; el._waitSince = Date.now(); }
-      else if (wait > 8000 && el._h) { el._waitSince = Date.now(); try { el._h.hls.recoverMediaError(); } catch (_) {} el._h.ready = false; hlsLoad(el._h, tl.T, tlQ()); }
+      if (wait > 2000 && next != null) { playbackNote(el.dataset.cam, 'jumped a gap of ' + (next - t < 1 ? '<1' : Math.round(next - t)) + ' s', el._h && el._h.hls); v.currentTime = next + 0.05; el._waitSince = Date.now(); }
+      else if (wait > 8000 && el._h) { playbackNote(el.dataset.cam, 'nothing loaded for 8 s: restarted', el._h.hls); el._waitSince = Date.now(); try { el._h.hls.recoverMediaError(); } catch (_) {} el._h.ready = false; hlsLoad(el._h, tl.T, tlQ()); }
     } else el._waitSince = 0;
     if (waiting) { const p = pct(tl.T); if (p >= 0 && p <= 100) html += `<i class="wait" style="left:${p}%" title="Loading this camera's video…"></i>`; }
     if (box._html !== html) { box._html = html; box.innerHTML = html; }
@@ -4785,7 +4805,11 @@ function paintLoaded() {
     if (!has || tl.live) { srcMark(el, null); continue; }
     // (No colour until there's a picture: a black camera still loading
     // isn't "playing" anything yet.)
-    srcMark(el, sp && !sp.hidden ? 'tl' : v && v.readyState >= 2 && v.style.visibility !== 'hidden' ? 'rec' : null);
+    // (Kept through a short wait — a moment's pause while the next piece
+    // arrives isn't "lost"; it goes after 1½ s without a picture.)
+    const pic = v && v.readyState >= 2 && v.style.visibility !== 'hidden';
+    if (pic) el._picAt = Date.now();
+    srcMark(el, sp && !sp.hidden ? 'tl' : pic || Date.now() - (el._picAt || 0) < 1500 ? (pic ? 'rec' : el.classList.contains('src-hd') ? 'hd' : el.classList.contains('src-sub') ? 'sub' : null) : null);
   }
 }
 setInterval(paintLoaded, 400);

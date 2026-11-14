@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.7.3 — November 2026
+- **The next recording is read ahead too**: a camera's recordings play as one stream, and the browser already loads into the next file before reaching it. Now GAZE also starts reading the next file from the disk or NAS while the current one is nearly done, so crossing from one recording into the next doesn't wait for the storage.
+- **Steadier playback on cameras whose recordings have small holes**: the player steps over small gaps in what it has loaded by itself, quickly, instead of stopping first.
+- **The outline doesn't flicker**: a camera's green (or purple) outline stays through a short pause while its next piece arrives; it only goes after 1½ seconds without a picture.
+- **Why a camera struggles, in the log**: while recordings play, what goes wrong for each camera (stalls, gaps jumped, restarts, slow loading) is written to Settings → Logs once a minute, with its video and sound format ("[Camera] playing recordings …").
+
 ## 0.7.2 — November 2026
 - **Recordings opens at once, also from a NAS**: the timeline (seen taking 25 seconds the first time) no longer waits while each recording's picture size is read to tell main stream from sub-stream: it answers straight away with what's known, reads the rest in the background, and corrects itself on its next refresh. In a test with 9 cameras and a day of recordings on slow storage it now answers in a few hundredths of a second.
 - **Faster first playback of each recording**: indexing a recording (finding its pieces) reads it in large parts instead of hundreds of small reads — on a network drive, much quicker. (Each recording is still indexed only once.)
