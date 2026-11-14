@@ -4663,9 +4663,35 @@ function tlLoop(ts) {
   if (!tl.syncAt || ts - tl.syncAt > 400) { tl.syncAt = ts; tlSync(false); } else drawHead();
   requestAnimationFrame(tlLoop);
 }
+// Pausing or playing: each camera's picture is held as a still on top of
+// the video until the video has drawn its next frame. (Browsers, with many
+// videos on the graphics card, can drop a paused or just-started video's
+// picture for a moment: it blinked black.)
+function holdPictures() {
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    const v = activeVideo(el);
+    if (!v || v.readyState < 2 || !v.videoWidth || v.style.visibility === 'hidden') continue;
+    let c = el.querySelector(':scope > canvas.hold');
+    if (!c) { c = document.createElement('canvas'); c.className = 'hold'; v.after(c); }
+    try {
+      c.width = v.videoWidth; c.height = v.videoHeight;
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    } catch (_) { continue; }
+    c.hidden = false;
+    const gen = c._gen = (c._gen || 0) + 1;
+    // Gone once the video shows a new frame (or after 3 s at the latest).
+    const off = () => { if (c._gen === gen) c.hidden = true; };
+    const later = () => { if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => setTimeout(off, 30)); else setTimeout(off, 300); };
+    if (v.paused) v.addEventListener('playing', later, {once: true}); else later();
+    // Moved to another moment (a jump, a frame step): the video shows that.
+    v.addEventListener('seeked', () => setTimeout(off, 30), {once: true});
+    setTimeout(off, tl.playing ? 3000 : 600000);
+  }
+}
 function tlPlay(on) {
   // From Live: play the recording from a few seconds ago.
   if (on && tl.live) { tlLeaveLive(); tl.T = Date.now() - 15000; drawHead(); }
+  if (on !== tl.playing && page === 'recordings') holdPictures();
   tl.playing = on; tl.last = 0;
   $('tl-play').textContent = on ? '❚❚ Pause' : '▶ Play';
   tlSync(false);
@@ -4863,10 +4889,20 @@ function paintLoaded() {
     if (waiting && v && el._mode === 'hls' && !v.seeking) {
       el._waitSince = el._waitSince || Date.now();
       const t = v.currentTime, wait = Date.now() - el._waitSince;
-      let next = null;
-      for (let i = 0; i < v.buffered.length; i++) { const a = v.buffered.start(i), b = v.buffered.end(i); if (a <= t && t < b - 0.1) { next = null; break; } if (a > t && a - t < 15 && next == null) next = a; }
+      let next = null, inside = false;
+      for (let i = 0; i < v.buffered.length; i++) { const a = v.buffered.start(i), b = v.buffered.end(i); if (a <= t && t < b - 0.1) { next = null; inside = true; break; } if (a > t && a - t < 15 && next == null) next = a; }
+      // Footage loaded right here, yet no picture: the browser can't show
+      // this camera's video (its format). Starting the player again only
+      // threw the loaded footage away and went round again; instead it
+      // plays converted by GAZE (to H.264) from now on.
+      if (inside && v.readyState < 2 && wait > 6000) {
+        playbackNote(el.dataset.cam, 'loaded but no picture: played converted from now on', el._h && el._h.hls);
+        el._tc = true; el._noHls = Date.now() + 24 * 3600e3; el._waitSince = 0;
+        leaveHls(el); tlSync(true);
+        continue;
+      }
       if (wait > 2000 && next != null) { playbackNote(el.dataset.cam, 'jumped a gap of ' + (next - t < 1 ? '<1' : Math.round(next - t)) + ' s', el._h && el._h.hls); v.currentTime = next + 0.05; el._waitSince = Date.now(); }
-      else if (wait > 8000 && el._h) { playbackNote(el.dataset.cam, 'nothing loaded for 8 s: restarted', el._h.hls); el._waitSince = Date.now(); try { el._h.hls.recoverMediaError(); } catch (_) {} el._h.ready = false; hlsLoad(el._h, tl.T, tlQ()); }
+      else if (!inside && wait > 8000 && el._h && !(el._restartAt && Date.now() - el._restartAt < 60000)) { el._restartAt = Date.now(); playbackNote(el.dataset.cam, 'nothing loaded for 8 s: restarted', el._h.hls); el._waitSince = Date.now(); try { el._h.hls.recoverMediaError(); } catch (_) {} el._h.ready = false; hlsLoad(el._h, tl.T, tlQ()); }
     } else el._waitSince = 0;
     if (waiting) { const p = pct(tl.T); if (p >= 0 && p <= 100) html += `<i class="wait" style="left:${p}%" title="Loading this camera's video…"></i>`; }
     if (box._html !== html) { box._html = html; box.innerHTML = html; }
@@ -5467,6 +5503,8 @@ function previewOne(el, T) {
   });
 }
 function previewAll() {
+  // (Scrubbing: no held pictures in the way.)
+  document.querySelectorAll('#tl-videos canvas.hold').forEach(c => { c._gen = (c._gen || 0) + 1; c.hidden = true; });
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
     el.querySelectorAll('.tl-t').forEach(t => t.textContent = fmtDate(new Date(tl.T), t.dataset.fmt || undefined));

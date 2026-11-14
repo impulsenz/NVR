@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 0.7.5 — November 2026
+- **Recordings load 10 minutes ahead, evenly**: while playing, every camera now loads up to 10 minutes ahead (was 1 minute; 30 seconds for HD), sub-stream and HD alike (a browser holds up to about 150 MB per camera, so HD may get a little less). Cameras fill up together: a camera more than a minute ahead of the slowest one waits for it, so speeding up doesn't let one camera take all the bandwidth. What was watched is kept (10 minutes back), and once every camera is loaded ahead, GAZE reads the 10 minutes before the playhead from the disk or NAS into its memory, so going back is quick too. All of this is in memory (the browser's and GAZE's), nothing is written to disk.
+- **Fewer cameras chosen, faster loading**: only the cameras chosen are loaded, and the fewer there are, the bigger each piece fetched — one camera alone fills its 10 minutes in seconds.
+- **No black blink when pausing or playing**: each camera's picture is held until its video has drawn the next frame.
+- **Cameras whose video the browser can't show stop going round in circles**: a camera whose footage loaded but never showed a picture used to be started again — throwing away what was loaded (the loaded strip filled, then reset) and blinking between black and video. Now it plays converted by GAZE (to H.264) from then on, and the log says so. (Usually H.265 cameras: setting the camera to H.264 in its own settings avoids the conversion.)
+- **How long Recordings takes, in the log**: opening Recordings and changing cameras is written to Settings → Logs — how long the list, the first picture and all pictures took, and which camera was last.
+
 ## 0.7.4 — November 2026
 - **The timeline's legend explains the light strip under the footage**: **Loaded** — footage already loaded into the browser (ahead of the playhead it plays without waiting; behind it, what was just played). A strip with gaps means that camera's footage is arriving in pieces — the log (Settings → Logs, "playing recordings") says why.
 
