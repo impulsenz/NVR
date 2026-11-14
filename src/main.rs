@@ -168,13 +168,8 @@ fn main() -> Result<()> {
             if mode == Mode::Companion || winservice::installed() {
                 return companion(&path, mode == Mode::Companion);
             }
-            // The program is GAZE.exe (older downloads were called
-            // nvr-windows-x64.exe): a copy under that name takes over.
             // A fresh download installs itself in its own program folder.
             if launch::install_if_downloaded(dir.is_some() || path != std::path::Path::new("nvr.toml")) {
-                return Ok(());
-            }
-            if update::become_gaze_exe() {
                 return Ok(());
             }
             if args.iter().any(|a| a == "--open") {

@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "nvr"
-version = "0.6.98"
+version = "0.6.99"
 dependencies = [
  "anyhow",
  "argon2",

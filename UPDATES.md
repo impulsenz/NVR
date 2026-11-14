@@ -76,10 +76,7 @@ The workflow that does it is `.github/workflows/release.yml`.
    too.
 4. On GitHub, open **Actions** → *Release* to follow the build. It takes
    about 10–15 minutes. When it's done, **Releases** has *GAZE v0.6.0* with
-   these files:
-   - `GAZE.exe` and `GAZE.exe.sha256`
-   - `nvr-windows-x64.exe` and `nvr-windows-x64.exe.sha256` (the same program, for
-     installs from before 0.6.73 to find their update)
+   two files: `GAZE.exe` and `GAZE.exe.sha256`.
 5. Installed copies see the new version within a minute.
 
 Other pushes don't start a release (a change to `Cargo.toml` in a commit

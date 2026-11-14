@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.99 — November 2026
+- **Releases are just GAZE.exe**: the second copy under GAZE's old file name (nvr-windows-x64.exe) is no longer published, and GAZE no longer looks for it or renames itself from it when it starts. Copies of GAZE from before 0.6.73 don't update by themselves any more: download GAZE.exe once.
+
 ## 0.6.98 — November 2026
 - **Sub-stream stays on the sub-stream**: with Sub-stream chosen, no full-quality footage is fetched in advance; choose Main stream (HD) to watch full quality. An alert you click still plays in full quality (its HD clip) whichever is chosen.
 - **Each camera's outline shows what it's playing, and stays**: **purple** — full-quality (HD) video, **green** — the sub-stream recording, **blue** — the time-lapse (the timeline's own colours).
