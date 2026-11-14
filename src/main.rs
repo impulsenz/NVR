@@ -52,6 +52,7 @@ mod talk;
 mod talkmix;
 mod tls;
 mod tray;
+mod tts;
 mod update;
 mod users;
 mod web;

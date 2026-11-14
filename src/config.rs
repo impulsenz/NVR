@@ -1080,6 +1080,22 @@ pub struct Profile {
     pub retention_days: u64,
     pub max_storage_gb: f64,
     pub detect: DetectConfig,
+    /// Sound detection (what to listen for, how sensitive). Missing in
+    /// profiles from before 0.6.79: the camera's own is kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sound: Option<SoundConfig>,
+    /// Speaker button on the live picture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_sound: Option<bool>,
+    /// Doorbell chime before talking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub talk_chime: Option<bool>,
+    /// Use what the camera itself detects (ONVIF events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onvif_events: Option<bool>,
+    /// Also the camera's plain motion detection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onvif_motion: Option<bool>,
 }
 
 impl Profile {
@@ -1107,6 +1123,21 @@ impl Profile {
         cam.detect.packages = packages;
         cam.detect.package_area = area;
         cam.detect.package_mask = spot;
+        if let Some(v) = &self.sound {
+            cam.sound = v.clone();
+        }
+        if let Some(v) = self.live_sound {
+            cam.live_sound = v;
+        }
+        if let Some(v) = self.talk_chime {
+            cam.talk_chime = v;
+        }
+        if let Some(v) = self.onvif_events {
+            cam.onvif_events = v;
+        }
+        if let Some(v) = self.onvif_motion {
+            cam.onvif_motion = v;
+        }
         cam.profile = self.name.clone();
     }
 }
@@ -1126,6 +1157,12 @@ impl Default for Profile {
             retention_days: c.retention_days,
             max_storage_gb: c.max_storage_gb,
             detect: c.detect,
+            // Not in older profiles: each camera keeps its own.
+            sound: None,
+            live_sound: None,
+            talk_chime: None,
+            onvif_events: None,
+            onvif_motion: None,
         }
     }
 }

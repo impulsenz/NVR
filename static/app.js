@@ -495,6 +495,7 @@ class LiveVideo {
   // carries on from what it has, with no new connection and no flash.
   attach(img) {
     this.img = img; img.after(this.video);
+    this.lastMove = performance.now();
     if (Live.mse.has(this.key)) {
       const s = img.parentElement; if (s) { s.classList.add('mse'); const m = s.querySelector(':scope > .msg'); if (m) m.hidden = true; }
       this.video.play().catch(() => {});
@@ -559,10 +560,21 @@ class LiveVideo {
     // behind. Some cameras (Tapo, many Wi-Fi ones) send video in bursts:
     // half a second in hand rides those out without skipping, and catching
     // up gently keeps motion smooth.
+    this.lastT = -1; this.lastMove = performance.now();
     this.timer = setInterval(() => {
-      if (!this.sb || !v.buffered.length) return;
+      if (!this.sb || this.dead) return;
+      // Frozen video (stalled decoder, a gap in the data, an error): start
+      // the video again; the still pictures stand in meanwhile.
+      const now = performance.now();
+      if (document.hidden || !v.isConnected || v.currentTime !== this.lastT) { this.lastT = v.currentTime; this.lastMove = now; }
+      else if (v.error || now - this.lastMove > 4000) { this.restart(); return; }
+      if (!v.buffered.length) return;
+      // Stuck just before a gap in what's buffered: jump over it.
+      let inside = false;
+      for (let i = 0; i < v.buffered.length; i++) if (v.currentTime >= v.buffered.start(i) - 0.05 && v.currentTime <= v.buffered.end(i)) inside = true;
+      if (!inside) for (let i = 0; i < v.buffered.length; i++) if (v.buffered.start(i) > v.currentTime) { v.currentTime = v.buffered.start(i) + 0.05; this.lastT = v.currentTime; break; }
       const end = v.buffered.end(v.buffered.length - 1), lag = end - v.currentTime;
-      if (lag > 3.5) { v.currentTime = end - 0.5; v.playbackRate = 1; }
+      if (lag > 3.5) { v.currentTime = end - 0.5; v.playbackRate = 1; this.lastT = v.currentTime; }  // a jump isn't playing
       else v.playbackRate = lag > 1.6 ? 1.1 : lag > 0.9 ? 1.04 : 1;
       if (v.paused) v.play().catch(() => {});
       if (!this.sb.updating && v.currentTime - v.buffered.start(0) > 20) try { this.sb.remove(0, v.currentTime - 10); } catch (_) {}
@@ -580,6 +592,20 @@ class LiveVideo {
     if (this.ms) { try { URL.revokeObjectURL(this.video.src); } catch (_) {} this.video.removeAttribute('src'); this.video.load(); }
     this.ms = null; this.sb = null;
     if (Live.mse.delete(this.key)) { this.img.parentElement && this.img.parentElement.classList.remove('mse'); updateSubscriptions(); }
+  }
+  // Start the video connection again at once (a frozen picture); too many
+  // in a short time: pictures only for this stream.
+  restart() {
+    const now = Date.now();
+    this.restarts = (this.restarts || []).filter(t => now - t < 120000); this.restarts.push(now);
+    if (this.restarts.length > 6) return this.giveUp();
+    if (this.ws) { this.ws.onclose = null; this.ws.close(); }
+    this.stopPlaying();
+    // A fresh video element: the old one may be what's stuck.
+    const old = this.video, v = this.video = document.createElement('video');
+    v.className = 'live-v'; v.muted = old.muted; v.volume = old.volume; v.playsInline = true; v.autoplay = true; v.disableRemotePlayback = true;
+    if (old.isConnected) old.replaceWith(v);
+    this.open();
   }
   giveUp() { Live.noMse.add(this.key); this.close(); }
   close() { this.dead = true; if (this.ws) { this.ws.onclose = null; this.ws.close(); } this.stopPlaying(); this.video.remove(); }
@@ -851,7 +877,9 @@ function switchStream(surface) {
   if (!c) return;
   const ctx = isFocus || (wall && wallSolo === c.id) ? 'focus' : 'grid';
   const q = feedQ(c, ctx) === 'main' ? 'sub' : 'main';
-  setFeedQ(c, ctx, q);
+  // The choice is the camera's, in the grid, opened and full screen alike,
+  // so it doesn't flip back when going in or out of full screen.
+  setFeedQ(c, 'focus', q); setFeedQ(c, 'grid', q);
   if (isFocus) bindFocusImage(c);
   else {
     // Swap the picture's stream in place: rebuilding the tiles would take
@@ -2065,6 +2093,7 @@ function showLive(id) {
     toast('Snapshot saved');
   };
   setupTalkButton(c);
+  setupSayButton(c);
   $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
   paintSnooze(c);
@@ -2104,14 +2133,24 @@ function bindFocusImage(c) {
   // picture is shown meanwhile).
   if (q === 'main') showFocusLoading(); else hideFocusLoading();
 }
+// Is the camera's full-quality picture already coming in (smooth video
+// playing, or pictures in the last few seconds)?
+function mainReady(id) {
+  const k = Live.key(id, 'main'), st = Live.stats.get(k), vs = Live.vstats.get(k), now = performance.now();
+  return (Live.mse.has(k) && vs && now - vs.last < 3000) || (st && now - st.last < 3000);
+}
+let loadingPoll = null;
 function showFocusLoading() {
-  const el = $('focus-loading');
+  const el = $('focus-loading'), id = focusId;
+  clearTimeout(loadingTimer); clearInterval(loadingPoll);
+  if (mainReady(id)) { el.hidden = true; return; }
   el.hidden = false;
   el.querySelector('span').textContent = 'Loading full quality…';
-  clearTimeout(loadingTimer);
-  loadingTimer = setTimeout(() => { el.querySelector('span').textContent = 'Full-quality stream not available — showing sub-stream'; setTimeout(() => el.hidden = true, 5000); }, 20000);
+  // Also catches a picture that was already playing (no "first frame" then).
+  loadingPoll = setInterval(() => { if (focusId !== id || mainReady(id)) hideFocusLoading(); }, 400);
+  loadingTimer = setTimeout(() => { clearInterval(loadingPoll); el.querySelector('span').textContent = 'Full-quality stream not available — showing sub-stream'; setTimeout(() => el.hidden = true, 5000); }, 20000);
 }
-function hideFocusLoading() { clearTimeout(loadingTimer); $('focus-loading').hidden = true; }
+function hideFocusLoading() { clearTimeout(loadingTimer); clearInterval(loadingPoll); $('focus-loading').hidden = true; }
 
 // ---------- PTZ controls ----------
 // Pan / tilt / zoom on the picture: the pad and zoom buttons (press and
@@ -2567,8 +2606,8 @@ function wireSoundDetect(camId) {
   const box = $('c-snd-kinds'); if (!box) return;
   $('c-snd-on').onchange = () => { $('c-snd-box').hidden = !chk('c-snd-on'); };
   $('c-snd-sens').oninput = () => { $('c-snd-sens-v').textContent = val('c-snd-sens'); };
-  const chosen = new Set(JSON.parse(box.dataset.kinds));
   const paint = (r) => {
+    const chosen = new Set(JSON.parse(box.dataset.kinds));
     if (!box.children.length) box.innerHTML = r.kinds.map(k => `<label class="check"><input type="checkbox" value="${esc(k.id)}" ${chosen.has(k.id) ? 'checked' : ''}> ${esc(k.name)}</label>`).join('');
     const st = camId && r.cameras[camId], el = $('c-snd-now'); if (!el) return;
     el.innerHTML = !st ? (chk('c-snd-on') ? 'Starts listening once saved.' : '')
@@ -2708,6 +2747,47 @@ async function startTalk(camId, latch) {
   src.connect(node);
 }
 // Push to talk (hold); a quick tap latches (tap again to stop).
+// "Say…": type words and the camera's speaker says them (the computer
+// running GAZE turns them into speech).
+function setupSayButton(c, b = $('focus-say')) {
+  if (!b) return;
+  b.hidden = !c.talk || !me || me.role === 'viewer';
+  b.onclick = (e) => { e.stopPropagation(); openSay(c, b); };
+}
+const SAY_RECENT = 'gaze-say-recent';
+function openSay(c, anchor) {
+  document.querySelectorAll('.say-pop').forEach(x => x.remove());
+  let recent = []; try { recent = JSON.parse(localStorage.getItem(SAY_RECENT) || '[]'); } catch (_) {}
+  const pop = document.createElement('form');
+  pop.className = 'say-pop';
+  pop.innerHTML = `<div class="row"><input type="text" maxlength="400" placeholder="What should ${esc(c.name)} say?" autocomplete="off" list="say-recent"><button type="submit" class="primary">🔊 Say</button></div>
+    <datalist id="say-recent">${recent.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+    <div class="say-quick">${['Hello, can I help you?', 'Please leave the parcel at the door.', 'This area is under video surveillance.', 'Please leave now.'].map(t => `<button type="button" class="small">${esc(t)}</button>`).join('')}</div>
+    <div class="hint say-msg"></div>`;
+  (anchor.closest('dialog, .fspov, body') || document.body).appendChild(pop);
+  const r = anchor.getBoundingClientRect(), w = Math.min(420, innerWidth - 16);
+  Object.assign(pop.style, {left: Math.max(8, Math.min(innerWidth - w - 8, r.left)) + 'px', width: w + 'px'});
+  if (r.top > 200) pop.style.bottom = (innerHeight - r.top + 6) + 'px'; else pop.style.top = (r.bottom + 6) + 'px';
+  const inp = pop.querySelector('input'), msg = pop.querySelector('.say-msg'), go = pop.querySelector('[type=submit]');
+  inp.focus();
+  const send = async (text) => {
+    text = text.trim(); if (!text) return;
+    go.disabled = true; msg.className = 'hint say-msg'; msg.textContent = 'Saying it…';
+    try {
+      await api(`api/cameras/${enc(c.id)}/say`, {method: 'POST', json: {text}});
+      recent = [text, ...recent.filter(t => t !== text)].slice(0, 10);
+      try { localStorage.setItem(SAY_RECENT, JSON.stringify(recent)); } catch (_) {}
+      msg.className = 'hint say-msg okc'; msg.textContent = '✓ Said'; inp.value = ''; inp.focus();
+    } catch (e) { msg.className = 'hint say-msg err'; msg.textContent = e.message; }
+    finally { go.disabled = false; }
+  };
+  pop.onsubmit = (e) => { e.preventDefault(); send(inp.value); };
+  pop.querySelectorAll('.say-quick button').forEach(b => b.onclick = () => send(b.textContent));
+  pop.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); } };
+  const away = (e) => { if (!pop.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) close(); };
+  const close = () => { pop.remove(); document.removeEventListener('pointerdown', away, true); };
+  setTimeout(() => document.addEventListener('pointerdown', away, true), 0);
+}
 function setupTalkButton(c, b = $('focus-talk')) {
   b.hidden = !c.talk;
   if (talk && talk.cam !== c.id) stopTalk();
@@ -4251,7 +4331,7 @@ function tlFsBar(el) {
       <button type="button" class="p-back" title="Back one frame">−1 frame</button><button type="button" class="p-fwd" title="Forward one frame">+1 frame</button>
       <button type="button" class="p-pev" title="Previous alert">⏮ Alert</button><button type="button" class="p-nev" title="Next alert">Alert ⏭</button>
       <button type="button" class="p-live" title="Watch this camera live now (Play or the timeline goes back to the recording)">● Live</button>
-      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk" hidden title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button>' : ''}
+      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk" hidden title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button><button type="button" class="p-say" hidden title="Type words for the camera to say">💬 Say…</button>' : ''}
       <select class="p-speed">${[1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === tl.speed ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
@@ -4279,6 +4359,7 @@ function tlFsBar(el) {
   // Live, in this window: the camera's live picture, and its push-to-talk.
   q('.p-live').onclick = () => { tl.live ? (tlLeaveLive(), tlSync(true)) : tlGoLive(); paintTlBar(); };
   if (q('.p-talk')) setupTalkButton(c, q('.p-talk'));
+  if (q('.p-say')) { const sb = q('.p-say'), hid = sb.hidden; setupSayButton(c, sb); sb.hidden = hid; }
   q('.p-speed').onchange = (e) => { $('tl-speed').value = e.target.value; $('tl-speed').dispatchEvent(new Event('change')); };
   q('.p-in').onclick = () => $('tl-in').click(); q('.p-out').onclick = () => $('tl-out').click();
   q('.p-clip').download = '';
@@ -4299,6 +4380,7 @@ function paintTlBar() {
   const bar = document.querySelector('.fspov.tlbar'); if (!bar) return;
   const lv = bar.querySelector('.p-live'); if (lv) { lv.classList.toggle('live-on', !!tl.live); lv.textContent = tl.live ? '● Live — back to recording' : '● Live'; }
   const tk = bar.querySelector('.p-talk'); if (tk) tk.hidden = !tl.live;
+  const sy = bar.querySelector('.p-say'); if (sy) sy.hidden = !tl.live;
   bar.querySelector('.p-time').textContent = fmtDate(new Date(tl.T));
   bar.querySelector('.p-play').textContent = tl.playing ? '❚❚' : '▶';
   const z = bar.querySelector('.p-zoom'); if (z && z.value !== $('tl-zoom').value) z.value = $('tl-zoom').value;
@@ -4323,7 +4405,7 @@ function liveFsBar(el, camId) {
       <button type="button" class="p-pback play-only" title="Back one frame">−1 frame</button><button type="button" class="p-pfwd play-only" title="Forward one frame">+1 frame</button>
       <select class="p-pspeed play-only">${[0.5, 1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === 1 ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
-      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk live-only" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button>' : ''}
+      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk live-only" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button><button type="button" class="p-say live-only" title="Type words for the camera to say">💬 Say…</button>' : ''}
       <a class="btn p-snap live-only" title="Save a full-quality picture">📷 Snapshot</a>
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
@@ -4362,6 +4444,7 @@ function liveFsBar(el, camId) {
   snap.href = 'snapshot/' + enc(camId);
   snap.onclick = () => { snap.download = `${c.name} ${stamp(new Date())}.jpg`; };
   if (q('.p-talk')) setupTalkButton(c, q('.p-talk'));
+  if (q('.p-say')) { const sb = q('.p-say'), hid = sb.hidden; setupSayButton(c, sb); sb.hidden = hid; }
   // Clip marks: of what's playing (the player's), or of the live picture
   // (from the recording, between the marks).
   let a = null, b = null;
@@ -5557,7 +5640,7 @@ async function openCameraDialog(id, clone, prof) {
         <select id="c-prof"><option value="">Choose a saved profile…</option></select>
         <button type="button" class="small" id="c-prof-apply" hidden>Apply</button>
         <a class="btn small" href="#settings/profiles" id="c-prof-manage" title="Create and edit profiles">Manage profiles →</a>
-        <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
+        <span class="hint" id="c-prof-msg">Profiles hold recording, motion, AI and sound settings.</span></div>
       <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">ONVIF</button><button type="button" data-t="zones">Zones</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
@@ -5679,8 +5762,8 @@ async function openCameraDialog(id, clone, prof) {
         <label>Live sound</label>
         <div><label class="check"><input type="checkbox" id="c-sound" ${c.live_sound !== false ? 'checked' : ''}> Speaker button on the live picture</label>
           <div class="hint">Click 🔇 on the camera's picture (grid, camera view or full screen) to hear it; hover it for the volume. One camera plays at a time.</div></div>
-        <label>Two-way audio</label>
-        <div><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker${tip('Adds a 🎙️ Push to talk button to the camera’s live view: hold it and speak into this phone’s or computer’s microphone, and whoever is there hears you. Works with cameras and doorbells that have a speaker and support two-way audio over ONVIF (most Dahua, Hikvision, Amcrest and Axis).')}</label>
+        <label class="cam-only">Two-way audio</label>
+        <div class="cam-only"><label class="check"><input type="checkbox" id="c-talk" ${c.talk ? 'checked' : ''}> Talk through this camera's speaker${tip('Adds a 🎙️ Push to talk button to the camera’s live view: hold it and speak into this phone’s or computer’s microphone, and whoever is there hears you. Works with cameras and doorbells that have a speaker and support two-way audio over ONVIF (most Dahua, Hikvision, Amcrest and Axis).')}</label>
           <div class="hint">Shows a <b>🎙️ Push to talk</b> button on the camera's live view.</div>
           <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there (and a short "goodbye" tune when you stop)</label>
           <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
@@ -5804,7 +5887,9 @@ async function openCameraDialog(id, clone, prof) {
   if (prof) {
     // Only the settings a profile holds: Recording, Motion and AI.
     f.querySelector('.head h2').textContent = prof.idx >= 0 ? `Edit profile “${prof.name}”` : `New profile “${prof.name}”`;
-    f.querySelectorAll('#c-tabs button').forEach(b => b.hidden = !['recording', 'detection', 'ai'].includes(b.dataset.t));
+    f.querySelectorAll('#c-tabs button').forEach(b => b.hidden = !['recording', 'detection', 'ai', 'audio'].includes(b.dataset.t));
+    // Talking needs this camera's own speaker: not in a profile.
+    f.querySelectorAll('.cam-only').forEach(x => x.hidden = true);
     f.querySelector('#c-tabs [data-t=recording]').click();
     $('c-save').textContent = 'Save profile';
     // The camera-only fields (hidden here) mustn't stop the form being sent.
@@ -6574,7 +6659,8 @@ function renderZoneList() {
 }
 
 // ---------- recording profiles ----------
-const PROFILE_KEYS = ['record_mode', 'schedule_enabled', 'schedule', 'record_audio', 'transcode', 'record_fps', 'segment_seconds', 'retention_days', 'max_storage_gb', 'detect'];
+const PROFILE_KEYS = ['record_mode', 'schedule_enabled', 'schedule', 'record_audio', 'transcode', 'record_fps', 'segment_seconds', 'retention_days', 'max_storage_gb', 'detect',
+  'sound', 'live_sound', 'talk_chime', 'onvif_events', 'onvif_motion'];
 // The profile the camera being edited follows ('' = none).
 let camProfile = '';
 function setupProfiles(cfg) {
@@ -6589,12 +6675,12 @@ function setupProfiles(cfg) {
   if (linkedIdx < 0) camProfile = '';
   fill(linkedIdx >= 0 ? linkedIdx : null);
   const showLink = () => msg(camProfile ? `Follows the profile “${camProfile}”: when that profile is changed, this camera changes too. Choose “No profile” to give it its own settings.`
-    : 'Profiles hold recording, motion and AI settings (not the motion mask or camera connection settings).');
+    : 'Profiles hold recording, motion, AI and sound settings (not the motion mask, privacy areas or camera connection settings).');
   showLink();
   // Editing a profile setting by hand gives the camera its own settings.
-  const tabs = $('f-cam').querySelectorAll('[data-tab=recording], [data-tab=detection]');
+  const tabs = $('f-cam').querySelectorAll('[data-tab=recording], [data-tab=detection], [data-tab=audio]');
   tabs.forEach(t => t.addEventListener('input', (e) => {
-    if (!camProfile || e.isTrusted === false || e.target.closest('#d-mask')) return;
+    if (!camProfile || e.isTrusted === false || e.target.closest('#d-mask, .cam-only')) return;
     toast(`Own settings now — no longer following “${camProfile}” (to change it for every camera, edit the profile in Settings → Profiles).`);
     camProfile = ''; sel.value = ''; showLink();
   }));
@@ -6617,11 +6703,11 @@ function renderProfiles(body) {
   const followers = (name) => cameraCfgs.filter(c => (c.profile || '').toLowerCase() === name.toLowerCase());
   const summary = (p) => [REC_MODE_NAMES[p.record_mode] || p.record_mode,
     p.detect.motion ? 'motion detection' : 'no motion detection',
-    p.detect.ai ? 'AI: ' + p.detect.objects.join(', ') : 'no AI'].join(' · ');
+    p.detect.ai ? 'AI: ' + p.detect.objects.join(', ') : 'no AI', p.sound && p.sound.enabled ? 'sound alerts' : ''].filter(Boolean).join(' · ');
   body.innerHTML = `<div class="card"><div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:1">Profiles</h2>
       <button type="button" id="pr-new">＋ New profile</button>
       ${cameraCfgs.length ? `<select id="pr-from" title="Start a profile from a camera's recording, motion and AI settings"><option value="">＋ New from a camera…</option>${cameraCfgs.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>` : ''}</div>
-    <p class="muted" style="margin-top:0">A profile holds recording, motion and AI settings. Cameras following a profile change when it's edited — set it up once for all the cameras that should behave the same. Each camera keeps its own picture-based settings (ignore areas, package spot, zones). Choose which profile a camera follows in its settings (top of the window).</p>
+    <p class="muted" style="margin-top:0">A profile holds recording, motion, AI and sound settings (sound alerts, live sound, the doorbell chime, and using what the camera itself detects). Cameras following a profile change when it's edited — set it up once for all the cameras that should behave the same. Each camera keeps its own picture-based settings (ignore areas, package spot, zones). Choose which profile a camera follows in its settings (top of the window).</p>
     ${list.length ? '' : '<div class="hint">No profiles yet.</div>'}
     <div class="prof-list">${list.map((p, i) => { const f = followers(p.name); return `<div class="prof" data-i="${i}">
       <div class="row"><b style="flex:1">${esc(p.name)}</b><button type="button" class="small pr-edit">Edit</button><button type="button" class="small pr-ren">Rename</button><button type="button" class="small danger pr-del">Delete</button></div>
@@ -6675,6 +6761,18 @@ function applyProfile(p) {
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
   set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-join', d.join_seconds ?? 30); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-hdcheck', d.hd_check || 'mark'); set('d-mask-ai', d.ai_ignores_mask !== false); set('d-parked-s', d.parked_seconds || 60);
   if (d.parked_objects) document.querySelectorAll('#d-parked-objs input, #d-parked-more input').forEach(i => i.checked = d.parked_objects.includes(i.value));
+  // Sound and the camera's own detection (profiles from before 0.6.79 have none: kept).
+  if (p.sound) {
+    set('c-snd-on', p.sound.enabled); set('c-snd-sens', p.sound.sensitivity || 6);
+    if ($('c-snd-sens-v')) $('c-snd-sens-v').textContent = p.sound.sensitivity || 6;
+    $('c-snd-kinds').dataset.kinds = JSON.stringify(p.sound.kinds || []);
+    document.querySelectorAll('#c-snd-kinds input').forEach(i => i.checked = (p.sound.kinds || []).includes(i.value));
+    if ($('c-snd-box')) $('c-snd-box').hidden = !p.sound.enabled;
+  }
+  if (p.live_sound != null) set('c-sound', p.live_sound);
+  if (p.talk_chime != null) set('c-chime', p.talk_chime);
+  if (p.onvif_events != null) set('c-onvif-ev', p.onvif_events);
+  if (p.onvif_motion != null) set('c-onvif-mo', p.onvif_motion);
   // Let the form update anything that depends on these (hidden sections, hints).
   for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select, [data-tab=ai] input, [data-tab=ai] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
   $('d-objpx') && $('d-objpx').dispatchEvent(new Event('input', {bubbles: true}));

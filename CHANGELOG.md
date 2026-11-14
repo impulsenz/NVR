@@ -1,5 +1,14 @@
 # What's new in GAZE
 
+## 0.6.79 — November 2026
+- **Live view, more reliable**:
+  - A live picture that freezes now starts again by itself within a few seconds (with the still pictures standing in meanwhile), instead of needing a page refresh.
+  - "Loading full quality…" no longer stays up when the HD picture is already showing, which happened mostly when going full screen.
+  - The S1 / S2 choice now belongs to the camera, in the grid, the camera view and full screen alike, so it doesn't flip back to the other stream when you go in or out of full screen.
+- **Say… (text to speech)**: on the live view of a camera with two-way audio, 💬 Say… lets you type words (or pick a ready phrase), and the camera's speaker says them. It uses the voice built into Windows; what's said is kept in the recordings like Push to talk. Also in the full-screen toolbar when live.
+- **Profiles cover sound too**: sound detection (what to listen for, sensitivity), the live speaker button, the doorbell chime, and using what the camera itself detects. A profile's window now has an Audio tab. Two-way audio itself, privacy areas, ignore areas and zones stay with each camera. Profiles made before keep each camera's own sound settings until you save them again.
+- **Day colours**: the on-screen clock and name on live pictures, and the coloured person / vehicle tags, are readable again in day mode.
+
 ## 0.6.78 — November 2026
 - **Search settings**: a search box at the top of Settings finds any setting, including the ones in each camera's window, and takes you straight to it (arrow keys and Enter work too).
 - **Alert cards**: symbols for what was found at the top left, NEW at the top right until you've opened it, how long ago at the bottom left, and the date and time at the bottom right.

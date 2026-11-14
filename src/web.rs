@@ -185,6 +185,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/ptz/stop", post(ptz_stop))
         .route("/api/cameras/{id}/talk", get(talk_ws))
         .route("/api/talk-test", post(talk_test))
+        .route("/api/cameras/{id}/say", post(say))
         .route("/api/jobs", get(jobs_list))
         .route("/api/jobs/pause", post(jobs_pause))
         .route("/api/where", get(where_work_runs))
@@ -3989,6 +3990,56 @@ async fn talk_ws(
 }
 
 #[derive(Deserialize)]
+struct SayReq {
+    text: String,
+}
+
+/// Live view → "Say": the camera's speaker says the typed words.
+async fn say(
+    State(m): App,
+    Path(id): Path<String>,
+    user: Option<axum::Extension<CurrentUser>>,
+    Json(r): Json<SayReq>,
+) -> Response {
+    let vis = visible(&user);
+    let cfg = m.config();
+    let Some(cam) = cfg.cameras.iter().find(|c| c.id == id && vis.as_ref().is_none_or(|v| v.contains(&id))).cloned() else {
+        return err(StatusCode::NOT_FOUND, "no such camera");
+    };
+    if !cam.talk {
+        return err(StatusCode::BAD_REQUEST, "two-way audio is off for this camera (camera settings → Audio)");
+    }
+    let samples = match crate::tts::speak(&cfg.server.ffmpeg_path, &r.text).await {
+        Ok(s) => s,
+        Err(e) => return bad(e),
+    };
+    let url = if cam.talk_url.trim().is_empty() { cam.url.clone() } else { cam.talk_url.trim().to_string() };
+    let mut talk = match crate::talk::Talk::open(&cam.id, &url).await {
+        Ok(t) => t,
+        Err(e) => return bad(e),
+    };
+    let who = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
+    tracing::info!("[{}] {} had the camera say: {}", cam.name, if who.is_empty() { "someone" } else { &who }, r.text.trim());
+    let from = Local::now();
+    // Played in real time, a tenth of a second at a time.
+    let start = tokio::time::Instant::now();
+    for (i, chunk) in samples.chunks(800).enumerate() {
+        if let Err(e) = talk.send(chunk).await {
+            return bad(e);
+        }
+        tokio::time::sleep_until(start + Duration::from_millis(100 * (i as u64 + 1)) - Duration::from_millis(40)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    talk.stop().await;
+    if let Some(c) = m.camera(&cam.id)
+        && let Err(e) = crate::talkmix::save(&c.dir, from, &samples)
+    {
+        tracing::warn!("[{}] couldn't keep what was said: {e:#}", cam.name);
+    }
+    Json(json!({"ok": true, "seconds": samples.len() as f64 / 8000.0})).into_response()
+}
+
+#[derive(Deserialize)]
 struct TalkTest {
     /// Existing camera (for its saved address when `url` is empty).
     #[serde(default)]
@@ -4287,7 +4338,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         return false;
     }
     // Talking through a camera's speaker: not for viewers.
-    if path.ends_with("/talk") {
+    if path.ends_with("/talk") || path.ends_with("/say") {
         return role != Viewer;
     }
     if read {
