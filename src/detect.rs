@@ -316,13 +316,19 @@ pub fn caption_for(e: &Event) -> Option<String> {
     (!heard.is_empty()).then(|| format!("Heard: {}", heard.join(" - ")))
 }
 
-/// `f` with `text` written along the bottom, big enough to read on a
-/// thumbnail.
+/// `f` with `text` written across the middle, big enough to read on a
+/// thumbnail (the bottom is covered by the alert card's own captions).
 pub fn captioned(f: &Frame, text: &str) -> Frame {
     let mut px = (*f.rgb).clone();
-    let scale = ((f.width / 200) as i32).clamp(2, 6);
-    let th = 11 * scale;
-    crate::draw::caption(&mut px, f.width, f.height, 4 * scale, f.height as i32 - th - 4 * scale, text, scale);
+    let mut scale = ((f.width / 200) as i32).clamp(2, 6);
+    // Smaller for a long text, to fit across.
+    while scale > 1 && crate::draw::text_width(text, scale) + 8 * scale > f.width as i32 {
+        scale -= 1;
+    }
+    let (tw, th) = (crate::draw::text_width(text, scale) + 4 * scale, 11 * scale);
+    let x = ((f.width as i32 - tw) / 2).max(0);
+    let y = (f.height as i32 - th) / 2;
+    crate::draw::caption(&mut px, f.width, f.height, x, y, text, scale);
     Frame { width: f.width, height: f.height, rgb: Arc::new(px) }
 }
 

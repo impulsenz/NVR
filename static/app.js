@@ -3828,7 +3828,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {sound: store.get('tl-sound', false), soundCam: null, live: false, scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {badClips: new Set(), sound: store.get('tl-sound', false), soundCam: null, live: false, scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
@@ -3882,6 +3882,12 @@ function buildTimelineVideos() {
     };
     el.querySelector('.solo-off').onclick = (e) => { e.stopPropagation(); tlSolo(null); };
     el._vids = [...el.querySelectorAll('video:not([data-hls])')]; el._vids.forEach(watchFps);
+    // An alert clip this browser can't play (e.g. H.265): the sub-stream
+    // stays on instead.
+    el._vids.forEach(v => v.addEventListener('error', () => {
+      const u = v.dataset.url;
+      if (u && tl.data.some(c => c.segments.some(x => x.kind === 'clip' && x.url === u))) { tl.badClips.add(u); delete v.dataset.url; tlSync(true); }
+    }));
     el._hlsV = el.querySelector('video[data-hls]'); watchFps(el._hlsV);
     // The continuous player is shown once it has the picture (until then
     // the last picture stays).
@@ -3981,22 +3987,40 @@ function hlsAt(h, W) {
   return nx && nx.w - W < 15000 && lo > 0 ? {m: nx.m, gap: true} : null;
 }
 function showHls(el) {
+  el._hlsBehind = false;
   el._hlsV.style.visibility = '';
   el._vids.forEach(v => { v.style.visibility = 'hidden'; if (!v.paused) v.pause(); });
   tlApplySound();
 }
-function leaveHls(el) {
+function leaveHls(el, soft) {
   if (el._mode !== 'hls') return;
   el._mode = 'file';
+  // Into an alert's HD clip: the stream stays on screen until the clip has
+  // a picture, and keeps going underneath, to take over again without a
+  // break when the alert is over.
+  if (soft) { el._hlsBehind = true; return; }
+  el._hlsBehind = false;
   el._hlsV.pause(); el._hlsV.style.visibility = 'hidden';
   if (el._h) { el._h.hls.stopLoad(); el._h.started = false; }
   el._vids.forEach(v => delete v.dataset.url);  // the files load afresh at the right time
+}
+// Load the file coming up (an alert's HD clip) in the spare player, set
+// to the moment it starts, so switching to it is instant.
+function tlPreload(el, c, from) {
+  const nx = segAt(c, from);
+  if (!nx || nx.kind !== 'clip') return;
+  const other = el._vids[1 - el._active];
+  if (other.dataset.url === nx.url) return;
+  other.dataset.url = nx.url; other.preload = 'auto'; other.src = nx.url;
+  const at = Math.max(0, (from - new Date(nx.start).getTime()) / 1000);
+  other.addEventListener('loadedmetadata', () => { other.currentTime = at; }, {once: true});
 }
 // Play camera `el` at tl.T with the continuous stream; false: play the file.
 function tlHls(el, c, s, force) {
   const hd = tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
   // (Converted playback is for files this browser can't play, e.g. H.265
   // HD clips: the stream is tried for the rest; it says if it can't.)
+  if (s.kind === 'clip' && !hd && hlsReady() && !(el._noHls && Date.now() - el._noHls < 60000)) { leaveHls(el, true); return false; }
   if ((el._noHls && Date.now() - el._noHls < 60000) || s.kind === 'clip' || hd || !hlsReady()) { leaveHls(el); return false; }
   const h = hlsFor(el, c.camera), q = tlQ(), T = tl.T, now = Date.now();
   const busy = !h.ready && now - (h.reqAt || 0) < 5000;
@@ -4016,6 +4040,10 @@ function tlHls(el, c, s, force) {
   if (tl.playing && !at.gap && v.paused) v.play().catch(() => {});
   if ((!tl.playing || at.gap) && !v.paused) v.pause();
   if (v.style.visibility === 'hidden' && v.readyState >= 2 && !v.seeking) showHls(el);
+  // An alert's HD clip coming up: have it ready.
+  const ahead = 6000 * Math.max(1, tl.speed);
+  const nextClip = c.segments.find(x => x.kind === 'clip' && !tl.badClips.has(x.url) && segMs(x)._a > T && segMs(x)._a - T < ahead);
+  if (nextClip) tlPreload(el, c, segMs(nextClip)._a + 50);
   return true;
 }
 const activeVideo = (el) => el._mode === 'hls' ? el._hlsV : el._vids[el._active];
@@ -4040,7 +4068,8 @@ function revealWhenReady(el, i) {
   setTimeout(done, 15000);
 }
 function showVideo(el, i) {
-  if (el._hlsV) { el._hlsV.style.visibility = 'hidden'; if (!el._hlsV.paused) el._hlsV.pause(); }
+  // (The stream kept going under an alert's clip isn't stopped.)
+  if (el._hlsV) { el._hlsV.style.visibility = 'hidden'; if (!el._hlsV.paused && !el._hlsBehind) el._hlsV.pause(); }
   el._vids.forEach((v, j) => { v.style.visibility = j === i ? '' : 'hidden'; if (j !== i && !v.paused) v.pause(); });
   el._active = i;
   tlApplySound();
@@ -4163,12 +4192,14 @@ function segAt(c, T, force) {
   // Normally the light stream 2 copy (opens instantly); after clicking an
   // alert, its full-quality footage until the alert is over.
   const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
+  // Watching stream 2, the alerts' HD clips play where there are any: the
+  // picture goes to full quality for the alert and back afterwards.
   const order = force === 'main' ? ['clip', 'recording', 'sub'] : force === 'sub' ? ['sub', 'recording', 'clip']
-    : hd || tlQ() === 'main' ? ['clip', 'recording', 'sub'] : ['sub', 'recording', 'clip'];
+    : ['clip', 'sub', 'recording'];
   // Only the chosen stream (an alert you clicked plays in HD either way).
   const ok = force || hd ? () => true : tlShows;
   for (const k of order) {
-    const s = c.segments.find(x => x.kind === k && ok(x) && hit(x));
+    const s = c.segments.find(x => x.kind === k && ok(x) && hit(x) && !(k === 'clip' && tl.badClips.has(x.url)));
     if (s) return s;
   }
   return null;
@@ -4240,6 +4271,15 @@ function tlSync(force) {
     v.playbackRate = tl.speed;
     if (tl.playing && v.paused) v.play().catch(() => {});
     if (!tl.playing && !v.paused) v.pause();
+    // The stream under an alert's clip: kept in step (out of sight), to
+    // carry on from the end of the alert at once.
+    if (el._hlsBehind && el._h && el._h.ready) {
+      const hv = el._hlsV, at = hlsAt(el._h, tl.T);
+      hv.muted = true; hv.playbackRate = tl.speed;
+      if (at && Math.abs(hv.currentTime - at.m) > Math.max(1.5, tl.speed)) hv.currentTime = at.m;
+      if (tl.playing && !at?.gap && hv.paused) hv.play().catch(() => {});
+      if ((!tl.playing || at?.gap) && !hv.paused) hv.pause();
+    }
     // Near the end of this file (or of the alert's HD part): load what comes
     // next in the other player, at the right moment, for a seamless switch.
     const segEnd = new Date(s.end).getTime();
@@ -4247,7 +4287,9 @@ function tlSync(force) {
     const left = (boundary - tl.T) / 1000;
     const nx = left < 10 * Math.max(1, tl.speed) && segAt(c, boundary + 100);
     const other = el._vids[1 - el._active];
-    if (nx && nx.url !== s.url && other.dataset.url !== nx.url) {
+    // (Back to the stream after an alert's clip: nothing to load.)
+    const streamNext = nx && nx.kind !== 'clip' && el._hlsBehind;
+    if (nx && !streamNext && nx.url !== s.url && other.dataset.url !== nx.url) {
       other.dataset.url = nx.url; other.preload = 'auto'; other.src = nx.url;
       const at = Math.max(0, (boundary - new Date(nx.start).getTime()) / 1000);
       other.addEventListener('loadedmetadata', () => { other.currentTime = at; }, {once: true});
@@ -5589,7 +5631,7 @@ const chk = (id) => $(id).checked;
 // ---------- cameras ----------
 function renderCameras(body) {
   body.innerHTML = `<div class="card">
-    <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><input id="scan-nets" placeholder="Also search e.g. 192.168.5.0/24" title="Networks this computer isn't directly on (behind a router), separated by commas. The computer's own networks and your cameras' networks are always searched." style="width:230px" value="${esc(store.get('scan-nets', ''))}"><button id="scan-cams" title="Look for cameras on every network this computer is on, your cameras' networks and any you add (ONVIF and RTSP)">🔍 Scan network</button><button class="primary" id="add-cam">+ Add camera</button></div>
+    <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><input type="text" id="scan-nets" placeholder="Also search e.g. 192.168.5.0/24" title="Networks this computer isn't directly on (behind a router), separated by commas. The computer's own networks and your cameras' networks are always searched." style="width:230px" value="${esc(store.get('scan-nets', ''))}"><button id="scan-cams" title="Look for cameras on every network this computer is on, your cameras' networks and any you add (ONVIF and RTSP)">🔍 Scan network</button><button class="primary" id="add-cam">+ Add camera</button></div>
     <div id="scan-out"></div>
     <table><thead><tr><th>Preview</th><th>Name</th><th class="hide-sm">Profile</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead><tbody id="cam-table"></tbody></table>
     ${cameraCfgs.length ? '' : '<div class="empty">No cameras yet. Click “Add camera”.</div>'}</div>`;

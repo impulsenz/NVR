@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.88 — November 2026
+- **Alerts in full quality on the timeline, without a break**: watching the sub-stream recording, the picture now changes to the alert's HD clip right where the alert starts, and back to the sub-stream where it ends, with no blink, skip or wait. The HD clip is loaded a few seconds ahead, and the sub-stream keeps going underneath, ready to take over again. A clip the browser can't play (e.g. H.265 in some browsers) is skipped and the sub-stream carries on.
+- **Alert cards**: the HD AI ✓ / ? badge lines up with the camera name and time. Sound alerts' "Heard: …" now goes across the middle of the picture, where the card's captions don't cover it (for new alerts).
+- **Day and night colours, reviewed**: the REC badge on Settings → Cameras is readable in day colours, and the "Also search" box next to Scan network looks like the other boxes.
+
 ## 0.6.87 — November 2026
 - **Drop-down lists over the video are readable**: the playback speed list in full screen (and the presets list on a pan / tilt / zoom camera) showed white text on white, visible only under the mouse. Every drop-down list now shows its choices clearly, in day and night colours.
 
