@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.7.2 — November 2026
+- **Recordings opens at once, also from a NAS**: the timeline (seen taking 25 seconds the first time) no longer waits while each recording's picture size is read to tell main stream from sub-stream: it answers straight away with what's known, reads the rest in the background, and corrects itself on its next refresh. In a test with 9 cameras and a day of recordings on slow storage it now answers in a few hundredths of a second.
+- **Faster first playback of each recording**: indexing a recording (finding its pieces) reads it in large parts instead of hundreds of small reads — on a network drive, much quicker. (Each recording is still indexed only once.)
+- **Watching comes first**: making time-lapse previews in the background pauses while someone is watching recordings, so the two don't compete for the NAS or disk.
+- **A camera that gets stuck catches up by itself**: when a camera's video waits at a gap in what it has loaded, it jumps over the gap after 2 seconds; with nothing loaded for 8 seconds, its player starts again.
+
 ## 0.7.1 — November 2026
 - **Recordings from a NAS or a slow disk: a new way of reading video.** The browser asks for a recording piece by piece, many times a minute per camera. Each request used to open the file on the storage and read a small piece — on a network drive every open and every read is a trip to the NAS (and often an antivirus check). Now:
   - **Files stay open** between requests (closed again after 15 seconds unused, and before anything is deleted or moved).

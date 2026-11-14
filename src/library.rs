@@ -336,7 +336,11 @@ pub fn timeline(
         let in_view: Vec<Recording> = recordings(&rt).into_iter().filter(|r| r.end >= from && r.start <= to).collect();
         // (The newest is still being written: no header yet.)
         let names: Vec<String> = in_view.iter().skip(1).map(|r| r.name.clone()).collect();
-        prefetch_heights(&rt.dir, &names);
+        // Picture sizes not known yet are read in the background (one
+        // folder at a time): the timeline answers at once, with the
+        // stream recorded now for those, corrected on its next refresh.
+        // (Read before answering, the first look at a NAS took 25 s.)
+        prefetch_heights_soon(&rt.dir, names);
         let stream_of = |name: &str| recording_stream(&rt, name);
         let mut segments: Vec<Segment> = in_view
             .into_iter()
@@ -563,13 +567,33 @@ fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
     }
 }
 
-fn mp4_height_cached(path: &std::path::Path) -> Option<u32> {
-    if let Some(h) = HEIGHTS.lock().unwrap().get(path) {
-        return Some(*h);
+fn prefetch_heights_soon(dir: &std::path::Path, names: Vec<String>) {
+    static BUSY: std::sync::LazyLock<std::sync::Mutex<HashSet<PathBuf>>> = std::sync::LazyLock::new(Default::default);
+    // Remembered ones first (instant), so most are known straight away.
+    if HEIGHT_DIRS.lock().unwrap().insert(dir.to_path_buf())
+        && let Some(f) = heights_file(dir)
+        && let Ok(t) = std::fs::read_to_string(&f)
+        && let Ok(m) = serde_json::from_str::<std::collections::HashMap<String, u32>>(&t)
+    {
+        let mut c = HEIGHTS.lock().unwrap();
+        for (n, h) in m {
+            c.insert(dir.join(n), h);
+        }
     }
-    let h = mp4_height(path)?;
-    HEIGHTS.lock().unwrap().insert(path.to_path_buf(), h);
-    Some(h)
+    let any = { let c = HEIGHTS.lock().unwrap(); names.iter().any(|n| !c.contains_key(&dir.join(n))) };
+    if !any || !BUSY.lock().unwrap().insert(dir.to_path_buf()) {
+        return;
+    }
+    let d = dir.to_path_buf();
+    std::thread::spawn(move || {
+        prefetch_heights(&d, &names);
+        BUSY.lock().unwrap().remove(&d);
+    });
+}
+
+/// Known picture height of a recording (never read here: see above).
+fn mp4_height_cached(path: &std::path::Path) -> Option<u32> {
+    HEIGHTS.lock().unwrap().get(path).copied()
 }
 
 /// Picture height of an MP4 file from its `moov` box (wherever it is).

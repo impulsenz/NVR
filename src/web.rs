@@ -3256,6 +3256,14 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                         }
                     }
                     j.pause_point().await;
+                    // Someone watching recordings: their video comes first
+                    // (making previews reads the recordings too — on a NAS
+                    // or a hard drive both would crawl).
+                    let mut waited = 0;
+                    while crate::vstore::watching() && waited < 600 {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        waited += 2;
+                    }
                     j.step(format!(
                         "{} — {} {}–{}",
                         c.cfg.name,

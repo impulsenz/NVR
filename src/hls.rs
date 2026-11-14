@@ -165,20 +165,34 @@ pub fn index_file(path: &Path) -> Option<FileIndex> {
 }
 
 fn index_from(path: &Path, len: u64, mut out: FileIndex, from: Resume) -> Option<(FileIndex, Resume)> {
-    let mut f = std::fs::File::open(path).ok()?;
+    // Read in large pieces: the box headers are only a few bytes apart, and
+    // on a network drive (NAS) hundreds of small reads were far slower
+    // than reading on through the file.
+    let mut f = std::io::BufReader::with_capacity(2 << 20, std::fs::File::open(path).ok()?);
+    let mut at = 0u64; // where the reader is
     let mut pos = from.pos;
     let mut track = from.track;
     // After the last complete piece: where to carry on next time.
     let mut done = from;
     let mut pending: Option<(u64, f64, f64)> = None; // moof start, start, duration
     while pos + 8 <= len {
-        f.seek(SeekFrom::Start(pos)).ok()?;
+        // (Forward within what's been read: no new read from the disk.)
+        if pos != at {
+            if pos > at && pos - at < (1 << 30) {
+                f.seek_relative((pos - at) as i64).ok()?;
+            } else {
+                f.seek(SeekFrom::Start(pos)).ok()?;
+            }
+            at = pos;
+        }
         let mut h = [0u8; 16];
         f.read_exact(&mut h[..8]).ok()?;
+        at += 8;
         let mut size = u32::from_be_bytes(h[0..4].try_into().ok()?) as u64;
         let mut hdr = 8u64;
         if size == 1 {
             f.read_exact(&mut h[8..16]).ok()?;
+            at += 8;
             size = u64::from_be_bytes(h[8..16].try_into().ok()?);
             hdr = 16;
         } else if size == 0 {
@@ -195,6 +209,7 @@ fn index_from(path: &Path, len: u64, mut out: FileIndex, from: Resume) -> Option
                 }
                 let mut body = vec![0; (size - hdr) as usize];
                 f.read_exact(&mut body).ok()?;
+                at += size - hdr;
                 if &kind == b"moov" {
                     track = video_track(&body);
                     out.init_len = pos + size;

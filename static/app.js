@@ -4760,6 +4760,17 @@ function paintLoaded() {
     const v = activeVideo(el), c = tl.data.find(x => x.camera === el.dataset.cam);
     const has = !!(c && tl.T != null && segAt(c, tl.T));
     const waiting = !tl.live && !tl.dragging && has && (el._pending != null || (v && (v.seeking || v.readyState < 3) && (tl.playing || v.readyState < 2)));
+    // A camera stuck waiting: footage loaded a little further on (a gap
+    // in what it has) is jumped to; nothing at all for a while, and its
+    // player starts again.
+    if (waiting && v && el._mode === 'hls' && !v.seeking) {
+      el._waitSince = el._waitSince || Date.now();
+      const t = v.currentTime, wait = Date.now() - el._waitSince;
+      let next = null;
+      for (let i = 0; i < v.buffered.length; i++) { const a = v.buffered.start(i), b = v.buffered.end(i); if (a <= t && t < b - 0.1) { next = null; break; } if (a > t && a - t < 15 && next == null) next = a; }
+      if (wait > 2000 && next != null) { v.currentTime = next + 0.05; el._waitSince = Date.now(); }
+      else if (wait > 8000 && el._h) { el._waitSince = Date.now(); try { el._h.hls.recoverMediaError(); } catch (_) {} el._h.ready = false; hlsLoad(el._h, tl.T, tlQ()); }
+    } else el._waitSince = 0;
     if (waiting) { const p = pct(tl.T); if (p >= 0 && p <= 100) html += `<i class="wait" style="left:${p}%" title="Loading this camera's video…"></i>`; }
     if (box._html !== html) { box._html = html; box.innerHTML = html; }
     // The outline: what's on the picture now. A camera whose video can't

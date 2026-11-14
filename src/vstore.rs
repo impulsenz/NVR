@@ -238,8 +238,17 @@ fn read_ahead(path: &Path, from: u64, len: u64, modified: SystemTime) {
     }
 }
 
+static LAST_READ: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Someone has been watching recordings in the last 20 seconds (background
+/// work that reads recordings waits).
+pub fn watching() -> bool {
+    LAST_READ.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_secs(20))
+}
+
 /// Bytes `[a, b]` (inclusive) of a file, through the blocks.
 pub fn read(path: &Path, a: u64, b: u64) -> std::io::Result<Vec<u8>> {
+    *LAST_READ.lock().unwrap() = Some(Instant::now());
     let (len, modified) = meta(path)?;
     if len == 0 || a >= len {
         return Ok(Vec::new());
