@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.7.4 — November 2026
+- **The timeline's legend explains the light strip under the footage**: **Loaded** — footage already loaded into the browser (ahead of the playhead it plays without waiting; behind it, what was just played). A strip with gaps means that camera's footage is arriving in pieces — the log (Settings → Logs, "playing recordings") says why.
+
 ## 0.7.3 — November 2026
 - **The next recording is read ahead too**: a camera's recordings play as one stream, and the browser already loads into the next file before reaching it. Now GAZE also starts reading the next file from the disk or NAS while the current one is nearly done, so crossing from one recording into the next doesn't wait for the storage.
 - **Steadier playback on cameras whose recordings have small holes**: the player steps over small gaps in what it has loaded by itself, quickly, instead of stopping first.

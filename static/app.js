@@ -837,6 +837,8 @@ function legendHtml(kind, data) {
   for (const [k, t] of [['person', 'People'], ['vehicle', 'Vehicles'], ['animal', 'Animals'], ['package', 'Packages'], ['other', 'Other'], ['motion', 'Motion only']])
     if (cats.has(k)) bars.push([`<i class="lg-bar ev cat-${k}"></i>`, t]);
   if (TIMELAPSE) bars.push(['<i class="lg-bar tlr"></i>', 'Time-lapse ready']);
+  // (The strip under the footage: what's in the browser already.)
+  bars.push(['<i class="lg-bar loaded" title="Footage already loaded into this browser: ahead of the playhead it plays without waiting; behind it, what was just played"></i>', 'Loaded']);
   return bars.map(([i, t]) => `<span>${i}${t}</span>`).join('')
     + (watched.length ? '<span class="lg-sep"></span>' + watched.map(o => `<span>${labelIcon(o)} ${esc(o)}</span>`).join('') : '');
 }

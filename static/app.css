@@ -1434,3 +1434,5 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
   background: rgba(0,0,0,.72); color: #fff; font-size: 12px; padding: 3px 10px; border-radius: 12px; pointer-events: none; white-space: nowrap; }
 /* (Below the clock on the picture, not under it.) */
 #tl-videos .surface > .msg { align-items: flex-end; padding-bottom: 22%; }
+
+.lg-bar.loaded { height: 4px; background: rgba(255,255,255,.55); box-shadow: 0 0 4px rgba(255,255,255,.35); }
