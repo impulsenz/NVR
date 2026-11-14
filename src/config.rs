@@ -864,6 +864,14 @@ pub struct DetectConfig {
     pub package_area: Vec<[f32; 2]>,
 }
 
+impl DetectConfig {
+    /// Plain motion makes an alert: chosen, or object recognition is off
+    /// (then "only recognised objects" can't apply).
+    pub fn alert_on_motion(&self) -> bool {
+        self.trigger == "motion" || !self.ai
+    }
+}
+
 impl Default for DetectConfig {
     fn default() -> Self {
         Self {
@@ -874,14 +882,9 @@ impl Default for DetectConfig {
             min_travel_px: 0,
             mask: String::new(),
             ai: false,
-            objects: vec![
-                "person".into(),
-                "vehicle".into(),
-                "dog".into(),
-                "cat".into(),
-            ],
-            min_confidence: 0.5,
-            trigger: "motion".into(),
+            objects: vec!["person".into(), "vehicle".into()],
+            min_confidence: 0.7,
+            trigger: "objects".into(),
             pre_seconds: 3,
             post_seconds: 15,
             join_seconds: 30,
@@ -1310,9 +1313,6 @@ impl CameraConfig {
         }
         if d.ai && !d.motion {
             bail!("object recognition only runs when motion is seen: turn on motion detection");
-        }
-        if d.trigger == "objects" && !d.ai {
-            bail!("alerts on objects need object recognition turned on");
         }
         let o = &self.osd;
         for c in [

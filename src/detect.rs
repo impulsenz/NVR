@@ -935,7 +935,7 @@ impl Detector {
             && d.ai
             && self.ai.get().enabled()
             && (a.animal_seen || (a.ai_looks < 2 && a.began.elapsed() < Duration::from_secs(4)));
-        if d.trigger == "motion" && !a.qualified && !wait_for_ai {
+        if d.alert_on_motion() && !a.qualified && !wait_for_ai {
             a.qualified = true;
             info!(target: "event", "[{}] motion detected", self.cam.name);
             self.store.save_detected(a.event.clone());

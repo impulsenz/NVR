@@ -741,7 +741,7 @@ ol.steps code { user-select: all; }
   animation: ub-pulse 2.4s ease-in-out infinite; }
 .upd-bar.ub-busy .ub-icon { position: relative; animation: none; box-shadow: none; }
 .upd-bar.ub-busy .ub-icon::before { content: ''; position: absolute; inset: -4px; border-radius: 50%; z-index: -1;
-  background: conic-gradient(#fff var(--ub-pct, 0%), color-mix(in srgb, var(--accent) 30%, transparent) 0); transition: background .5s;
+  background: conic-gradient(#fff var(--ub-pct, 0%), color-mix(in srgb, var(--accent) 30%, transparent) 0);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px)); mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px)); }
 .upd-bar.ub-busy .ub-icon { isolation: isolate; }
 .upd-bar .ub-icon svg { display: block; overflow: hidden; }
@@ -1028,10 +1028,12 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .now-ax.end em { left: auto; right: 4px; }
 /* the recording being made right now: its end is "still loading" */
 .tl-row .seg.live, .ctl-lane .seg.live { overflow: hidden; }
-.tl-row .seg.live::after, .ctl-lane .seg.live::after { content: ''; position: absolute; top: 0; bottom: 0; right: 0; width: min(60px, 100%);
+.tl-row .seg.live::after, .ctl-lane .seg.live::after { content: ''; position: absolute; top: 0; bottom: 0; right: 0; width: min(72px, 100%);
   background: repeating-linear-gradient(45deg, rgba(120,230,160,.85) 0 4px, rgba(35,101,62,.35) 4px 8px); background-size: 11px 11px;
   animation: tlp-load .8s linear infinite; border-radius: 0 4px 4px 0;
-  -webkit-mask: linear-gradient(90deg, transparent, #000 60%); mask: linear-gradient(90deg, transparent, #000 60%); }
+  -webkit-mask: linear-gradient(90deg, transparent, #000); mask: linear-gradient(90deg, transparent, #000); }
+/* purple when the HD main stream is shown */
+.lg-bar.live.clip { background: repeating-linear-gradient(45deg, rgba(196,170,255,.9) 0 4px, rgba(84,60,150,.5) 4px 8px); background-size: 11px 11px; }
 .lg-bar.live { background: repeating-linear-gradient(45deg, rgba(120,230,160,.85) 0 4px, rgba(35,101,62,.5) 4px 8px); background-size: 11px 11px; animation: tlp-load .8s linear infinite; }
 /* alert pictures above the recording bar */
 .evt { position: absolute; top: 3px; height: 28px; width: 48px; margin-left: -1px; border-radius: 4px; overflow: visible; cursor: pointer; z-index: 2;
@@ -1102,7 +1104,7 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 /* Recordings in full screen: the timeline in a panel that slides up from the bottom */
 .surface:fullscreen .fspov.tl-panel { padding: 10px 12px 12px; background: rgba(10,12,17,.94); backdrop-filter: blur(6px);
   border-top: 1px solid rgba(255,255,255,.08); transition: transform .25s ease, opacity .25s ease; }
-.fspov.tl-panel.away { transform: translateY(calc(100% - 4px)); opacity: 0; }
+.fspov.tl-panel.away { transform: translateY(calc(100% - 4px)); opacity: 0; transition: none; }
 .fspov.tl-panel .fs-tlslot #tl { max-height: 42vh; overflow-y: auto; margin: 0 0 6px; }
 .fspov.tl-panel .controls { margin-top: 0; }
 .eye-btn { flex: none; margin-left: -1px; padding: 0 9px; min-width: 36px; font-size: 14px; line-height: 1; opacity: .7; }
@@ -1245,7 +1247,7 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 #tl-videos .tl-livebox { position: absolute; inset: 0; z-index: 2; background: #000; }
 #tl-videos .tl-livebox img, #tl-videos .tl-livebox video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
 #tl-videos .tl-livetag { position: absolute; right: 8px; bottom: 8px; z-index: 3; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
-#tl-live.live-on { background: var(--red); border-color: var(--red); color: #fff; }
+#tl-live.live-on, .fspov .p-live.live-on { background: var(--red) !important; border-color: var(--red) !important; color: #fff !important; }
 #tl-sound.on, #tl-videos .tl-snd.on { border-color: var(--accent); color: var(--accent); }
 #tl-videos .tl-livebox > video.live-v { opacity: 0; transition: opacity .25s; pointer-events: none; }
 #tl-videos .tl-livebox.mse > video.live-v { opacity: 1; }
@@ -1282,3 +1284,43 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 }
 
 #cam-dialog .foot .c-err { flex: 1; margin: 0 8px 0 0; font-size: 13px; text-align: left; }
+
+/* The update rings glide from one reading to the next (progress comes every
+   ~2 s): the percentage is a real CSS value the browser animates smoothly. */
+@property --ub-pct { syntax: '<percentage>'; inherits: true; initial-value: 0%; }
+@property --upd-pct { syntax: '<percentage>'; inherits: true; initial-value: 0%; }
+.upd-bar { transition: --ub-pct 2s linear, max-height .35s ease, padding .35s ease; }
+#upd-btn { transition: --upd-pct 2s linear; }
+
+/* Settings search */
+.set-search { position: relative; margin-bottom: 10px; }
+.set-search input { width: 100%; }
+.set-res { position: absolute; left: 0; right: -60px; top: calc(100% + 4px); z-index: 50; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); max-height: 60vh; overflow: auto; padding: 4px; }
+.set-res button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 6px; height: auto; white-space: normal; }
+.set-res button small { display: block; color: var(--muted); font-size: 11.5px; }
+.set-res button:hover, .set-res button.on { background: var(--accent2); }
+.set-flash { animation: setflash 2.4s ease-out; border-radius: 6px; }
+@keyframes setflash { 0%, 30% { box-shadow: 0 0 0 3px var(--accent); background: var(--accent2); } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+/* Alert cards: symbols top left, NEW top right, how long ago bottom left,
+   date and time bottom right. */
+.rc .thumb .tags .sym { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 3px; border-radius: 6px;
+  background: rgba(0,0,0,.6); border: 1px solid rgba(255,255,255,.2); font-size: 14px; line-height: 1; }
+.rc .thumb .tags .sym.unconfirmed { opacity: .6; border-style: dashed; }
+.rc .thumb .newb { position: absolute; right: 5px; top: 5px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .5px;
+  padding: 2px 6px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.rc.new .thumb .tools { top: 28px; }
+.rc .thumb .cap { align-items: flex-end; }
+.rc .thumb .cap .l { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.rc .thumb .cap .l b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc .thumb .cap .ago { color: #dfe6f0; font-size: 11px; }
+.rc .thumb .cap .t { text-align: right; font-size: 11px; line-height: 1.3; color: #dfe6f0; }
+.rc .thumb .cap .hdai { align-self: flex-start; }
+
+/* Camera test pictures turned as chosen (sideways ones shrunk to fit). */
+.probe-grid img { transition: transform .25s; }
+.probe-grid img[data-rot="180"] { transform: rotate(180deg); }
+.probe-grid img[data-rot="90"] { transform: rotate(90deg) scale(.5625); }
+.probe-grid img[data-rot="270"] { transform: rotate(270deg) scale(.5625); }
+.dv-apply { margin-top: 12px; }
+.rc .thumb .cap { padding-top: 26px; background: linear-gradient(transparent, rgba(0,0,0,.6) 40%, rgba(0,0,0,.85)); }

@@ -80,6 +80,17 @@ const ago = (d) => {
   if (s < 86400) { const h = Math.round(s / 3600); return h + (h === 1 ? ' hour ago' : ' hours ago'); }
   const n = Math.round(s / 86400); return n === 1 ? 'yesterday' : n + ' days ago';
 };
+// How long ago, for the alert cards: "just now", "5 min ago", "3 h ago".
+const cardAgo = (d) => {
+  const s = (Date.now() - new Date(d).getTime()) / 1000;
+  if (!isFinite(s)) return '';
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+  const n = Math.floor(s / 86400); return n === 1 ? 'yesterday' : n + ' days ago';
+};
+// Keep "… ago" on the cards up to date.
+setInterval(() => document.querySelectorAll('.rc .ago[data-t]').forEach(e => { e.textContent = cardAgo(e.dataset.t); }), 30000);
 const fmtDur = (s) => {
   s = Math.max(0, Math.floor(s)); const d = Math.floor(s / 86400); s %= 86400;
   const h = Math.floor(s / 3600); s %= 3600; const m = Math.floor(s / 60); s %= 60;
@@ -708,7 +719,10 @@ function legendHtml(kind, data) {
   const bars = [];
   if (!segs.length || segs.some(x => sm(x) === 'sub')) bars.push(['<i class="lg-bar rec"></i>', 'Sub-stream']);
   if (segs.some(x => sm(x) === 'main')) bars.push(['<i class="lg-bar clip"></i>', segs.every(x => sm(x) !== 'main' || x.kind === 'clip') ? 'HD alert clips' : 'Main stream (HD)']);
-  if (segs.some(isGrowing)) bars.push(['<i class="lg-bar live"></i>', 'Recording now']);
+  // Recording now: purple stripes when the HD main stream is what's shown.
+  const grow = segs.filter(isGrowing);
+  const hdNow = kind === 'tl' ? tlQ() === 'main' : grow.length && grow.every(x => sm(x) === 'main');
+  if (grow.length) bars.push([`<i class="lg-bar live${hdNow ? ' clip' : ''}"></i>`, 'Recording now']);
   // Alerts in the colour of their kind (only kinds that are on it).
   const cats = new Set(evs.map(evCat));
   for (const [k, t] of [['person', 'People'], ['vehicle', 'Vehicles'], ['animal', 'Animals'], ['package', 'Packages'], ['other', 'Other'], ['motion', 'Motion only']])
@@ -756,10 +770,9 @@ function overlayHtml(c, q, noFs, opts = {}) {
     row.push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
   }
   const fsBtn = '<button type="button" class="fsbtn fs-go" title="Full screen (or double-click the picture)">⛶</button>';
-  const fsAt = corners.length ? corners : opts.rec ? ['tr'] : [];
-  if (fsAt.includes(sc) || !fsAt.length) { if (fsAt.length) row.push(fsBtn); }
+  // ⛶ once, with the other buttons (no second one in another corner).
+  if (corners.length || opts.rec) row.push(fsBtn);
   parts[sc].unshift(`<span class="ov-btns">${row.join('')}</span>`);
-  for (const corner of fsAt) if (corner !== sc) parts[corner].push(fsBtn);
   return Object.entries(parts).filter(([, v]) => v.length).map(([k, v]) => ovBox(k, v.join(''), opts.extra || '')).join('');
 }
 // One on-screen display box: at one of the nine places, or anywhere
@@ -3176,12 +3189,13 @@ function renderRecordings() {
     card.dataset.eid = it.event ? it.event.id : '';
     const dur = (new Date(it.end) - new Date(it.start)) / 1000;
     const tags = it.kind === 'event' ? labelTags(it.event.labels, it.event.motion) : '<span class="tag">recording</span>';
-    const icons = it.kind === 'event' ? (it.event.labels.length ? it.event.labels.map(l => `<span class="tag ${LABEL_GROUP[l.label] || ''} ${hdClass(l)}" title="${esc(l.label)} ${Math.round(l.score * 100)}% — ${hdTip(l)}">${labelIcon(l.label)} ${Math.round(l.score * 100)}%</span>`).join('') : `<span class="tag motion">${labelIcon('motion')}</span>`) : '';
+    // Top left: a symbol for each thing found (how sure, in the tip).
+    const icons = it.kind === 'event' ? (it.event.labels.length ? [...new Map(it.event.labels.map(l => [l.label, l])).values()].map(l => `<span class="sym ${LABEL_GROUP[l.label] || ''} ${hdClass(l)}" title="${esc(l.label)} ${Math.round(l.score * 100)}% — ${hdTip(l)}">${labelIcon(l.label)}</span>`).join('') : `<span class="sym motion" title="Motion">${labelIcon('motion')}</span>`) : '<span class="tag">recording</span>';
     card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
-        <div class="tags">${it.kind === 'event' && !it.seen ? '<span class="tag newtag">NEW</span>' : ''}${icons}</div>
+        <div class="tags">${icons}</div>${it.kind === 'event' && !it.seen ? '<span class="newb">NEW</span>' : ''}
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small op-only" data-a="del" title="Delete">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
-        <div class="cap"><b>${esc(it.camera_name)}</b>${hdAi(it.event)}<span class="t">${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
+        <div class="cap"><span class="l"><b>${esc(it.camera_name)}</b>${hdAi(it.event)}<span class="ago" data-t="${esc(it.start)}">${cardAgo(it.start)}</span></span><span class="t">${fmtDay(it.start)}<br>${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
     card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && it.event.notes && it.event.notes.length ? '\n' + it.event.notes.join('\n') : ''}`;
     card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
@@ -3271,19 +3285,20 @@ function renderRecKey() {
   const row = (k, d) => `<div><span class="k">${k}</span><span class="d">${d}</span></div>`;
   const ex = objs[0] || 'person';
   $('rec-key').innerHTML = [
-    row('<span class="tag newtag">NEW</span><span class="newk"></span>', '<b>New</b> — an alert you haven\u2019t opened yet. It has a blue outline until you play it.'),
-    row(`<span class="tag ${LABEL_GROUP[ex] || ''}">${labelIcon(ex)} 92%</span>`, '<b>What the AI found</b> and how sure it is (92% sure). Hover over it for the name.'),
+    row('<span class="tag newtag">NEW</span><span class="newk"></span>', '<b>New</b> (top right) — an alert you haven\u2019t opened yet. It has a blue outline until you play it.'),
+    row(`<span class="sym">${labelIcon(ex)}</span>`, '<b>What the AI found</b> (top left). Hover over it for the name and how sure the AI is.'),
     objs.length ? row(`<span class="sym">${objs.map(labelIcon).join(' ')}</span>`, `<b>Objects</b> these cameras look for: ${objs.map(esc).join(', ')}.`) : '',
     row(`<span class="tag motion">${labelIcon('motion')}</span>`, '<b>Motion only</b> — something moved, but no object was recognised.'),
     row('<span class="box"></span>', '<b>Green box</b> — where the object was in the picture.'),
     hd ? row('<span class="hdai">HD AI ✓</span>', '<b>Confirmed in HD</b> — the find from the smaller stream was checked again in a full-quality picture and is real.') : '',
     hd ? row('<span class="hdai no">HD AI ?</span>', '<b>Not confirmed in HD</b> — the full-quality picture didn\u2019t show it clearly. Often a shadow, reflection or something far away: worth a quick look.') : '',
-    hd ? row(`<span class="tag unconfirmed">${labelIcon(ex)} 61%</span>`, '<b>Faded, dashed tag</b> — that object wasn\u2019t confirmed in HD.') : '',
+    hd ? row(`<span class="tag unconfirmed">${labelIcon(ex)}</span>`, '<b>Faded, dashed symbol</b> — that object wasn\u2019t confirmed in HD.') : '',
     hd ? row('<span class="muted small">no badge</span>', '<b>Not checked in HD</b> — found in the full-quality stream already, motion only, or the HD check was off.') : '',
     row('<span class="sym">▶</span>', '<b>Play</b> — the alert\u2019s video is ready.'),
     row('<span class="sym">⏳</span>', '<b>Still recording</b> — the clip is ready a few seconds after the activity stops.'),
     row('<span class="sym">⇩ ✕</span>', '<b>Download</b> the clip, or <b>delete</b> the alert (when you hover over a card).'),
-    row('<span class="muted small">07:01:43 · 6s</span>', '<b>When</b> it started and how long the activity lasted.'),
+    row('<span class="muted small">5 min ago</span>', '<b>How long ago</b> (bottom left, under the camera name).'),
+    row('<span class="muted small">07:01:43 · 6s</span>', '<b>Date and time</b> it started and how long the activity lasted (bottom right).'),
   ].join('');
 }
 $('rec-key-btn').onclick = () => { const k = $('rec-key'); k.hidden = !k.hidden; store.set('rec-key', !k.hidden); if (!k.hidden) renderRecKey(); };
@@ -3368,7 +3383,7 @@ async function playItem(it, card) {
   // Viewed.
   if (e && !it.seen) {
     it.seen = true;
-    if (card) { card.classList.remove('new'); const n = card.querySelector('.newtag'); if (n) n.remove(); }
+    if (card) { card.classList.remove('new'); const n = card.querySelector('.newb'); if (n) n.remove(); }
     api('api/alerts/seen', {method: 'POST', json: {ids: [e.id]}}).then(refreshStatus).catch(() => {});
   }
 }
@@ -3848,7 +3863,7 @@ function tlGoLive() {
   clearInterval(tlLiveTimer); tlLiveTimer = setInterval(tick, 1000); tick();
   $('tl-live').classList.add('live-on');
   updateSubscriptions();
-  tlApplySound();
+  tlApplySound(); paintTlBar();
 }
 function tlLeaveLive() {
   if (!tl.live) return;
@@ -3858,7 +3873,7 @@ function tlLeaveLive() {
   $('tl-live').classList.remove('live-on');
   if (soundCam) stopSound();
   updateSubscriptions();
-  tlApplySound();
+  tlApplySound(); paintTlBar();
 }
 $('tl-live').onclick = () => tl.live ? (tlLeaveLive(), tlSync(true)) : tlGoLive();
 // Bars on a timeline: pieces of the same kind that follow each other (a
@@ -4235,6 +4250,8 @@ function tlFsBar(el) {
       <button type="button" class="p-play primary">▶</button>
       <button type="button" class="p-back" title="Back one frame">−1 frame</button><button type="button" class="p-fwd" title="Forward one frame">+1 frame</button>
       <button type="button" class="p-pev" title="Previous alert">⏮ Alert</button><button type="button" class="p-nev" title="Next alert">Alert ⏭</button>
+      <button type="button" class="p-live" title="Watch this camera live now (Play or the timeline goes back to the recording)">● Live</button>
+      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk" hidden title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button>' : ''}
       <select class="p-speed">${[1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === tl.speed ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
@@ -4259,6 +4276,9 @@ function tlFsBar(el) {
   q('.p-play').onclick = () => $('tl-play').click();
   q('.p-back').onclick = () => tlStep(-1); q('.p-fwd').onclick = () => tlStep(1);
   q('.p-pev').onclick = () => $('tl-prev-ev').click(); q('.p-nev').onclick = () => $('tl-next-ev').click();
+  // Live, in this window: the camera's live picture, and its push-to-talk.
+  q('.p-live').onclick = () => { tl.live ? (tlLeaveLive(), tlSync(true)) : tlGoLive(); paintTlBar(); };
+  if (q('.p-talk')) setupTalkButton(c, q('.p-talk'));
   q('.p-speed').onchange = (e) => { $('tl-speed').value = e.target.value; $('tl-speed').dispatchEvent(new Event('change')); };
   q('.p-in').onclick = () => $('tl-in').click(); q('.p-out').onclick = () => $('tl-out').click();
   q('.p-clip').download = '';
@@ -4270,13 +4290,15 @@ function tlFsBar(el) {
 function slidePanel(el, bar, busy) {
   let hideT = null;
   const place = () => { const pb = el.querySelector('.pov:not(.fspov)'); bar.style.bottom = pb && !pb.hidden && !el.classList.contains('pov-idle') ? pb.offsetHeight + 'px' : '0px'; };
-  const show = (on) => { clearTimeout(hideT); place(); if (on) bar.classList.remove('away'); else hideT = setTimeout(() => { if (!busy() && !bar.matches(':hover')) bar.classList.add('away'); }, 700); };
+  const show = (on) => { clearTimeout(hideT); place(); if (on) bar.classList.remove('away'); else { if (!busy() && !bar.matches(':hover')) bar.classList.add('away'); else hideT = setTimeout(() => show(false), 200); } };
   el.addEventListener('pointermove', (e) => { if (document.fullscreenElement !== el) return; show(e.clientY > innerHeight - Math.max(140, bar.offsetHeight + 30) - (parseFloat(bar.style.bottom) || 0) || bar.contains(e.target) || busy()); });
   bar.addEventListener('pointerleave', () => show(false));
   show(true); hideT = setTimeout(() => { if (!bar.matches(':hover')) bar.classList.add('away'); }, 2500);
 }
 function paintTlBar() {
   const bar = document.querySelector('.fspov.tlbar'); if (!bar) return;
+  const lv = bar.querySelector('.p-live'); if (lv) { lv.classList.toggle('live-on', !!tl.live); lv.textContent = tl.live ? '● Live — back to recording' : '● Live'; }
+  const tk = bar.querySelector('.p-talk'); if (tk) tk.hidden = !tl.live;
   bar.querySelector('.p-time').textContent = fmtDate(new Date(tl.T));
   bar.querySelector('.p-play').textContent = tl.playing ? '❚❚' : '▶';
   const z = bar.querySelector('.p-zoom'); if (z && z.value !== $('tl-zoom').value) z.value = $('tl-zoom').value;
@@ -5217,6 +5239,65 @@ const camPreviewUnbind = [];
 
 async function loadSettings() { [settings, cameraCfgs] = await Promise.all([api('api/settings'), api('api/cameras')]); }
 
+// ---------- searching the settings ----------
+// Every setting's name (from each settings page and the camera window's
+// tabs): [section, name, camera tab].
+const SETTINGS_INDEX = [["cameras", "Cameras"], ["profiles", "Profiles"], ["storage", "Default recordings folder"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Full-screen button"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Also use the graphics card for sub-streams"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "System"], ["system", "trust its own certificate"], ["info", "Update from"], ["info", "About"], ["info", "Updates"], ["info", "What's new"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
+const CAM_TABS = {general: 'General', recording: 'Recording', detection: 'Motion', ai: 'AI', audio: 'Audio', osd: 'On-screen display', ptz: 'Pan / tilt / zoom', device: 'ONVIF', zones: 'Zones'};
+function sectionName(sec) { const a = document.querySelector(`#side a[data-s="${sec}"]`); return a ? a.textContent.trim() : sec; }
+// Find a setting's row on the page (or in the camera window) and show it.
+function flashSetting(root, name) {
+  const want = name.toLowerCase();
+  const el = [...root.querySelectorAll('label, h2, h3, .check, b')].find(e => e.textContent.trim().toLowerCase().startsWith(want.slice(0, 40)));
+  if (!el) return;
+  const row = el.closest('label, .check') || el;
+  row.scrollIntoView({block: 'center', behavior: 'smooth'});
+  row.classList.remove('set-flash'); void row.offsetWidth; row.classList.add('set-flash');
+  setTimeout(() => row.classList.remove('set-flash'), 2400);
+}
+async function goToSetting([sec, name, tab]) {
+  $('set-res').hidden = true;
+  if (sec === 'camera') {
+    // A camera's own setting: in its window (the first camera's, as an example).
+    location.hash = '#settings/cameras';
+    if (!cameraCfgs.length) { toast('Add a camera first — this is in each camera’s window', true); return; }
+    await openCameraDialog(cameraCfgs[0].id);
+    const b = document.querySelector(`#c-tabs [data-t="${tab}"]`); if (b) b.click();
+    setTimeout(() => flashSetting($('cam-dialog'), name), 150);
+    toast(`${CAM_TABS[tab] || tab} tab — every camera has this in its own window`);
+    return;
+  }
+  if (location.hash !== '#settings/' + sec) location.hash = '#settings/' + sec;
+  else showSettings(sec);
+  // (Drawn after the page's settings load.)
+  let tries = 0;
+  const look = () => { const body = $('settings-body'); if (body && body.textContent.toLowerCase().includes(name.toLowerCase().slice(0, 30))) flashSetting(body, name); else if (tries++ < 20) setTimeout(look, 150); };
+  setTimeout(look, 100);
+}
+(function wireSettingsSearch() {
+  const q = $('set-q'), res = $('set-res'); if (!q) return;
+  let hits = [], at = -1;
+  const paint = () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) { res.hidden = true; return; }
+    const where = (x) => x[0] === 'camera' ? `Camera window › ${CAM_TABS[x[2]] || x[2]}` : sectionName(x[0]);
+    hits = SETTINGS_INDEX.filter(x => { const t = (x[1] + ' ' + where(x)).toLowerCase(); return words.every(w => t.includes(w)); }).slice(0, 12);
+    at = hits.length ? 0 : -1;
+    res.innerHTML = hits.length ? hits.map((x, i) => `<button type="button" data-i="${i}" class="${i === at ? 'on' : ''}"><b>${esc(x[1])}</b><small>${esc(where(x))}</small></button>`).join('')
+      : '<div class="muted small" style="padding:8px">No settings match.</div>';
+    res.hidden = false;
+    res.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { goToSetting(hits[+b.dataset.i]); });
+  };
+  q.oninput = paint;
+  q.onfocus = () => { if (q.value) paint(); };
+  q.onkeydown = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); at = Math.max(0, Math.min(hits.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1))); res.querySelectorAll('[data-i]').forEach((b, i) => b.classList.toggle('on', i === at)); }
+    else if (e.key === 'Enter' && hits[at]) { e.preventDefault(); goToSetting(hits[at]); }
+    else if (e.key === 'Escape') { q.value = ''; res.hidden = true; }
+  };
+  document.addEventListener('click', (e) => { if (!e.target.closest('.set-search')) res.hidden = true; });
+})();
+
 async function showSettings(sec) {
   section = SECTIONS.includes(sec) ? sec : 'cameras';
   document.querySelectorAll('#side a').forEach(a => a.classList.toggle('active', a.dataset.s === section));
@@ -5278,7 +5359,9 @@ function renderCameras(body) {
     ${cameraCfgs.length ? '' : '<div class="empty">No cameras yet. Click “Add camera”.</div>'}</div>`;
   $('add-cam').onclick = () => openCameraDialog();
   $('scan-cams').onclick = () => scanNetwork();
-  if (status && status.new_cameras) scanNetwork();
+  // The last scan stays (with "already added" brought up to date) until
+  // Scan network is pressed again.
+  if (lastScan) renderScan($('scan-out'), lastScan); else if (status && status.new_cameras) scanNetwork();
   const tb = $('cam-table');
   for (const cfg of cameraCfgs) {
     const c = cam(cfg.id);
@@ -5335,13 +5418,24 @@ async function scanNetwork(ids = {btn: 'scan-cams', out: 'scan-out', nets: 'scan
   let found = [];
   const nets = ($(ids.nets) && val(ids.nets).trim()) || '';
   store.set('scan-nets', nets);
-  try { found = await api('api/discover', {method: 'POST', json: {networks: nets}}); } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  try { found = await api('api/discover', {method: 'POST', json: {networks: nets}}); } catch (e) { btn.disabled = false; btn.textContent = label; out.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   btn.disabled = false; btn.textContent = label;
+  if (out.id === 'scan-out') lastScan = found;
+  renderScan(out, found);
+}
+let lastScan = null;
+// Is a camera at this address already set up?
+function ipAdded(ip) {
+  const re = new RegExp('(^|[/@])' + ip.replace(/\./g, '\\.') + '([:/]|$)');
+  return cameraCfgs.some(c => [c.url, c.live_url, c.talk_url, c.onvif && c.onvif.host].some(u => u && re.test(u)));
+}
+function renderScan(out, found) {
+  if (!out) return;
   if (!found.length) { out.innerHTML = '<div class="hint" style="margin:8px 0">No cameras answered. Check that ONVIF is turned on in the camera. A camera on a network this computer is not on (behind another router) is found by adding that network, e.g. 192.168.5.0/24, in the box next to Scan network.</div>'; return; }
   out.innerHTML = `<div class="scan-res"><b>Found on the network</b> <span class="muted">(${found.length})</span>
     <table><tbody>${found.map((f, i) => `<tr><td><b>${esc(f.ip)}</b></td><td>${esc([f.manufacturer, f.hardware, f.name].filter(Boolean).join(' · ') || (f.rtsp ? 'Device with a video stream (RTSP)' : 'Device'))}</td>
       <td>${f.onvif_port ? '<span class="tag">ONVIF</span>' : ''}${f.rtsp ? '<span class="tag">RTSP</span>' : ''}</td>
-      <td style="text-align:right">${f.added ? '<span class="muted">already added</span>' : `<button type="button" class="small primary" data-add="${i}">+ Add</button>`}</td></tr>`).join('')}</tbody></table></div>`;
+      <td style="text-align:right">${f.added || ipAdded(f.ip) ? '<span class="muted">already added</span>' : `<button type="button" class="small primary" data-add="${i}">+ Add</button>`}</td></tr>`).join('')}</tbody></table></div>`;
   out.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => {
     const f = found[+b.dataset.add];
     await openCameraDialog();
@@ -5436,7 +5530,7 @@ async function openCameraDialog(id, clone, prof) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','vehicle','dog','cat'], min_confidence: 0.5, trigger: 'motion', pre_seconds: 3, post_seconds: 15, join_seconds: 30, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','vehicle'], min_confidence: 0.7, trigger: 'objects', pre_seconds: 3, post_seconds: 15, join_seconds: 30, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   // A profile: its settings on top of a new camera's.
   if (prof) { Object.assign(c, JSON.parse(JSON.stringify(prof.values || {}))); c.detect = {...c.detect, mask: ''}; c.name = prof.name; }
@@ -5449,10 +5543,10 @@ async function openCameraDialog(id, clone, prof) {
     if (last) { q.user = last.u.user; q.pass = last.u.pass; sameLogin = last.c.name; }
   }
   // The usual objects, plus any this camera already watches for.
-  const objs = [...new Set([...((sysinfo && sysinfo.ai_objects) || ['person','vehicle','bicycle','dog','cat']), ...canonKinds(c.detect.objects)])];
+  const objs = [...new Set([...((sysinfo && sysinfo.ai_objects) || ['person','vehicle']), ...canonKinds(c.detect.objects)])];
   const more = ((sysinfo && sysinfo.ai_more) || []).filter(o => !objs.includes(o));
   const aiOn = settings && settings.ai.provider !== 'none';
-  const brandOpts = '<option value="">Format…</option>' + BRANDS.map(b => `<option value="${b[0]}">${esc(b[1])}</option>`).join('');
+  const brandOpts = '<option value="">Choose brand…</option>' + BRANDS.map(b => `<option value="${b[0]}">${esc(b[1])}</option>`).join('');
   const segOpts = [[0, 'Default (' + fmtDur(settings ? settings.storage.segment_seconds : 300) + ')'], [300, '5 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [86400, 'One long file per day']];
   $('f-cam').innerHTML = `
     <div class="head"><h2>${clone ? 'Clone camera' : id ? 'Edit camera' : 'Add camera'}</h2>
@@ -5464,25 +5558,24 @@ async function openCameraDialog(id, clone, prof) {
         <button type="button" class="small" id="c-prof-apply" hidden>Apply</button>
         <a class="btn small" href="#settings/profiles" id="c-prof-manage" title="Create and edit profiles">Manage profiles →</a>
         <span class="hint" id="c-prof-msg">Profiles hold recording, motion and AI settings (not the motion mask).</span></div>
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="zones">Zones</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">ONVIF</button><button type="button" data-t="zones">Zones</button></div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
         <span class="c-restart" hidden></span><div class="c-restart row" hidden><button type="button" id="c-restart">⟳ Restart camera</button><span class="hint" id="c-restart-info"></span></div>
         <h3>Quick setup</h3>
         <label for="q-brand">Camera brand</label>
-        <div><div class="row"><select id="q-brand">${brandOpts.replace('Format…', 'Choose brand…')}</select></div>
+        <div><div class="row"><select id="q-brand">${brandOpts}</select></div>
           <div class="hint">Fill in the camera's address and login, pick the brand, and the stream URLs are filled in for you.</div></div>
-        <label for="q-ip">IP address</label><div class="row"><input type="text" id="q-ip" value="${esc(q.ip || '')}" placeholder="192.168.1.100" style="flex:2"></div>
+        <label for="q-ip">IP address</label><div class="row"><input type="text" id="q-ip" value="${esc(q.ip || '')}" placeholder="192.168.1.100" style="flex:2"><button type="button" id="q-web" title="Open the camera's own web page (its settings) in a new tab">🌐 Camera's page</button></div>
         <label for="q-user">Camera login</label><div><div class="row"><input type="text" id="q-user" value="${esc(q.user || '')}" placeholder="username" style="flex:1" autocomplete="off"><input type="password" id="q-pass" value="${esc(q.pass || '')}" placeholder="password" style="flex:1" autocomplete="new-password"></div>
           ${sameLogin ? `<div class="hint" id="q-same">The same login as ${esc(sameLogin)} — change it if this camera's is different.</div>` : ''}</div>
         <h3>Streams</h3>
         <label for="c-url">Main stream (HD)${tip('The camera’s full-quality video address, usually starting rtsp://. Example: rtsp://admin:password@192.168.1.50:554/stream1 — the brand list fills it in for you.')}</label>
-        <div><input type="text" id="c-url" required value="${esc(c.url)}" placeholder="rtsp://user:password@192.168.1.50:554/stream1">
-          <div class="row" style="margin-top:6px"><select id="c-url-fmt">${brandOpts}</select><span class="hint" style="margin:0">Pick a format to fill this field from the quick setup above.</span></div></div>
+        <div><input type="text" id="c-url" required value="${esc(c.url)}" placeholder="rtsp://user:password@192.168.1.50:554/stream1"></div>
         <label for="c-live">Sub-stream (low resolution)${tip('A second, smaller video most cameras also send (often …/stream2 or subtype=1). GAZE uses it for the camera grid, motion detection and AI, so the computer works much less. Optional, but recommended.')}</label>
         <div><input type="text" id="c-live" value="${esc(c.live_url)}" placeholder="Optional – e.g. …/stream2">
-          <div class="row" style="margin-top:6px"><select id="c-live-fmt">${brandOpts}</select><span class="hint" style="margin:0">Used for the live grid, motion detection and AI. Saves a lot of CPU.</span></div></div>
+          <div class="hint">Used for the live grid, motion detection and AI. Saves a lot of CPU.</div></div>
         <label for="c-rotate">Rotate picture</label>
         <div><select id="c-rotate">${[[0, 'No rotation'], [90, '90° clockwise'], [180, '180° (upside down)'], [270, '90° anticlockwise']].map(([v, t]) => `<option value="${v}" ${(c.rotate || 0) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <div class="hint">For cameras mounted sideways or upside down: live view, alerts and new recordings are turned the right way.</div></div>
@@ -5625,7 +5718,11 @@ async function openCameraDialog(id, clone, prof) {
         <label>Stationary objects</label>
         <div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Stop alerting for objects that stay in one place${tip('A car parked in the driveway alerts when it arrives, then stays quiet while it stands still (people walking past still alert). It alerts again as soon as it moves or drives off.')}</label>
           <div class="row" style="margin-top:4px"><span class="muted">after</span><input type="number" id="d-parked-s" min="10" max="3600" value="${c.detect.parked_seconds || 60}" style="width:90px"><span class="muted">seconds without moving, for:</span></div>
-          <div class="chips" id="d-parked-objs" style="margin-top:4px">${[...new Set([...objs, ...canonKinds(c.detect.parked_objects || [])])].map(o => `<label><input type="checkbox" value="${o}" ${canonKinds(c.detect.parked_objects || ['vehicle', 'bicycle', 'boat']).includes(o) ? 'checked' : ''}>${o}</label>`).join('')}</div>
+          ${(() => { const parked = canonKinds(c.detect.parked_objects || ['vehicle', 'bicycle', 'boat']);
+            const chip = (o) => `<label><input type="checkbox" value="${esc(o)}" ${parked.includes(o) ? 'checked' : ''}>${esc(o)}</label>`;
+            const rest = [...new Set([...parked, 'bicycle', 'motorcycle', 'boat', ...more])].filter(o => !objs.includes(o));
+            return `<div class="chips" id="d-parked-objs" style="margin-top:4px">${objs.map(chip).join('')}</div>
+              <details class="more-objs"><summary>More things to watch for…</summary><div class="chips" id="d-parked-more">${rest.map(chip).join('')}</div></details>`; })()}
 </div>
         <label>Package delivery</label>
         <div><label class="check"><input type="checkbox" id="d-pkg" ${c.detect.packages ? 'checked' : ''}> Notice parcels delivered or picked up</label>
@@ -5670,6 +5767,7 @@ async function openCameraDialog(id, clone, prof) {
           <div class="chips" id="p-follow-objs" style="margin-top:4px">${['person', 'vehicle', 'dog', 'cat'].map(o => `<label><input type="checkbox" value="${o}" ${canonKinds(c.ptz.follow_objects && c.ptz.follow_objects.length ? c.ptz.follow_objects : ['person']).includes(o) ? 'checked' : ''}>${labelIcon(o)} ${o}</label>`).join('')}</div></div>
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
+      <div data-tab="device" hidden><div id="dv-body"></div></div>
       <div data-tab="zones" hidden>
         <div class="row" style="margin-bottom:8px"><button type="button" id="z-add-area">＋ Area</button><button type="button" id="z-add-line">＋ Line</button>
           <span class="muted" id="z-msg">Click on the picture to place the corners; click the first corner (or Done) to finish.</span>${tip('Areas: alert only for things inside them, or when something stays too long (loitering). Lines: alert when something crosses, in one or both directions — e.g. a line across your gate. Each can be limited to some kinds of objects.')}<button type="button" id="z-done" hidden class="primary">Done</button></div>
@@ -5686,8 +5784,10 @@ async function openCameraDialog(id, clone, prof) {
   f.querySelectorAll('#c-tabs button').forEach(b => b.onclick = () => {
     f.querySelectorAll('#c-tabs button').forEach(x => x.classList.toggle('active', x === b));
     f.querySelectorAll('[data-tab]').forEach(t => t.hidden = t.dataset.tab !== b.dataset.t);
+    if (b.dataset.t === 'device' && !deviceLoaded) loadDeviceTab();
     if (b.dataset.t === 'zones') drawZones();
   });
+  deviceLoaded = false; deviceDirty = new Set(); saveDevice = null;
   setupRestartButton(id && !clone ? id : null);
   setupPrivacy(c, id && !clone ? id : null);
   ['yaw', 'pitch', 'width', 'lens'].forEach(k => { const r = $('c-fe-' + k); if (r) r.oninput = () => { $('c-fe-' + k + '-v').textContent = r.value + '°'; }; });
@@ -5725,7 +5825,9 @@ async function openCameraDialog(id, clone, prof) {
     const inp = e.target; if (!inp.checked) return;
     const o = inp.value; inp.closest('label').remove();
     $('d-objs').insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${esc(o)}" checked>${esc(o)}</label>`);
-    if (!$('d-parked-objs').querySelector(`input[value="${CSS.escape(o)}"]`)) $('d-parked-objs').insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${esc(o)}">${esc(o)}</label>`);
+    const pm = $('d-parked-more') && $('d-parked-more').querySelector(`input[value="${CSS.escape(o)}"]`);
+    if (pm) $('d-parked-objs').appendChild(pm.closest('label'));
+    else if (!$('d-parked-objs').querySelector(`input[value="${CSS.escape(o)}"]`)) $('d-parked-objs').insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${esc(o)}">${esc(o)}</label>`);
   };
   $('c-talk-test').onclick = async () => {
     const r = $('c-talk-res'); r.textContent = 'Connecting to the speaker…'; r.className = 'hint';
@@ -5771,9 +5873,9 @@ async function openCameraDialog(id, clone, prof) {
     if (val('q-brand')) return $('q-brand').onchange();
     for (const id of ['c-url', 'c-live']) $(id).value = rewriteUrl(val(id));
   };
-  $('c-url-fmt').onchange = (e) => { if (e.target.value) $('c-url').value = brandUrl(e.target.value, 'main'); e.target.value = ''; };
-  $('c-live-fmt').onchange = (e) => { if (e.target.value) $('c-live').value = brandUrl(e.target.value, 'sub'); e.target.value = ''; };
   $('c-test').onclick = testCamera;
+  $('q-web').onclick = () => openCameraPage(cameraHost());
+  $('c-rotate').addEventListener('change', testRotate);
   const origDir = c.storage_dir;
   $('c-dir').oninput = () => { if ($('c-move-row')) $('c-move-row').hidden = val('c-dir').trim() === origDir; };
   $('c-browse').onclick = async () => {
@@ -6096,7 +6198,7 @@ async function testCamera() {
   const urls = [['Main stream', val('c-url').trim()], ['Sub-stream', val('c-live').trim()]].filter(x => x[1]);
   if (!urls.length) { out.innerHTML = '<div class="err" style="margin-top:8px">Enter a stream URL first.</div>'; return; }
   btn.disabled = true; btn.textContent = 'Connecting…';
-  out.innerHTML = `<div class="probe-grid">${urls.map((u, i) => `<div><div class="surface"><img id="pv-${i}" alt=""><div class="msg" id="pv-msg-${i}">Connecting…</div></div><div id="pv-info-${i}" class="hint"><b>${u[0]}</b></div></div>`).join('')}</div>`;
+  out.innerHTML = `<div class="probe-grid">${urls.map((u, i) => `<div><div class="surface"><img id="pv-${i}" alt="" data-rot="${+val('c-rotate') || 0}"><div class="msg" id="pv-msg-${i}">Connecting…</div></div><div id="pv-info-${i}" class="hint"><b>${u[0]}</b></div></div>`).join('')}</div>`;
   // One at a time: many cameras allow only two or three connections at once
   // (Tapo, Reolink …), and refuse more ("SETUP failed: 500"). Each stream
   // is checked first, then the live pictures start.
@@ -6131,6 +6233,12 @@ async function testCamera() {
     } catch (e) { $('pv-msg-' + i).innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   }
   btn.disabled = false; btn.textContent = '▶ Test connection';
+  testRotate();
+}
+// The test pictures turned as chosen under "Rotate picture".
+function testRotate() {
+  const r = +val('c-rotate') || 0;
+  document.querySelectorAll('#c-probe .probe-grid img').forEach(i => { i.dataset.rot = r; });
 }
 
 async function saveCamera(ev) {
@@ -6142,7 +6250,15 @@ async function saveCamera(ev) {
   const err = (m) => { $('c-err').hidden = false; $('c-err').textContent = m; };
   if (body.schedule_enabled && !days.length) return err('Choose at least one day for the schedule.');
   if (body.detect.ai && !objects.length) return err('Choose at least one object to alert on.');
-  return profileEdit ? saveProfileForm(body) : finishSave(body);
+  if (profileEdit) return saveProfileForm(body);
+  // ONVIF tab changes not yet applied: sent to the camera first.
+  if (editingId && deviceLoaded && saveDevice && deviceDirty.size) {
+    const btn = $('c-save'); btn.disabled = true; btn.textContent = 'Saving to the camera…';
+    try { const done = await saveDevice(); if (done.length) toast('On the camera: ' + done.join(', ') + ' changed'); }
+    catch (e) { return err('The camera refused: ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = 'Save camera'; }
+  }
+  return finishSave(body);
 }
 // Save the camera window's Recording, Motion and AI settings as the profile
 // being edited; cameras following it change too.
@@ -6193,7 +6309,7 @@ function collectCamera() {
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), join_seconds: Math.max(0, Math.round(num('d-join')) || 0), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), hd_check: val('d-hdcheck'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
-      parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgCells.some(x => x), package_mask: encodeCells(pkgCells), package_area: []},
+      parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked, #d-parked-more input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgCells.some(x => x), package_mask: encodeCells(pkgCells), package_area: []},
   };
 }
 // ---------- restart the camera over ONVIF ----------
@@ -6214,6 +6330,152 @@ async function setupRestartButton(id) {
     catch (e) { toast(e.message, true); }
     b.disabled = false;
   };
+}
+
+// ---------- camera's own settings over ONVIF ----------
+let deviceLoaded = false, deviceReport = null;
+const prefixMask = (p) => { const m = p ? (0xffffffff << (32 - p)) >>> 0 : 0; return [24, 16, 8, 0].map(s => (m >>> s) & 255).join('.'); };
+async function loadDeviceTab() {
+  const box = $('dv-body');
+  if (!editingId) { box.innerHTML = '<div class="hint">Save the camera first, then its own settings can be changed here.</div>'; return; }
+  deviceLoaded = true;
+  box.innerHTML = '<div class="hint"><span class="spinner small"></span> Asking the camera for its settings (ONVIF)…</div>';
+  let res;
+  try { res = await api(`api/cameras/${enc(editingId)}/device/report`); } catch (e) {
+    box.innerHTML = `<div class="err">${esc(e.message)}</div>`; deviceLoaded = false; return;
+  }
+  const r = deviceReport = res.report, er = r.errors || {};
+  const na = (k) => er[k] ? `<div class="hint">Not available on this camera: ${esc(er[k])}</div>` : '';
+  const intro = `<div class="hint" style="margin-bottom:10px">These are the camera's own settings, changed directly on the camera over ONVIF (${esc(res.address)}).
+    The address, port and login come from the <b>Pan / tilt / zoom</b> tab (blank there = from the stream URL). Changes are sent to the camera with <b>Apply to the camera</b> at the bottom (or when you press <b>Save camera</b>).
+    <button type="button" class="small" id="dv-reload" style="margin-left:6px">↻ Reload</button></div>`;
+  if (er.connection) {
+    box.innerHTML = intro + `<div class="err">Could not reach the camera: ${esc(er.connection)}</div>
+      <div class="hint">Check that ONVIF is turned on in the camera (some brands need a separate ONVIF user) and the port on the Pan / tilt / zoom tab (80 for most, 2020 for Tapo, 8000 for Reolink).</div>`;
+    $('dv-reload').onclick = loadDeviceTab; deviceLoaded = false; return;
+  }
+  const i = r.info || {}, n = r.network, t = r.time, im = r.imaging;
+  let h = intro;
+  h += `<div class="dv-sec"><h3>Device</h3><dl class="kv">
+    <dt>Make &amp; model</dt><dd>${esc(i.manufacturer)} ${esc(i.model)}</dd><dt>Firmware</dt><dd>${esc(i.firmware) || '–'}</dd>
+    <dt>Serial number</dt><dd>${esc(i.serial) || '–'}</dd>${n && n.mac ? `<dt>MAC address</dt><dd>${esc(n.mac)}</dd>` : ''}</dl>
+    <div class="row"><button type="button" id="dv-reboot">⟳ Restart camera</button><button type="button" id="dv-web">🌐 Open the camera's web page</button></div></div>`;
+  // Network
+  h += `<div class="dv-sec" data-sec="network"><h3>Network</h3>${na('network')}`;
+  if (n) h += `<div class="form">
+    <label>Address</label><div class="row"><label class="check"><input type="radio" name="dv-dhcp" value="0" ${n.dhcp ? '' : 'checked'}> Fixed (static)</label><label class="check"><input type="radio" name="dv-dhcp" value="1" ${n.dhcp ? 'checked' : ''}> Automatic (DHCP)</label></div>
+    <label for="dv-ip">IP address</label><div><input type="text" id="dv-ip" value="${esc(n.ip)}" placeholder="192.168.1.64"></div>
+    <label for="dv-prefix">Subnet mask</label><div><select id="dv-prefix">${Array.from({length: 17}, (_, k) => 16 + k).map(p => `<option value="${p}" ${p === n.prefix ? 'selected' : ''}>${prefixMask(p)} (/${p})</option>`).join('')}</select></div>
+    <label for="dv-gw">Gateway (router)</label><div><input type="text" id="dv-gw" value="${esc(n.gateway)}" placeholder="192.168.1.1"></div>
+    <label for="dv-dns">DNS servers</label><div><input type="text" id="dv-dns" value="${esc((n.dns || []).join(', '))}" placeholder="192.168.1.1, 8.8.8.8"></div>
+    <label for="dv-host">Host name</label><div><input type="text" id="dv-host" value="${esc(n.hostname)}"></div>
+    <span></span><div><label class="check"><input type="checkbox" id="dv-upd" checked> Also change this camera's stream addresses in the NVR</label>
+      <div class="hint">Changing the address makes the camera reconnect (some restart). Make sure the new address is free and on your network, or you'll have to find the camera again.</div></div>
+    </div>`;
+  h += '</div>';
+  // Time
+  h += `<div class="dv-sec" data-sec="time"><h3>Date &amp; time</h3>${na('time')}`;
+  if (t) {
+    const cam = t.utc ? new Date(t.utc) : null, diff = cam ? Math.round((cam - new Date(res.computer_utc)) / 1000) : null;
+    h += `<div class="form">
+      <label>Camera clock</label><div>${cam ? `${fmtDate(cam)} — ${Math.abs(diff) < 3 ? '<span class="ok">matches this computer</span>' : `<span class="warnc">${fmtDur(Math.abs(diff))} ${diff > 0 ? 'ahead of' : 'behind'} this computer</span>`}` : '–'}
+        <div class="hint">A wrong camera clock can make ONVIF logins fail and puts the wrong time on the picture.</div></div>
+      <label for="dv-ntp">Time server</label><div><input type="text" id="dv-ntp" value="${esc((t.ntp || []).join(', '))}" placeholder="pool.ntp.org"></div>
+      <label for="dv-mode">Keep time from</label><div><select id="dv-mode"><option value="NTP" ${t.mode !== 'Manual' ? 'selected' : ''}>The time server (recommended)</option><option value="Manual" ${t.mode === 'Manual' ? 'selected' : ''}>Its own clock</option></select></div>
+      <label for="dv-tz">Time zone</label><div><input type="text" id="dv-tz" value="${esc(t.tz)}" placeholder="e.g. NZST-12NZDT,M9.5.0,M4.1.0/3">
+        <div class="hint">In the camera's format (POSIX). Common: <a href="javascript:void 0" data-tz="NZST-12NZDT,M9.5.0,M4.1.0/3">New Zealand</a> · <a href="javascript:void 0" data-tz="AEST-10AEDT,M10.1.0,M4.1.0/3">Sydney</a> · <a href="javascript:void 0" data-tz="GMT0BST,M3.5.0/1,M10.5.0">UK</a> · <a href="javascript:void 0" data-tz="EST5EDT,M3.2.0,M11.1.0">US Eastern</a> · <a href="javascript:void 0" data-tz="PST8PDT,M3.2.0,M11.1.0">US Pacific</a> · <a href="javascript:void 0" data-tz="CET-1CEST,M3.5.0,M10.5.0/3">Central Europe</a></div></div>
+      <span></span><div class="row"><button type="button" id="dv-time-sync">Set camera clock to this computer's time now</button></div></div>`;
+  }
+  h += '</div>';
+  // Video
+  h += `<div class="dv-sec"><h3>Video streams</h3>${na('video')}`;
+  (r.video || []).forEach((v, k) => {
+    const res2 = v.resolutions.length ? v.resolutions : [[v.width, v.height]];
+    const fpsOpts = v.fps_options.length ? v.fps_options : Array.from(new Set([1, 2, 5, 8, 10, 12, 15, 20, 25, 30, v.fps])).filter(x => !v.fps_max || (x >= (v.fps_min || 1) && x <= v.fps_max)).sort((a, b) => a - b);
+    h += `<div class="dv-stream" data-sec="video" data-k="${k}"><b>${k === 0 ? 'Stream 1 (main)' : k === 1 ? 'Stream 2 (sub)' : 'Stream ' + (k + 1)}</b> <span class="muted">${esc(v.name)}</span>
+      <div class="form">
+        <label>Video format</label><div>${v.encodings.length > 1 ? `<select class="dv-enc">${v.encodings.map(e => `<option ${e === v.encoding ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>` : esc(v.encoding)}</div>
+        <label>Resolution</label><div><select class="dv-res">${res2.map(([w, hh]) => `<option value="${w}x${hh}" ${w === v.width && hh === v.height ? 'selected' : ''}>${w} × ${hh}</option>`).join('')}</select></div>
+        <label>Frame rate</label><div><select class="dv-fps">${fpsOpts.map(x => `<option value="${x}" ${x == v.fps ? 'selected' : ''}>${x} fps</option>`).join('')}</select></div>
+        <label>Bitrate</label><div class="row"><input type="number" class="dv-br" value="${v.bitrate}" min="${v.bitrate_min || 32}" ${v.bitrate_max ? `max="${v.bitrate_max}"` : ''} style="width:120px"><span class="muted">kbit/s${v.bitrate_max ? ` (${v.bitrate_min}–${v.bitrate_max})` : ''}</span></div>
+        <label>Keyframe interval</label><div class="row"><input type="number" class="dv-gov" value="${v.gov || ''}" min="1" max="400" style="width:120px"><span class="muted">frames (about ${v.fps ? Math.max(1, Math.round((v.gov || 0) / v.fps)) : '?'} s; 1–2 s seeks and starts fastest)</span></div>
+        </div></div>`;
+  });
+  h += '</div>';
+  // Picture
+  h += `<div class="dv-sec" data-sec="imaging"><h3>Picture</h3>${na('imaging')}`;
+  if (im) {
+    const sl = (key, label) => im[key] == null ? '' : (() => { const [lo, hi] = (im.ranges || {})[key] || [0, 100]; return `<label>${label}</label><div class="row"><input type="range" id="dv-${key}" min="${lo}" max="${hi}" value="${im[key]}" style="flex:1"><span class="muted" style="width:40px" id="dv-${key}-v">${im[key]}</span></div>`; })();
+    const irName = {AUTO: 'Automatic day / night', ON: 'Day (colour)', OFF: 'Night (black & white, infrared)'};
+    h += `<div class="form">${sl('brightness', 'Brightness')}${sl('contrast', 'Contrast')}${sl('saturation', 'Colour')}${sl('sharpness', 'Sharpness')}
+      ${im.ir_cut != null ? `<label>Day / night</label><div><select id="dv-ir">${(im.ir_modes.length ? im.ir_modes : ['AUTO', 'ON', 'OFF']).map(m => `<option value="${m}" ${m === im.ir_cut ? 'selected' : ''}>${irName[m] || m}</option>`).join('')}</select></div>` : ''}
+      </div>`;
+  }
+  h += '</div>';
+  h += '<div class="row dv-apply"><span class="spacer"></span><button type="button" class="primary" id="dv-apply" disabled>Apply to the camera</button></div>';
+  box.innerHTML = h;
+  const busy = async (btn, fn) => { const t0 = btn.textContent; btn.disabled = true; btn.textContent = 'Saving…'; try { await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; btn.textContent = t0; } };
+  const url = (p) => `api/cameras/${enc(editingId)}/device/${p}`;
+  $('dv-reload').onclick = loadDeviceTab;
+  $('dv-reboot').onclick = () => { if (confirm('Restart the camera now? It will be offline for about a minute.')) busy($('dv-reboot'), async () => { await api(url('reboot'), {method: 'POST'}); toast('The camera is restarting.'); }); };
+  box.querySelectorAll('[data-tz]').forEach(a => a.onclick = () => $('dv-tz').value = a.dataset.tz);
+  box.querySelectorAll('input[type=range]').forEach(el => el.oninput = () => { const v = $(el.id + '-v'); if (v) v.textContent = el.value; });
+  const syncDhcp = () => { const d = document.querySelector('input[name=dv-dhcp]:checked'); if (!d) return; ['dv-ip', 'dv-prefix', 'dv-gw', 'dv-dns'].forEach(x => $(x).disabled = d.value === '1'); };
+  box.querySelectorAll('input[name=dv-dhcp]').forEach(x => x.onchange = syncDhcp); syncDhcp();
+  // Remember which parts were changed; "Save camera" sends only those.
+  deviceDirty = new Set();
+  box.querySelectorAll('[data-sec]').forEach(sec => {
+    const mark = () => deviceDirty.add(sec.dataset.sec === 'video' ? 'video:' + sec.dataset.k : sec.dataset.sec);
+    sec.addEventListener('input', mark); sec.addEventListener('change', mark);
+    const on = () => { $('dv-apply').disabled = false; };
+    sec.addEventListener('input', on); sec.addEventListener('change', on);
+  });
+  $('dv-web').onclick = () => openCameraPage(res.address.replace(/:\d+$/, ''));
+  $('dv-apply').onclick = () => busy($('dv-apply'), async () => { const done = await saveDevice(); toast(done.length ? 'On the camera: ' + done.join(', ') + ' changed' : 'Nothing to change'); $('dv-apply').disabled = true; });
+  const timeBody = () => ({mode: val('dv-mode'), tz: val('dv-tz').trim(), ntp_dhcp: false, ntp: val('dv-ntp').split(/[,\s]+/).filter(Boolean)});
+  if ($('dv-time-sync')) $('dv-time-sync').onclick = () => busy($('dv-time-sync'), async () => { await api(url('time'), {method: 'PUT', json: {...timeBody(), sync_clock: true}}); toast("The camera's clock now matches this computer."); loadDeviceTab(); });
+  saveDevice = async () => {
+    const done = [];
+    if (deviceDirty.has('network') && n) {
+      const dhcp = document.querySelector('input[name=dv-dhcp]:checked').value === '1';
+      const body = {token: n.token, mac: n.mac, dhcp, ip: val('dv-ip').trim(), prefix: +val('dv-prefix'), gateway: val('dv-gw').trim(),
+        dns: val('dv-dns').split(/[,\s]+/).filter(Boolean), dns_dhcp: n.dns_dhcp, hostname: val('dv-host').trim(), update_nvr: chk('dv-upd')};
+      const changing = dhcp !== n.dhcp || body.ip !== n.ip || body.prefix !== n.prefix;
+      if (!changing || confirm((dhcp ? 'Switch the camera to an automatic (DHCP) address? Its address may change and the NVR will lose it until you enter the new address.'
+        : `Change the camera's address from ${n.ip} to ${body.ip}?`) + '\n\nSome cameras restart to apply a new address; that is done automatically.')) {
+        const r2 = await api(url('network'), {method: 'PUT', json: body});
+        done.push('network' + (r2.nvr_updated ? ' (the NVR now uses the new address)' : '') + (r2.restarted ? ' — the camera is restarting' : ''));
+      }
+    }
+    if (deviceDirty.has('time') && t) { await api(url('time'), {method: 'PUT', json: timeBody()}); done.push('date & time'); }
+    for (const el of box.querySelectorAll('.dv-stream')) {
+      if (!deviceDirty.has('video:' + el.dataset.k)) continue;
+      const v = r.video[+el.dataset.k], [w, hh] = el.querySelector('.dv-res').value.split('x').map(Number), enc2 = el.querySelector('.dv-enc');
+      await api(url('video'), {method: 'PUT', json: {token: v.token, width: w, height: hh, fps: +el.querySelector('.dv-fps').value, bitrate: Math.round(+el.querySelector('.dv-br').value),
+        gov: Math.round(+el.querySelector('.dv-gov').value) || 0, encoding: enc2 ? enc2.value : ''}});
+      done.push(`stream ${+el.dataset.k + 1}`);
+    }
+    if (deviceDirty.has('imaging') && im) {
+      const g = (k) => $('dv-' + k) ? +$('dv-' + k).value : null;
+      await api(url('imaging'), {method: 'PUT', json: {brightness: g('brightness'), contrast: g('contrast'), saturation: g('saturation'), sharpness: g('sharpness'), ir_cut: $('dv-ir') ? $('dv-ir').value : null}});
+      done.push('picture');
+    }
+    deviceDirty.clear();
+    return done;
+  };
+}
+let deviceDirty = new Set(), saveDevice = null;
+// The camera's own web page (its settings), in a new tab.
+function openCameraPage(host) {
+  if (!host) return toast('Enter the camera’s IP address first', true);
+  window.open('http://' + host + '/', '_blank', 'noopener');
+}
+// The camera's address, from the quick setup or the stream address.
+function cameraHost() {
+  const ip = ($('q-ip') && val('q-ip').trim()) || '';
+  if (ip) return ip;
+  const m = (val('c-url') || '').match(/^[a-z]+:\/\/(?:[^@\/]*@)?([^:\/?]+)/i);
+  return m ? m[1] : '';
 }
 
 // ---------- zones ----------
@@ -6412,7 +6674,7 @@ function applyProfile(p) {
   if ($('d-conf-v')) $('d-conf-v').textContent = Math.round(d.min_confidence * 100) + '%';
   document.querySelectorAll('#d-objs input').forEach(i => i.checked = d.objects.includes(i.value));
   set('d-trig', d.trigger); set('d-pre', d.pre_seconds); set('d-post', d.post_seconds); set('d-join', d.join_seconds ?? 30); set('d-fps', d.fps); set('d-int', d.ai_interval); set('d-parked', d.ignore_parked !== false); set('d-animals', d.ignore_animals !== false); set('d-hdcheck', d.hd_check || 'mark'); set('d-mask-ai', d.ai_ignores_mask !== false); set('d-parked-s', d.parked_seconds || 60);
-  if (d.parked_objects) document.querySelectorAll('#d-parked-objs input').forEach(i => i.checked = d.parked_objects.includes(i.value));
+  if (d.parked_objects) document.querySelectorAll('#d-parked-objs input, #d-parked-more input').forEach(i => i.checked = d.parked_objects.includes(i.value));
   // Let the form update anything that depends on these (hidden sections, hints).
   for (const el of $('f-cam').querySelectorAll('[data-tab=recording] input, [data-tab=recording] select, [data-tab=detection] input, [data-tab=detection] select, [data-tab=ai] input, [data-tab=ai] select')) el.dispatchEvent(new Event('change', {bubbles: true}));
   $('d-objpx') && $('d-objpx').dispatchEvent(new Event('input', {bubbles: true}));

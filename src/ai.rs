@@ -125,18 +125,16 @@ pub const ANIMALS: &[&str] = &[
 
 /// Objects most useful for home security, offered as alert choices.
 /// Shown on every camera's AI tab (and the Alerts filter).
-pub const MAIN_OBJECTS: &[&str] = &[
-    "person",
-    "vehicle",
-    "bicycle",
-    "dog",
-    "cat",
-];
+pub const MAIN_OBJECTS: &[&str] = &["person", "vehicle"];
 
 /// "More things to watch for": the rest the built-in model knows, the
 /// most useful for a home camera first.
 pub fn more_objects() -> Vec<&'static str> {
     const FIRST: &[&str] = &[
+        "bicycle",
+        "motorcycle",
+        "dog",
+        "cat",
         "bird",
         "horse",
         "cow",

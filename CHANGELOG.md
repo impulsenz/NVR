@@ -1,5 +1,16 @@
 # What's new in GAZE
 
+## 0.6.78 — November 2026
+- **Search settings**: a search box at the top of Settings finds any setting, including the ones in each camera's window, and takes you straight to it (arrow keys and Enter work too).
+- **Alert cards**: symbols for what was found at the top left, NEW at the top right until you've opened it, how long ago at the bottom left, and the date and time at the bottom right.
+- **Full screen**: the toolbar now disappears as soon as the mouse leaves it. A **● Live** button in the full-screen toolbar jumps to the live picture in the same window, with Push to talk for cameras that have a speaker. The extra full-screen button at the bottom right of the live picture is gone.
+- **"Recording now"** stripes at the end of the bar are 20% longer and fade in smoothly. While the HD main stream is shown, the legend's "Recording now" is purple to match.
+- **ONVIF tab is back** in each camera's window: the camera's own network address, date & time, video streams (resolution, frame rate, bitrate) and picture settings, with Apply to the camera, Restart, and a button to **open the camera's own web page** (also next to the IP address on the General tab).
+- **Adding cameras**: the Format drop-downs under Streams are gone (the brand above fills in the addresses). Test connection shows the picture turned as chosen under Rotate picture. Scan results stay when you add a camera, with "already added" updated, until you press Scan network again.
+- **AI defaults for new cameras**: watch for people and vehicles, 70% sure, and alerts only for recognised objects (plain motion alerts only when object recognition is off). Bicycle, dog, cat and the rest are now under "More things to watch for", for alerts and for objects that stay in one place.
+- **Updates**: the progress ring fills smoothly in 1% steps.
+- **"GAZE can't be reached" page** tries again every 10 seconds by itself, without a counter.
+
 ## 0.6.77 — November 2026
 - **Day and night colours**: 👤 menu → Colours on this device: ☀️ Day (light), 🌙 Night (dark), or Automatic, which follows the device's own light/dark setting (and changes with it). Remembered per device, for the browser and the app alike. Camera pictures, video and their on-screen display keep their dark surroundings in both.
 - **Saving a camera after choosing a profile**: if the camera can't be saved (for example the profile's recording mode needs motion detection, which the camera has off), the window now stays open with the reason right next to Save, instead of closing and flashing back with the message out of sight on another tab.

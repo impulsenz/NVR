@@ -1,7 +1,7 @@
 // GAZE as an installed app. Everything comes fresh from GAZE; when the
 // computer running it can't be reached, the app shows a friendly message
 // instead of the browser's error page.
-const SHELL = 'gaze-shell-v3';
+const SHELL = 'gaze-shell-v4';
 // "Try again" shows that it's trying (a spinning ring, "Connecting…"), and
 // the page keeps trying by itself every few seconds: GAZE opens as soon as
 // it answers.
@@ -19,10 +19,10 @@ button[disabled] .ring{display:inline-block}
 <body><div class="box"><img src="icon-192.png" alt="" width="72" height="72"><h2>GAZE can’t be reached</h2>
 <p>Check that the computer running GAZE is on, and that this device is on your home network (or connected to it remotely).</p>
 <button id="go"><span class="ring"></span><span id="lbl">Try again</span></button>
-<div class="note" id="note">Trying again by itself every few seconds…</div></div>
+<div class="note" id="note">Trying again by itself every 10 seconds…</div></div>
 <script>
 const go = document.getElementById('go'), lbl = document.getElementById('lbl'), note = document.getElementById('note');
-let busy = false, tries = 0;
+let busy = false;
 async function attempt(byHand) {
   if (busy) return; busy = true;
   go.disabled = true; lbl.textContent = 'Connecting…';
@@ -32,12 +32,11 @@ async function attempt(byHand) {
   // (Long enough to see it trying.)
   await new Promise(r => setTimeout(r, Math.max(0, 900 - (Date.now() - started))));
   if (ok) { lbl.textContent = 'Connected — opening…'; location.reload(); return; }
-  tries++;
   go.disabled = false; lbl.textContent = 'Try again'; busy = false;
-  note.textContent = (byHand ? 'Still can’t reach GAZE. ' : '') + 'Trying again by itself every few seconds… (' + tries + ')';
+  note.textContent = (byHand ? 'Still can’t reach GAZE. ' : '') + 'Trying again by itself every 10 seconds…';
 }
 go.onclick = () => attempt(true);
-setInterval(() => { if (!document.hidden) attempt(false); }, 5000);
+setInterval(() => { if (!document.hidden) attempt(false); }, 10000);
 </script></body></html>`;
 
 self.addEventListener('install', (e) => {
