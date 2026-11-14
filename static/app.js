@@ -1299,7 +1299,13 @@ function convertedUrl(url) {
   return m ? `media/${m[1]}/play/${m[2] === 'events' ? 'clip' : 'rec'}/${m[3]}` : null;
 }
 // URL of the converted stream starting at `t` seconds (small and light with the data saver).
-function convertedAt(url, t) { return convertedUrl(url) + '?t=' + t.toFixed(2) + (dataSaver ? '&lite=true' : ''); }
+// (A camera whose video is H.264 keeps its picture as it is: only the
+// sound is converted — what browsers can't play in some cameras' recordings.)
+function convertedAt(url, t) {
+  const m = String(url).match(/^media\/([^/]+)\//), cam = m ? decodeURIComponent(m[1]) : '';
+  const h264 = cam && ['main', 'sub'].every(q => { const c = streamCodec(cam + '|' + q); return !c || /h264|avc/i.test(c); }) && /h264|avc/i.test(streamCodec(cam + '|main') + streamCodec(cam + '|sub'));
+  return convertedUrl(url) + '?t=' + t.toFixed(2) + (dataSaver ? '&lite=true' : h264 ? '&copy=true' : '');
+}
 
 // ---------- data saver ----------
 // Smaller live pictures, fewer frames per second, and recordings streamed
@@ -4272,13 +4278,24 @@ function hlsFor(el, cam) {
     tlSync(true);
   });
   hls.on(hlsLib.Events.ERROR, (_, d) => {
-    playbackNote(cam, d.details + (d.fatal ? ' (fatal)' : ''), hls);
+    // (What the browser refused, for the log: its format.)
+    const why = d.mimeType ? ` [${d.mimeType}]` : d.error && d.error.message ? ` [${String(d.error.message).slice(0, 80)}]` : '';
+    playbackNote(cam, d.details + (d.fatal ? ' (fatal)' : '') + why, hls);
     if (!d.fatal) return;
-    // Can't be played this way (e.g. a picture or sound format the browser
-    // can't stream): this camera goes back to playing the files.
     console.warn('continuous playback off for', cam, d.details);
-    // (Tried again after a minute: it may have been a passing fault.)
-    hls.destroy(); el._h = null; el._noHls = Date.now(); leaveHls(el); tlSync(true);
+    hls.destroy(); el._h = null;
+    // The browser can't take this camera's recordings as they are (their
+    // picture or sound format): converted by GAZE from now on — only the
+    // sound for an H.264 camera. Before, it went back and forth every
+    // minute (the loaded strip filling and resetting, the picture blinking).
+    if (/bufferAddCodecError|bufferAppendError|bufferIncompatibleCodecsError|manifestIncompatibleCodecsError/.test(d.details)) {
+      el._tc = true; el._noHls = Date.now() + 24 * 3600e3;
+      playbackNote(cam, 'its recordings play converted from now on', null);
+    } else {
+      // (Something passing — tried again after a minute.)
+      el._noHls = Date.now();
+    }
+    leaveHls(el); tlSync(true);
   });
   return h;
 }

@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.7.6 — November 2026
+- **Restart GAZE from the user menu** (top right, your name → ⟳ Restart GAZE): anyone signed in can restart GAZE. It asks first; recording and live view stop for about half a minute, and the page reloads by itself when GAZE is back. Who restarted it is written to the log.
+- **Cameras whose recordings the browser refuses play properly**: some cameras' recordings are in a picture or sound format the browser can't stream (the log showed "bufferAddCodecError" / "bufferAppendError"). GAZE then went back and forth every minute between two ways of playing them — the loaded strip filling and resetting, choppy loading, black pictures. Now such a camera plays converted by GAZE for the rest of the visit; for a camera whose picture is H.264, the picture is passed on as it is and only the sound is converted (light work).
+- **Camera sound is recorded as AAC**: sound that isn't AAC (G.711 and similar, common on cameras) is converted to AAC while recording, so new recordings stream in any browser.
+- **The log names the refused format**: "playing recordings" lines now include what the browser couldn't play (e.g. a picture or sound format), to tell a camera setting apart from anything else.
+
 ## 0.7.5 — November 2026
 - **Recordings load 10 minutes ahead, evenly**: while playing, every camera now loads up to 10 minutes ahead (was 1 minute; 30 seconds for HD), sub-stream and HD alike (a browser holds up to about 150 MB per camera, so HD may get a little less). Cameras fill up together: a camera more than a minute ahead of the slowest one waits for it, so speeding up doesn't let one camera take all the bandwidth. What was watched is kept (10 minutes back), and once every camera is loaded ahead, GAZE reads the 10 minutes before the playhead from the disk or NAS into its memory, so going back is quick too. All of this is in memory (the browser's and GAZE's), nothing is written to disk.
 - **Fewer cameras chosen, faster loading**: only the cameras chosen are loaded, and the fewer there are, the bigger each piece fetched — one camera alone fills its 10 minutes in seconds.

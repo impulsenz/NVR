@@ -213,7 +213,16 @@ impl Recorder {
             .args(self.spec.relay.input_args())
             .args(["-map", "0:v:0"]);
         if cam.record_audio {
-            cmd.args(["-map", "0:a:0?", "-c:a", "copy"]);
+            // Sound kept as it comes when it's AAC; otherwise (G.711, G.726 …,
+            // common on cameras) made AAC — light work — so the recordings
+            // stream in the browser: it can't play other sound in them, and
+            // refused the whole recording ("codec" errors, black cameras).
+            let aac = self.spec.relay.audio().is_some_and(|a| a.is_empty() || a.trim_start().starts_with("aac"));
+            if aac {
+                cmd.args(["-map", "0:a:0?", "-c:a", "copy"]);
+            } else {
+                cmd.args(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "64k"]);
+            }
         } else {
             cmd.arg("-an");
         }

@@ -2817,6 +2817,10 @@ struct PlayQuery {
     /// Data saver: small, low-bitrate stream for slow or metered connections.
     #[serde(default)]
     lite: bool,
+    /// The picture plays as it is (H.264): only the sound is made AAC —
+    /// for recordings whose sound the browser can't play (light work).
+    #[serde(default)]
+    copy: bool,
 }
 
 /// Play a recording converted to H.264 on the fly, for browsers that cannot
@@ -2857,10 +2861,17 @@ async fn play_converted(
     }
     let mut cmd = crate::load::cmd(&cfg.server.ffmpeg_path);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
+    if q.copy && !q.lite {
+        // Only the sound changes: picture copied as it is.
+        cmd.args(["-ss", &format!("{:.3}", q.t.max(0.0)), "-i"])
+            .arg(&src)
+            .args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k"])
+            .args(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1"]);
+    } else {
     if gpu {
         cmd.args(ffmpeg::decode_args(hw, false));
     }
-    let child = cmd
+    cmd
         .args(pre)
         .args(["-ss", &format!("{:.3}", q.t.max(0.0)), "-i"])
         .arg(&src)
@@ -2892,7 +2903,9 @@ async fn play_converted(
             "-movflags",
             "frag_keyframe+empty_moov+default_base_moof",
             "pipe:1",
-        ])
+        ]);
+    }
+    let child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
