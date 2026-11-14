@@ -2,6 +2,26 @@
   --bg: #0e1014; --panel: #161920; --panel2: #1d212a; --panel3: #252a35; --border: #2a2f3a;
   --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --accent2: rgba(79,140,255,.16);
   --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa;
+  --auth-bg: radial-gradient(ellipse at 50% 30%, #1d2533 0%, #0e1014 70%);
+  color-scheme: dark;
+}
+/* Day colours (👤 menu → Colours), or the device's own choice on Automatic.
+   Pictures and video keep their dark surroundings. */
+:root[data-theme="light"] {
+  --bg: #f2f4f7; --panel: #ffffff; --panel2: #eef1f5; --panel3: #e2e6ed; --border: #d5dae3;
+  --text: #1a1e26; --muted: #5b6474; --accent: #2563eb; --accent2: rgba(37,99,235,.12);
+  --red: #dc2626; --amber: #b45309; --green: #15803d; --purple: #7c3aed;
+  --auth-bg: radial-gradient(ellipse at 50% 30%, #ffffff 0%, #e6eaf0 75%);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    --bg: #f2f4f7; --panel: #ffffff; --panel2: #eef1f5; --panel3: #e2e6ed; --border: #d5dae3;
+  --text: #1a1e26; --muted: #5b6474; --accent: #2563eb; --accent2: rgba(37,99,235,.12);
+  --red: #dc2626; --amber: #b45309; --green: #15803d; --purple: #7c3aed;
+    --auth-bg: radial-gradient(ellipse at 50% 30%, #ffffff 0%, #e6eaf0 75%);
+    color-scheme: light;
+  }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -601,7 +621,7 @@ body.role-viewer #focus-surface.has-ptz { cursor: default; }
 
 /* Sign-in page */
 body.signed-out > header, body.signed-out > main { visibility: hidden; }
-#auth { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 30%, #1d2533 0%, #0b0d12 70%); overflow: hidden; }
+#auth { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: var(--auth-bg); overflow: hidden; }
 #auth .auth-bg { position: absolute; inset: 0; pointer-events: none; }
 #auth .auth-bg .grid { position: absolute; inset: -50%; background-image: linear-gradient(rgba(79,140,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(79,140,255,.07) 1px, transparent 1px);
   background-size: 48px 48px; transform: perspective(600px) rotateX(55deg) translateY(10%); animation: gridmove 12s linear infinite; }
@@ -1246,3 +1266,19 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 .pw-wrap > input { flex: 1; min-width: 0; padding-right: 36px; }
 .pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: none; border: 0; padding: 4px 6px; cursor: pointer; opacity: .65; font-size: 15px; line-height: 1; }
 .pw-eye:hover { opacity: 1; background: none; }
+
+/* Day colours: what's drawn over a picture or video (names, times, tags,
+   buttons on it), the timelines' dark lanes and the sign-in card keep the
+   night colours, so they stay readable on their dark backgrounds. */
+:root[data-theme="light"] :is(.surface, .thumb, .tl-videos, .auth-card, .pov, .fspov, #tipcard),
+:root[data-theme="light"] .rc .tags { --bg: #0e1014; --panel: #161920; --panel2: #1d212a; --panel3: #252a35; --border: #2a2f3a;
+  --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --accent2: rgba(79,140,255,.16);
+  --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa; color-scheme: dark; }
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] :is(.surface, .thumb, .tl-videos, .auth-card, .pov, .fspov, #tipcard),
+  :root[data-theme="auto"] .rc .tags { --bg: #0e1014; --panel: #161920; --panel2: #1d212a; --panel3: #252a35; --border: #2a2f3a;
+  --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --accent2: rgba(79,140,255,.16);
+  --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa; color-scheme: dark; }
+}
+
+#cam-dialog .foot .c-err { flex: 1; margin: 0 8px 0 0; font-size: 13px; text-align: left; }

@@ -5676,9 +5676,8 @@ async function openCameraDialog(id, clone, prof) {
         <div class="surface zone-ed" id="z-prev"><img alt=""><svg id="z-svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
         <div id="z-list"></div>
       </div>
-      <div class="err" id="c-err" style="margin-top:12px" hidden></div>
     </div>
-    <div class="foot"><button type="button" data-close>Cancel</button><button class="primary" id="c-save">Save camera</button></div>`;
+    <div class="foot"><div class="err c-err" id="c-err" hidden></div><button type="button" data-close>Cancel</button><button class="primary" id="c-save">Save camera</button></div>`;
   $('c-transport').value = c.rtsp_transport;
   $('d-trig').value = c.detect.trigger;
   const f = $('f-cam');
@@ -6447,8 +6446,9 @@ async function finishSave(body) {
     toast(id ? 'Camera updated' : clone ? 'Camera cloned' : 'Camera added');
     await after();
   } catch (e) {
-    if (camDlgGen === gen && !$('cam-dialog').open) { $('cam-dialog').showModal(); err(e.message); }
-    else toast('Camera not saved: ' + e.message, true);
+    // Shown next to Save (and as a message), so it's seen whichever tab is open.
+    if (camDlgGen === gen && !$('cam-dialog').open) { $('cam-dialog').showModal(); err('Not saved: ' + e.message); }
+    toast('Camera not saved: ' + e.message, true);
   }
 }
 
@@ -7146,6 +7146,15 @@ function watchIdle(minutes) {
 for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) addEventListener(ev, () => { idleLast = Date.now(); }, {passive: true, capture: true});
 const isAdmin = () => me && me.role === 'admin';
 $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $('um-pop').hidden = !$('um-pop').hidden; };
+// Day / night colours on this device (Automatic follows the device).
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  const light = t === 'light' || (t === 'auto' && matchMedia('(prefers-color-scheme: light)').matches);
+  const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = light ? '#ffffff' : '#14161c';
+}
+$('um-theme').value = store.get('theme', 'auto'); applyTheme($('um-theme').value);
+$('um-theme').onchange = () => { store.set('theme', val('um-theme')); applyTheme(val('um-theme')); };
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(store.get('theme', 'auto')));
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
 $('um-out').onclick = async () => { await fetch('api/auth/logout', {method: 'POST'}); location.hash = '#live'; location.reload(); };
 // API tokens: keys for scripts, Home Assistant or another GAZE.

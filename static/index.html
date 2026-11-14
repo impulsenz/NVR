@@ -11,6 +11,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="GAZE">
 <meta name="theme-color" content="#14161c">
+<script>
+// Day or night colours (👤 menu), before anything is drawn: no flash.
+(function () { var t = 'auto'; try { t = JSON.parse(localStorage.getItem('nvr-theme')) || 'auto'; } catch (e) {} document.documentElement.dataset.theme = t; })();
+</script>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -44,6 +48,8 @@
       </div>
       <label class="small muted" style="display:block;margin:6px 0 2px">Data saver on this device</label>
       <select id="um-ds"><option value="auto">Automatic (on for phones)</option><option value="on">Always on</option><option value="off">Off</option></select>
+      <label class="small muted" style="display:block;margin:6px 0 2px">Colours on this device</label>
+      <select id="um-theme"><option value="auto">Automatic (follow this device)</option><option value="light">☀️ Day (light)</option><option value="dark">🌙 Night (dark)</option></select>
       <button type="button" id="um-install" hidden title="Add GAZE to this device's home screen or Start menu, like an app">📲 Install GAZE as an app</button>
       <a class="btn" id="um-openapp" hidden title="GAZE is installed on this computer: open this page in the GAZE app">📲 Open in GAZE app</a>
       <button type="button" id="um-pass">Change password</button>

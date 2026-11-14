@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.77 — November 2026
+- **Day and night colours**: 👤 menu → Colours on this device: ☀️ Day (light), 🌙 Night (dark), or Automatic, which follows the device's own light/dark setting (and changes with it). Remembered per device, for the browser and the app alike. Camera pictures, video and their on-screen display keep their dark surroundings in both.
+- **Saving a camera after choosing a profile**: if the camera can't be saved (for example the profile's recording mode needs motion detection, which the camera has off), the window now stays open with the reason right next to Save, instead of closing and flashing back with the message out of sight on another tab.
+
 ## 0.6.76 — November 2026
 - **"Start with Windows" works**: GAZE set to start with Windows didn't start — Windows starts programs in its own system folder, where GAZE couldn't find or write its files. GAZE now always works in its own folder, and the start-up entry says which folder (it's corrected by itself the next time GAZE starts).
 - **Old copies of GAZE are tidied away**: the copy replaced by an update (GAZE.old.exe, nvr-windows-x64.old.exe …) is now deleted once it has closed, whatever its name — before, it could stay behind.
