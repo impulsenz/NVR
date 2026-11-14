@@ -123,15 +123,18 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     n(a) == n(b)
 }
 
-/// Start menu shortcut (kept pointing at this program) and, the first
-/// time, one on the desktop. An app shortcut Edge or Chrome put on the
+/// Start menu shortcut (kept pointing at this program). On the first start
+/// and the first after each update, a desktop shortcut too when the desktop
+/// has none to this program. An app shortcut Edge or Chrome put on the
 /// desktop under the same name is kept aside, to open the app with.
 #[cfg(windows)]
 pub fn make_shortcuts(data_dir: &Path) {
     let Ok(exe) = std::env::current_exe() else { return };
     let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
+    // The version that last looked at the desktop.
     let flag = data_dir.join("desktop-shortcut");
-    let desktop = !flag.exists();
+    let version = env!("CARGO_PKG_VERSION");
+    let desktop = std::fs::read_to_string(&flag).map(|v| v.trim() != version).unwrap_or(true);
     let script = r#"
 $ErrorActionPreference = 'Stop'
 $w = New-Object -ComObject WScript.Shell
@@ -144,6 +147,15 @@ $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'GAZE'
 New-Item -ItemType Directory -Force -Path $menu | Out-Null
 Make (Join-Path $menu 'GAZE.lnk')
 if ($env:GAZE_DESKTOP -eq '1') {
+  # Already a shortcut to this program on the desktop (any name)?
+  $have = $false
+  foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory'))) {
+    if (-not $dir -or -not (Test-Path $dir)) { continue }
+    foreach ($l in Get-ChildItem -LiteralPath $dir -Filter *.lnk -ErrorAction SilentlyContinue) {
+      try { if ($w.CreateShortcut($l.FullName).TargetPath -ieq $env:GAZE_EXE) { $have = $true } } catch {}
+    }
+  }
+  if ($have) { exit 0 }
   $d = Join-Path ([Environment]::GetFolderPath('Desktop')) 'GAZE.lnk'
   if (Test-Path $d) {
     $t = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($d))
@@ -164,7 +176,7 @@ if ($env:GAZE_DESKTOP -eq '1') {
             .status()
             .is_ok_and(|s| s.success());
         if ok && desktop {
-            let _ = std::fs::write(&flag, b"made once; delete the desktop shortcut if you don't want it\n");
+            let _ = std::fs::write(&flag, version);
         }
     });
 }

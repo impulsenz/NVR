@@ -296,6 +296,7 @@ pub struct SettingsUpdate {
     pub update: Option<crate::config::UpdateConfig>,
     pub mqtt: Option<crate::config::MqttConfig>,
     pub webhooks: Option<Vec<crate::config::Webhook>>,
+    pub tts: Option<crate::config::TtsConfig>,
     pub remotes: Option<Vec<crate::config::RemoteServer>>,
     /// When the recordings folder changes, move existing recordings there.
     #[serde(default)]
@@ -795,6 +796,13 @@ impl Manager {
                 }
             }
             cfg.remotes = r;
+        }
+        if let Some(mut t) = up.tts {
+            t.rate = t.rate.clamp(-10, 10);
+            t.volume = t.volume.clamp(10, 100);
+            t.voice = t.voice.trim().chars().filter(|c| !c.is_control()).take(120).collect();
+            t.phrases = t.phrases.into_iter().map(|p| p.trim().chars().take(200).collect::<String>()).filter(|p| !p.is_empty()).take(20).collect();
+            cfg.tts = t;
         }
         if let Some(w) = up.webhooks {
             for h in &w {

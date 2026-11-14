@@ -268,6 +268,40 @@ pub fn valid_position(c: &str) -> bool {
         .and_then(|(x, y)| Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?)))
         .is_some_and(|(x, y)| (0.0..=100.0).contains(&x) && (0.0..=100.0).contains(&y))
 }
+/// Text to speech ("Say…" on a camera with two-way audio).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TtsConfig {
+    /// Voice name as the computer lists it; empty = its default voice.
+    pub voice: String,
+    /// Speed, -10 (slow) to 10 (fast); 0 = normal.
+    pub rate: i32,
+    /// Loudness, 10 to 100 (%). Speech is evened out first, so 100 is
+    /// clear without distorting.
+    pub volume: u32,
+    /// Ready phrases shown under the text box.
+    pub phrases: Vec<String>,
+    /// A short chime before speaking, to get attention.
+    pub chime: bool,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            voice: String::new(),
+            rate: 0,
+            volume: 100,
+            phrases: vec![
+                "Hello, can I help you?".into(),
+                "Please leave the parcel at the door.".into(),
+                "This area is under video surveillance.".into(),
+                "Please leave now.".into(),
+            ],
+            chime: false,
+        }
+    }
+}
+
 /// Longest allowed recording file ("one long file").
 pub const MAX_SEGMENT_SECONDS: u64 = 86_400;
 
@@ -294,6 +328,8 @@ pub struct Config {
     pub webhooks: Vec<Webhook>,
     /// Other GAZE servers whose cameras show on the Live page.
     pub remotes: Vec<RemoteServer>,
+    /// The voice for "Say…" (text to speech through a camera's speaker).
+    pub tts: TtsConfig,
     pub cameras: Vec<CameraConfig>,
 
 }

@@ -446,12 +446,14 @@ pub fn export_parts(
     }
 }
 
-/// New (not yet viewed) alerts in the last week.
+/// New (not yet viewed) alerts in the last week. Plain motion (nothing
+/// recognised) isn't counted: it's there to look up, not to review.
 pub fn unseen_count(mgr: &Manager) -> usize {
     let from = Local::now() - CDuration::days(7);
     mgr.cameras()
         .iter()
         .flat_map(|rt| rt.events.between(from, Local::now()))
+        .filter(|e| !e.labels.is_empty())
         .filter(|e| !mgr.seen.is_seen(&e.id, e.start))
         .count()
 }

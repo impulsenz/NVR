@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.82 — November 2026
+- **Settings → Voice & talking** for 💬 Say…: choose the **voice** (every voice on the computer, including the newer natural Windows voices you add in Windows Settings → Time & language → Speech), the **speed** and **loudness**, an optional **chime** before speaking, and your own **ready phrases** (the buttons under the text box). **Hear it here** plays the voice in your browser exactly as the camera gets it; **Say on camera** tries it on a camera.
+- **Plain motion alerts no longer count as new**: the Alerts tab's number and "Dismiss all new" count only alerts where something was recognised (people, vehicles, sounds…). Motion-only alerts are still there to look up and filter, just without the NEW mark.
+- **Desktop shortcut**: when GAZE is first installed, and after each update, it checks that there's a shortcut to GAZE.exe on the desktop and makes one if not.
+
 ## 0.6.81 — November 2026
 - **Two-way audio on Tapo cameras**: Push to talk, Say… and the speaker Test now work with TP-Link Tapo (and VIGI) cameras, which don't offer the usual ONVIF speaker connection. GAZE talks to them the way the Tapo app does. To set it up: camera settings → Audio → tick *Talk through this camera's speaker*, enter the password of the **TP-Link / Tapo app account** the camera is in (not the camera account made for the video) and press **Use for talking**, then Test. Newer firmware with the stronger login is handled automatically. If the camera says it's busy, close the Tapo app's live view and try again.
 

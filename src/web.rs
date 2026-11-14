@@ -186,6 +186,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/talk", get(talk_ws))
         .route("/api/talk-test", post(talk_test))
         .route("/api/cameras/{id}/say", post(say))
+        .route("/api/tts/voices", get(tts_voices))
+        .route("/api/tts/preview", post(tts_preview))
         .route("/api/jobs", get(jobs_list))
         .route("/api/jobs/pause", post(jobs_pause))
         .route("/api/where", get(where_work_runs))
@@ -392,6 +394,7 @@ async fn status(
             .map(|j| json!({"title": j.title, "done": j.done, "total": j.total}))
             .collect::<Vec<_>>(),
         "alerts_unseen": library::unseen_count(&m),
+        "say_phrases": m.config().tts.phrases,
         "timelapse": crate::picturelog::enabled(),
         "timelapse_seconds": crate::picturelog::seconds(),
         "safe_mode": Config::safe_mode(),
@@ -3989,6 +3992,27 @@ async fn talk_ws(
     })
 }
 
+/// Settings → voice: the voices this computer has.
+async fn tts_voices() -> Response {
+    Json(crate::tts::voices().await).into_response()
+}
+
+#[derive(Deserialize)]
+struct PreviewReq {
+    text: String,
+    #[serde(flatten)]
+    tts: crate::config::TtsConfig,
+}
+
+/// Settings → voice: hear it here (a WAV file, as the camera would get it).
+async fn tts_preview(State(m): App, Json(r): Json<PreviewReq>) -> Response {
+    let ffmpeg = m.config().server.ffmpeg_path.clone();
+    match crate::tts::speak(&ffmpeg, &r.text, &r.tts).await {
+        Ok(s) => ([(axum::http::header::CONTENT_TYPE, "audio/wav")], crate::tts::wav(&s)).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
 #[derive(Deserialize)]
 struct SayReq {
     text: String,
@@ -4009,7 +4033,7 @@ async fn say(
     if !cam.talk {
         return err(StatusCode::BAD_REQUEST, "two-way audio is off for this camera (camera settings → Audio)");
     }
-    let samples = match crate::tts::speak(&cfg.server.ffmpeg_path, &r.text).await {
+    let samples = match crate::tts::speak(&cfg.server.ffmpeg_path, &r.text, &cfg.tts).await {
         Ok(s) => s,
         Err(e) => return bad(e),
     };
@@ -4319,6 +4343,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/maintenance",
         "/api/notify",
         "/api/talk-test",
+        "/api/tts/",
         "/api/update",
         "/api/logs",
         "/api/system",
