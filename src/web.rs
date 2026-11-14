@@ -145,6 +145,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/usage/kinds", get(usage_kinds))
         .route("/api/logs", get(get_logs))
         .route("/api/playback-report", post(playback_report))
+        .route("/api/warm", post(warm_footage))
         .route("/api/logs/download", get(download_logs))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/dashboard", put(put_dashboard))
@@ -2277,6 +2278,42 @@ async fn serve_video(path: PathBuf, req: Request, download: Option<String>) -> R
 }
 
 #[derive(Deserialize)]
+struct WarmReq {
+    camera: String,
+    #[serde(default)]
+    stream: String,
+    from: DateTime<chrono::FixedOffset>,
+    to: DateTime<chrono::FixedOffset>,
+}
+
+/// Read a camera's footage between two times from the disk or NAS into
+/// memory (in the background), so going back to it is quick.
+async fn warm_footage(State(m): App, user: Option<axum::Extension<CurrentUser>>, Json(q): Json<WarmReq>) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&q.camera)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let c = camera!(m, q.camera);
+    let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
+    if to <= from || (to - from).num_minutes() > 30 {
+        return err(StatusCode::BAD_REQUEST, "bad time range");
+    }
+    let stream = if q.stream == "main" { "main" } else { "sub" };
+    tokio::task::spawn_blocking(move || {
+        let t = library::timeline(&m, std::slice::from_ref(&c.cfg.id), from, to);
+        let mut files: Vec<PathBuf> = t
+            .into_iter()
+            .flat_map(|x| x.segments)
+            .filter(|s| s.kind != "clip" && s.stream == stream)
+            .map(|s| if s.kind == "sub" { storage::timeline_dir(&c.dir).join(&s.name) } else { c.dir.join(&s.name) })
+            .collect();
+        // Nearest the playhead first.
+        files.reverse();
+        crate::vstore::warm(&files);
+    });
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
 struct PlaybackReport {
     #[serde(default)]
     report: Vec<PlaybackCam>,
@@ -2492,6 +2529,9 @@ struct HlsQuery {
     /// Reaches now: a growing playlist (see hls::playlist_as).
     #[serde(default)]
     live: bool,
+    /// Seconds per piece fetched (bigger with fewer cameras on screen).
+    #[serde(default)]
+    part: Option<f64>,
 }
 
 /// A camera's recordings of one stream ("sub" or "main", path ends in
@@ -2509,6 +2549,7 @@ async fn hls_playlist(
     let c = camera!(m, id);
     let stream = stream.trim_end_matches(".m3u8").to_string();
     let (from, to, live) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local), q.live);
+    let part = q.part.unwrap_or(8.0).clamp(4.0, 60.0);
     if to <= from || (to - from).num_hours() > 26 {
         return err(StatusCode::BAD_REQUEST, "bad time range");
     }
@@ -2530,7 +2571,7 @@ async fn hls_playlist(
             files.push(crate::hls::PlaylistFile { path, url: s.url, start: s.start });
         }
         crate::vstore::set_next(&files.iter().map(|f| f.path.clone()).collect::<Vec<_>>());
-        crate::hls::playlist_as(&files, 8.0, "../../../", live && to > Local::now())
+        crate::hls::playlist_as(&files, part, "../../../", live && to > Local::now())
     })
     .await
     .unwrap_or_default();
@@ -5247,8 +5288,9 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
     {
         return false;
     }
-    // A browser telling how playing recordings went (logged): anyone.
-    if path == "/api/playback-report" {
+    // A browser telling how playing recordings went (logged), or asking
+    // for footage behind the playhead to be read ahead: anyone.
+    if path == "/api/playback-report" || path == "/api/warm" {
         return true;
     }
     // Talking through a camera's speaker: not for viewers.

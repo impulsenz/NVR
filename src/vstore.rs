@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 pub const BLOCK: u64 = 2 << 20;
 /// Memory kept for blocks (least recently used go first).
-const BUDGET: u64 = 384 << 20;
+const BUDGET: u64 = 512 << 20;
 /// Blocks read ahead of the one asked for.
 const AHEAD: u64 = 3;
 const OPEN_FILES: usize = 64;
@@ -100,6 +100,32 @@ pub fn meta(path: &Path) -> std::io::Result<(u64, SystemTime)> {
     }
     st.meta.insert(path.to_path_buf(), m);
     Ok((m.len, m.modified))
+}
+
+/// Read whole files into memory in the background (footage behind the
+/// playhead, for going back): one file after another, never while the
+/// memory is nearly full of other footage, at most one warm-up at a time.
+pub fn warm(files: &[PathBuf]) {
+    static BUSY: Mutex<bool> = Mutex::new(false);
+    {
+        let mut b = BUSY.lock().unwrap();
+        if *b {
+            return;
+        }
+        *b = true;
+    }
+    for p in files {
+        if ST.lock().unwrap().bytes > BUDGET * 7 / 10 {
+            break;
+        }
+        let Ok((len, modified)) = meta(p) else { continue };
+        for n in 0..=(len.saturating_sub(1) / BLOCK) {
+            if block(p, n, len, modified).is_err() {
+                break;
+            }
+        }
+    }
+    *BUSY.lock().unwrap() = false;
 }
 
 /// Size and time of a file, as a folder listing told them.
