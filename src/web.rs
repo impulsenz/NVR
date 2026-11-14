@@ -279,6 +279,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/snapshot/{id}", get(snapshot))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(mgr.clone(), remote_footage))
+        .layer(middleware::from_fn(slow_requests))
         .layer(middleware::from_fn_with_state(mgr.clone(), auth))
         .with_state(mgr)
 }
@@ -2187,6 +2188,27 @@ async fn timeline(
     Json(out).into_response()
 }
 
+/// Requests GAZE takes long to start answering are written to the log (what
+/// and how long), to find out what's slow on a particular computer: the
+/// disk, a NAS, or GAZE itself. At most one line every 10 s per kind.
+async fn slow_requests(req: Request, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    let t = Instant::now();
+    let res = next.run(req).await;
+    let took = t.elapsed();
+    if took > Duration::from_millis(1500) && !path.ends_with("/video") && !path.contains("/live/") && path != "/api/live/ws" {
+        // (Kinds: "/media/x/rec", "/api/hls", "/api/timeline" …)
+        let kind: String = path.split('/').filter(|x| !x.is_empty()).enumerate().filter(|(i, x)| *i == 0 || (*i == 1 && *x != "media") || (*i == 2 && path.starts_with("/media"))).map(|(_, x)| x).collect::<Vec<_>>().join("/");
+        static LAST: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Instant>>> = std::sync::LazyLock::new(Default::default);
+        let mut l = LAST.lock().unwrap();
+        if l.get(&kind).is_none_or(|x| x.elapsed() > Duration::from_secs(10)) {
+            l.insert(kind, Instant::now());
+            tracing::warn!("slow to answer: {path} took {:.1} s (the disk or network drive may be busy)", took.as_secs_f64());
+        }
+    }
+    res
+}
+
 /// Files of a camera brought in from another server (its recordings, alert
 /// clips and pictures, time-lapse, video pieces): passed on from there, so
 /// it plays here like this server's own.
@@ -2362,7 +2384,7 @@ async fn hls_playlist(
             };
             files.push(crate::hls::PlaylistFile { path, url: s.url, start: s.start });
         }
-        crate::hls::playlist_as(&files, 4.0, "../../../", live && to > Local::now())
+        crate::hls::playlist_as(&files, 8.0, "../../../", live && to > Local::now())
     })
     .await
     .unwrap_or_default();
@@ -2513,16 +2535,12 @@ fn download_name(camera: &str, when: Option<DateTime<Local>>, file: &str) -> Str
 /// given and either `force` is set or the URL has `?download`.
 async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bool) -> Response {
     let download = force || req.uri().query().is_some_and(|q| q.contains("download"));
-    let video = path.extension().is_some_and(|e| e == "mp4");
     match ServeFile::new(path).oneshot(req).await {
         Ok(res) => {
             let mut res = res.map(Body::new);
-            // Video isn't kept by the browser: it comes straight from GAZE
-            // on the home network, and gigabytes of footage piled up in the
-            // browser's cache, slowing it down until the cache was cleared.
-            if video && !res.headers().contains_key(header::CACHE_CONTROL) {
-                res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            }
+            // (Video is cached by the browser as usual: its players read the
+            // file through that cache, and without it every switch between
+            // them and every jump downloaded the file again.)
             if let Some(name) = name.filter(|_| download)
                 && let Ok(v) = HeaderValue::from_str(&attachment(&name))
             {
@@ -3592,8 +3610,11 @@ async fn sprites_ready(
             Some(json!({"info": info, "url": format!("media/{}/sprite/{kind}/{name}?v={}&page=", c.cfg.id, info.version)}))
         };
         let found: Vec<((String, String), Option<serde_json::Value>)> = std::thread::scope(|sc| {
-            let per = todo.len().div_ceil(8).max(1);
-            let hs: Vec<_> = todo.chunks(per).map(|ch| sc.spawn(|| ch.iter().map(|(k, n)| ((k.clone(), n.clone()), check(k, n))).collect::<Vec<_>>())).collect();
+            let per = todo.len().div_ceil(crate::load::DISK_READERS).max(1);
+            let hs: Vec<_> = todo
+                .chunks(per)
+                .map(|ch| sc.spawn(|| ch.iter().map(|(k, n)| { let _t = crate::load::disk_slot(); ((k.clone(), n.clone()), check(k, n)) }).collect::<Vec<_>>()))
+                .collect();
             hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
         });
         let mut seen = SEEN.lock().unwrap();

@@ -529,9 +529,13 @@ fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
     if missing.is_empty() {
         return;
     }
+    // (A few at a time for the whole server: see load::disk_slot.)
     let found: Vec<(PathBuf, u32)> = std::thread::scope(|sc| {
-        let per = missing.len().div_ceil(8).max(1);
-        let hs: Vec<_> = missing.chunks(per).map(|ch| sc.spawn(move || ch.iter().filter_map(|p| mp4_height(p).map(|h| (p.clone(), h))).collect::<Vec<_>>())).collect();
+        let per = missing.len().div_ceil(crate::load::DISK_READERS).max(1);
+        let hs: Vec<_> = missing
+            .chunks(per)
+            .map(|ch| sc.spawn(move || ch.iter().filter_map(|p| { let _t = crate::load::disk_slot(); mp4_height(p).map(|h| (p.clone(), h)) }).collect::<Vec<_>>()))
+            .collect();
         hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
     if found.is_empty() {

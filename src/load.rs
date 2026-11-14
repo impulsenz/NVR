@@ -198,3 +198,28 @@ mod tests {
         update(0.0, None);
     }
 }
+
+/// Reading recordings' details (picture size, time-lapse ready?) from the
+/// disk: a few at a time for the whole server. Many at once made a hard
+/// drive jump between them, and the video being watched waited behind them
+/// (on a NAS, a few at a time still hides the network's delay).
+static DISK_SLOTS: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+static DISK_FREE: std::sync::Condvar = std::sync::Condvar::new();
+pub const DISK_READERS: usize = 3;
+
+pub struct DiskSlot;
+impl Drop for DiskSlot {
+    fn drop(&mut self) {
+        *DISK_SLOTS.lock().unwrap() -= 1;
+        DISK_FREE.notify_one();
+    }
+}
+/// Wait for a turn to read from the disk (blocking threads only).
+pub fn disk_slot() -> DiskSlot {
+    let mut n = DISK_SLOTS.lock().unwrap();
+    while *n >= DISK_READERS {
+        n = DISK_FREE.wait(n).unwrap();
+    }
+    *n += 1;
+    DiskSlot
+}

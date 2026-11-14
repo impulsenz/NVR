@@ -1252,9 +1252,37 @@ function spriteStyle(el, sp, n, W, H, fill) {
   el.style.backgroundPosition = `${-col * dw}px ${-row * dh}px`;
   return {ox, oy};
 }
+// Time-lapse pages fetched ahead of time (for scrubbing) wait their turn:
+// a few at a time, low priority, and not while a camera's video is still
+// loading — the video you're watching comes first. (Hundreds at once
+// kept the disk and the connection busy, and the videos waited.)
+const spriteQ = []; let spriteQBusy = 0;
+function videosLoading() {
+  if (page !== 'recordings') return false;
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    if (!(el.classList.contains('src-sub') || el.classList.contains('src-hd'))) continue;
+    const v = activeVideo(el);
+    if (v && v.readyState < 3) return true;
+  }
+  return false;
+}
+function pumpSprites() {
+  while (spriteQBusy < 3 && spriteQ.length) {
+    if (videosLoading()) { clearTimeout(pumpSprites.t); pumpSprites.t = setTimeout(pumpSprites, 400); return; }
+    const url = spriteQ.shift();
+    if (spritePages.has(url)) continue;
+    spriteQBusy++;
+    const im = new Image(); im.fetchPriority = 'low';
+    const done = () => { spriteQBusy--; pumpSprites(); };
+    im.addEventListener('load', done, {once: true});
+    im.addEventListener('error', () => { if (spritePages.get(url) === im) spritePages.delete(url); done(); }, {once: true});
+    im.src = url; spritePages.set(url, im);
+  }
+}
 function preloadSprite(sp) {
   if (!sp) return sp;
-  for (let p = 0; p < sp.info.pages; p++) spritePage(sp.url + p);
+  for (let p = 0; p < sp.info.pages; p++) if (!spritePages.has(sp.url + p) && !spriteQ.includes(sp.url + p)) spriteQ.push(sp.url + p);
+  pumpSprites();
   return sp;
 }
 
@@ -4129,6 +4157,9 @@ function hlsReady() {
 // the moment it opens on, and the time-lapse pictures — so it's ready when
 // you go there (it then carries on as loaded, see resumeTimeline). Leaving
 // for another page stops its downloads as usual.
+// The video player for Recordings (a script, no footage) is fetched while
+// the page is idle, so Recordings opens without waiting for it.
+setTimeout(() => (window.requestIdleCallback || ((f) => setTimeout(f, 0)))(() => { if (!dataSaver) hlsReady(); }), 4000);
 async function preloadRecordings() {
   // (Not with the data saver on: nothing is fetched until it's asked for.)
   if (page === 'recordings' || tl.key || document.hidden || dataSaver) return;
@@ -4138,7 +4169,10 @@ async function preloadRecordings() {
   rec.mode = 'timeline';
   try { await loadTimeline(); } finally { if (page !== 'recordings') rec.mode = mode; }
 }
-const HLS_WIN = 90 * 60000;  // a playlist covers 1½ h either side
+// A playlist covers half an hour either side: a recent one is asked for
+// again every few seconds, for every camera (1½ hours either side made
+// each one ~0.5 MB, most of what was downloaded).
+const HLS_WIN = 30 * 60000;
 function hlsFor(el, cam) {
   if (el._h) return el._h;
   // Loaded well ahead (a minute of the light sub-stream, half a minute of
@@ -4738,7 +4772,9 @@ function paintLoaded() {
     }
     if (el._stallPv && !el.classList.contains('stalled')) { el._stallPv = false; sp.hidden = true; }
     if (!has || tl.live) { srcMark(el, null); continue; }
-    srcMark(el, sp && !sp.hidden ? 'tl' : 'rec');
+    // (No colour until there's a picture: a black camera still loading
+    // isn't "playing" anything yet.)
+    srcMark(el, sp && !sp.hidden ? 'tl' : v && v.readyState >= 2 && v.style.visibility !== 'hidden' ? 'rec' : null);
   }
 }
 setInterval(paintLoaded, 400);
@@ -5239,6 +5275,9 @@ async function prefetchSprites() {
   let i = 0, missing = 0;
   const worker = async () => {
     while (i < todo.length && gen === tl.pfGen) {
+      // (Making missing previews waits while a camera's video is loading.)
+      while (videosLoading() && gen === tl.pfGen) await new Promise(r => setTimeout(r, 500));
+      if (gen !== tl.pfGen) break;
       const job = todo[i++], key = job.sg.url, had = tl.pv.get(key);
       // Already loaded (and not still growing): nothing to do.
       if (had && had.state === 'ready' && !(isGrowing(job.sg) && Date.now() - had.at > 30000)) continue;

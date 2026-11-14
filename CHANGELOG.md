@@ -1,5 +1,15 @@
 # What's new in GAZE
 
+## 0.7.0 — November 2026
+- **Recordings load much faster with many cameras**, especially from a hard drive (HDD):
+  - **The video you're watching comes first.** The time-lapse pages for scrubbing were all fetched at once for every camera — hundreds of requests reading the same disk as the video — and previews still to be made were made then too. Now they're fetched a few at a time, at low priority, and only once the cameras' video is playing.
+  - **Fewer reads at once from the disk.** Checking recordings and their time-lapse previews read up to 8 files at a time per camera (72 at once with 9 cameras), which made a hard drive jump between them while the video waited. Now it's a few at a time for the whole server.
+  - **Smaller playlists.** Each camera's playlist now covers half an hour either side (was 1½ hours, about 0.5 MB, asked for again every few seconds for every camera), in pieces of about 8 seconds (fewer, larger reads from the disk).
+  - **Video can be kept by the browser again.** Since 0.6.95 it wasn't, so every switch between a camera's players and every jump downloaded the file again.
+  - The video player for Recordings is fetched while the page is idle, so Recordings opens without waiting for it.
+- **A camera's outline only shows once it has a picture** (a black camera still loading has none yet).
+- **Slow answers are logged**: anything GAZE takes more than 1.5 seconds to start answering is written to the log (Settings → Logs) with what it was and how long it took — to see whether a disk or network drive is holding things up.
+
 ## 0.6.99 — November 2026
 - **Releases are just GAZE.exe**: the second copy under GAZE's old file name (nvr-windows-x64.exe) is no longer published, and GAZE no longer looks for it or renames itself from it when it starts. Copies of GAZE from before 0.6.73 don't update by themselves any more: download GAZE.exe once.
 
