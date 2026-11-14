@@ -1219,7 +1219,7 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 
 /* PTZ controls only on the live picture: not while a recording plays or the
    time-lapse is being scrubbed. */
-#focus-surface.pb .ptz-ov, #focus-surface.scrub .ptz-ov { display: none !important; }
+#focus-surface.pb .ptz-ov, #focus-surface.scrubbing .ptz-ov { display: none !important; }
 
 .fc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .fc { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
@@ -1355,7 +1355,7 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 @keyframes sirenpulse { 50% { box-shadow: 0 0 0 4px rgba(239,68,68,.35); } }
 
 /* The version next to GAZE in the top bar */
-.brand .brand-ver { font-size: 11px; font-weight: 500; letter-spacing: 0; color: var(--muted); margin-left: 6px; align-self: flex-end; margin-bottom: 3px; }
+.brand .brand-ver { font-size: 14px; font-weight: 500; letter-spacing: 0; color: var(--muted); margin-left: 6px; align-self: center; line-height: 1; }
 @media (max-width: 600px) { .brand .brand-ver { display: none; } }
 
 .dl-voices { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
@@ -1365,3 +1365,5 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 /* Drop-down lists: their options always readable, in day and night colours
    and over pictures (full screen), where the text is light. */
 select option, select optgroup { background-color: var(--panel); color: var(--text); }
+#focus-sprite, .tl-sprite, .sprite { background-repeat: no-repeat; }
+.bk-what { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 8px; }

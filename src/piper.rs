@@ -75,6 +75,34 @@ pub fn catalog() -> Vec<Entry> {
         .collect()
 }
 
+/// The chosen voice isn't on this computer (chosen on another one and
+/// imported, or deleted): fetch it in the background. True if it's there.
+pub fn ensure(id: &str) -> bool {
+    if installed(id) {
+        return true;
+    }
+    if CATALOG.iter().any(|v| v.0 == id) && !BUSY.lock().unwrap().iter().any(|b| b == id) {
+        let id = id.to_string();
+        tokio::spawn(async move {
+            tracing::info!("downloading the chosen voice {id}");
+            if let Err(e) = download(&id).await {
+                tracing::warn!("voice {id}: {e:#}");
+            }
+        });
+    }
+    false
+}
+
+/// Keep the voice chosen in the settings downloaded (checked every minute).
+pub async fn keep_ready(m: std::sync::Arc<crate::manager::Manager>) {
+    loop {
+        if let Some(id) = m.config().tts.voice.strip_prefix("piper:") {
+            ensure(id);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
+}
+
 /// Download the engine (first time) and a voice, as a task with progress.
 pub async fn download(id: &str) -> Result<()> {
     let Some((_, name, _, path)) = CATALOG.iter().find(|v| v.0 == id) else { bail!("unknown voice") };

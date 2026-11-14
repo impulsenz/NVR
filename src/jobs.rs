@@ -123,7 +123,16 @@ impl Job {
             j.state = "running";
         });
     }
-    pub fn done_one(&self) {
+    /// Something that sets how many are done, usable from another thread.
+    pub fn setter(&self) -> impl FnMut(u64) + Send + 'static {
+        let id = self.id;
+        move |n| {
+            if let Some(j) = JOBS.lock().unwrap().iter_mut().find(|j| j.id == id) {
+                j.done = n;
+            }
+        }
+    }
+        pub fn done_one(&self) {
         self.with(|j| j.done += 1);
     }
     /// Waiting for the computer to have spare capacity.

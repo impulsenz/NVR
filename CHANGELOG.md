@@ -1,5 +1,15 @@
 # What's new in GAZE
 
+## 0.6.89 — November 2026
+- **Scrubbing a camera's timeline** (after clicking a camera on the Live page) no longer makes the picture vanish and come back as a sheet of tiny thumbnails: the picture keeps its size and shows the time-lapse picture of where you are.
+- **HD on the timeline, never black**: an alert's HD clip is only shown once it actually has a picture. If this browser can't show the camera's HD format (often H.265), only the HD clips are converted (started a few seconds ahead), while the sub-stream keeps playing directly. Before, one such clip could switch the whole camera to slow converted playback, sub-stream included — a likely cause of black screens when clicking alert pictures on the timeline, and of extra work for the computer.
+- **Editing older profiles**: the Edit button works again on profiles made before 0.6.79 (it failed on settings those profiles didn't have yet). Saving brings them up to date.
+- **Only administrators can delete** alerts, clips and recordings; other accounts don't see the delete buttons. An opened alert has a 🗑 Delete button (alerts can also still be deleted from their picture).
+- **Export needs your password**, and lets you choose what goes in: cameras & settings, people & vehicles (with the faces GAZE has learned and the corrections), and users. Backups now carry a version note: every GAZE reads backups from older versions, and an older GAZE reads what it knows of a newer one.
+- **Voices download by themselves**: every natural voice is listed under Settings → Voice & talking → Voice; choosing one (or importing settings that use one) downloads it automatically, and the computer's own voice speaks until it's ready.
+- **Moving a camera's recordings to a new folder** no longer keeps the window open: the camera records into the new folder at once, and the older recordings move in the background (progress under System → Tasks).
+- Alert cards show the HD AI badge above the camera name. The version next to GAZE sits on the same line as the rest of the top bar, a little bigger.
+
 ## 0.6.88 — November 2026
 - **Alerts in full quality on the timeline, without a break**: watching the sub-stream recording, the picture now changes to the alert's HD clip right where the alert starts, and back to the sub-stream where it ends, with no blink, skip or wait. The HD clip is loaded a few seconds ahead, and the sub-stream keeps going underneath, ready to take over again. A clip the browser can't play (e.g. H.265 in some browsers) is skipped and the sub-stream carries on.
 - **Alert cards**: the HD AI ✓ / ? badge lines up with the camera name and time. Sound alerts' "Heard: …" now goes across the middle of the picture, where the card's captions don't cover it (for new alerts).

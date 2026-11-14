@@ -381,6 +381,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(hooks::run(mgr.clone()));
     tokio::spawn(onvif_events::run(mgr.clone()));
     piper::init(&mgr.data_dir);
+    tokio::spawn(piper::keep_ready(mgr.clone()));
     tokio::spawn(sound::run(mgr.clone()));
     tokio::spawn(clip::run(mgr.clone()));
     tokio::spawn(ptz_auto::run(mgr.clone()));

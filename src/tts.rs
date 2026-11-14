@@ -112,10 +112,14 @@ async fn powershell(script: &str, env: &[(&str, String)]) -> Result<std::process
 
 /// The voices this computer has: downloaded ones first, then its own.
 pub async fn voices() -> Vec<Voice> {
+    // Downloadable ones too: chosen, they download by themselves.
     let mut v: Vec<Voice> = crate::piper::CATALOG
         .iter()
-        .filter(|c| crate::piper::installed(c.0))
-        .map(|(id, name, lang, _)| Voice { id: format!("piper:{id}"), name: format!("{name} — downloaded"), lang: lang.to_string() })
+        .map(|(id, name, lang, _)| Voice {
+            id: format!("piper:{id}"),
+            name: if crate::piper::installed(id) { format!("{name} — natural voice") } else { format!("{name} — natural voice (downloads when chosen)") },
+            lang: lang.to_string(),
+        })
         .collect();
     v.extend(system_voices().await);
     v
@@ -170,9 +174,18 @@ async fn system_voices() -> Vec<Voice> {
 
 /// Make a WAV file of the text being said.
 async fn voice(ffmpeg: &str, text: &str, t: &TtsConfig, wav: &Path) -> Result<()> {
-    if let Some(id) = t.voice.strip_prefix("piper:") {
-        return crate::piper::speak(id, text, t.rate, wav).await;
-    }
+    // A downloaded voice; not here yet: fetched now, the computer's own
+    // voice speaks meanwhile.
+    let fallback;
+    let t = if let Some(id) = t.voice.strip_prefix("piper:") {
+        if crate::piper::ensure(id) {
+            return crate::piper::speak(id, text, t.rate, wav).await;
+        }
+        fallback = TtsConfig { voice: String::new(), ..t.clone() };
+        &fallback
+    } else {
+        t
+    };
     #[cfg(windows)]
     {
         let _ = ffmpeg;

@@ -179,6 +179,17 @@ pub struct MoveReport {
 /// Move everything in `src` into `dst` (merging), then remove `src`.
 /// Renames when on the same drive, otherwise copies and deletes.
 pub fn move_tree(src: &Path, dst: &Path) -> Result<MoveReport> {
+    move_tree_with(src, dst, &mut |_| {})
+}
+
+/// Files under `p` (for progress).
+pub fn count_files(p: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(p) else { return 0 };
+    rd.flatten().map(|e| if e.file_type().is_ok_and(|t| t.is_dir()) { count_files(&e.path()) } else { 1 }).sum()
+}
+
+/// `move_tree`, telling `on` how far it got after each file.
+pub fn move_tree_with(src: &Path, dst: &Path, on: &mut dyn FnMut(&MoveReport)) -> Result<MoveReport> {
     let mut r = MoveReport::default();
     if !src.exists() || src == dst {
         return Ok(r);
@@ -186,7 +197,7 @@ pub fn move_tree(src: &Path, dst: &Path) -> Result<MoveReport> {
     if dst.starts_with(src) {
         bail!("the new folder cannot be inside the old one");
     }
-    move_inner(src, dst, &mut r)?;
+    move_inner(src, dst, &mut r, on)?;
     let _ = remove_empty_dirs(src);
     info!(
         "moved {} files ({} MB) from {} to {}",
@@ -198,13 +209,13 @@ pub fn move_tree(src: &Path, dst: &Path) -> Result<MoveReport> {
     Ok(r)
 }
 
-fn move_inner(src: &Path, dst: &Path, r: &mut MoveReport) -> Result<()> {
+fn move_inner(src: &Path, dst: &Path, r: &mut MoveReport, on: &mut dyn FnMut(&MoveReport)) -> Result<()> {
     std::fs::create_dir_all(dst).with_context(|| format!("cannot create {}", dst.display()))?;
     for e in std::fs::read_dir(src)?.flatten() {
         let from = e.path();
         let to = dst.join(e.file_name());
         if e.file_type()?.is_dir() {
-            move_inner(&from, &to, r)?;
+            move_inner(&from, &to, r, on)?;
             continue;
         }
         let name = e.file_name().to_string_lossy().to_string();
@@ -227,6 +238,7 @@ fn move_inner(src: &Path, dst: &Path, r: &mut MoveReport) -> Result<()> {
                 );
                 r.skipped += 1;
             }
+            on(r);
             continue;
         }
         if std::fs::rename(&from, &to).is_err() {
@@ -236,6 +248,7 @@ fn move_inner(src: &Path, dst: &Path, r: &mut MoveReport) -> Result<()> {
         }
         r.files += 1;
         r.bytes += len;
+        on(r);
     }
     Ok(())
 }

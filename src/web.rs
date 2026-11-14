@@ -166,7 +166,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/alerts/seen", post(alerts_seen))
         .route("/api/alerts/seen-all", post(alerts_seen_all))
         .route("/api/alerts/unseen", post(alerts_unseen))
-        .route("/api/config/export", get(export_config))
+        .route("/api/config/export", post(export_config))
         .route("/api/config/import", post(import_config).layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         .route("/api/cameras", get(list_cameras).post(add_camera))
         .route(
@@ -1089,15 +1089,48 @@ async fn put_dashboard(
 
 #[derive(Deserialize)]
 struct ExportCfgQuery {
+    /// The password of the account asking (admin): a backup holds the
+    /// whole setup.
+    #[serde(default)]
+    password: String,
     #[serde(default)]
     passwords: bool,
+    /// What goes in (all by default).
+    #[serde(default = "yes")]
+    settings: bool,
+    #[serde(default = "yes")]
+    users: bool,
+    /// People & vehicles: names, plates, photos and everything GAZE has
+    /// learned about them (faceprints, corrections).
+    #[serde(default = "yes")]
+    people: bool,
 }
+
+/// Backup format (manifest.json in the .zip). Version 1 (before 0.6.89)
+/// had no manifest. Every version reads every older backup; an older GAZE
+/// reading a newer backup ignores the settings it doesn't know.
+const BACKUP_FORMAT: u32 = 2;
 
 /// Download the whole setup as one backup file (.zip): settings, cameras
 /// and profiles (settings.toml), users with their layouts (users.json), and
 /// people & vehicles with their photos (known.json, known/). Without
 /// `passwords`, every password, key and token is left out.
-async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Response {
+async fn export_config(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Json(q): Json<ExportCfgQuery>,
+) -> Response {
+    // The administrator's own password again (a signed-in browser left
+    // open isn't enough to take the whole setup away).
+    let name = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
+    if !name.is_empty() {
+        let (m2, pw, from) = (m.clone(), q.password.clone(), addr.ip().to_string());
+        let ok = check_password_blocking(move || m2.users.check(&name, &pw, &from)).await;
+        if !matches!(ok, Some(Ok(_))) {
+            return err(StatusCode::FORBIDDEN, "that password isn't right — enter your own (administrator) password to export");
+        }
+    }
     let mut cfg = m.config();
     if !q.passwords {
         cfg.remove_secrets();
@@ -1106,19 +1139,40 @@ async fn export_config(State(m): App, Query(q): Query<ExportCfgQuery>) -> Respon
         use std::io::Write;
         let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let opt = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        z.start_file("settings.toml", opt)?;
-        z.write_all(cfg.to_toml()?.as_bytes())?;
-        z.start_file("users.json", opt)?;
-        z.write_all(&m.users.export(q.passwords))?;
-        let (known, photos) = m.known.export();
-        z.start_file("known.json", opt)?;
-        z.write_all(&known)?;
-        // Photos are JPEGs already: stored as they are.
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        for (name, b) in photos {
-            z.start_file(name, stored)?;
-            z.write_all(&b)?;
+        let mut parts = Vec::new();
+        if q.settings {
+            z.start_file("settings.toml", opt)?;
+            z.write_all(cfg.to_toml()?.as_bytes())?;
+            parts.push("settings");
         }
+        if q.users {
+            z.start_file("users.json", opt)?;
+            z.write_all(&m.users.export(q.passwords))?;
+            parts.push("users");
+        }
+        if q.people {
+            let (known, photos) = m.known.export();
+            z.start_file("known.json", opt)?;
+            z.write_all(&known)?;
+            // Photos are JPEGs already: stored as they are.
+            let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            for (name, b) in photos {
+                z.start_file(name, stored)?;
+                z.write_all(&b)?;
+            }
+            parts.push("people");
+        }
+        z.start_file("manifest.json", opt)?;
+        z.write_all(
+            serde_json::to_string_pretty(&json!({
+                "gaze_backup": BACKUP_FORMAT,
+                "gaze_version": env!("CARGO_PKG_VERSION"),
+                "made": Local::now().to_rfc3339(),
+                "contains": parts,
+                "passwords": q.passwords,
+            }))?
+            .as_bytes(),
+        )?;
         anyhow::Ok(z.finish()?.into_inner())
     })();
     match res {
@@ -1171,18 +1225,30 @@ async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: Bytes)
             }
         }
         let read = |name: &str| files.get(name).cloned();
+        let manifest: Option<serde_json::Value> = read("manifest.json").and_then(|b| serde_json::from_slice(&b).ok());
         let text = match read("settings.toml") {
-            Some(b) => String::from_utf8(b)?,
+            Some(b) => Some(String::from_utf8(b)?),
+            None if manifest.is_some() => None,
             None if is_zip => anyhow::bail!("this .zip isn't a GAZE backup (no settings.toml in it)"),
-            None => String::from_utf8(body.to_vec()).map_err(|_| anyhow::anyhow!("choose the backup file made by Export (.zip or .toml)"))?,
+            None => Some(String::from_utf8(body.to_vec()).map_err(|_| anyhow::anyhow!("choose the backup file made by Export (.zip or .toml)"))?),
         };
-        let (mut cfg, _) = Config::from_toml(&text)?;
-        cfg.keep_secrets_from(&m.config());
         let users = read("users.json");
         let known = read("known.json");
-        let n = cfg.cameras.len();
-        let restart = m.import(cfg, q.keep_login).await?;
-        let mut parts = vec![format!("{n} camera(s) and all settings")];
+        let mut parts = Vec::new();
+        let (mut n, mut restart) = (0, false);
+        if let Some(text) = text {
+            // Settings from a newer GAZE: what this version doesn't know is left out.
+            let (mut cfg, _) = Config::from_toml(&text)?;
+            cfg.keep_secrets_from(&m.config());
+            n = cfg.cameras.len();
+            restart = m.import(cfg, q.keep_login).await?;
+            parts.push(format!("{n} camera(s) and all settings"));
+        }
+        if let Some(v) = manifest.as_ref().and_then(|m| m["gaze_version"].as_str())
+            && v != env!("CARGO_PKG_VERSION")
+        {
+            tracing::info!("importing a backup made by GAZE {v}");
+        }
         if let Some(u) = users {
             let (got, skipped) = m.users.import(&u)?;
             parts.push(format!("{got} user(s) with their layouts"));
@@ -4593,16 +4659,14 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
     {
         return true;
     }
-    // Operators: move cameras, pause recording, remove alerts/recordings,
-    // switch Home / Away / Night.
+    // Operators: move cameras, pause recording, switch Home / Away / Night.
+    // Deleting footage (alerts, clips, recordings) is for administrators only.
     role == Operator
         && (path.contains("/ptz/")
             || path == "/api/mode"
             || path.ends_with("/snooze")
             || path.ends_with("/pause")
-            || path.ends_with("/resume")
-            || (method == axum::http::Method::DELETE
-                && (path.contains("/events/") || path.contains("/recordings/"))))
+            || path.ends_with("/resume"))
 }
 
 /// Same-origin check: a change (or a live connection) must come from GAZE's
@@ -5067,5 +5131,11 @@ mod tests {
         assert!(allowed(Viewer, &post, "/api/sprites-ready"));
         assert!(!allowed(Viewer, &post, "/api/settings"));
         assert!(!allowed(Operator, &axum::http::Method::GET, "/api/cameras"));
+        // Only administrators delete footage.
+        let del = axum::http::Method::DELETE;
+        assert!(!allowed(Operator, &del, "/api/cameras/front/events/ev-1"));
+        assert!(!allowed(Operator, &del, "/api/cameras/front/recordings/a.mp4"));
+        assert!(allowed(Admin, &del, "/api/cameras/front/events/ev-1"));
+        assert!(allowed(Operator, &post, "/api/cameras/front/ptz/stop"));
     }
 }

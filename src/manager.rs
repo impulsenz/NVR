@@ -514,7 +514,7 @@ impl Manager {
     }
 
     pub async fn update_camera(
-        &self,
+        self: &Arc<Self>,
         id: &str,
         mut cam: CameraConfig,
         move_recordings: bool,
@@ -541,13 +541,59 @@ impl Manager {
             rt.live_main.set_view(cam.view.clone());
             return Ok(cam);
         }
-        let moved = if move_recordings {
-            self.move_camera_dirs(&old_cfg, &cfg, Some(id)).await
-        } else {
-            Ok(())
-        };
+        // The camera carries on in its new folder at once; what it recorded
+        // before follows in the background (a task with progress), and the
+        // two lists of alerts are merged at the end.
+        let move_from = move_recordings
+            .then(|| old_cam.as_ref().map(|p| (old_cfg.camera_dir(p), cfg.camera_dir(&cam))))
+            .flatten()
+            .filter(|(f, t)| f != t && f.exists());
+        if let Some((from, to)) = &move_from
+            && to.starts_with(from)
+        {
+            bail!("the new folder cannot be inside the old one");
+        }
+        if move_from.is_some() {
+            if let Some(rt) = self.camera(id) {
+                rt.stop().await;
+            }
+            self.stores.lock().unwrap().remove(id);
+        }
         self.restart_camera(&cam).await;
-        moved?;
+        if let Some((from, to)) = move_from {
+            let me = self.clone();
+            let (cam2, id2) = (cam.clone(), id.to_string());
+            tokio::spawn(async move {
+                let job = crate::jobs::start("files", format!("Moving {}'s recordings to {}", cam2.name, to.display()));
+                let total = { let f = from.clone(); tokio::task::spawn_blocking(move || crate::fsbrowse::count_files(&f)).await.unwrap_or(0) };
+                job.total(total);
+                let mut set = job.setter();
+                let (f2, t2) = (from.clone(), to.clone());
+                let res = tokio::task::spawn_blocking(move || {
+                    let mut last = 0;
+                    crate::fsbrowse::move_tree_with(&f2, &t2, &mut |r| {
+                        let n = r.files + r.skipped;
+                        if n > last {
+                            last = n;
+                            set(n);
+                        }
+                    })
+                })
+                .await;
+                match res {
+                    Ok(Ok(r)) => {
+                        job.step(format!("{} files, {} MB", r.files, r.bytes / 1_000_000));
+                        // The moved alerts and recordings show up: read afresh.
+                        me.stores.lock().unwrap().remove(&id2);
+                        if let Some(c) = me.config().cameras.into_iter().find(|c| c.id == id2) {
+                            me.restart_camera(&c).await;
+                        }
+                    }
+                    Ok(Err(e)) => job.fail(format!("{e:#}")),
+                    Err(e) => job.fail(e),
+                }
+            });
+        }
         Ok(cam)
     }
 
@@ -609,7 +655,7 @@ impl Manager {
 
     /// The camera moved to a new IP address: change it in its stream URLs and
     /// PTZ address. Returns true if anything changed.
-    pub async fn change_camera_host(&self, id: &str, old: &str, new: &str) -> Result<bool> {
+    pub async fn change_camera_host(self: &Arc<Self>, id: &str, old: &str, new: &str) -> Result<bool> {
         let Some(mut cam) = self.config().cameras.into_iter().find(|c| c.id == id) else {
             bail!("camera not found")
         };

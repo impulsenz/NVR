@@ -1235,13 +1235,18 @@ setInterval(() => {
     el.title = `Data streaming from GAZE to this device right now (live video, recordings, pictures)${dataSaver ? ' — data saver is on' : ''}`;
   }
 }, 3000);
-// Cameras whose recordings this browser can't play directly.
-const noNativePlayback = new Set(store_get('no-native', []));
+// Cameras' streams ("camera|main" / "camera|sub") this browser can't play
+// directly (usually H.265 main streams): only those are converted. (Older
+// versions marked whole cameras, converting even the sub-stream: forgotten.)
+const noNativePlayback = new Set(store_get('no-native2', []));
+try { localStorage.removeItem('nvr-no-native'); } catch (_) {}
 function store_get(k, d) { try { const v = localStorage.getItem('nvr-' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
-function markNoNative(camId) {
-  noNativePlayback.add(camId);
-  try { localStorage.setItem('nvr-no-native', JSON.stringify([...noNativePlayback])); } catch (e) {}
+function markNoNative(key) {
+  noNativePlayback.add(key);
+  try { localStorage.setItem('nvr-no-native2', JSON.stringify([...noNativePlayback])); } catch (e) {}
 }
+// The stream a file of the timeline belongs to (alert clips: main).
+const fileStream = (c, url) => { const sg = c && c.segments.find(x => x.url === url); return sg ? streamOf(sg) : 'main'; };
 
 class Player {
   constructor(video, controls, msgEl) {
@@ -2615,7 +2620,7 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
     }
     if (!camTl.data || markAt(e)) return;
     e.preventDefault();
-    camTl.dragging = true; lane.setPointerCapture(e.pointerId); $('focus-surface').classList.add('scrub');
+    camTl.dragging = true; lane.setPointerCapture(e.pointerId); $('focus-surface').classList.add('scrubbing');
     lane.querySelector('.preview').hidden = true;
     const [T] = tAt(e); camTl.scrubT = T; camTl.paintHead(T); camTl.scrubTo(T);
   };
@@ -2637,7 +2642,7 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
   });
   const up = (e) => {
     if (!camTl.dragging) return;
-    camTl.dragging = false; $('focus-surface').classList.remove('scrub');
+    camTl.dragging = false; $('focus-surface').classList.remove('scrubbing');
     const [T] = tAt(e); camTl.playAt(T); camTl.draw();
   };
   lane.addEventListener('pointerup', up); lane.addEventListener('pointercancel', up);
@@ -3423,9 +3428,9 @@ function renderRecordings() {
     const icons = it.kind === 'event' ? (it.event.labels.length ? [...new Map(it.event.labels.map(l => [l.label, l])).values()].map(l => `<span class="sym ${LABEL_GROUP[l.label] || ''} ${hdClass(l)}" title="${esc(l.label)} ${Math.round(l.score * 100)}% — ${hdTip(l)}">${labelIcon(l.label)}</span>`).join('') : `<span class="sym motion" title="Motion">${labelIcon('motion')}</span>`) : '<span class="tag">recording</span>';
     card.innerHTML = `<div class="thumb">${it.thumb ? `<div class="zw"><img loading="lazy" src="${esc(it.thumb)}" alt="" onerror="this.parentElement.remove()">${boxesHtml(it.event, false)}</div>` : ''}
         <div class="tags">${icons}</div>${isNew ? '<span class="newb">NEW</span>' : ''}
-        <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small op-only" data-a="del" title="Delete">✕</button></div>
+        <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small admin-only" data-a="del" title="Delete this alert and its clip">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
-        <div class="cap"><span class="l"><b>${esc(it.camera_name)}</b>${hdAi(it.event)}<span class="ago" data-t="${esc(it.start)}">${cardAgo(it.start)}</span></span><span class="t">${fmtDay(it.start)}<br>${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
+        <div class="cap"><span class="l">${hdAi(it.event)}<b>${esc(it.camera_name)}</b><span class="ago" data-t="${esc(it.start)}">${cardAgo(it.start)}</span></span><span class="t">${fmtDay(it.start)}<br>${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
     card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && it.event.notes && it.event.notes.length ? '\n' + it.event.notes.join('\n') : ''}`;
     card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
@@ -3817,6 +3822,17 @@ $('alert-dialog').addEventListener('close', () => { if (recPlayer) recPlayer.sto
 $('alert-dialog').addEventListener('click', (e) => { if (e.target === $('alert-dialog')) closeAlert(); });
 $('ad-prev').onclick = () => stepAlert(-1);
 $('ad-next').onclick = () => stepAlert(1);
+$('ad-del').onclick = async () => {
+  const it = rec.items[alertIdx]; if (!it || !it.event) return;
+  if (!confirm(`Delete this alert${it.event.clip ? ' and its clip' : ''} from ${fmtDate(it.start)}?`)) return;
+  try {
+    await api(`api/cameras/${enc(it.camera)}/events/${enc(it.event.id)}`, {method: 'DELETE'});
+    const i = alertIdx;
+    rec.items.splice(i, 1);
+    closeAlert(); renderRecordings(); refreshStatus();
+    toast('Alert deleted');
+  } catch (e) { toast(e.message, true); }
+};
 $('ad-unseen').onclick = async () => {
   const it = rec.items[alertIdx]; if (!it || !it.event) return;
   await api('api/alerts/unseen', {method: 'POST', json: {camera: it.camera, id: it.event.id}}).catch(e => toast(e.message, true));
@@ -3894,9 +3910,15 @@ function buildTimelineVideos() {
     for (const ev of ['seeked', 'loadeddata', 'playing', 'canplay'])
       el._hlsV.addEventListener(ev, () => { if (el._mode === 'hls' && el._hlsV.readyState >= 2 && !el._hlsV.seeking) showHls(el); });
     el._active = 0;
-    el._tc = dataSaver || noNativePlayback.has(c.camera);
-    // Fall back to converted playback if this browser can't play the files.
-    const fallback = (v) => { if (!el._tc && convertedUrl(v.dataset.url || '')) { el._tc = true; markNoNative(c.camera); el._vids.forEach(x => delete x.dataset.url); tlSync(true); } };
+    el._tc = dataSaver;
+    // Files of a stream this browser can't show (no picture, or an error):
+    // that stream is converted from then on (just that one).
+    const fallback = (v) => {
+      const u = v.dataset.url || ''; if (!u || u.endsWith('#tc') || !convertedUrl(u)) return;
+      const key = c.camera + '|' + fileStream(c, u);
+      if (noNativePlayback.has(key)) return;
+      markNoNative(key); el._vids.forEach(x => delete x.dataset.url); tlSync(true);
+    };
     for (const v of el._vids) {
       v.addEventListener('error', () => fallback(v));
       v.addEventListener('loadeddata', () => { if (v.videoWidth === 0) fallback(v); });
@@ -4010,9 +4032,15 @@ function tlPreload(el, c, from) {
   const nx = segAt(c, from);
   if (!nx || nx.kind !== 'clip') return;
   const other = el._vids[1 - el._active];
+  const at = Math.max(0, (from - new Date(nx.start).getTime()) / 1000);
+  // HD this browser can't show: converted, started at that moment.
+  if (el._tc || noNativePlayback.has(c.camera + '|' + streamOf(nx))) {
+    if (other.dataset.url === nx.url + '#tc') return;
+    other.dataset.url = nx.url + '#tc'; other._base = at; other.preload = 'auto'; other.src = convertedAt(nx.url, at);
+    return;
+  }
   if (other.dataset.url === nx.url) return;
   other.dataset.url = nx.url; other.preload = 'auto'; other.src = nx.url;
-  const at = Math.max(0, (from - new Date(nx.start).getTime()) / 1000);
   other.addEventListener('loadedmetadata', () => { other.currentTime = at; }, {once: true});
 }
 // Play camera `el` at tl.T with the continuous stream; false: play the file.
@@ -4061,11 +4089,14 @@ function revealWhenReady(el, i) {
     const old = el._vids[1 - i];
     if (old.networkState === HTMLMediaElement.NETWORK_LOADING && old.dataset.url !== (el._vids[i].dataset.url)) { old.removeAttribute('src'); old.load(); delete old.dataset.url; }
   };
-  if (v.readyState >= 2 && !v.seeking) { done(); return; }
-  v.addEventListener('seeked', () => { if (v.readyState >= 2) done(); }, {once: true});
-  v.addEventListener('loadeddata', done, {once: true});
-  v.addEventListener('playing', done, {once: true});
-  setTimeout(done, 15000);
+  // Only with a picture: a file with sound but no picture this browser can
+  // show (H.265) would cover the picture before with black.
+  const pic = () => v.readyState >= 2 && !v.seeking && v.videoWidth > 0;
+  const tryDone = () => { if (pic()) { stop(); done(); } };
+  if (pic()) { done(); return; }
+  for (const ev of ['seeked', 'loadeddata', 'playing', 'canplay', 'timeupdate']) v.addEventListener(ev, tryDone);
+  const stop = () => ['seeked', 'loadeddata', 'playing', 'canplay', 'timeupdate'].forEach(ev => v.removeEventListener(ev, tryDone));
+  setTimeout(() => { stop(); if (el._pending === i && pic()) done(); }, 15000);
 }
 function showVideo(el, i) {
   // (The stream kept going under an alert's clip isn't stopped.)
@@ -4230,14 +4261,23 @@ function tlSync(force) {
     if (tlHls(el, c, s, force)) continue;
     v = activeVideo(el);
     const want = (tl.T - new Date(s.start).getTime()) / 1000;
-    if (el._tc) {
-      // Converted stream: restart it at the wanted time when needed.
-      showVideo(el, el._active);
-      const cur = (v._base || 0) + v.currentTime;
-      if (v.dataset.url !== s.url || force || Math.abs(cur - want) > Math.max(3, tl.speed * 2)) {
-        v.dataset.url = s.url; v._base = want;
-        v.src = convertedAt(s.url, want);
+    if (el._tc || noNativePlayback.has(c.camera + '|' + streamOf(s))) {
+      // Converted stream (converted on the fly by GAZE): started at the
+      // wanted time in the spare player and shown once it has a picture,
+      // the picture before staying meanwhile; restarted when far off.
+      const tc = s.url + '#tc';
+      const cur = v.dataset.url === tc ? (v._base || 0) + v.currentTime : NaN;
+      if (v.dataset.url !== tc || force || !(Math.abs(cur - want) <= Math.max(3, tl.speed * 2))) {
+        const oi = el._pending != null ? el._pending : 1 - el._active, other = el._vids[oi];
+        if (other.dataset.url !== tc || Math.abs(((other._base || 0) + other.currentTime) - want) > Math.max(3, tl.speed * 2)) {
+          other.dataset.url = tc; other._base = want; other.src = convertedAt(s.url, want);
+        }
+        other.playbackRate = tl.speed;
+        if (tl.playing) other.play().catch(() => {});
+        if (el._pending !== oi) revealWhenReady(el, oi);
+        continue;
       }
+      if (el._pending == null) showVideo(el, el._active);
       v.playbackRate = tl.speed;
       if (tl.playing && v.paused) v.play().catch(() => {});
       if (!tl.playing && !v.paused) v.pause();
@@ -5520,7 +5560,7 @@ async function loadSettings() { [settings, cameraCfgs] = await Promise.all([api(
 // ---------- searching the settings ----------
 // Every setting's name (from each settings page and the camera window's
 // tabs): [section, name, camera tab].
-const SETTINGS_INDEX = [["cameras", "Cameras"], ["profiles", "Profiles"], ["storage", "Default recordings folder"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Full-screen button"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Also use the graphics card for sub-streams"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Download voices"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Sounds for"], ["voice", "Warnings"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["voice", "Speak warnings between the wails (in the voice above)"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "System"], ["system", "trust its own certificate"], ["info", "Update from"], ["info", "About"], ["info", "Updates"], ["info", "What's new"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "0) ? 'checked' : ''}> Roam between the ticked presets,", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
+const SETTINGS_INDEX = [["cameras", "Cameras"], ["profiles", "Profiles"], ["storage", "Default recordings folder"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Full-screen button"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Also use the graphics card for sub-streams"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Users, with their camera access and layouts"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Download voices"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Sounds for"], ["voice", "Warnings"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["voice", "Speak warnings between the wails (in the voice above)"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "System"], ["system", "trust its own certificate"], ["info", "Update from"], ["info", "About"], ["info", "Updates"], ["info", "What's new"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "0) ? 'checked' : ''}> Roam between the ticked presets,", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
 const CAM_TABS = {general: 'General', recording: 'Recording', detection: 'Motion', ai: 'AI', audio: 'Audio', osd: 'On-screen display', ptz: 'Pan / tilt / zoom', device: 'ONVIF', zones: 'Zones'};
 function sectionName(sec) { const a = document.querySelector(`#side a[data-s="${sec}"]`); return a ? a.textContent.trim() : sec; }
 // Find a setting's row on the page (or in the camera window) and show it.
@@ -6569,7 +6609,7 @@ async function saveCamera(ev) {
 // being edited; cameras following it change too.
 async function saveProfileForm(body) {
   const pe = profileEdit, p = {name: pe.name};
-  for (const k of PROFILE_KEYS) p[k] = JSON.parse(JSON.stringify(body[k]));
+  for (const k of PROFILE_KEYS) if (body[k] !== undefined) p[k] = JSON.parse(JSON.stringify(body[k]));
   p.detect.mask = ''; p.detect.packages = false; p.detect.package_area = []; p.detect.package_mask = '';
   const profiles = [...((settings && settings.profiles) || [])];
   if (pe.idx >= 0) profiles[pe.idx] = p; else profiles.push(p);
@@ -6939,7 +6979,9 @@ function renderProfiles(body) {
     if (list.some(p => p.name.toLowerCase() === name.toLowerCase() && p.name !== cur)) { toast(`There's already a profile called “${name}”.`, true); return null; }
     return name;
   };
-  const valuesOf = (src) => { const v = {}; for (const k of PROFILE_KEYS) v[k] = JSON.parse(JSON.stringify(src[k])); return v; };
+  // (A profile from an older version lacks the newer settings: left out,
+  // and the camera window keeps its own for those.)
+  const valuesOf = (src) => { const v = {}; for (const k of PROFILE_KEYS) if (src[k] !== undefined) v[k] = JSON.parse(JSON.stringify(src[k])); return v; };
   $('pr-new').onclick = () => { const name = askName(); if (name) openCameraDialog(null, false, {idx: -1, name, values: null}); };
   if ($('pr-from')) $('pr-from').onchange = (e) => {
     const c = cameraCfgs.find(x => x.id === e.target.value); e.target.value = '';
@@ -7007,14 +7049,8 @@ async function finishSave(body) {
     await loadSettings(); await refreshStatus();
     if (page === 'settings') showSettings(section); else route();
   };
-  // Moving recordings to a new folder can take a while: wait for it here.
-  if (move) {
-    btn.disabled = true; btn.textContent = 'Moving recordings…';
-    try { await send(); closeCameraDialog(); toast('Camera updated'); await after(); }
-    catch (e) { err(e.message); }
-    finally { btn.disabled = false; btn.textContent = 'Save camera'; }
-    return;
-  }
+  // (Moving recordings to a new folder carries on in the background, as a
+  // task under System → Tasks: the camera records into the new folder at once.)
   // Otherwise the window closes at once and the camera is saved (and its
   // video restarted) in the background. If it's refused, the window comes
   // back with what was typed and why, unless another camera was opened since.
@@ -7023,7 +7059,7 @@ async function finishSave(body) {
   toast('Saving camera…');
   try {
     await send();
-    toast(id ? 'Camera updated' : clone ? 'Camera cloned' : 'Camera added');
+    toast(move ? 'Camera updated — its recordings are moving to the new folder (progress under System → Tasks)' : id ? 'Camera updated' : clone ? 'Camera cloned' : 'Camera added');
     await after();
   } catch (e) {
     // Shown next to Save (and as a message), so it's seen whichever tab is open.
@@ -7484,14 +7520,36 @@ async function paintCloudStatus() {
 function renderBackup(body) {
   body.innerHTML = `<div class="card"><h2>Export setup</h2>
     <p class="muted" style="margin-top:0">One file with everything you've set up, to restore after reinstalling or to copy to another computer: every camera and its settings, profiles, zones and masks, modes, notifications, smart-home links, users with their camera access and layouts, and People &amp; vehicles with their faces, plates and photos. Recordings and alerts are not included.</p>
+    <div class="bk-what"><b>What to include</b>
+      <label class="check"><input type="checkbox" id="bk-set" checked> Cameras and all settings (profiles, zones, masks, modes, notifications, voices, smart home, other GAZE servers)</label>
+      <label class="check"><input type="checkbox" id="bk-ppl" checked> People &amp; vehicles — names, plates, photos, and the faces GAZE has learned (and been corrected on)</label>
+      <label class="check"><input type="checkbox" id="bk-usr" checked> Users, with their camera access and layouts</label></div>
     <label class="check"><input type="checkbox" id="bk-pw"> Include passwords, keys and tokens${tip('Camera passwords, users’ passwords (stored scrambled) and two-step sign-in, API tokens, notification and MQTT passwords, live-streaming keys. Without them, importing on this computer keeps the passwords it has now; on a new computer you type them in again.')} (keep the file somewhere safe)</label>
-    <div class="actions"><button class="primary" id="bk-export">⇩ Download backup</button></div></div>
+    <div class="row" style="margin-top:8px"><input type="password" id="bk-pass" placeholder="Your password (to confirm it's you)" autocomplete="current-password" style="max-width:300px"><button class="primary" id="bk-export">⇩ Download backup</button></div>
+    <div class="hint">A backup made by this version can be imported by later versions, and older versions read what they know of it.</div></div>
     <div class="card"><h2>Import setup</h2>
     <p class="muted" style="margin-top:0">Replaces all cameras and settings with the ones in the backup. Cameras not in it are removed (their recordings stay on disk). Users and People &amp; vehicles in the backup are added or updated; others here are kept. Passwords the backup doesn't have are kept from this computer.</p>
     <input type="file" id="bk-file" accept=".zip,.toml,application/zip,text/plain">
     <label class="check"><input type="checkbox" id="bk-keep" checked> Keep this NVR's login and web address</label>
     <div class="actions"><button id="bk-import" class="danger">Import</button></div><div id="bk-result"></div></div>`;
-  $('bk-export').onclick = () => location.href = 'api/config/export?passwords=' + chk('bk-pw');
+  eyeFor($('bk-pass'));
+  $('bk-export').onclick = async () => {
+    const pw = val('bk-pass');
+    if (!pw) { $('bk-pass').focus(); return toast('Enter your password to export', true); }
+    const b = $('bk-export'); b.disabled = true;
+    try {
+      const r = await fetch('api/config/export', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: pw, passwords: chk('bk-pw'), settings: chk('bk-set'), people: chk('bk-ppl'), users: chk('bk-usr')})});
+      if (!r.ok) { const t = await r.text(); let m = ''; try { m = JSON.parse(t).error; } catch (_) {} throw new Error(m || t || r.statusText); }
+      const blob = await r.blob(), a = document.createElement('a');
+      const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/);
+      a.href = URL.createObjectURL(blob); a.download = name ? name[1] : 'gaze-backup.zip';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      $('bk-pass').value = '';
+      toast('Backup downloaded');
+    } catch (e) { toast(e.message, true); } finally { b.disabled = false; }
+  };
   $('bk-import').onclick = async () => {
     const f = $('bk-file').files[0];
     if (!f) return toast('Choose a setup file first.', true);
@@ -8025,6 +8083,13 @@ function renderVoice(body) {
     if (!list.length) $('v-msg').textContent = 'No voices found on this computer — the default one is used.';
   }).catch(() => {}).finally(() => { const l = $('v-load'); if (l) l.remove(); });
   loadVoices();
+  // Choosing a voice that isn't downloaded yet: it downloads now.
+  $('v-voice').addEventListener('change', async () => {
+    const v = val('v-voice'); if (!v.startsWith('piper:')) return;
+    const list = await api('api/tts/downloads').catch(() => []);
+    const e = list.find(x => 'piper:' + x.id === v);
+    if (e && !e.installed && !e.downloading) { await api(`api/tts/downloads/${enc(e.id)}`, {method: 'POST'}).catch(() => {}); toast('Downloading the voice — it’s ready in a minute or two (progress under System → Tasks)'); refreshDl(); }
+  });
   // Downloadable voices: download / delete, with progress on the Tasks page.
   let dlPoll = null;
   const paintDl = (list) => {
