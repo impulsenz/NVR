@@ -2280,6 +2280,9 @@ async fn serve_video(path: PathBuf, req: Request, download: Option<String>) -> R
 struct PlaybackReport {
     #[serde(default)]
     report: Vec<PlaybackCam>,
+    /// How long Recordings took to show (a sentence).
+    #[serde(default)]
+    timing: String,
     #[serde(default)]
     speed: f64,
     #[serde(default)]
@@ -2297,6 +2300,9 @@ struct PlaybackCam {
 /// What went wrong for a browser playing recordings (stalls, holes in the
 /// footage, restarts), per camera, written to the log.
 async fn playback_report(State(m): App, Json(r): Json<PlaybackReport>) -> Response {
+    if !r.timing.is_empty() {
+        tracing::info!("{}", r.timing.chars().take(200).collect::<String>());
+    }
     for c in r.report.into_iter().take(64) {
         let Some(rt) = m.camera(&c.camera) else { continue };
         let what: Vec<String> = c.counts.iter().take(12).map(|(k, n)| format!("{} ×{n}", k.chars().take(60).collect::<String>())).collect();

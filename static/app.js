@@ -4045,9 +4045,38 @@ document.addEventListener('keydown', (e) => {
 // ---------- multi-camera timeline ----------
 const tl = {badClips: new Set(), sound: store.get('tl-sound', false), soundCam: null, live: false, scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
 
+// How long Recordings took to show, written to GAZE's log (Settings → Logs)
+// so a slow computer, disk or NAS can be told apart from GAZE itself: the
+// timeline's list, the first camera's picture, all of them (and the last).
+function timeOpening(what) {
+  // (Asked again within a moment — the page loads its list twice when it
+  // opens — the same timing carries on.)
+  if (timeOpening.at && performance.now() - timeOpening.at < 1500) return;
+  timeOpening.at = performance.now();
+  const t0 = performance.now(), gen = (timeOpening.gen = (timeOpening.gen || 0) + 1);
+  let listAt = null, firstAt = null;
+  const tick = () => {
+    if (gen !== timeOpening.gen || page !== 'recordings') return;
+    if (listAt == null && tl.data && tl.data.length) listAt = performance.now() - t0;
+    const els = [...document.querySelectorAll('#tl-videos .surface')];
+    const ok = els.filter(el => { const v = activeVideo(el), m = el.querySelector('.msg'); return (v && v.readyState >= 2 && v.style.visibility !== 'hidden') || (m && !m.hidden); });
+    if (ok.length && firstAt == null) firstAt = performance.now() - t0;
+    const took = performance.now() - t0;
+    if (els.length && ok.length === els.length || took > 60000) {
+      const late = els.find(el => !ok.includes(el)), lastName = late ? (cam(late.dataset.cam) || {}).name : null;
+      const sec = (x) => x == null ? '–' : (x / 1000).toFixed(1) + ' s';
+      api('api/playback-report', {method: 'POST', json: {timing: `${what}, ${els.length} camera${els.length === 1 ? '' : 's'}: list ${sec(listAt)}, first picture ${sec(firstAt)}, all ${ok.length === els.length ? sec(took) : 'not after 60 s (still waiting: ' + (lastName || '?') + ')'}`}}).catch(() => {});
+      return;
+    }
+    setTimeout(tick, 200);
+  };
+  setTimeout(tick, 200);
+}
 async function loadTimeline() {
   const q = new URLSearchParams({from: rec.from.toISOString(), to: rec.to.toISOString()});
   if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
+  if (rec.mode === 'timeline') timeOpening(timeOpening.done ? 'Recordings: cameras changed' : 'Recordings opened');
+  timeOpening.done = true;
   try { tl.data = await api('api/timeline?' + q); } catch (e) { tl.data = []; toast(e.message, true); }
   tl.loadedAt = Date.now();
   const now = Date.now();
