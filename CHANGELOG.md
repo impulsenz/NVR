@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.86 — November 2026
+- **Opening a camera shows only that camera**: switching from one camera straight to another could bring back the previous camera's picture a few seconds later (until a page refresh). The previous camera's video, kept a few seconds in case you come back, no longer touches the picture of the camera you opened.
+- **No more frozen picture when a camera is both in the grid and opened on the same stream** (e.g. S2 in both): the opened picture now plays its own video instead of sitting on a still.
+
 ## 0.6.85 — November 2026
 - **Pan / tilt / zoom, roaming and tracking**: the button under the presets now shows the mode the camera is in — **Off** (stays where it is), **Roam** (visits the ticked presets in turn), **Track** (follows a person the AI finds, then goes back) or **Roam + track** (roams; when the AI finds a person it stops roaming, follows them until they're gone, then carries on). It's green and turning while active. The stay at each preset can now be anything from **0 seconds** (keeps moving from one preset to the next as soon as it gets there) upwards.
 - **Roaming works reliably now**: it used to stop after the first move, because the camera's own movement set off motion alerts and roaming paused during alerts. The camera's own movement no longer counts as motion (no more false alerts while it roams), and the AI keeps looking for people while it moves when tracking is on.

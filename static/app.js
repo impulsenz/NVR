@@ -318,7 +318,7 @@ const MODE_TEXT = {continuous: 'HD 24/7', continuous_plus_events: 'HD 24/7 plus 
 // Live video over one WebSocket
 // ======================================================================
 const Live = {
-  ws: null, wanted: [], imgs: new Map(), urls: new Map(), stats: new Map(), connected: false,
+  ws: null, wanted: [], imgs: new Map(), mseCount: new Map(), urls: new Map(), stats: new Map(), connected: false,
   key: (camId, q) => camId + '|' + q,
   connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -488,6 +488,9 @@ class LiveVideo {
     this.img = img; this.id = id; this.q = q; this.key = Live.key(id, q); this.fails = 0; this.dead = false;
     const v = this.video = document.createElement('video');
     v.className = 'live-v'; v.muted = true; v.playsInline = true; v.autoplay = true; v.disableRemotePlayback = true;
+    // This picture shows its stills until this video plays (another
+    // camera's video may have been here a moment ago).
+    if (img.parentElement) img.parentElement.classList.remove('mse');
     img.after(v);
     this.open();
   }
@@ -496,10 +499,11 @@ class LiveVideo {
   attach(img) {
     this.img = img; img.after(this.video);
     this.lastMove = performance.now();
-    if (Live.mse.has(this.key)) {
-      const s = img.parentElement; if (s) { s.classList.add('mse'); const m = s.querySelector(':scope > .msg'); if (m) m.hidden = true; }
+    const s = img.parentElement;
+    if (this.playing) {
+      if (s) { s.classList.add('mse'); const m = s.querySelector(':scope > .msg'); if (m) m.hidden = true; }
       this.video.play().catch(() => {});
-    }
+    } else if (s) s.classList.remove('mse');
   }
   open() {
     if (this.dead) return;
@@ -531,10 +535,18 @@ class LiveVideo {
     }, {once: true});
     const v = this.video;
     v.addEventListener('playing', () => {
-      if (this.dead || Live.mse.has(this.key)) return;
-      this.fails = 0;
-      Live.mse.add(this.key); this.img.parentElement && this.img.parentElement.classList.add('mse');
-      const m = this.img.parentElement && this.img.parentElement.querySelector(':scope > .msg'); if (m) m.hidden = true;
+      if (this.dead || this.playing) return;
+      this.fails = 0; this.playing = true;
+      // Several videos of the same stream can play (a grid tile and the
+      // opened camera): the stream counts as video while any of them does.
+      Live.mseCount.set(this.key, (Live.mseCount.get(this.key) || 0) + 1);
+      Live.mse.add(this.key);
+      // Only while on show: a video set aside (just left) mustn't change
+      // the picture that now shows another camera.
+      if (this.video.isConnected && this.img.parentElement) {
+        this.img.parentElement.classList.add('mse');
+        const m = this.img.parentElement.querySelector(':scope > .msg'); if (m) m.hidden = true;
+      }
       if (this.q === 'main' && this.id === focusId && typeof hideFocusLoading === 'function') hideFocusLoading();
       updateSubscriptions();
     });
@@ -591,7 +603,13 @@ class LiveVideo {
     clearInterval(this.timer); this.timer = null;
     if (this.ms) { try { URL.revokeObjectURL(this.video.src); } catch (_) {} this.video.removeAttribute('src'); this.video.load(); }
     this.ms = null; this.sb = null;
-    if (Live.mse.delete(this.key)) { this.img.parentElement && this.img.parentElement.classList.remove('mse'); updateSubscriptions(); }
+    if (this.playing) {
+      this.playing = false;
+      if (this.video.isConnected && this.img.parentElement) this.img.parentElement.classList.remove('mse');
+      const n = (Live.mseCount.get(this.key) || 1) - 1;
+      if (n > 0) Live.mseCount.set(this.key, n); else { Live.mseCount.delete(this.key); Live.mse.delete(this.key); }
+      updateSubscriptions();
+    }
   }
   // Start the video connection again at once (a frozen picture); too many
   // in a short time: pictures only for this stream.
