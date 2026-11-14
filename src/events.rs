@@ -444,6 +444,9 @@ impl EventStore {
             removed
         };
         // (The files go after: the list isn't held while the disk works.)
+        if !gone.is_empty() {
+            crate::vstore::close_all();
+        }
         for f in gone {
             let _ = std::fs::remove_file(self.dir.join(f));
         }

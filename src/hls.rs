@@ -18,14 +18,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// A piece of a file: bytes `off..off+len`, `dur` seconds long.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Piece {
     pub off: u64,
     pub len: u64,
     pub dur: f64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FileIndex {
     /// Bytes of the header (`ftyp` + `moov`): the init segment.
     pub init_len: u64,
@@ -148,14 +148,28 @@ fn moof_video(moof: &[u8], track: u32, default_dur: u32) -> Option<(u64, u64)> {
     None
 }
 
+/// Where indexing a file got to: carried on from there when it has grown
+/// (a file being recorded), instead of reading it from the start again.
+#[derive(Clone, Copy, Default)]
+struct Resume {
+    pos: u64,
+    track: Option<(u32, u32, u32)>,
+}
+
 /// Index a fragmented MP4 file (only complete pieces: a file still being
 /// recorded is indexed as far as it's written).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn index_file(path: &Path) -> Option<FileIndex> {
+    let len = std::fs::metadata(path).ok()?.len();
+    index_from(path, len, FileIndex::default(), Resume::default()).map(|x| x.0)
+}
+
+fn index_from(path: &Path, len: u64, mut out: FileIndex, from: Resume) -> Option<(FileIndex, Resume)> {
     let mut f = std::fs::File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
-    let mut pos = 0u64;
-    let mut track = None;
-    let mut out = FileIndex::default();
+    let mut pos = from.pos;
+    let mut track = from.track;
+    // After the last complete piece: where to carry on next time.
+    let mut done = from;
     let mut pending: Option<(u64, f64, f64)> = None; // moof start, start, duration
     while pos + 8 <= len {
         f.seek(SeekFrom::Start(pos)).ok()?;
@@ -184,6 +198,7 @@ pub fn index_file(path: &Path) -> Option<FileIndex> {
                 if &kind == b"moov" {
                     track = video_track(&body);
                     out.init_len = pos + size;
+                    done = Resume { pos: pos + size, track };
                 } else if let Some((id, scale, def)) = track
                     && let Some((base, dur)) = moof_video(&body, id, def)
                 {
@@ -197,33 +212,87 @@ pub fn index_file(path: &Path) -> Option<FileIndex> {
             b"mdat" => {
                 if let Some((p0, _, d)) = pending.take() {
                     out.pieces.push(Piece { off: p0, len: pos + size - p0, dur: d });
+                    done = Resume { pos: pos + size, track };
                 }
             }
             _ => {}
         }
         pos += size;
     }
-    (track.is_some() && out.init_len > 0 && !out.pieces.is_empty()).then_some(out)
+    (track.is_some() && out.init_len > 0 && !out.pieces.is_empty()).then_some((out, done))
 }
 
-/// Indexes of files, kept while the file doesn't change.
+static STORE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Where indexes of finished recordings are kept (on this computer, so a
+/// recording on a NAS is only ever indexed once).
+pub fn init(data_dir: &Path) {
+    let _ = STORE.set(data_dir.join("hlsidx"));
+}
+
+fn stored(path: &Path, len: u64) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut h);
+    Some(STORE.get()?.join(format!("{:016x}-{len:x}.json", h.finish())))
+}
+
+/// Indexes of files, kept while the file doesn't change; a file that grew
+/// (being recorded) is indexed on from where it got to; a finished one is
+/// also kept on this computer's disk.
 pub fn index_cached(path: &Path) -> Option<Arc<FileIndex>> {
-    type Cache = HashMap<PathBuf, (u64, Arc<FileIndex>)>;
+    type Cache = HashMap<PathBuf, (u64, Arc<FileIndex>, Resume)>;
     static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
-    let len = std::fs::metadata(path).ok()?.len();
-    if let Some((l, ix)) = CACHE.lock().ok()?.get_or_insert_with(HashMap::new).get(path)
+    let (len, modified) = crate::vstore::meta(path).ok()?;
+    let had = CACHE.lock().ok()?.get_or_insert_with(HashMap::new).get(path).cloned();
+    if let Some((l, ix, _)) = &had
         && *l == len
     {
         return Some(ix.clone());
     }
-    let ix = Arc::new(index_file(path)?);
+    let finished = modified.elapsed().is_ok_and(|e| e > std::time::Duration::from_secs(120));
+    // Indexed before (a finished file), on this computer.
+    let saved = if had.is_none() && finished {
+        stored(path, len).and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<FileIndex>(&b).ok())
+    } else {
+        None
+    };
+    let (ix, resume) = match saved {
+        Some(ix) => (ix, Resume::default()),
+        None => match had {
+            // Grown since: carry on.
+            Some((l, ix, r)) if l < len && r.pos > 0 => index_from(path, len, (*ix).clone(), r)?,
+            _ => index_from(path, len, FileIndex::default(), Resume::default())?,
+        },
+    };
+    if finished
+        && let Some(f) = stored(path, len)
+        && !f.exists()
+    {
+        let _ = std::fs::create_dir_all(f.parent().unwrap());
+        if let Ok(t) = serde_json::to_vec(&ix) {
+            let _ = std::fs::write(&f, t);
+        }
+    }
+    let ix = Arc::new(ix);
     let mut c = CACHE.lock().ok()?;
     let map = c.get_or_insert_with(HashMap::new);
     if map.len() > 20_000 {
         map.clear();
     }
-    map.insert(path.to_path_buf(), (len, ix.clone()));
+    map.insert(path.to_path_buf(), (len, ix.clone(), resume));
     Some(ix)
+}
+
+/// Saved indexes of recordings deleted long ago: tidied now and then.
+pub fn tidy_store(max_age_days: u64) {
+    let Some(d) = STORE.get() else { return };
+    let Ok(rd) = std::fs::read_dir(d) else { return };
+    for e in rd.flatten() {
+        if e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|a| a.as_secs() > max_age_days * 86400)) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// One file in a playlist: where it is, its URL (relative to the page) and
@@ -342,6 +411,25 @@ mod tests {
         );
         assert_eq!(pl.matches("#EXTINF:4.000").count(), 2);
         assert!(pl.contains(&format!("BYTERANGE=\"{}@0\"", ix.init_len)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_growing_file_is_indexed_on_from_where_it_got_to() {
+        let dir = std::env::temp_dir().join(format!("gaze-hls-grow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("g.mp4");
+        let full = sample(6, false);
+        // Part of it first (as while recording), then all of it.
+        std::fs::write(&p, &full[..full.len() * 2 / 3]).unwrap();
+        let a = super::index_cached(&p).unwrap();
+        std::fs::write(&p, &full).unwrap();
+        crate::vstore::forget(&p);
+        let b = super::index_cached(&p).unwrap();
+        let whole = super::index_file(&p).unwrap();
+        assert!(a.pieces.len() < b.pieces.len());
+        assert_eq!(b.pieces, whole.pieces);
+        assert_eq!(b.init_len, whole.init_len);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

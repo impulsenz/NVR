@@ -1,5 +1,15 @@
 # What's new in GAZE
 
+## 0.7.1 — November 2026
+- **Recordings from a NAS or a slow disk: a new way of reading video.** The browser asks for a recording piece by piece, many times a minute per camera. Each request used to open the file on the storage and read a small piece — on a network drive every open and every read is a trip to the NAS (and often an antivirus check). Now:
+  - **Files stay open** between requests (closed again after 15 seconds unused, and before anything is deleted or moved).
+  - **Large reads**: recordings are read in 2 MB blocks, which a network drive is fast at, kept in memory (up to 384 MB) so the pieces after come from memory.
+  - **Read-ahead**: while one block is being watched, the next ones are already being read, so the video doesn't wait for the NAS.
+  - **Each recording is indexed only once**: the list of pieces of a finished recording (needed to play it as one stream) is kept on this computer (nvr-data), so a NAS isn't read through again after a restart; the recording still being made is indexed on from where it got to instead of from its start every few seconds.
+  - **Sizes and times of recordings** come from one look at the folder instead of a look at each file.
+  - In a test with every storage operation slowed down like a network drive, nine cameras started playing in about a second (a camera's playlist: 11 s before, now under 0.1 s).
+- **Security**: a camera brought in from another GAZE passed requests on to that server with its token; a specially made address could reach other parts of that server. Now only that camera's recordings, pictures and playlists are passed on.
+
 ## 0.7.0 — November 2026
 - **Recordings load much faster with many cameras**, especially from a hard drive (HDD):
   - **The video you're watching comes first.** The time-lapse pages for scrubbing were all fetched at once for every camera — hundreds of requests reading the same disk as the video — and previews still to be made were made then too. Now they're fetched a few at a time, at low priority, and only once the cameras' video is playing.

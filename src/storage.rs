@@ -117,7 +117,11 @@ fn list_now(dir: &Path) -> Vec<Recording> {
             if !meta.is_file() {
                 return None;
             }
-            let modified: DateTime<Local> = meta.modified().ok()?.into();
+            let mt = meta.modified().ok()?;
+            // (The listing tells each file's size and time: the video
+            // reader needn't ask the disk again, see vstore.)
+            crate::vstore::seed(&e.path(), meta.len(), mt);
+            let modified: DateTime<Local> = mt.into();
             let start = parse_start(&name).unwrap_or(modified);
             Some(Recording {
                 name,
@@ -222,6 +226,7 @@ pub fn migrate_flat_files(root: &Path, camera_ids: &[String]) {
 
 /// Remove a recording and its cached previews.
 pub fn delete_recording(dir: &Path, name: &str) -> std::io::Result<()> {
+    crate::vstore::close_all();
     std::fs::remove_file(dir.join(name))?;
     forget_lists();
     // Cached preview pictures: "<name>.jpg", "<name>.sprite-000.jpg", "<name>.sprite.json", ...
@@ -286,6 +291,7 @@ pub fn timeline_dir(camera_dir: &Path) -> PathBuf {
 }
 
 pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize {
+    crate::vstore::close_all();
     let now = Local::now();
     let mut removed = 0;
     let mut all: Vec<Candidate> = Vec::new();

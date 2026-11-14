@@ -2188,6 +2188,93 @@ async fn timeline(
     Json(out).into_response()
 }
 
+/// A recording, in the byte ranges the player asks for, read through the
+/// block reader (files kept open, large reads, read-ahead: see vstore.rs).
+async fn serve_video(path: PathBuf, req: Request, download: Option<String>) -> Response {
+    let p = path.clone();
+    let Ok(Ok((len, modified))) = tokio::task::spawn_blocking(move || crate::vstore::meta(&p)).await else {
+        return err(StatusCode::NOT_FOUND, "not found");
+    };
+    let head = req.method() == axum::http::Method::HEAD;
+    let range = req.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).map(String::from);
+    let etag = format!("\"{len:x}-{:x}\"", modified.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
+    let growing = modified.elapsed().map(|e| e < Duration::from_secs(90)).unwrap_or(true);
+    let (a, b, partial) = match range.as_deref() {
+        Some(r) => match crate::vstore::parse_range(r, len) {
+            Some((a, b)) => (a, b, true),
+            None => {
+                let mut res = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+                if let Ok(v) = HeaderValue::from_str(&format!("bytes */{len}")) {
+                    res.headers_mut().insert(header::CONTENT_RANGE, v);
+                }
+                return res;
+            }
+        },
+        None => (0, len.saturating_sub(1), false),
+    };
+    let n = if len == 0 { 0 } else { b - a + 1 };
+    let body = if head || n == 0 {
+        Body::empty()
+    } else if n <= 4 * crate::vstore::BLOCK {
+        // A piece (what the timeline's player asks for): read and sent.
+        let p = path.clone();
+        match tokio::task::spawn_blocking(move || crate::vstore::read(&p, a, b)).await {
+            Ok(Ok(v)) => Body::from(v),
+            _ => return err(StatusCode::INTERNAL_SERVER_ERROR, "couldn't read the recording"),
+        }
+    } else {
+        // The rest of the file (a download, or a player reading on): sent
+        // block by block as it's read, stopping when the browser has enough.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
+        let p = path.clone();
+        tokio::spawn(async move {
+            let mut pos = a;
+            while pos <= b {
+                let end = ((pos / crate::vstore::BLOCK + 1) * crate::vstore::BLOCK - 1).min(b);
+                let p2 = p.clone();
+                let part = tokio::task::spawn_blocking(move || crate::vstore::read(&p2, pos, end)).await;
+                let Ok(Ok(v)) = part else {
+                    let _ = tx.send(Err(std::io::Error::other("read failed"))).await;
+                    return;
+                };
+                if v.is_empty() {
+                    return;
+                }
+                pos += v.len() as u64;
+                if tx.send(Ok(Bytes::from(v))).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Body::from_stream(futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx)))
+    };
+    let mut res = body.into_response();
+    if partial {
+        *res.status_mut() = StatusCode::PARTIAL_CONTENT;
+    }
+    let h = res.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("video/mp4"));
+    h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Ok(v) = HeaderValue::from_str(&n.to_string()) {
+        h.insert(header::CONTENT_LENGTH, v);
+    }
+    if partial && let Ok(v) = HeaderValue::from_str(&format!("bytes {a}-{b}/{len}")) {
+        h.insert(header::CONTENT_RANGE, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        h.insert(header::ETAG, v);
+    }
+    // A finished recording never changes: the browser may keep it; one
+    // still being recorded is asked for afresh.
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(if growing { "no-cache" } else { "private, max-age=86400" }));
+    if let Some(name) = download
+        && let Ok(v) = HeaderValue::from_str(&attachment(&name))
+    {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    res
+}
+
 /// Requests GAZE takes long to start answering are written to the log (what
 /// and how long), to find out what's slow on a particular computer: the
 /// disk, a NAS, or GAZE itself. At most one line every 10 s per kind.
@@ -2215,12 +2302,24 @@ async fn slow_requests(req: Request, next: Next) -> Response {
 async fn remote_footage(State(m): App, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let seg: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    // Only exactly these shapes are passed on, and every part must be a plain
+    // name (no "..", "." or hidden parts): the request goes to the other
+    // server with its token, so it must never reach anything else there.
     let at = match seg.as_slice() {
-        ["media", _, _, ..] => 1,
-        ["api", "sprite" | "hls-file" | "hls", _, ..] => 2,
-        ["api", "cameras", _, "events" | "recordings", _, ..] => 2,
+        ["media", _, "rec" | "tl" | "events" | "thumb", _] => 1,
+        ["media", _, "play" | "sprite", "rec" | "clip" | "tl", _] => 1,
+        ["api", "sprite" | "hls-file", _, "rec" | "clip" | "tl", _] => 2,
+        ["api", "hls", _, "main" | "sub" | "main.m3u8" | "sub.m3u8"] => 2,
+        ["api", "cameras", _, "events" | "recordings", _] => 2,
         _ => 0,
     };
+    let plain = |x: &str| {
+        let d = percent_decode(x);
+        !d.is_empty() && !d.starts_with('.') && !d.contains(['/', '\\']) && !d.contains("..")
+    };
+    if at != 0 && !seg.iter().all(|x| plain(x)) {
+        return next.run(req).await;
+    }
     let query = req.uri().query().unwrap_or("").to_string();
     let by_query = matches!(path.as_str(), "/api/export" | "/api/timelapse-export");
     if at == 0 && !by_query {
@@ -2535,6 +2634,10 @@ fn download_name(camera: &str, when: Option<DateTime<Local>>, file: &str) -> Str
 /// given and either `force` is set or the URL has `?download`.
 async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bool) -> Response {
     let download = force || req.uri().query().is_some_and(|q| q.contains("download"));
+    // Video: through the block reader built for slow storage (see vstore).
+    if path.extension().is_some_and(|e| e == "mp4") {
+        return serve_video(path, req, name.filter(|_| download)).await;
+    }
     match ServeFile::new(path).oneshot(req).await {
         Ok(res) => {
             let mut res = res.map(Body::new);
@@ -3455,6 +3558,7 @@ async fn rebuild_previews(State(m): App) -> Response {
 /// camera. Settings, cameras, known people and vehicles stay. The file each
 /// camera is writing right now is left alone (it's still open).
 async fn delete_all_footage(State(m): App) -> Response {
+    crate::vstore::close_all();
     let res = tokio::task::spawn_blocking(move || {
         let (mut files, mut bytes, mut alerts) = (0u64, 0u64, 0usize);
         let busy = |p: &std::path::Path| {

@@ -190,6 +190,7 @@ pub fn count_files(p: &Path) -> u64 {
 
 /// `move_tree`, telling `on` how far it got after each file.
 pub fn move_tree_with(src: &Path, dst: &Path, on: &mut dyn FnMut(&MoveReport)) -> Result<MoveReport> {
+    crate::vstore::close_all();
     let mut r = MoveReport::default();
     if !src.exists() || src == dst {
         return Ok(r);

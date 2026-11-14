@@ -26,6 +26,7 @@ mod launch;
 mod jobs;
 mod known;
 mod library;
+mod vstore;
 mod live;
 mod load;
 mod logs;
@@ -437,6 +438,17 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(onvif_events::run(mgr.clone()));
     piper::init(&mgr.data_dir);
     library::init(&std::path::absolute(&mgr.data_dir).unwrap_or(mgr.data_dir.clone()));
+    hls::init(&std::path::absolute(&mgr.data_dir).unwrap_or(mgr.data_dir.clone()));
+    {
+        // Saved indexes of recordings long deleted: tidied once a day.
+        let keep = mgr.config().storage.retention_days.max(30) as u64 + 30;
+        tokio::spawn(async move {
+            loop {
+                let _ = tokio::task::spawn_blocking(move || hls::tidy_store(keep)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
+            }
+        });
+    }
     tokio::spawn(piper::keep_ready(mgr.clone()));
     tokio::spawn(sound::run(mgr.clone()));
     tokio::spawn(clip::run(mgr.clone()));
