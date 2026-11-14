@@ -333,10 +333,13 @@ pub fn timeline(
             continue;
         }
         let id = &rt.cfg.id;
+        let in_view: Vec<Recording> = recordings(&rt).into_iter().filter(|r| r.end >= from && r.start <= to).collect();
+        // (The newest is still being written: no header yet.)
+        let names: Vec<String> = in_view.iter().skip(1).map(|r| r.name.clone()).collect();
+        prefetch_heights(&rt.dir, &names);
         let stream_of = |name: &str| recording_stream(&rt, name);
-        let mut segments: Vec<Segment> = recordings(&rt)
+        let mut segments: Vec<Segment> = in_view
             .into_iter()
-            .filter(|r| r.end >= from && r.start <= to)
             .map(|r| Segment {
                 start: r.start,
                 end: r.end,
@@ -360,12 +363,11 @@ pub fn timeline(
                 }),
         );
         let events = rt.events.between(from, to);
+        // (One listing of the folder, not a check per clip.)
+        let have = storage::names_in(rt.events.dir());
         for e in &events {
             if let (Some(clip), Some(cs)) = (&e.clip, e.clip_start) {
-                let len = std::fs::metadata(rt.events.dir().join(clip))
-                    .ok()
-                    .map(|_| ());
-                if len.is_some() {
+                if have.contains(clip) {
                     let end = e.end + CDuration::seconds(rt.cfg.detect.post_seconds as i64);
                     segments.push(Segment {
                         start: cs,
@@ -483,27 +485,86 @@ pub fn recording_stream(rt: &CameraRuntime, name: &str) -> &'static str {
     }
 }
 
-/// Picture height of an MP4 file, read from its header (no ffmpeg), kept
-/// once known (a file still being written has no header yet).
-fn mp4_height_cached(path: &std::path::Path) -> Option<u32> {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    static CACHE: Mutex<Option<HashMap<PathBuf, u32>>> = Mutex::new(None);
-    if let Some(h) = CACHE
-        .lock()
-        .ok()?
-        .get_or_insert_with(HashMap::new)
-        .get(path)
+// ---------- picture heights of recordings (main or sub-stream) ----------
+//
+// Told by reading each file's header. On a network drive (NAS) each read is
+// a trip to the NAS, and the timeline needs every file in view: so they're
+// read many at a time, and remembered on this computer (nvr-data/heights),
+// so each file is only ever read once.
+
+static HEIGHTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, u32>>> =
+    std::sync::LazyLock::new(Default::default);
+static HEIGHT_DIRS: std::sync::LazyLock<std::sync::Mutex<HashSet<PathBuf>>> = std::sync::LazyLock::new(Default::default);
+static HEIGHT_STORE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn init(data_dir: &std::path::Path) {
+    let _ = HEIGHT_STORE.set(data_dir.join("heights"));
+}
+
+fn heights_file(dir: &std::path::Path) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    dir.hash(&mut h);
+    Some(HEIGHT_STORE.get()?.join(format!("{:016x}.json", h.finish())))
+}
+
+/// Make sure the heights of these files in `dir` are known (read now, many
+/// at a time, if not remembered).
+fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
+    // Remembered from before (once per folder).
+    if HEIGHT_DIRS.lock().unwrap().insert(dir.to_path_buf())
+        && let Some(f) = heights_file(dir)
+        && let Ok(t) = std::fs::read_to_string(&f)
+        && let Ok(m) = serde_json::from_str::<std::collections::HashMap<String, u32>>(&t)
     {
+        let mut c = HEIGHTS.lock().unwrap();
+        for (n, h) in m {
+            c.insert(dir.join(n), h);
+        }
+    }
+    let missing: Vec<PathBuf> = {
+        let c = HEIGHTS.lock().unwrap();
+        names.iter().map(|n| dir.join(n)).filter(|p| !c.contains_key(p)).collect()
+    };
+    if missing.is_empty() {
+        return;
+    }
+    let found: Vec<(PathBuf, u32)> = std::thread::scope(|sc| {
+        let per = missing.len().div_ceil(8).max(1);
+        let hs: Vec<_> = missing.chunks(per).map(|ch| sc.spawn(move || ch.iter().filter_map(|p| mp4_height(p).map(|h| (p.clone(), h))).collect::<Vec<_>>())).collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+    });
+    if found.is_empty() {
+        return;
+    }
+    let keep: std::collections::HashMap<String, u32> = {
+        let mut c = HEIGHTS.lock().unwrap();
+        for (p, h) in found {
+            c.insert(p, h);
+        }
+        // What's remembered for this folder: the files still there.
+        names.iter().filter_map(|n| c.get(&dir.join(n)).map(|h| (n.clone(), *h))).collect()
+    };
+    if let Some(f) = heights_file(dir) {
+        let _ = std::fs::create_dir_all(f.parent().unwrap());
+        // Older entries for files out of view are kept too.
+        let mut all: std::collections::HashMap<String, u32> =
+            std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        all.extend(keep);
+        // Files deleted since (old footage): forgotten.
+        all.retain(|n, _| storage::parse_start(n).is_some_and(|t| Local::now() - t < CDuration::days(400)));
+        if let Ok(t) = serde_json::to_string(&all) {
+            let _ = std::fs::write(&f, t);
+        }
+    }
+}
+
+fn mp4_height_cached(path: &std::path::Path) -> Option<u32> {
+    if let Some(h) = HEIGHTS.lock().unwrap().get(path) {
         return Some(*h);
     }
     let h = mp4_height(path)?;
-    let mut c = CACHE.lock().ok()?;
-    let map = c.get_or_insert_with(HashMap::new);
-    if map.len() > 100_000 {
-        map.clear();
-    }
-    map.insert(path.to_path_buf(), h);
+    HEIGHTS.lock().unwrap().insert(path.to_path_buf(), h);
     Some(h)
 }
 

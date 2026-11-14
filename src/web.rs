@@ -2511,9 +2511,16 @@ fn download_name(camera: &str, when: Option<DateTime<Local>>, file: &str) -> Str
 /// given and either `force` is set or the URL has `?download`.
 async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bool) -> Response {
     let download = force || req.uri().query().is_some_and(|q| q.contains("download"));
+    let video = path.extension().is_some_and(|e| e == "mp4");
     match ServeFile::new(path).oneshot(req).await {
         Ok(res) => {
             let mut res = res.map(Body::new);
+            // Video isn't kept by the browser: it comes straight from GAZE
+            // on the home network, and gigabytes of footage piled up in the
+            // browser's cache, slowing it down until the cache was cleared.
+            if video && !res.headers().contains_key(header::CACHE_CONTROL) {
+                res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            }
             if let Some(name) = name.filter(|_| download)
                 && let Ok(v) = HeaderValue::from_str(&attachment(&name))
             {
@@ -2563,10 +2570,15 @@ async fn serve_event_file(
     let c = camera!(m, id);
     match storage::resolve(c.events.dir(), &name) {
         Ok(p) => {
-            // The alert's file: named after the camera and the alert's time.
-            let when = c.events.all().into_iter().find(|e| name.starts_with(&e.id)).map(|e| e.clip_start.unwrap_or(e.start));
-            let dl = download_name(&c.cfg.name, when, &name);
-            serve_file(p, req, Some(dl), false).await
+            // The alert's file: named after the camera and the alert's time
+            // (looked up only for a download: pictures are asked for by the
+            // hundred).
+            let dl = req.uri().query().is_some_and(|q| q.contains("download")).then(|| {
+                let id = name.split('.').next().unwrap_or(&name).trim_end_matches("-hd");
+                let when = c.events.get(id).map(|e| e.clip_start.unwrap_or(e.start));
+                download_name(&c.cfg.name, when, &name)
+            });
+            serve_file(p, req, dl, false).await
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
@@ -3534,30 +3546,57 @@ async fn sprites_ready(
     }
     let c = camera!(m, r.camera);
     let every = m.config().storage.timelapse_seconds;
-    let mut out = serde_json::Map::new();
-    for (kind, name) in r.files.into_iter().take(2000) {
-        if !preview_ready(&c, &kind, &name, every) {
-            continue;
+    // Up to 2000 files, each a few looks at the disk: on a network drive
+    // (NAS) that took minutes one after another and held up the web server.
+    // Now off its threads, many at a time, and remembered (ready previews
+    // for 10 minutes, not-yet-ready ones for 15 seconds).
+    type Seen = HashMap<String, (Instant, Option<serde_json::Value>)>;
+    static SEEN: std::sync::LazyLock<std::sync::Mutex<Seen>> = std::sync::LazyLock::new(Default::default);
+    let out = tokio::task::spawn_blocking(move || {
+        let files: Vec<(String, String)> = r.files.into_iter().take(2000).collect();
+        let key = |k: &str, n: &str| format!("{}|{k}/{n}", c.cfg.id);
+        let mut out = serde_json::Map::new();
+        let mut todo = Vec::new();
+        {
+            let seen = SEEN.lock().unwrap();
+            for (kind, name) in files {
+                match seen.get(&key(&kind, &name)) {
+                    Some((t, Some(v))) if t.elapsed() < Duration::from_secs(600) => {
+                        out.insert(format!("{kind}/{name}"), v.clone());
+                    }
+                    Some((t, None)) if t.elapsed() < Duration::from_secs(15) => {}
+                    _ => todo.push((kind, name)),
+                }
+            }
         }
-        let Ok(src) = media_path(&c, &kind, &name) else {
-            continue;
+        let check = |kind: &str, name: &str| -> Option<serde_json::Value> {
+            if !preview_ready(&c, kind, name, every) {
+                return None;
+            }
+            let src = media_path(&c, kind, name).ok()?;
+            let meta = src.parent()?.join(".thumbs").join(format!("{name}.sprite.json"));
+            let info = serde_json::from_slice::<ffmpeg::SpriteInfo>(&std::fs::read(&meta).ok()?).ok()?;
+            Some(json!({"info": info, "url": format!("media/{}/sprite/{kind}/{name}?v={}&page=", c.cfg.id, info.version)}))
         };
-        let meta = src
-            .parent()
-            .unwrap()
-            .join(".thumbs")
-            .join(format!("{name}.sprite.json"));
-        let Some(info) = std::fs::read(&meta)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<ffmpeg::SpriteInfo>(&b).ok())
-        else {
-            continue;
-        };
-        out.insert(
-            format!("{kind}/{name}"),
-            json!({"info": info, "url": format!("media/{}/sprite/{kind}/{name}?v={}&page=", c.cfg.id, info.version)}),
-        );
-    }
+        let found: Vec<((String, String), Option<serde_json::Value>)> = std::thread::scope(|sc| {
+            let per = todo.len().div_ceil(8).max(1);
+            let hs: Vec<_> = todo.chunks(per).map(|ch| sc.spawn(|| ch.iter().map(|(k, n)| ((k.clone(), n.clone()), check(k, n))).collect::<Vec<_>>())).collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        });
+        let mut seen = SEEN.lock().unwrap();
+        if seen.len() > 50_000 {
+            seen.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(600));
+        }
+        for ((kind, name), v) in found {
+            if let Some(v) = &v {
+                out.insert(format!("{kind}/{name}"), v.clone());
+            }
+            seen.insert(key(&kind, &name), (Instant::now(), v));
+        }
+        out
+    })
+    .await
+    .unwrap_or_default();
     Json(serde_json::Value::Object(out)).into_response()
 }
 

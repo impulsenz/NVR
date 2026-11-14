@@ -787,23 +787,25 @@ impl Manager {
         }
         self.commit(cfg.clone())?;
         drop(_g);
-        // Cameras following a changed profile pick up its settings.
-        for cam in changed {
+        // Cameras following a changed profile pick up its settings (all at
+        // once).
+        let mut restart = Vec::new();
+        for cam in &changed {
             info!(
                 "[{}] settings updated from profile \"{}\"",
                 cam.name, cam.profile
             );
-            let rt = self.camera(&cam.id);
-            match &rt {
+            match self.camera(&cam.id) {
                 Some(rt) if !cam.needs_restart(&rt.cfg) => {
                     // (As from the camera's own window: display and live
                     // options apply without interrupting recording.)
                     rt.live_sub.set_view(cam.view.clone());
                     rt.live_main.set_view(cam.view.clone());
                 }
-                _ => self.restart_camera(&cam).await,
+                _ => restart.push(cam),
             }
         }
+        futures_util::future::join_all(restart.into_iter().map(|c| self.restart_camera(c))).await;
         Ok(())
     }
 
@@ -1011,12 +1013,14 @@ impl Manager {
             }
         }
         let env_changed = RuntimeEnv::from(&cfg) != RuntimeEnv::from(&old);
-        for cam in &cfg.cameras {
-            let prev = old.cameras.iter().find(|c| c.id == cam.id);
-            if env_changed || prev != Some(cam) {
-                self.restart_camera(cam).await;
-            }
-        }
+        // All at once: one after another, a save waited up to 15 s per
+        // camera (each finishes writing its files first).
+        let restart: Vec<&CameraConfig> = cfg
+            .cameras
+            .iter()
+            .filter(|cam| env_changed || old.cameras.iter().find(|c| c.id == cam.id) != Some(*cam))
+            .collect();
+        futures_util::future::join_all(restart.into_iter().map(|cam| self.restart_camera(cam))).await;
         if env_changed {
             info!("settings changed; cameras restarted");
         }

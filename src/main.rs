@@ -313,8 +313,12 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         cfg.save(&path)?;
         info!("wrote {}", path.display());
     }
-    std::fs::create_dir_all(&cfg.storage.dir)
-        .with_context(|| format!("creating {}", cfg.storage.dir.display()))?;
+    // A NAS that isn't there yet (the computer started before the network
+    // did) mustn't stop GAZE: live view works, and recording starts by
+    // itself once the folder can be reached (it keeps retrying).
+    if let Err(e) = std::fs::create_dir_all(&cfg.storage.dir) {
+        warn!("the recordings folder {} can't be reached right now ({e}); recording starts once it can", cfg.storage.dir.display());
+    }
     let ids: Vec<String> = cfg.cameras.iter().map(|c| c.id.clone()).collect();
     storage::migrate_flat_files(&cfg.storage.dir, &ids);
     // Each camera's folder is called like the camera (0.6.91): older
@@ -364,6 +368,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         warn!("repaired {fixed} recording(s) left incomplete by an unexpected stop");
     }
 
+    let mut bench_later: Option<ffmpeg::Capabilities> = None;
     let mut caps = ffmpeg::capabilities(&cfg.server.ffmpeg_path).await;
     // Not installed: GAZE's own copy, if it has one (downloaded before).
     if caps.ffmpeg_version.is_empty()
@@ -388,20 +393,19 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         info!("{}", caps.ffmpeg_version);
         // Video on the graphics card where possible (Settings → GPU
         // acceleration → Choose automatically).
+        // The choice is measured once and remembered (it took up to a
+        // minute, before the page could open): measured again only when
+        // ffmpeg changes, and then after GAZE has started.
         if cfg.hardware.auto {
-            let hw = ffmpeg::auto_hardware(&cfg.server.ffmpeg_path, &caps, &cfg.hardware).await;
-            info!(
-                "video: decoding on {}, converting with {}",
-                if hw.hwaccel == "none" {
-                    "the processor (no GPU decoder works)".to_string()
-                } else {
-                    format!("the GPU ({})", hw.hwaccel)
-                },
-                hw.encoder
-            );
-            if hw != cfg.hardware {
-                cfg.hardware = hw;
-                cfg.save(&path)?;
+            match ffmpeg::auto_cached(&data_dir, &caps) {
+                Some((a, e, g)) => {
+                    let hw = config::HardwareConfig { hwaccel: a, encoder: e, gpu_substreams: g, ..cfg.hardware.clone() };
+                    if hw != cfg.hardware {
+                        cfg.hardware = hw;
+                        cfg.save(&path)?;
+                    }
+                }
+                None => bench_later = Some(caps.clone()),
             }
         }
     }
@@ -437,6 +441,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(hooks::run(mgr.clone()));
     tokio::spawn(onvif_events::run(mgr.clone()));
     piper::init(&mgr.data_dir);
+    library::init(&std::path::absolute(&mgr.data_dir).unwrap_or(mgr.data_dir.clone()));
     tokio::spawn(piper::keep_ready(mgr.clone()));
     tokio::spawn(sound::run(mgr.clone()));
     tokio::spawn(clip::run(mgr.clone()));
@@ -444,6 +449,9 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(rtmp::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));
     tokio::spawn(infer::run(mgr.clone()));
+    if let Some(caps) = bench_later {
+        tokio::spawn(ffmpeg::auto_in_background(mgr.clone(), caps));
+    }
 
     let https_port = mgr.config().server.https_port;
     if https_port > 0 {

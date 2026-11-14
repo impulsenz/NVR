@@ -476,6 +476,55 @@ async fn decode_cost(ffmpeg: &str, hw: &HardwareConfig, clip: &std::path::Path) 
 /// sub-streams only when that's really cheaper than the processor alone);
 /// then the first GPU encoder that encodes. Nothing on the GPU works: the
 /// processor, as before.
+/// What "Choose automatically" picked, remembered with what it was measured
+/// with (ffmpeg's version and abilities): measuring takes a while.
+const AUTO_FILE: &str = "hardware-auto.json";
+const AUTO_VERSION: u32 = 1;
+
+fn auto_key(caps: &Capabilities) -> String {
+    format!("{AUTO_VERSION}|{}|{}|{}", caps.ffmpeg_version, caps.hwaccels.join(","), caps.encoders.join(","))
+}
+
+/// The remembered choice (decoder, encoder, sub-streams on the card), if it
+/// was measured with this ffmpeg.
+pub fn auto_cached(data_dir: &std::path::Path, caps: &Capabilities) -> Option<(String, String, bool)> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(data_dir.join(AUTO_FILE)).ok()?).ok()?;
+    if v["key"].as_str()? != auto_key(caps) {
+        return None;
+    }
+    Some((v["hwaccel"].as_str()?.to_string(), v["encoder"].as_str()?.to_string(), v["gpu_substreams"].as_bool()?))
+}
+
+pub fn auto_remember(data_dir: &std::path::Path, caps: &Capabilities, hw: &HardwareConfig) {
+    let v = serde_json::json!({"key": auto_key(caps), "hwaccel": hw.hwaccel, "encoder": hw.encoder, "gpu_substreams": hw.gpu_substreams});
+    let _ = std::fs::write(data_dir.join(AUTO_FILE), v.to_string());
+}
+
+/// First start (or ffmpeg changed): measure after GAZE has started, then
+/// use the result (cameras restart only if it differs).
+pub async fn auto_in_background(m: std::sync::Arc<crate::manager::Manager>, caps: Capabilities) {
+    // Let the cameras connect first.
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let job = crate::jobs::start("files", "Testing the graphics card for video (once)".to_string());
+    let cfg = m.config();
+    let hw = auto_hardware(&cfg.server.ffmpeg_path, &caps, &cfg.hardware).await;
+    auto_remember(&m.data_dir, &caps, &hw);
+    tracing::info!(
+        "video: decoding on {}, converting with {}",
+        if hw.hwaccel == "none" { "the processor (no GPU decoder works)".to_string() } else { format!("the GPU ({})", hw.hwaccel) },
+        hw.encoder
+    );
+    let now = m.config();
+    if now.hardware.auto && (now.hardware.hwaccel != hw.hwaccel || now.hardware.encoder != hw.encoder || now.hardware.gpu_substreams != hw.gpu_substreams) {
+        let hw = HardwareConfig { hwaccel: hw.hwaccel, encoder: hw.encoder, gpu_substreams: hw.gpu_substreams, ..now.hardware.clone() };
+        let up = crate::manager::SettingsUpdate { hardware: Some(hw), ..Default::default() };
+        if let Err(e) = m.update_settings(up).await {
+            tracing::warn!("couldn't use the graphics card choice: {e:#}");
+        }
+    }
+    job.step("done".to_string());
+}
+
 pub async fn auto_hardware(
     ffmpeg: &str,
     caps: &Capabilities,

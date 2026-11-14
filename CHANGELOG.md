@@ -1,5 +1,25 @@
 # What's new in GAZE
 
+## 0.6.95 — November 2026
+- **Recordings on a NAS (network drive)**: Recordings, the timeline and the time-lapse load again with footage on a NAS. They used to make thousands of separate trips to the NAS — reading each recording's header, checking each alert clip and each time-lapse preview one by one — so the page never finished. Now:
+  - Each recording's header is read once and remembered on this computer (nvr-data), and new ones are read many at a time.
+  - Alert clips are checked with one look at the folder instead of one per clip.
+  - Time-lapse previews are checked many at a time, off the web server's own threads, and remembered.
+- **A slow NAS no longer freezes GAZE**: alerts are written to the disk on their own thread. Before, a NAS that paused (Windows network drives can hang for 30–60 seconds) held up detection, the Alerts page, the timeline and saving settings until it answered.
+- **Safer with a NAS**:
+  - GAZE starts even when the recordings folder can't be reached yet (the computer started before the network); recording starts by itself once it can.
+  - The free space of a NAS that can't be reached is no longer taken from this computer's own disk (the clean-up could have judged the NAS by the wrong disk).
+  - Alerts are no longer dropped from the list when their folder can't be read at start-up.
+- **Faster start**:
+  - The page opens in about a second: the graphics card test (up to a minute, every start) now runs only once, and again only when ffmpeg changes — after GAZE has started.
+  - After an unexpected stop, only the files being written at the time are checked, not every recording of the last 3 days (minutes on a NAS).
+- **Saving settings is quicker**: settings that restart the cameras restart them all at once (one after another, a save could wait up to 15 seconds per camera); profiles likewise.
+- **Nothing streams in the background**: the Live grid's cameras only stream while the grid is on screen — not on Recordings, Alerts or Settings, nor with one camera open — and Recordings is no longer loaded in the background while you're on other pages.
+- **Browser cache**:
+  - Videos are no longer kept in the browser's cache (they come straight from GAZE on your network and piled up there).
+  - A stream that failed to play once — even from a network hiccup — was converted on the server from then on, until the browser's data was cleared. Now that only happens when the browser really can't decode it, never for H.264, and the browser tries again after 3 days.
+- **Timeline scrubbing shows what each camera is showing**: while you drag along the timeline, the cameras above it have a **blue** outline while they show the time-lapse; when you let go, it turns **green** once the recorded video has loaded and taken over (the same blue and green as the timeline).
+
 ## 0.6.94 — November 2026
 - **Save buttons show that they worked**: every button gives a little when pressed. Save buttons (Save, Apply, Add, Import…) also pulse when clicked, show a spinner while saving, then flash green with a ✓ — or shake red if the save failed (the message says why). The tick finds the button again even when the page redraws after saving.
 - **Profiles update their cameras straight away**: saving a profile now applies its live-view and display changes to every camera using it at once, as the camera's own window does; other changes restart those cameras with the new settings, as before.

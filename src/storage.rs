@@ -72,6 +72,29 @@ pub fn list(dir: &Path) -> Vec<Recording> {
     v
 }
 
+/// The names of the files in a folder (one listing, kept a few seconds):
+/// cheaper than checking files one by one on a network drive.
+pub fn names_in(dir: &Path) -> std::sync::Arc<std::collections::HashSet<String>> {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{Arc, Mutex};
+    type Cache = HashMap<PathBuf, (std::time::Instant, Arc<HashSet<String>>)>;
+    static CACHE: std::sync::LazyLock<Mutex<Cache>> = std::sync::LazyLock::new(Default::default);
+    if let Some((t, v)) = CACHE.lock().unwrap().get(dir)
+        && t.elapsed() < std::time::Duration::from_secs(5)
+    {
+        return v.clone();
+    }
+    let v: Arc<HashSet<String>> = Arc::new(
+        std::fs::read_dir(dir)
+            .map(|rd| rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect())
+            .unwrap_or_default(),
+    );
+    let mut c = CACHE.lock().unwrap();
+    c.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(60));
+    c.insert(dir.to_path_buf(), (std::time::Instant::now(), v.clone()));
+    v
+}
+
 /// A recording was deleted: the folders are read afresh next time.
 static FORGET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 fn forget_lists() {

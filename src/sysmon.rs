@@ -772,11 +772,21 @@ fn parse_typeperf(text: &str) -> Option<f32> {
 /// Free and total bytes of the disk holding `path` (works for network shares too).
 pub fn disk_space(path: &std::path::Path) -> Option<(u64, u64)> {
     let mut p = path.to_path_buf();
-    // The folder may not exist yet: use the nearest existing parent.
+    // The folder may not exist yet: use the nearest existing parent — but
+    // never another disk: a network share (NAS) that can't be reached
+    // right now has no free space to tell (falling back to this computer's
+    // own disk made the clean-up judge the NAS by the wrong disk).
     while !p.exists() {
         if !p.pop() {
             p = PathBuf::from(".");
             break;
+        }
+        if p.as_os_str().is_empty() {
+            p = PathBuf::from(".");
+            break;
+        }
+        if p.parent().is_none() && !p.exists() {
+            return None;
         }
     }
     match fs4::statvfs(&p) {

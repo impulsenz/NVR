@@ -785,8 +785,9 @@ function updateSubscriptions() {
     const want = new Map();
     const add = (q, fps) => want.set(q, Math.max(want.get(q) || 0, fps));
     const gridQ = feedQ(c, 'grid'), focusQ = feedQ(c, 'focus');
-    // The grid keeps running in the background so switching back is instant.
-    if (!dataSaver || shown) add(gridQ, focused && gridQ === focusQ ? hdFps : gridFps);
+    // Only what's on screen is streamed (nothing kept running in the
+    // background on other pages).
+    if (shown) add(gridQ, focused && gridQ === focusQ ? hdFps : gridFps);
     // The camera editor's pictures (motion mask, package spot, zones) use stream 2.
     if ($('cam-dialog').open && editingId === c.id) add('sub', gridFps);
     if (focused) {
@@ -1031,6 +1032,7 @@ function route() {
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
+  if (page !== 'live' || sub) dropGrid();
   if (page !== 'live' && typeof soundCam !== 'undefined' && soundCam) stopSound();
   if (page !== 'recordings') pauseAllPlayback();
   // Leaving a page: its downloads stop (see cutPageDownloads), and videos
@@ -1063,7 +1065,6 @@ document.querySelector('nav a[data-page="recordings"]').addEventListener('click'
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { cutPageDownloads(); pauseAllPlayback(); return; }
   if (page === 'recordings' && rec.mode === 'timeline' && tl.key) { tlSync(true); prefetchSprites(); }
-  else if (page !== 'recordings' && !tl.key) setTimeout(preloadRecordings, 1500);
 });
 // A browser only opens a few connections (6) to the NVR at a time. The
 // time-lapse pictures of Live and Recordings (each can take a while to
@@ -1305,13 +1306,40 @@ setInterval(() => {
 // Cameras' streams ("camera|main" / "camera|sub") this browser can't play
 // directly (usually H.265 main streams): only those are converted. (Older
 // versions marked whole cameras, converting even the sub-stream: forgotten.)
-const noNativePlayback = new Set(store_get('no-native2', []));
-try { localStorage.removeItem('nvr-no-native'); } catch (_) {}
+//
+// Remembered for 3 days, then tried directly again; and only ever for a
+// stream that isn't H.264 (which every browser plays). Before, a network
+// hiccup (a slow NAS) marked a stream for good: everything then went
+// through the slow conversion until the browser's data was cleared.
+const NO_NATIVE_DAYS = 3;
+const noNativeSince = (() => {
+  let m = {}; try { m = JSON.parse(localStorage.getItem('nvr-no-native3') || '{}') || {}; } catch (_) {}
+  const now = Date.now();
+  for (const k of Object.keys(m)) if (!(now - m[k] < NO_NATIVE_DAYS * 86400e3)) delete m[k];
+  return m;
+})();
+const noNativePlayback = new Set(Object.keys(noNativeSince));
+try { localStorage.removeItem('nvr-no-native'); localStorage.removeItem('nvr-no-native2'); localStorage.setItem('nvr-no-native3', JSON.stringify(noNativeSince)); } catch (_) {}
 function store_get(k, d) { try { const v = localStorage.getItem('nvr-' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
-function markNoNative(key) {
-  noNativePlayback.add(key);
-  try { localStorage.setItem('nvr-no-native2', JSON.stringify([...noNativePlayback])); } catch (e) {}
+// The stream's codec as GAZE sees it ("camera|main" / "camera|sub").
+function streamCodec(key) {
+  const [cam, q] = key.split('|');
+  const c = typeof status !== 'undefined' && status && (status.cameras || []).find(x => x.id === cam);
+  const i = c && c.info && c.info[q === 'sub' ? 'sub' : 'main'];
+  return i && i.codec ? String(i.codec) : '';
 }
+function markNoNative(key) {
+  // H.264 always plays: whatever went wrong wasn't the format.
+  if (/h264|avc/i.test(streamCodec(key))) return false;
+  noNativePlayback.add(key);
+  noNativeSince[key] = Date.now();
+  try { localStorage.setItem('nvr-no-native3', JSON.stringify(noNativeSince)); } catch (e) {}
+  return true;
+}
+// A video error that means "can't decode this here" (not a network error
+// or an interrupted download).
+const formatError = (v) => !!(v && v.error && (v.error.code === 3 || v.error.code === 4));
+const playerKey = (item) => item.camera + '|' + (item.stream || (/\/tl\//.test(item.url || '') ? 'sub' : 'main'));
 // The stream a file of the timeline belongs to (alert clips: main).
 const fileStream = (c, url) => { const sg = c && c.segments.find(x => x.url === url); return sg ? streamOf(sg) : 'main'; };
 
@@ -1372,7 +1400,9 @@ class Player {
     on('ended', () => this.next());
     on('error', () => {
       if (!video.getAttribute('src') || !this.item) return;
-      if (!this.tc && convertedUrl(this.item.url)) return this.useConverted();
+      // (Converted only when the browser can't decode it; a network error
+      // is just reported.)
+      if (!this.tc && convertedUrl(this.item.url) && formatError(video)) return this.useConverted();
       if (!this.msg) return;
       this.msg.hidden = false;
       this.msg.textContent = video.error && video.error.code === 4 && this.tc ? 'No recorded footage here — the file may have been deleted, or the camera was offline.'
@@ -1459,7 +1489,7 @@ class Player {
   useConverted() {
     const t = this.tc ? this.cur() : (this.video.currentTime || this.item.offset || 0);
     this.tc = true;
-    markNoNative(this.item.camera);
+    markNoNative(playerKey(this.item));
     if (this.msg) { this.msg.hidden = false; this.msg.textContent = 'Converting for this browser…'; }
     this.seekTo(t, true);
   }
@@ -1470,7 +1500,7 @@ class Player {
     if (this.msg) this.msg.hidden = true;
     const start = item.offset || 0;
     // Known not to play here: go straight to the converted stream.
-    this.tc = (dataSaver || noNativePlayback.has(item.camera)) && !!convertedUrl(item.url);
+    this.tc = (dataSaver || noNativePlayback.has(playerKey(item))) && !!convertedUrl(item.url);
     this.base = 0;
     if (this.tc) {
       this.seekTo(start, autoplay);
@@ -1820,9 +1850,20 @@ function renderGroupSelect() {
   $('wall-cycle').parentElement.hidden = $('wall-cycle-s').hidden = !many;
 }
 
+// The grid's pictures (and their video connections) only exist while the
+// grid is on screen: on other pages, or with one camera open, nothing is
+// streamed for it (they come back when the grid is shown again; a picture
+// left a moment ago carries on without reconnecting).
+function dropGrid() {
+  for (const u of unbinders.values()) u();
+  unbinders.clear();
+  const d = $('dash'); if (d && d.firstChild) d.innerHTML = '';
+  dashIds = null;
+}
 function renderDash() {
   const dash = $('dash');
   if (!status) return;
+  if (page !== 'live' || (focusId && !wall)) { dropGrid(); return; }
   renderGroupSelect();
   const cams = viewCams();
   $('no-cameras').hidden = status.cameras.length > 0;
@@ -2153,7 +2194,7 @@ $('wall-cycle-s').value = String(store.get('cycle-s', 20));
 $('wall-cycle').onchange = startCycle;
 $('wall-cycle-s').onchange = () => { store.set('cycle-s', +$('wall-cycle-s').value); startCycle(); };
 
-// Keep the dashboard current (it runs in the background on every page).
+// Keep the dashboard current (while it's shown).
 function dashSync() {
   if (!status) return;
   if (dashKey() !== dashIds && !editing) renderDash();
@@ -4038,10 +4079,11 @@ function buildTimelineVideos() {
       const u = v.dataset.url || ''; if (!u || u.endsWith('#tc') || !convertedUrl(u)) return;
       const key = c.camera + '|' + fileStream(c, u);
       if (noNativePlayback.has(key)) return;
-      markNoNative(key); el._vids.forEach(x => delete x.dataset.url); tlSync(true);
+      if (!markNoNative(key)) return;
+      el._vids.forEach(x => delete x.dataset.url); tlSync(true);
     };
     for (const v of el._vids) {
-      v.addEventListener('error', () => fallback(v));
+      v.addEventListener('error', () => { if (formatError(v)) fallback(v); });
       v.addEventListener('loadeddata', () => { if (v.videoWidth === 0) fallback(v); });
     }
     box.appendChild(el);
@@ -5166,7 +5208,7 @@ function hideSpritesWhenReady() {
     const fade = () => {
       ready();
       if (sp._gen !== gen || sp.classList.contains('fading')) return;
-      sp.classList.add('fading');
+      sp.classList.add('fading'); srcMark(el, 'rec');
       setTimeout(() => { if (sp._gen === gen) { sp.hidden = true; sp.classList.remove('fading'); } }, 220);
     };
     // Only once the video (the player that will be shown) has actually
@@ -5205,24 +5247,34 @@ function previewAll() {
     if (sp.classList.contains('fading')) { sp._gen = (sp._gen || 0) + 1; sp.classList.remove('fading'); }
     el.querySelector('.msg').hidden = !!s;
     if (!s) [...el._vids, el._hlsV].forEach(x => x.style.visibility = 'hidden');
-    if (!s) { sp.hidden = true; continue; }
+    if (!s) { sp.hidden = true; srcMark(el, null); continue; }
     // Scrubbing with the video itself (sub-stream or main stream): seek it.
     if (tl.scrub !== 'timelapse' && !el._tc) {
       const vs = segAt(c, T, tl.scrub) || s;
-      sp.hidden = true;
+      sp.hidden = true; srcMark(el, 'rec');
       scrubVideo(el, vs, (T - new Date(vs.start).getTime()) / 1000);
       continue;
     }
     // The last moments (newer than the preview): the live picture.
-    if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; continue; }
+    if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; srcMark(el, 'tl'); continue; }
     const src = ps || s;
     spriteFor(c.camera, src).then(info => {
       if (info) markPreviewReady(src.url, info);
       if (!info || tl.T !== T) return;
       const off = (T - new Date(src.start).getTime()) / 1000;
-      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) sp.hidden = false;
+      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) { sp.hidden = false; srcMark(el, 'tl'); }
     });
   }
+}
+// What a camera above the timeline shows, as its outline in the timeline's
+// colours: blue while it's the time-lapse (scrubbing), green once the
+// recorded video has loaded and taken over.
+function srcMark(el, what) {
+  el.classList.toggle('src-tl', what === 'tl');
+  el.classList.toggle('src-rec', what === 'rec');
+  clearTimeout(el._srcT);
+  // (Green says "loaded": it fades after a moment.)
+  if (what === 'rec') el._srcT = setTimeout(() => el.classList.remove('src-rec'), 2500);
 }
 // Seek a camera's video while scrubbing: one seek at a time, always to the
 // newest wanted moment, timing how long each picture takes to show.
@@ -7953,7 +8005,6 @@ async function boot() {
   showWhatsNew();
   route();
   // Recordings loads in the background meanwhile (ready when you go there).
-  setTimeout(preloadRecordings, 2500);
 }
 // Sign out after no activity (Settings → Users → Signing in): no mouse,
 // keyboard or touch for that long on this page. (GAZE also signs out a

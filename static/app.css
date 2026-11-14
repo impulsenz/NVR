@@ -1411,3 +1411,9 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
 .tl-row .prune span, .ctl-lane .prune span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 13px; animation: prunebob 1.6s ease-in-out infinite; }
 @keyframes prunesweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes prunebob { 50% { transform: translate(-50%, -62%); opacity: .6; } }
+
+/* Recordings: each camera's outline says what it shows — blue: the
+   time-lapse (scrubbing), green: the recorded video, loaded. */
+#tl-videos .surface::after { content: ''; position: absolute; inset: 0; border: 2px solid transparent; border-radius: inherit; pointer-events: none; z-index: 6; transition: border-color .25s ease, box-shadow .25s ease; }
+#tl-videos .surface.src-tl::after { border-color: #38bdf8; box-shadow: inset 0 0 10px rgba(56,189,248,.35); }
+#tl-videos .surface.src-rec::after { border-color: #45b06c; box-shadow: inset 0 0 10px rgba(69,176,108,.35); transition: border-color .25s ease, box-shadow .25s ease; }

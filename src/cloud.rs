@@ -395,6 +395,7 @@ mod tests {
                 .set_modified(old)
                 .unwrap();
         }
+        store.flush();
         let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new())
             .into_iter()
             .map(|x| x.1)

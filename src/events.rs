@@ -3,7 +3,6 @@
 
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -161,6 +160,86 @@ impl Event {
 pub struct EventStore {
     dir: PathBuf,
     events: RwLock<Vec<Event>>,
+    /// Writes to the disk happen on their own thread, in order: a slow or
+    /// stalled network drive (NAS) then never holds up detection or the
+    /// web page, which only touch the list in memory.
+    writer: std::sync::Mutex<std::sync::mpsc::Sender<WriteOp>>,
+}
+
+enum WriteOp {
+    Line(String),
+    All(String),
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+fn writer_thread(dir: PathBuf, rx: std::sync::mpsc::Receiver<WriteOp>) {
+    for w in rx {
+        match w {
+            WriteOp::Line(l) => append_to(&dir, &l),
+            WriteOp::All(t) => rewrite_to(&dir, &t),
+            WriteOp::Flush(done) => {
+                let _ = done.send(());
+            }
+        }
+    }
+}
+
+/// Write the whole list of alerts again (after removing some). Written to a
+/// new file that replaces the old one; if that can't be done (on Windows
+/// the old file may be held open for a moment by another program), written
+/// over the old file directly, so a deletion is never undone at the next
+/// start.
+fn rewrite_to(dir: &Path, text: &str) {
+    let path = dir.join("events.jsonl");
+    let tmp = dir.join("events.jsonl.tmp");
+    let swapped = std::fs::write(&tmp, text).is_ok()
+        && std::fs::File::open(&tmp).and_then(|f| f.sync_all()).is_ok()
+        && std::fs::rename(&tmp, &path).is_ok();
+    if !swapped {
+        let _ = std::fs::remove_file(&tmp);
+        for _ in 0..5 {
+            if std::fs::write(&path, text).is_ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        tracing::warn!("couldn't save the list of alerts in {}", dir.display());
+    }
+}
+
+fn append_to(dir: &Path, line: &str) {
+    let _ = std::fs::create_dir_all(dir);
+    let path = dir.join("events.jsonl");
+    // If the last write was cut off by a crash or power cut, start on a
+    // new line so this event is not glued to the broken one (broken lines
+    // are skipped when loading).
+    let torn = std::fs::File::open(&path)
+        .and_then(|mut f| {
+            use std::io::{Read, Seek, SeekFrom};
+            if f.seek(SeekFrom::End(0))? == 0 {
+                return Ok(false);
+            }
+            f.seek(SeekFrom::End(-1))?;
+            let mut b = [0u8; 1];
+            f.read_exact(&mut b)?;
+            Ok(b[0] != b'\n')
+        })
+        .unwrap_or(false);
+    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut f) => {
+            use std::io::Write as _;
+            let nl = if torn { "\n" } else { "" };
+            let _ = writeln!(f, "{nl}{line}");
+            let _ = f.sync_data();
+        }
+        Err(e) => tracing::warn!("couldn't save an alert in {}: {e}", dir.display()),
+    }
+}
+
+impl Drop for EventStore {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 impl EventStore {
@@ -190,14 +269,30 @@ impl EventStore {
         // Alerts whose picture and clip are both gone (deleted, while the
         // list of alerts couldn't be rewritten): left out, and the list
         // tidied.
+        // (One listing of the folder, not a check per file: on a network
+        // drive each check is a trip to the NAS. If the folder can't be
+        // read right now, nothing is left out.)
         let before = events.len();
-        events.retain(|e| {
-            let has = |f: &Option<String>| f.as_ref().is_some_and(|f| dir.join(f).is_file());
-            e.thumb.is_none() || has(&e.thumb) || has(&e.clip)
-        });
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            let files: std::collections::HashSet<String> = rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
+            if !files.is_empty() {
+                events.retain(|e| {
+                    let has = |f: &Option<String>| f.as_ref().is_some_and(|f| files.contains(f));
+                    e.thumb.is_none() || has(&e.thumb) || has(&e.clip)
+                });
+            }
+        }
+        // (Pictures and clips are saved straight into it.)
+        let _ = std::fs::create_dir_all(&dir);
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let d = dir.clone();
+            let _ = std::thread::Builder::new().name("alerts-writer".into()).spawn(move || writer_thread(d, rx));
+        }
         let store = Self {
             dir,
             events: RwLock::new(events),
+            writer: std::sync::Mutex::new(tx),
         };
         if store.events.read().unwrap().len() != before {
             store.rewrite(&store.events.read().unwrap());
@@ -205,31 +300,20 @@ impl EventStore {
         store
     }
 
-    /// Write the whole list of alerts again (after removing some). Written
-    /// to a new file that replaces the old one; if that can't be done (on
-    /// Windows the old file may be held open for a moment by another
-    /// program), written over the old file directly, so a deletion is never
-    /// undone at the next start.
     fn rewrite(&self, ev: &[Event]) {
         let text: String = ev
             .iter()
             .filter_map(|e| serde_json::to_string(e).ok())
             .map(|l| l + "\n")
             .collect();
-        let path = self.dir.join("events.jsonl");
-        let tmp = self.dir.join("events.jsonl.tmp");
-        let swapped = std::fs::write(&tmp, &text).is_ok()
-            && std::fs::File::open(&tmp).and_then(|f| f.sync_all()).is_ok()
-            && std::fs::rename(&tmp, &path).is_ok();
-        if !swapped {
-            let _ = std::fs::remove_file(&tmp);
-            for _ in 0..5 {
-                if std::fs::write(&path, &text).is_ok() {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            tracing::warn!("couldn't save the list of alerts in {}", self.dir.display());
+        let _ = self.writer.lock().unwrap().send(WriteOp::All(text));
+    }
+
+    /// Wait until everything saved so far is on the disk.
+    pub fn flush(&self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        if self.writer.lock().unwrap().send(WriteOp::Flush(tx)).is_ok() {
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(30));
         }
     }
 
@@ -238,32 +322,8 @@ impl EventStore {
     }
 
     fn append_line(&self, e: &Event) {
-        let _ = std::fs::create_dir_all(&self.dir);
-        let path = self.dir.join("events.jsonl");
-        // If the last write was cut off by a crash or power cut, start on a
-        // new line so this event is not glued to the broken one (broken
-        // lines are skipped when loading).
-        let torn = std::fs::File::open(&path)
-            .and_then(|mut f| {
-                use std::io::{Read, Seek, SeekFrom};
-                if f.seek(SeekFrom::End(0))? == 0 {
-                    return Ok(false);
-                }
-                f.seek(SeekFrom::End(-1))?;
-                let mut b = [0u8; 1];
-                f.read_exact(&mut b)?;
-                Ok(b[0] != b'\n')
-            })
-            .unwrap_or(false);
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            && let Ok(line) = serde_json::to_string(e)
-        {
-            let nl = if torn { "\n" } else { "" };
-            let _ = writeln!(f, "{nl}{line}");
-            let _ = f.sync_data();
+        if let Ok(line) = serde_json::to_string(e) {
+            let _ = self.writer.lock().unwrap().send(WriteOp::Line(line));
         }
     }
 
@@ -365,21 +425,27 @@ impl EventStore {
 
     /// Delete events (and their files) that match `remove`, then compact the file.
     pub fn remove_where(&self, remove: impl Fn(&Event) -> bool) -> usize {
-        let mut ev = self.events.write().unwrap();
-        let before = ev.len();
-        ev.retain(|e| {
-            if remove(e) {
-                for f in [&e.thumb, &e.clip].into_iter().flatten() {
-                    let _ = std::fs::remove_file(self.dir.join(f));
+        let mut gone: Vec<String> = Vec::new();
+        let removed = {
+            let mut ev = self.events.write().unwrap();
+            let before = ev.len();
+            ev.retain(|e| {
+                if remove(e) {
+                    gone.extend([&e.thumb, &e.clip].into_iter().flatten().cloned());
+                    false
+                } else {
+                    true
                 }
-                false
-            } else {
-                true
+            });
+            let removed = before - ev.len();
+            if removed > 0 {
+                self.rewrite(&ev);
             }
-        });
-        let removed = before - ev.len();
-        if removed > 0 {
-            self.rewrite(&ev);
+            removed
+        };
+        // (The files go after: the list isn't held while the disk works.)
+        for f in gone {
+            let _ = std::fs::remove_file(self.dir.join(f));
         }
         removed
     }
@@ -431,6 +497,7 @@ mod tests {
             hd: None,
         });
         s.save(e.clone());
+        s.flush();
         let s2 = EventStore::open(&dir);
         assert_eq!(s2.all().len(), 1);
         assert!(s2.get("e1").unwrap().has_label("person"));
@@ -446,12 +513,15 @@ mod tests {
         std::fs::write(s2.dir().join("kept.jpg"), b"jpg").unwrap();
         s2.save_detected(a);
         s2.save_detected(b);
+        s2.flush();
         let s3 = EventStore::open(&dir);
         assert!(s3.get("kept").is_some() && s3.get("gone").is_none());
         assert_eq!(s3.remove_where(|x| x.id == "kept"), 1);
+        s3.flush();
         // A background job saving its copy afterwards doesn't bring it back.
         s2.save(e.clone());
         assert!(s2.get("e1").is_none());
+        s2.flush();
         assert_eq!(EventStore::open(&dir).all().len(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -139,6 +139,11 @@ pub fn repair_dir(dir: &Path, hours: u64) -> usize {
         let Ok(rd) = std::fs::read_dir(&d) else {
             continue;
         };
+        // Only the files being written when GAZE stopped can be cut short:
+        // the newest few in each folder (one per recorder writing there).
+        // Checking every recent file read each one through, which on a
+        // network drive (NAS) could hold up starting for minutes.
+        let mut recent: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
         for e in rd.flatten() {
             let p = e.path();
             // Leftovers of files that were being written when it stopped.
@@ -147,12 +152,18 @@ pub fn repair_dir(dir: &Path, hours: u64) -> usize {
                 let _ = std::fs::remove_file(&p);
                 continue;
             }
-            let recent = e
-                .metadata()
-                .and_then(|m| m.modified())
-                .map(|t| t >= cutoff)
-                .unwrap_or(false);
-            if recent && p.extension().is_some_and(|x| x == "mp4") && repair(&p) {
+            if p.extension().is_none_or(|x| x != "mp4") {
+                continue;
+            }
+            if let Ok(t) = e.metadata().and_then(|m| m.modified())
+                && t >= cutoff
+            {
+                recent.push((t, p));
+            }
+        }
+        recent.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, p) in recent.into_iter().take(4) {
+            if repair(&p) {
                 fixed += 1;
             }
         }
