@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.7.8 — November 2026
+- **Fixed: recent footage broke on every camera** ("fragParsingError" / "Found no media in fragment" in the log). On Windows, a folder lists a file that's still being recorded with an old size and time; since 0.7.1 GAZE trusted that, took the recording in progress for a finished one, and passed on a cut-off copy of its end — so the browser got broken pieces of the latest footage. Now a file counts as being recorded when it's the newest in its folder (or changed lately), whatever the folder says, and its size is read from the file itself.
+
 ## 0.7.7 — November 2026
 - **What's in a recording the browser refuses, in the log**: when the browser can't play a camera's recording, GAZE now looks at that recording and the one before it and writes what's in each to Settings → Logs — picture format, profile, size and frame rate, and the sound's format, rate and channels (or "no sound"). A difference between the two (sound coming and going, a size or format change) is the usual reason, and tells whether a camera setting is behind it. The browser's full message is kept too.
 
