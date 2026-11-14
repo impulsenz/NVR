@@ -146,6 +146,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/logs", get(get_logs))
         .route("/api/playback-report", post(playback_report))
         .route("/api/warm", post(warm_footage))
+        .route("/api/restart", post(restart_server))
         .route("/api/logs/download", get(download_logs))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/dashboard", put(put_dashboard))
@@ -2275,6 +2276,20 @@ async fn serve_video(path: PathBuf, req: Request, download: Option<String>) -> R
         h.insert(header::CONTENT_DISPOSITION, v);
     }
     res
+}
+
+/// Restart GAZE (the user menu's "Restart GAZE"; anyone signed in).
+async fn restart_server(user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let who = user.as_ref().map(|u| u.0.0.username.clone()).unwrap_or_else(|| "someone".into());
+    tracing::warn!("GAZE restarting (asked for by {who})");
+    // (A moment for this answer to reach the browser first.)
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        if !crate::update::restart_now() {
+            tracing::warn!("couldn't restart GAZE from here");
+        }
+    });
+    Json(json!({"ok": true})).into_response()
 }
 
 #[derive(Deserialize)]
@@ -5290,7 +5305,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
     }
     // A browser telling how playing recordings went (logged), or asking
     // for footage behind the playhead to be read ahead: anyone.
-    if path == "/api/playback-report" || path == "/api/warm" {
+    if path == "/api/playback-report" || path == "/api/warm" || path == "/api/restart" {
         return true;
     }
     // Talking through a camera's speaker: not for viewers.
@@ -5783,6 +5798,9 @@ mod tests {
         let post = axum::http::Method::POST;
         assert!(allowed(Viewer, &post, "/api/sprites-ready"));
         assert!(!allowed(Viewer, &post, "/api/settings"));
+        // Anyone signed in may restart GAZE (the user menu).
+        assert!(allowed(Viewer, &post, "/api/restart"));
+        assert!(allowed(Operator, &post, "/api/restart"));
         assert!(!allowed(Operator, &axum::http::Method::GET, "/api/cameras"));
         // Only administrators delete footage.
         let del = axum::http::Method::DELETE;

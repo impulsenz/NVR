@@ -8314,6 +8314,21 @@ $('um-theme').value = store.get('theme', 'auto'); applyTheme($('um-theme').value
 $('um-theme').onchange = () => { store.set('theme', val('um-theme')); applyTheme(val('um-theme')); };
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(store.get('theme', 'auto')));
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
+// Restart GAZE (anyone signed in): it's back in about half a minute; the
+// page waits for it and reloads.
+$('um-restart').onclick = async () => {
+  $('um-pop').hidden = true;
+  if (!confirm('Restart GAZE now?\n\nRecording and live view stop for about half a minute while it starts again. This page reloads by itself when GAZE is back.')) return;
+  try { await api('api/restart', {method: 'POST'}); } catch (e) { toast(e.message, true); return; }
+  toast('Restarting GAZE… this page reloads when it\'s back');
+  const t0 = Date.now();
+  await new Promise(r => setTimeout(r, 4000));
+  const tryBack = async () => {
+    try { const r = await fetch('api/auth/state?t=' + Date.now(), {cache: 'no-store'}); if (r.ok) { location.reload(); return; } } catch (_) {}
+    if (Date.now() - t0 < 180000) setTimeout(tryBack, 2000); else toast('GAZE hasn\'t come back yet — check the computer it runs on', true);
+  };
+  tryBack();
+};
 $('um-out').onclick = async () => { await fetch('api/auth/logout', {method: 'POST'}); location.hash = '#live'; location.reload(); };
 // API tokens: keys for scripts, Home Assistant or another GAZE.
 $('um-tokens').onclick = async () => {
