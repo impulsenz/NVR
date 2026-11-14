@@ -118,9 +118,6 @@ fn list_now(dir: &Path) -> Vec<Recording> {
                 return None;
             }
             let mt = meta.modified().ok()?;
-            // (The listing tells each file's size and time: the video
-            // reader needn't ask the disk again, see vstore.)
-            crate::vstore::seed(&e.path(), meta.len(), mt);
             let modified: DateTime<Local> = mt.into();
             let start = parse_start(&name).unwrap_or(modified);
             Some(Recording {
@@ -132,6 +129,14 @@ fn list_now(dir: &Path) -> Vec<Recording> {
         })
         .collect();
     out.sort_by(|a, b| b.start.cmp(&a.start).then(b.name.cmp(&a.name)));
+    // The listing tells each finished file's size and time: the video
+    // reader needn't ask the disk again (see vstore). Not the newest, nor
+    // anything changed lately: a file being recorded can be listed with an
+    // old size on Windows.
+    let recent = Local::now() - chrono::Duration::minutes(3);
+    for r in out.iter().skip(1).filter(|r| r.end < recent) {
+        crate::vstore::seed(&dir.join(&r.name), r.size, std::time::SystemTime::from(r.end));
+    }
     out
 }
 

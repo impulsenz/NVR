@@ -83,13 +83,24 @@ fn open(path: &Path) -> std::io::Result<Arc<File>> {
 /// being recorded (it grows), every 10 minutes for a finished one (on a
 /// network drive each look is a trip to the NAS).
 pub fn meta(path: &Path) -> std::io::Result<(u64, SystemTime)> {
-    if let Some(m) = ST.lock().unwrap().meta.get(path)
-        && m.at.elapsed() < if growing(m.modified) { Duration::from_millis(1500) } else { Duration::from_secs(600) }
+    let kept = ST.lock().unwrap().meta.get(path).copied();
+    if let Some(m) = kept
+        && m.at.elapsed() < if is_growing(path, m.modified) { Duration::from_millis(1500) } else { Duration::from_secs(600) }
     {
         return Ok((m.len, m.modified));
     }
     test_delay();
-    let md = std::fs::metadata(path)?;
+    // A file being recorded: asked of the open file itself (on Windows a
+    // folder's listing — and with it a plain look — can tell an old size
+    // and time for a file still being written).
+    let md = if is_growing(path, kept.map(|m| m.modified).unwrap_or(SystemTime::now())) {
+        match open(path).and_then(|f| f.metadata()) {
+            Ok(m) => m,
+            Err(_) => std::fs::metadata(path)?,
+        }
+    } else {
+        std::fs::metadata(path)?
+    };
     if !md.is_file() {
         return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not a file"));
     }
@@ -175,9 +186,21 @@ fn read_at(f: &File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
 }
 
 /// A file that may still be growing (being recorded): its last, partial
-/// block isn't kept.
+/// block isn't kept, its size is asked often, its index isn't saved. Told
+/// by a recent change, or by being the newest file in its folder — the
+/// time alone isn't enough: on Windows a file still being written can show
+/// the time it was started for minutes.
 fn growing(modified: SystemTime) -> bool {
     modified.elapsed().map(|e| e < Duration::from_secs(90)).unwrap_or(true)
+}
+
+pub fn is_growing(path: &Path, modified: SystemTime) -> bool {
+    if growing(modified) {
+        return true;
+    }
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return true };
+    // (The folder's list is kept a few seconds: cheap.)
+    crate::storage::list(dir).first().is_some_and(|r| r.name == name)
 }
 
 /// Block `n` of a file (read now, or kept from before).
@@ -215,11 +238,12 @@ fn block(path: &Path, n: u64, len: u64, modified: SystemTime) -> std::io::Result
         buf.truncate(got);
         Ok(Arc::new(buf))
     })();
+    let grows = is_growing(path, modified);
     let mut st = ST.lock().unwrap();
     st.reading.remove(&key);
     let b = res?;
     // Kept unless it's the unfinished end of a file still being recorded.
-    let full = b.len() as u64 == BLOCK || !growing(modified) || (n + 1) * BLOCK <= len;
+    let full = b.len() as u64 == BLOCK || !grows || (n + 1) * BLOCK <= len;
     if full && !b.is_empty() {
         st.bytes += b.len() as u64;
         st.blocks.insert(key, (b.clone(), Instant::now()));
@@ -257,7 +281,7 @@ pub fn set_next(files: &[PathBuf]) {
 /// when this one ends).
 fn read_ahead(path: &Path, from: u64, len: u64, modified: SystemTime) {
     let last = len.saturating_sub(1) / BLOCK;
-    if from + AHEAD > last + 1 && !growing(modified) {
+    if from + AHEAD > last + 1 && !is_growing(path, modified) {
         let next = NEXT.lock().unwrap().get(path).cloned();
         if let Some(next) = next {
             let left = (from + AHEAD).saturating_sub(last + 1).min(2);
@@ -378,6 +402,20 @@ mod tests {
             assert_eq!(got, data[a as usize..=b2 as usize], "{a}-{b}");
         }
         forget(&p);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_newest_file_counts_as_being_recorded() {
+        let d = std::env::temp_dir().join(format!("gaze-vstore-grow-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (a, b) = (d.join("c_2026-01-01_10-00-00.mp4"), d.join("c_2026-01-01_10-05-00.mp4"));
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+        // Both look old (as a file being written can on Windows).
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        assert!(is_growing(&b, old), "the newest is still being recorded");
+        assert!(!is_growing(&a, old), "an older one is finished");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

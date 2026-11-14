@@ -265,7 +265,7 @@ pub fn index_cached(path: &Path) -> Option<Arc<FileIndex>> {
     {
         return Some(ix.clone());
     }
-    let finished = modified.elapsed().is_ok_and(|e| e > std::time::Duration::from_secs(120));
+    let finished = modified.elapsed().is_ok_and(|e| e > std::time::Duration::from_secs(120)) && !crate::vstore::is_growing(path, modified);
     // Indexed before (a finished file), on this computer.
     let saved = if had.is_none() && finished {
         stored(path, len).and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<FileIndex>(&b).ok())
