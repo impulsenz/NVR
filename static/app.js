@@ -1116,6 +1116,9 @@ async function refreshStatus() {
         try { const r = await api('api/safe-mode/restore', {method: 'POST'}); toast(r.message); setTimeout(() => location.reload(), 6000); } catch (e) { toast(e.message, true); }
       };
     }
+  } else if (status.ffmpeg_missing) {
+    gb.hidden = false; delete gb.dataset.safe;
+    gb.innerHTML = `<b>⏳ Getting ffmpeg ready</b> — GAZE needs it to record and play video. It's downloading by itself (progress under <a href="#system">System → Tasks</a>) and GAZE restarts with it when it's done.`;
   } else if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
     gb.hidden = false;
     gb.innerHTML = `<b>📷 New camera${status.new_cameras > 1 ? 's' : ''} found on your network</b> (${status.new_cameras}) — <a href="#settings/cameras">add ${status.new_cameras > 1 ? 'them' : 'it'}</a> · <a href="javascript:void 0" id="gb-x">dismiss</a>`;
@@ -5361,22 +5364,35 @@ function showSystem() {
   jobsTimer = setInterval(() => { if (page === 'system') loadJobs(); else clearInterval(jobsTimer); }, 2000);
   clearInterval(sysTimer);
   sysTimer = setInterval(() => { if (page === 'system') loadSystem(); else clearInterval(sysTimer); }, 5000);
+  clearInterval(sysNowTimer);
+  sysNowTimer = setInterval(() => { if (page === 'system' && !document.hidden) loadSystemNow(); else if (page !== 'system') clearInterval(sysNowTimer); }, 1000);
 }
 document.querySelectorAll('#sys-range button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#sys-range button').forEach(x => x.classList.toggle('active', x === b));
   sysRange = +b.dataset.r; loadSystem();
 });
 
+const sysCard = (title, big, sub, pct) => `<div class="card"><h2>${title}</h2><div class="stat">${big}</div><div class="muted">${sub}</div>${pct != null ? `<div class="bar"><div style="width:${Math.min(100, pct)}%;${pct > 85 ? 'background:var(--red)' : ''}"></div></div>` : ''}</div>`;
+// CPU, GPU and memory cards (refreshed every second).
+function sysLiveCards(c) {
+  const s = c.sample, card = sysCard;
+  const bd = (c.breakdown || []).slice(0, 6).map(([w, v]) => `<div class="cpu-bd"><span>${esc(w)}</span><b>${v.toFixed(1)}%</b></div>`).join('');
+  return card('CPU', s.cpu.toFixed(0) + '%', `${esc(c.cpu_name || 'CPU')} · ${c.cores} threads<br>NVR + ffmpeg: ${s.nvr_cpu.toFixed(1)}%${bd ? `<details class="cpu-where"><summary>Where GAZE's share goes</summary>${bd}</details>` : ''}`, s.cpu) +
+    card('GPU', s.gpu != null ? s.gpu.toFixed(0) + '%' : '–', s.gpu != null ? `${esc(c.gpu_name || 'GPU')}${c.gpu_temp != null ? ' · ' + c.gpu_temp.toFixed(0) + ' °C' : ''}${s.gpu_mem != null ? ' · memory ' + s.gpu_mem.toFixed(0) + '%' : ''}${c.moved_to_cpu ? `<br>${c.moved_to_cpu} video job${c.moved_to_cpu === 1 ? '' : 's'} moved to the CPU while the GPU was busy` : ''}` : 'No GPU readings available (NVIDIA needs nvidia-smi; AMD on Linux and any GPU on Windows are read automatically).', s.gpu) +
+    card('Memory', s.ram.toFixed(0) + '%', `${fmtBytes(c.ram_used)} of ${fmtBytes(c.ram_total)}<br>NVR + ffmpeg: ${fmtBytes(c.nvr_ram_used || 0)} (${(s.nvr_ram || 0).toFixed(1)}%)`, s.ram);
+}
+let sysNowTimer = null;
+async function loadSystemNow() {
+  const el = $('sys-live'); if (!el) return;
+  try { el.innerHTML = sysLiveCards(await api('api/monitor/now')); } catch (_) {}
+}
 async function loadSystem() {
   let mon, usage;
   try { [mon, usage] = await Promise.all([api('api/monitor?range=' + sysRange), api('api/usage')]); } catch (e) { return; }
   const c = mon.current, s = c.sample;
-  const card = (title, big, sub, pct) => `<div class="card"><h2>${title}</h2><div class="stat">${big}</div><div class="muted">${sub}</div>${pct != null ? `<div class="bar"><div style="width:${Math.min(100, pct)}%;${pct > 85 ? 'background:var(--red)' : ''}"></div></div>` : ''}</div>`;
+  const card = sysCard;
   const disk = usage.locations[0];
-  $('sys-cards').innerHTML =
-    card('CPU', s.cpu.toFixed(0) + '%', `${esc(c.cpu_name || 'CPU')} · ${c.cores} threads<br>NVR + ffmpeg: ${s.nvr_cpu.toFixed(1)}%`, s.cpu) +
-    card('GPU', s.gpu != null ? s.gpu.toFixed(0) + '%' : '–', s.gpu != null ? `${esc(c.gpu_name || 'GPU')}${c.gpu_temp != null ? ' · ' + c.gpu_temp.toFixed(0) + ' °C' : ''}${s.gpu_mem != null ? ' · memory ' + s.gpu_mem.toFixed(0) + '%' : ''}${c.moved_to_cpu ? `<br>${c.moved_to_cpu} video job${c.moved_to_cpu === 1 ? '' : 's'} moved to the CPU while the GPU was busy` : ''}` : 'No GPU readings available (NVIDIA needs nvidia-smi; AMD on Linux and any GPU on Windows are read automatically).', s.gpu) +
-    card('Memory', s.ram.toFixed(0) + '%', `${fmtBytes(c.ram_used)} of ${fmtBytes(c.ram_total)}<br>NVR + ffmpeg: ${fmtBytes(c.nvr_ram_used || 0)} (${(s.nvr_ram || 0).toFixed(1)}%)`, s.ram) +
+  $('sys-cards').innerHTML = `<div id="sys-live" style="display:contents">${sysLiveCards(c)}</div>` +
     card('Disk', disk ? fmtBytes(disk.free_bytes) + ' free' : '–', disk ? `of ${fmtBytes(disk.total_bytes)} · ${esc(disk.path)}` : '', disk ? 100 * (1 - disk.free_bytes / disk.total_bytes) : null) +
     card('Recording rate', fmtBytes(usage.bytes_per_hour) + '/h', `${fmtBytes(usage.bytes_per_day)} per 24 hours`, null) +
     card('Days of recording', usage.days_capacity != null ? (usage.days_capacity < 2 ? usage.days_capacity.toFixed(1) + ' days' : Math.floor(usage.days_capacity) + ' days') : '–',

@@ -11,6 +11,7 @@ mod discover;
 mod draw;
 mod events;
 mod ffmpeg;
+mod getffmpeg;
 mod finalize;
 mod fsbrowse;
 mod ftp;
@@ -326,8 +327,22 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         warn!("repaired {fixed} recording(s) left incomplete by an unexpected stop");
     }
 
-    let caps = ffmpeg::capabilities(&cfg.server.ffmpeg_path).await;
+    let mut caps = ffmpeg::capabilities(&cfg.server.ffmpeg_path).await;
+    // Not installed: GAZE's own copy, if it has one (downloaded before).
+    if caps.ffmpeg_version.is_empty()
+        && let Some(own) = getffmpeg::own_ffmpeg(&data_dir)
+    {
+        let own = std::path::absolute(&own).unwrap_or(own).to_string_lossy().into_owned();
+        let c2 = ffmpeg::capabilities(&own).await;
+        if !c2.ffmpeg_version.is_empty() {
+            info!("using GAZE's own ffmpeg: {own}");
+            cfg.server.ffmpeg_path = own;
+            cfg.save(&path)?;
+            caps = c2;
+        }
+    }
     if caps.ffmpeg_version.is_empty() {
+        getffmpeg::MISSING.store(true, std::sync::atomic::Ordering::SeqCst);
         warn!(
             "ffmpeg not found at \"{}\" — install ffmpeg or set the path in Settings",
             cfg.server.ffmpeg_path
@@ -370,6 +385,10 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(mgr.clone().housekeeping());
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
+    #[cfg(windows)]
+    if getffmpeg::MISSING.load(std::sync::atomic::Ordering::SeqCst) {
+        tokio::spawn(getffmpeg::fetch_and_use(mgr.clone()));
+    }
     tokio::spawn(web::prebuild_timelapse(mgr.clone()));
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));

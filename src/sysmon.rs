@@ -1,4 +1,4 @@
-//! System monitor: CPU, RAM and GPU usage sampled every few seconds, with
+//! System monitor: CPU, RAM and GPU usage sampled every second, with
 //! history (fine-grained for 6 hours, per-minute for 30 days; the per-minute
 //! history is saved to disk so it survives restarts).
 
@@ -12,7 +12,7 @@ use std::time::Duration;
 use sysinfo::{ProcessesToUpdate, System};
 use tracing::{info, warn};
 
-const FINE_SECS: i64 = 5;
+const FINE_SECS: i64 = 1;
 const FINE_KEEP: usize = 6 * 3600 / FINE_SECS as usize;
 const MINUTE_KEEP: usize = 30 * 24 * 60;
 
@@ -49,6 +49,31 @@ pub struct Current {
     pub gpu_source: Option<String>,
     /// Video jobs moved to the CPU because the GPU was busy.
     pub moved_to_cpu: u64,
+    /// Where GAZE's processor time goes: (what, % of the whole machine),
+    /// busiest first.
+    pub breakdown: Vec<(String, f32)>,
+}
+
+/// What an ffmpeg started by GAZE is doing, from its command line.
+fn job_of(args: &str) -> &'static str {
+    let a = args;
+    if a.contains("f32le") || a.contains("s16le") {
+        "Sound detection (listening)"
+    } else if a.contains("rawvideo") {
+        "Motion detection (decoding video)"
+    } else if a.contains("image2pipe") || a.contains("mjpeg") {
+        "Live pictures (JPEG)"
+    } else if a.contains("libx264") || a.contains("nvenc") || a.contains("_qsv") || a.contains("_amf") || a.contains("h264_mf") || a.contains("_vaapi") {
+        "Converting video (H.264)"
+    } else if a.contains("segment") {
+        "Recording"
+    } else if a.contains("frag_keyframe") {
+        "Live video and playback"
+    } else if a.contains("rtsp") || a.contains("relay") {
+        "Camera connections"
+    } else {
+        "Other video work"
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -166,29 +191,31 @@ impl Monitor {
         #[cfg(not(windows))]
         let card_name: Option<String> = None;
         let mut minute: Vec<Sample> = Vec::new();
-        let mut last_gpu: Option<GpuReading> = None;
-        let mut n = 0u64;
         loop {
             tick.tick().await;
-            n += 1;
             sys.refresh_cpu_usage();
             sys.refresh_memory();
             sys.refresh_processes(ProcessesToUpdate::All, true);
             let cores = sys.cpus().len().max(1);
             let mut nvr = 0.0f32;
             let mut nvr_mem = 0u64;
+            let mut jobs: std::collections::HashMap<&'static str, f32> = Default::default();
             if let Some(pid) = pid {
                 for (p_pid, p) in sys.processes() {
                     if *p_pid == pid || p.parent() == Some(pid) {
                         nvr += p.cpu_usage();
                         nvr_mem += p.memory();
+                        let what = if *p_pid == pid {
+                            "GAZE itself (motion analysis, AI on the processor, pictures)"
+                        } else {
+                            let args: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+                            job_of(&args.join(" "))
+                        };
+                        *jobs.entry(what).or_default() += p.cpu_usage();
                     }
                 }
             }
-            // The Windows counters are slow to read; sample them less often.
-            if source != GpuSource::WindowsCounters || n % 2 == 1 {
-                last_gpu = read_gpu(source).await;
-            }
+            let last_gpu = read_gpu(source).await;
             let total = sys.total_memory().max(1);
             // Windows' Task Manager shows "% Processor Utility" (it counts
             // turbo clock speeds), which can differ a lot from plain busy
@@ -228,6 +255,13 @@ impl Monitor {
                 gpu_temp: last_gpu.as_ref().and_then(|g| g.temp),
                 gpu_source: (source != GpuSource::None).then(|| format!("{source:?}")),
                 moved_to_cpu: crate::load::moved_to_cpu(),
+                breakdown: {
+                    // (Scaled like the NVR's share above: % of the machine.)
+                    let k = if nvr > 0.0 { nvr_cpu / nvr } else { 1.0 / cores as f32 };
+                    let mut b: Vec<(String, f32)> = jobs.into_iter().map(|(w, v)| (w.to_string(), v * k)).filter(|x| x.1 >= 0.1).collect();
+                    b.sort_by(|a, c| c.1.total_cmp(&a.1));
+                    b
+                },
             };
             {
                 let mut f = self.fine.lock().unwrap();
@@ -415,6 +449,87 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
         .collect()
 }
 
+/// A counter program kept running, printing a reading every second
+/// (typeperf, nvidia-smi): starting one for every reading cost CPU time
+/// that then showed up in the very reading (CPU looked busier than Task
+/// Manager said). Its column header line and latest line are kept.
+#[derive(Default)]
+struct Stream {
+    header: Option<String>,
+    last: Option<(std::time::Instant, String)>,
+}
+
+type StreamRef = std::sync::Arc<Mutex<Stream>>;
+
+fn stream(cmd: &'static str, args: Vec<String>, restart_every: Option<Duration>) -> StreamRef {
+    let st: StreamRef = Default::default();
+    let out = st.clone();
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        loop {
+            let child = crate::load::cmd(cmd)
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn();
+            let Ok(mut child) = child else {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            };
+            let Some(stdout) = child.stdout.take() else { continue };
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            let started = std::time::Instant::now();
+            let mut first_quoted = true;
+            while let Ok(Ok(Some(l))) = tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
+                let l = l.trim().to_string();
+                if l.is_empty() {
+                    continue;
+                }
+                let mut s = st.lock().unwrap();
+                // typeperf: the first quoted line names the columns.
+                if l.starts_with('"') && first_quoted {
+                    first_quoted = false;
+                    s.header = Some(l);
+                    continue;
+                }
+                s.last = Some((std::time::Instant::now(), l));
+                drop(s);
+                if restart_every.is_some_and(|d| started.elapsed() > d) {
+                    break;
+                }
+            }
+            let _ = child.kill().await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
+    out
+}
+
+/// The latest reading of a stream (header and line together, as one
+/// sample's output), if it's recent.
+fn latest(s: &StreamRef) -> Option<String> {
+    let s = s.lock().unwrap();
+    let (at, l) = s.last.as_ref()?;
+    if at.elapsed() > Duration::from_secs(5) {
+        return None;
+    }
+    Some(match &s.header {
+        Some(h) => format!("{h}\n{l}"),
+        None => l.clone(),
+    })
+}
+
+static STREAMS: std::sync::OnceLock<Mutex<std::collections::HashMap<&'static str, StreamRef>>> = std::sync::OnceLock::new();
+
+fn named_stream(name: &'static str, cmd: &'static str, args: &[&str], restart_every: Option<Duration>) -> StreamRef {
+    let mut m = STREAMS.get_or_init(Default::default).lock().unwrap();
+    m.entry(name)
+        .or_insert_with(|| stream(cmd, args.iter().map(|a| a.to_string()).collect(), restart_every))
+        .clone()
+}
+
 async fn run_cmd(cmd: &str, args: &[&str], secs: u64) -> Option<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(secs),
@@ -453,8 +568,10 @@ async fn detect_gpu() -> GpuSource {
 async fn read_gpu(source: GpuSource) -> Option<GpuReading> {
     match source {
         GpuSource::NvidiaSmi => {
-            let text = run_cmd("nvidia-smi", NVSMI_ARGS, 5).await?;
-            parse_nvidia_smi(&text)
+            let mut a = NVSMI_ARGS.to_vec();
+            a.extend(["-l", "1"]);
+            let st = named_stream("nvsmi", "nvidia-smi", &a, None);
+            parse_nvidia_smi(&latest(&st)?)
         }
         GpuSource::Sysfs => sysfs_busy().map(|util| GpuReading {
             util,
@@ -462,7 +579,15 @@ async fn read_gpu(source: GpuSource) -> Option<GpuReading> {
             name: Some("GPU".into()),
             temp: None,
         }),
-        GpuSource::WindowsCounters => read_windows_counters().await,
+        GpuSource::WindowsCounters => {
+            // (Restarted every minute: programs that started using the
+            // graphics card since are counted from then.)
+            let st = named_stream("gpuperf", "typeperf", &["\\GPU Engine(*)\\Utilization Percentage", "-si", "1"], Some(Duration::from_secs(60)));
+            match latest(&st) {
+                Some(t) => parse_typeperf(&t).map(|util| GpuReading { util, mem: None, name: Some("GPU".into()), temp: None }),
+                None => None,
+            }
+        }
         GpuSource::None => None,
     }
 }
@@ -496,17 +621,8 @@ fn sysfs_busy() -> Option<f32> {
 /// Windows: total CPU as Task Manager shows it ("% Processor Utility").
 #[cfg(windows)]
 async fn cpu_utility() -> Option<f32> {
-    let text = run_cmd(
-        "typeperf",
-        &[
-            "\\Processor Information(_Total)\\% Processor Utility",
-            "-sc",
-            "1",
-        ],
-        10,
-    )
-    .await?;
-    parse_single_counter(&text).map(|v| v.min(100.0))
+    let st = named_stream("cpuperf", "typeperf", &["\\Processor Information(_Total)\\% Processor Utility", "-si", "1"], None);
+    parse_single_counter(&latest(&st)?).map(|v| v.min(100.0))
 }
 
 #[cfg(not(windows))]

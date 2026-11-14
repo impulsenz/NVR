@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.90 — November 2026
+- **CPU and GPU readings, accurate and every second**: the System page's CPU, GPU and memory now update every second (the history graph keeps its one-minute steps). The readings come from counters that keep running, the way Task Manager reads them: before, a counter program was started for every reading, and its own start-up work made the CPU look busier than it was (e.g. 73% where Task Manager said 50%).
+- **Where the processor time goes**: under the CPU card, *Where GAZE's share goes* shows how much motion detection, live pictures, live video, recording, conversions, sound detection and GAZE itself are using.
+- **GPU acceleration → Choose automatically now measures**: at start-up every graphics-card decoder that works (NVIDIA CUDA first, then DirectX, Intel) decodes a full-HD and a sub-stream-sized test clip, and the one that leaves the processor least busy is used — for the small sub-streams too when that's cheaper on the card. The result shows in Settings → GPU acceleration.
+- **ffmpeg comes with GAZE on Windows**: if ffmpeg isn't installed, GAZE starts anyway, downloads it by itself (a build with NVIDIA, Intel, AMD and DirectX video support; progress under System → Tasks, with a note at the top of the page), and restarts using it. No separate install needed.
+
 ## 0.6.89 — November 2026
 - **Scrubbing a camera's timeline** (after clicking a camera on the Live page) no longer makes the picture vanish and come back as a sheet of tiny thumbnails: the picture keeps its size and shows the time-lapse picture of where you are.
 - **HD on the timeline, never black**: an alert's HD clip is only shown once it actually has a picture. If this browser can't show the camera's HD format (often H.265), only the HD clips are converted (started a few seconds ahead), while the sub-stream keeps playing directly. Before, one such clip could switch the whole camera to slow converted playback, sub-stream included — a likely cause of black screens when clicking alert pictures on the timeline, and of extra work for the computer.

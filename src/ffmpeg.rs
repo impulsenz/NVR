@@ -404,10 +404,41 @@ pub async fn test_hardware(ffmpeg: &str, hw: &HardwareConfig) -> HwTest {
     }
 }
 
-/// The best GPU video setup that works on this computer: the first GPU
-/// decoder that decodes a test clip (also used for the small sub-streams),
-/// and the first GPU encoder that encodes one. Nothing on the GPU works:
-/// the processor, as before.
+/// The processor time (seconds, user + system) ffmpeg took for a job, from
+/// `-benchmark`'s "bench: utime=…s stime=…s" line.
+fn bench_cpu(stderr: &[u8]) -> Option<f64> {
+    let t = String::from_utf8_lossy(stderr);
+    let l = t.lines().find(|l| l.contains("bench: utime="))?;
+    let num = |k: &str| l.split(k).nth(1).and_then(|r| r.split('s').next()).and_then(|v| v.trim().parse::<f64>().ok());
+    Some(num("utime=")? + num("stime=").unwrap_or(0.0))
+}
+
+/// How much processor time decoding `clip` and making the small RGB
+/// pictures motion detection uses (as GAZE does it) takes with decoder `hw`.
+async fn decode_cost(ffmpeg: &str, hw: &HardwareConfig, clip: &std::path::Path) -> Option<f64> {
+    let o = run(
+        crate::load::cmd(ffmpeg)
+            .args(["-hide_banner", "-benchmark", "-loglevel", "info"])
+            .args(decode_args(hw, false))
+            .arg("-i")
+            .arg(clip)
+            .args(["-vf", "scale=640:-2,format=rgb24", "-f", "null", "-"]),
+        60,
+    )
+    .await
+    .ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    bench_cpu(&o.stderr)
+}
+
+/// The best GPU video setup on this computer, measured: every GPU decoder
+/// that works decodes a full-HD and a sub-stream-sized test clip, and the
+/// one that leaves the processor least busy is used (for the small
+/// sub-streams only when that's really cheaper than the processor alone);
+/// then the first GPU encoder that encodes. Nothing on the GPU works: the
+/// processor, as before.
 pub async fn auto_hardware(
     ffmpeg: &str,
     caps: &Capabilities,
@@ -419,28 +450,61 @@ pub async fn auto_hardware(
         gpu_substreams: false,
         ..cur.clone()
     };
+    // NVIDIA's own (CUDA) first: it decodes on the card with the least
+    // copying; the others are measured too.
     let decoders: &[&str] = if cfg!(windows) {
-        &["d3d11va", "cuda", "qsv", "dxva2"]
+        &["cuda", "d3d11va", "qsv", "dxva2"]
     } else if cfg!(target_os = "macos") {
         &["videotoolbox"]
     } else {
-        &["cuda", "qsv"]
+        &["cuda", "qsv", "vaapi"]
     };
-    for d in decoders
-        .iter()
-        .filter(|d| caps.hwaccels.iter().any(|h| h == *d))
-    {
-        let t = HardwareConfig {
-            hwaccel: d.to_string(),
-            encoder: "libx264".into(),
-            ..cur.clone()
-        };
-        if test_hardware(ffmpeg, &t).await.decoder.ok {
-            hw.hwaccel = d.to_string();
-            hw.gpu_substreams = true;
-            break;
+    let dir = std::env::temp_dir();
+    let (big, small) = (dir.join(format!("gaze-bench-hd-{}.mp4", std::process::id())), dir.join(format!("gaze-bench-sd-{}.mp4", std::process::id())));
+    let make = |size: &str, out: &std::path::Path| {
+        let mut c = crate::load::cmd(ffmpeg);
+        c.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("testsrc2=size={size}:rate=20"))
+            .args(["-t", "8", "-c:v", "libx264", "-preset", "ultrafast", "-g", "40"])
+            .arg(out);
+        c
+    };
+    let have = run(&mut make("1920x1080", &big), 60).await.is_ok_and(|o| o.status.success())
+        && run(&mut make("640x360", &small), 60).await.is_ok_and(|o| o.status.success());
+    if have {
+        let cpu_big = decode_cost(ffmpeg, &HardwareConfig { hwaccel: "none".into(), ..cur.clone() }, &big).await;
+        let cpu_small = decode_cost(ffmpeg, &HardwareConfig { hwaccel: "none".into(), ..cur.clone() }, &small).await;
+        let mut best: Option<(String, f64, Option<f64>)> = None;
+        for d in decoders.iter().filter(|d| caps.hwaccels.iter().any(|h| h == *d)) {
+            let t = HardwareConfig { hwaccel: d.to_string(), encoder: "libx264".into(), ..cur.clone() };
+            let Some(cost) = decode_cost(ffmpeg, &t, &big).await else { continue };
+            tracing::info!("GPU test: {d} decoding uses {:.2}s of processor time (processor alone: {:.2}s)", cost, cpu_big.unwrap_or(f64::NAN));
+            if best.as_ref().is_none_or(|b| cost < b.1) {
+                let sm = decode_cost(ffmpeg, &t, &small).await;
+                best = Some((d.to_string(), cost, sm));
+            }
+        }
+        if let Some((d, cost, sm)) = best
+            && cpu_big.is_none_or(|c| cost < c * 0.9)
+        {
+            hw.hwaccel = d;
+            // Sub-streams on the card too when that's cheaper there.
+            hw.gpu_substreams = matches!((sm, cpu_small), (Some(g), Some(c)) if g < c * 0.9);
+            tracing::info!("GPU test: chose {} (sub-streams on the {})", hw.hwaccel, if hw.gpu_substreams { "graphics card" } else { "processor" });
+        }
+    } else {
+        // No test clips (no libx264): the first decoder that works.
+        for d in decoders.iter().filter(|d| caps.hwaccels.iter().any(|h| h == *d)) {
+            let t = HardwareConfig { hwaccel: d.to_string(), encoder: "libx264".into(), ..cur.clone() };
+            if test_hardware(ffmpeg, &t).await.decoder.ok {
+                hw.hwaccel = d.to_string();
+                hw.gpu_substreams = true;
+                break;
+            }
         }
     }
+    let _ = std::fs::remove_file(&big);
+    let _ = std::fs::remove_file(&small);
     for e in [
         "h264_nvenc",
         "h264_amf",

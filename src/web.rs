@@ -140,6 +140,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/status", get(status))
         .route("/api/system", get(system))
         .route("/api/monitor", get(monitor))
+        .route("/api/monitor/now", get(monitor_now))
         .route("/api/usage", get(usage))
         .route("/api/usage/kinds", get(usage_kinds))
         .route("/api/logs", get(get_logs))
@@ -402,6 +403,7 @@ async fn status(
             .collect::<Vec<_>>(),
         "alerts_unseen": library::unseen_count(&m),
         "say_phrases": m.config().tts.phrases,
+        "ffmpeg_missing": crate::getffmpeg::MISSING.load(std::sync::atomic::Ordering::SeqCst),
         "sirens": crate::siren::running(),
         "timelapse": crate::picturelog::enabled(),
         "timelapse_seconds": crate::picturelog::seconds(),
@@ -474,6 +476,11 @@ fn default_range() -> i64 {
 async fn monitor(State(m): App, Query(q): Query<MonitorQuery>) -> Response {
     let range = q.range.clamp(300, 30 * 86_400);
     Json(json!({ "current": m.monitor.current(), "history": m.monitor.history(range, 360), "range": range })).into_response()
+}
+
+/// This moment's CPU, RAM and GPU (System page, every second).
+async fn monitor_now(State(m): App) -> Response {
+    Json(m.monitor.current()).into_response()
 }
 
 async fn usage(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {

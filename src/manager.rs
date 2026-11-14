@@ -487,6 +487,13 @@ impl Manager {
         self.stores.lock().unwrap().clone()
     }
 
+    /// Use the ffmpeg at `path` (saved in the settings).
+    pub fn set_ffmpeg_path(&self, path: &str) -> Result<()> {
+        let mut cfg = self.config();
+        cfg.server.ffmpeg_path = path.to_string();
+        self.commit(cfg)
+    }
+
     /// Validate and persist a new config, then make it current.
     fn commit(&self, new: Config) -> Result<()> {
         if Config::safe_mode().is_some() {
