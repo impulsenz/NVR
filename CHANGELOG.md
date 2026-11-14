@@ -1,5 +1,14 @@
 # What's new in GAZE
 
+## 0.6.98 — November 2026
+- **Sub-stream stays on the sub-stream**: with Sub-stream chosen, no full-quality footage is fetched in advance; choose Main stream (HD) to watch full quality. An alert you click still plays in full quality (its HD clip) whichever is chosen.
+- **Each camera's outline shows what it's playing, and stays**: **purple** — full-quality (HD) video, **green** — the sub-stream recording, **blue** — the time-lapse (the timeline's own colours).
+- **Playback keeps up better**:
+  - Each camera loads further ahead while playing — a minute of the sub-stream, half a minute of HD (was 20 seconds).
+  - A camera whose video can't arrive in time no longer just freezes: it shows the time-lapse at that moment (blue outline, "Catching up") until its video has caught up.
+  - With many cameras, open GAZE on its secure address (https, Settings → System): browsers fetch at most 6 things at once from a plain http address, so cameras wait for each other; over https they all come at once.
+- "No recording at this time" on a camera's picture sits below the clock instead of under it.
+
 ## 0.6.97 — November 2026
 - **Recordings play the stream you choose**: with **Sub-stream** chosen above the timeline, every camera plays its sub-stream recording only (the full-quality alert clips no longer cut in, also not for an alert you click); with **Main stream**, only full-quality footage (24/7 HD recording and alert clips). Where the chosen stream has nothing at that moment, the camera says so ("No sub-stream recording at this time"). The time-lapse while scrubbing works whichever is chosen. A stream that wasn't recorded can still be chosen (marked "not recorded here").
 - **See what's loading on the timeline**: footage is streamed a few seconds at a time, about 20 seconds ahead of where you're watching. Each camera's timeline now shows:

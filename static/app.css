@@ -1416,7 +1416,8 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
    time-lapse (scrubbing), green: the recorded video, loaded. */
 #tl-videos .surface::after { content: ''; position: absolute; inset: 0; border: 2px solid transparent; border-radius: inherit; pointer-events: none; z-index: 6; transition: border-color .25s ease, box-shadow .25s ease; }
 #tl-videos .surface.src-tl::after { border-color: #38bdf8; box-shadow: inset 0 0 10px rgba(56,189,248,.35); }
-#tl-videos .surface.src-rec::after { border-color: #45b06c; box-shadow: inset 0 0 10px rgba(69,176,108,.35); transition: border-color .25s ease, box-shadow .25s ease; }
+#tl-videos .surface.src-sub::after { border-color: #45b06c; box-shadow: inset 0 0 10px rgba(69,176,108,.35); }
+#tl-videos .surface.src-hd::after { border-color: #8b6fd6; box-shadow: inset 0 0 10px rgba(139,111,214,.4); }
 
 /* Recordings: what each camera has loaded (a light strip over its footage)
    and, at the playhead, a moving stripe while it waits for its video. */
@@ -1427,3 +1428,9 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
   animation: tlwait .6s linear infinite; box-shadow: 0 0 8px rgba(255,255,255,.25); }
 @keyframes tlwait { to { background-position: 14px 0; } }
 @media (prefers-reduced-motion: reduce) { .tl-buf .wait { animation: none; } }
+
+/* Recordings: a camera whose video can't keep up with playback. */
+#tl-videos .surface.stalled::before { content: '⏳ Catching up — time-lapse shown'; position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 7;
+  background: rgba(0,0,0,.72); color: #fff; font-size: 12px; padding: 3px 10px; border-radius: 12px; pointer-events: none; white-space: nowrap; }
+/* (Below the clock on the picture, not under it.) */
+#tl-videos .surface > .msg { align-items: flex-end; padding-bottom: 22%; }

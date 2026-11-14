@@ -4074,6 +4074,12 @@ function buildTimelineVideos() {
       if (u && tl.data.some(c => c.segments.some(x => x.kind === 'clip' && x.url === u))) { tl.badClips.add(u); delete v.dataset.url; tlSync(true); }
     }));
     el._hlsV = el.querySelector('video[data-hls]'); watchFps(el._hlsV);
+    // Playing, and this camera's video ran out (its footage didn't arrive
+    // in time): it says so on the picture until it's caught up.
+    for (const v of [el._hlsV, ...el._vids]) {
+      v.addEventListener('waiting', () => { if (tl.playing && v === activeVideo(el)) { clearTimeout(el._stallT); el._stallT = setTimeout(() => { if (tl.playing && v === activeVideo(el) && v.readyState < 3) el.classList.add('stalled'); }, 500); } });
+      for (const ev of ['playing', 'canplaythrough', 'pause', 'emptied']) v.addEventListener(ev, () => { clearTimeout(el._stallT); el.classList.remove('stalled'); });
+    }
     // The continuous player is shown once it has the picture (until then
     // the last picture stays).
     for (const ev of ['seeked', 'loadeddata', 'playing', 'canplay'])
@@ -4135,7 +4141,9 @@ async function preloadRecordings() {
 const HLS_WIN = 90 * 60000;  // a playlist covers 1½ h either side
 function hlsFor(el, cam) {
   if (el._h) return el._h;
-  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: 20, maxMaxBufferLength: 60, backBufferLength: 30,
+  // Loaded well ahead (a minute of the light sub-stream, half a minute of
+  // HD), so a camera doesn't freeze when the disk or NAS is slow for a moment.
+  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: tlQ() === 'main' ? 30 : 60, maxMaxBufferLength: 120, backBufferLength: 30, maxBufferHole: 1,
     startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1});
   hls.attachMedia(el._hlsV);
   const h = el._h = {hls, cam, frags: [], ready: false};
@@ -4164,6 +4172,7 @@ function hlsLoad(h, T, stream) {
   // (asked again by the player every few seconds; nothing starts over).
   h.from = T - HLS_WIN; h.to = T + HLS_WIN; h.live = h.to > now;
   h.stream = stream; h.ready = false; h.frags = []; h.reqAt = now; h.started = false;
+  h.hls.config.maxBufferLength = stream === 'main' ? 30 : 60;
   h.hls.stopLoad();
   h.hls.loadSource(`api/hls/${enc(h.cam)}/${stream}.m3u8?from=${new Date(h.from).toISOString()}&to=${new Date(h.to).toISOString()}${h.live ? '&live=true' : ''}`);
 }
@@ -4215,8 +4224,7 @@ function tlPreload(el, c, from) {
 }
 // Play camera `el` at tl.T with the continuous stream; false: play the file.
 function tlHls(el, c, s, force) {
-  // (An alert clicked plays its HD clip only with the main stream chosen.)
-  const hd = tlQ() === 'main' && tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
+  const hd = tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
   // (Converted playback is for files this browser can't play, e.g. H.265
   // HD clips: the stream is tried for the rest; it says if it can't.)
   if (s.kind === 'clip' && !hd && hlsReady() && !(el._noHls && Date.now() - el._noHls < 60000)) { leaveHls(el, true); return false; }
@@ -4397,10 +4405,12 @@ function segAt(c, T, force) {
   const hit = (s) => segMs(s)._a <= T && T < end(s);
   // Normally the light stream 2 copy (opens instantly); after clicking an
   // alert, its full-quality footage until the alert is over.
+  // An alert you clicked plays its full-quality clip whichever stream is
+  // chosen (until the alert is over); otherwise only the chosen stream.
+  const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
   const order = force === 'main' ? ['clip', 'recording', 'sub'] : force === 'sub' ? ['sub', 'recording', 'clip']
-    : tlQ() === 'main' ? ['clip', 'recording'] : ['sub', 'recording'];
-  // Only the chosen stream.
-  const ok = force ? () => true : tlShows;
+    : hd ? ['clip', 'recording', 'sub'] : tlQ() === 'main' ? ['clip', 'recording'] : ['sub', 'recording'];
+  const ok = force ? () => true : hd ? (x) => x.kind === 'clip' || tlShows(x) : tlShows;
   for (const k of order) {
     const s = c.segments.find(x => x.kind === k && ok(x) && hit(x) && !(k === 'clip' && tl.badClips.has(x.url)));
     if (s) return s;
@@ -4495,7 +4505,7 @@ function tlSync(force) {
     // Near the end of this file (or of the alert's HD part): load what comes
     // next in the other player, at the right moment, for a seamless switch.
     const segEnd = new Date(s.end).getTime();
-    const boundary = tlQ() === 'main' && tl.hd && tl.hd.camera === c.camera && s.kind !== 'sub' ? Math.min(segEnd, tl.hd.until) : segEnd;
+    const boundary = tl.hd && tl.hd.camera === c.camera && s.kind !== 'sub' ? Math.min(segEnd, tl.hd.until) : segEnd;
     const left = (boundary - tl.T) / 1000;
     const nx = left < 10 * Math.max(1, tl.speed) && segAt(c, boundary + 100);
     const other = el._vids[1 - el._active];
@@ -4718,6 +4728,17 @@ function paintLoaded() {
     const waiting = !tl.live && !tl.dragging && has && (el._pending != null || (v && (v.seeking || v.readyState < 3) && (tl.playing || v.readyState < 2)));
     if (waiting) { const p = pct(tl.T); if (p >= 0 && p <= 100) html += `<i class="wait" style="left:${p}%" title="Loading this camera's video…"></i>`; }
     if (box._html !== html) { box._html = html; box.innerHTML = html; }
+    // The outline: what's on the picture now. A camera whose video can't
+    // keep up shows the time-lapse at that moment meanwhile (blue).
+    const sp = el.querySelector('.sprite');
+    if (tl.dragging) continue;
+    if (el.classList.contains('stalled') && has && tl.playing) {
+      previewOne(el, tl.T);
+      continue;
+    }
+    if (el._stallPv && !el.classList.contains('stalled')) { el._stallPv = false; sp.hidden = true; }
+    if (!has || tl.live) { srcMark(el, null); continue; }
+    srcMark(el, sp && !sp.hidden ? 'tl' : 'rec');
   }
 }
 setInterval(paintLoaded, 400);
@@ -5284,6 +5305,16 @@ function hideSpritesWhenReady() {
 // once per frame, for the newest position.
 let previewQueued = false;
 function previewSoon() { if (previewQueued) return; previewQueued = true; requestAnimationFrame(() => { previewQueued = false; if (tl.dragging || tl.T != null) previewAll(); }); }
+function previewOne(el, T) {
+  const c = tl.data.find(x => x.camera === el.dataset.cam), sp = el.querySelector('.sprite');
+  const ps = c && previewSources(c.segments).find(x => x._a <= T && T < (isGrowing(x) ? Date.now() : x._b) + 1000);
+  if (!ps) return;
+  spriteFor(c.camera, ps).then(info => {
+    if (!info || !el.classList.contains('stalled')) return;
+    const off = (T - new Date(ps.start).getTime()) / 1000;
+    if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) { sp.hidden = false; el._stallPv = true; srcMark(el, 'tl'); }
+  });
+}
 function previewAll() {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam);
@@ -5319,15 +5350,21 @@ function previewAll() {
     });
   }
 }
-// What a camera above the timeline shows, as its outline in the timeline's
-// colours: blue while it's the time-lapse (scrubbing), green once the
-// recorded video has loaded and taken over.
+// What a camera above the timeline is showing, as its outline in the
+// timeline's colours (it stays): purple — full-quality (HD) video, green —
+// the sub-stream recording, blue — the time-lapse (while scrubbing, or while
+// its video can't keep up with playback).
 function srcMark(el, what) {
-  el.classList.toggle('src-tl', what === 'tl');
-  el.classList.toggle('src-rec', what === 'rec');
-  clearTimeout(el._srcT);
-  // (Green says "loaded": it fades after a moment.)
-  if (what === 'rec') el._srcT = setTimeout(() => el.classList.remove('src-rec'), 2500);
+  if (what === 'rec') what = recKind(el);
+  for (const k of ['tl', 'hd', 'sub']) el.classList.toggle('src-' + k, what === k);
+}
+// The stream of the video a camera shows right now.
+function recKind(el) {
+  const v = activeVideo(el), c = tl.data.find(x => x.camera === el.dataset.cam);
+  if (!v || !c) return null;
+  if (el._mode === 'hls') return el._h && el._h.stream === 'main' ? 'hd' : 'sub';
+  const u = (v.dataset.url || '').replace(/#tc$/, ''), sg = u && c.segments.find(x => x.url === u);
+  return sg ? (streamOf(sg) === 'main' ? 'hd' : 'sub') : null;
 }
 // Seek a camera's video while scrubbing: one seek at a time, always to the
 // newest wanted moment, timing how long each picture takes to show.
