@@ -1,5 +1,14 @@
 # What's new in GAZE
 
+## 0.6.85 — November 2026
+- **Pan / tilt / zoom, roaming and tracking**: the button under the presets now shows the mode the camera is in — **Off** (stays where it is), **Roam** (visits the ticked presets in turn), **Track** (follows a person the AI finds, then goes back) or **Roam + track** (roams; when the AI finds a person it stops roaming, follows them until they're gone, then carries on). It's green and turning while active. The stay at each preset can now be anything from **0 seconds** (keeps moving from one preset to the next as soon as it gets there) upwards.
+- **Roaming works reliably now**: it used to stop after the first move, because the camera's own movement set off motion alerts and roaming paused during alerts. The camera's own movement no longer counts as motion (no more false alerts while it roams), and the AI keeps looking for people while it moves when tracking is on.
+- **Delete a preset**: 🗑 next to ☆ deletes the chosen preset (it's taken out of the roaming list too).
+- **Move the PTZ controls**: drag them anywhere on the picture by the grip at the top; the place is remembered per camera on this device (double-click the grip to put them back).
+- **Download more voices**: Settings → Voice & talking → Download voices: natural-sounding free voices (British, American, German, French, Spanish …) from the open-source Piper project. They run on this computer; nothing is sent online.
+- **Say… queues**: messages sent quickly one after another (or while someone talks or the siren sounds) are said in turn instead of giving a "busy" error.
+- The **version number** now shows next to GAZE in the top bar.
+
 ## 0.6.84 — November 2026
 - **🚨 Siren** to scare off intruders: on the live view (and full-screen toolbar) of a camera with two-way audio, Siren sounds a loud wailing alarm through the camera's speaker with spoken warnings in between, such as "You are being recorded. The homeowner has been notified" and "Leave the property now. The police have been notified". It runs for the set time or until you press **Stop siren**, and is kept in the recordings. Set it up in **Settings → Voice & talking → Siren**: how long it sounds, your own warnings (or pick from ready ones), whether to speak them, and **Hear the siren here**.
 - **Tapo cameras**: choosing the Tapo brand in a camera's settings now picks **UDP** for the video (much smoother on Tapo's Wi-Fi cameras) and Tapo's pan / tilt / zoom control port **2020**. Nothing else is changed, and cameras already set up stay as they are.

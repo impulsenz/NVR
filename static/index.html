@@ -19,7 +19,7 @@
 </head>
 <body>
 <header>
-  <h1 id="nvr-name" class="brand"><img src="icon.png" alt=""><span>GAZE</span></h1>
+  <h1 id="nvr-name" class="brand"><img src="icon.png" alt=""><span>GAZE</span><small class="brand-ver" id="brand-ver"></small></h1>
   <nav>
     <a href="#live" data-page="live"><i class="ni">📹</i><span>Live</span></a>
     <a href="#alerts" data-page="alerts"><i class="ni">🔔</i><span>Alerts</span> <span class="badge" id="alert-badge" hidden></span></a>
@@ -108,6 +108,7 @@
             <svg id="focus-boxes" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute;pointer-events:none;z-index:1" hidden></svg>
             <div id="focus-motion-info" class="ovtext" style="position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:2" hidden></div>
             <div class="ptz-ov op-only" id="ptz-pad" hidden>
+              <div class="ptz-grip" id="ptz-grip" title="Drag to move these controls"></div>
               <div class="ptz-main">
                 <div class="ptz-ring">
                   <button type="button" class="u" data-ptz="0,1,0" title="Tilt up (↑)"><svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(0deg)"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -118,12 +119,13 @@
                 </div>
                 <div class="ptz-zoom"><button type="button" data-ptz="0,0,1" title="Zoom in (+ or scroll)">＋</button><span>ZOOM</span><button type="button" data-ptz="0,0,-1" title="Zoom out (− or scroll)">－</button></div>
               </div>
-              <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button><button type="button" id="ptz-roam" title="Roam between presets">⟲</button></div>
+              <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position (or press its number)"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button><button type="button" id="ptz-del" title="Delete the chosen preset">🗑</button></div>
+              <button type="button" class="ptz-mode" id="ptz-roam" title="Roaming and tracking: click to change"><b>⟲</b> <span>Off</span></button>
               <div class="ptz-roam" id="ptz-roam-box" hidden>
-                <label class="check"><input type="checkbox" id="ptz-roam-on"> Roam between presets</label>
+                <div class="ptz-seg" id="ptz-mode-seg"><button type="button" data-m="off">Off</button><button type="button" data-m="roam">Roam</button><button type="button" data-m="track">Track</button><button type="button" data-m="both">Roam + track</button></div>
+                <div class="hint" id="ptz-mode-hint"></div>
                 <div class="ptz-roam-list" id="ptz-roam-list"></div>
-                <div class="row"><span>Stay</span><input type="number" id="ptz-roam-s" min="5" max="3600" value="30"><span>s at each</span></div>
-                <div class="hint">Pauses while something's going on, and for 2 minutes after you steer it. Keys 1–9 go to presets.</div>
+                <div class="row ptz-stay"><span>Stay</span><input type="number" id="ptz-roam-s" min="0" max="3600" value="30"><span>s at each (0 = keep moving)</span></div>
                 <div class="row"><span class="spacer"></span><button type="button" id="ptz-roam-cancel">Cancel</button><button type="button" class="primary" id="ptz-roam-save">Save</button></div>
               </div>
               <div class="ptz-msg" id="ptz-msg"></div>

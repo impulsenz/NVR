@@ -190,6 +190,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/siren/stop", post(siren_stop))
         .route("/api/tts/siren-preview", post(siren_preview))
         .route("/api/tts/voices", get(tts_voices))
+        .route("/api/tts/downloads", get(tts_downloads))
+        .route("/api/tts/downloads/{id}", post(tts_download).delete(tts_download_delete))
         .route("/api/tts/preview", post(tts_preview))
         .route("/api/jobs", get(jobs_list))
         .route("/api/jobs/pause", post(jobs_pause))
@@ -226,6 +228,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         )
         .route("/api/cameras/{id}/ptz/goto", post(ptz_goto))
         .route("/api/cameras/{id}/ptz/patrol", get(ptz_patrol_get).put(ptz_patrol_put))
+        .route("/api/cameras/{id}/ptz/presets/{token}", axum::routing::delete(ptz_delete_preset))
         .route("/api/ptz/test", post(ptz_test))
         .route("/api/cameras/{id}/resume", post(resume))
         .route(
@@ -1518,14 +1521,21 @@ async fn ptz_goto(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq
 
 #[derive(Deserialize, serde::Serialize)]
 struct PatrolReq {
-    /// Preset tokens visited in turn (empty = not roaming).
+    /// Preset tokens visited in turn.
     patrol: Vec<String>,
+    /// Seconds at each (0: straight on to the next).
     patrol_seconds: u32,
+    /// Roaming on.
+    #[serde(default)]
+    roam: bool,
+    /// Following people (AI tracking) on.
+    #[serde(default)]
+    follow: bool,
 }
 
 async fn ptz_patrol_get(State(m): App, Path(id): Path<String>) -> Response {
     match m.config().cameras.iter().find(|c| c.id == id) {
-        Some(c) => Json(PatrolReq { patrol: c.ptz.patrol.clone(), patrol_seconds: c.ptz.patrol_seconds }).into_response(),
+        Some(c) => Json(PatrolReq { patrol: c.ptz.patrol.clone(), patrol_seconds: c.ptz.patrol_seconds, roam: c.ptz.roaming(), follow: c.ptz.follow }).into_response(),
         None => err(StatusCode::NOT_FOUND, "no such camera"),
     }
 }
@@ -1535,12 +1545,36 @@ async fn ptz_patrol_put(State(m): App, Path(id): Path<String>, Json(r): Json<Pat
     let Some(mut cam) = m.config().cameras.iter().find(|c| c.id == id).cloned() else {
         return err(StatusCode::NOT_FOUND, "no such camera");
     };
+    if r.roam && r.patrol.len() < 2 {
+        return err(StatusCode::BAD_REQUEST, "tick at least two presets to roam between");
+    }
     cam.ptz.patrol = r.patrol.into_iter().take(64).collect();
-    cam.ptz.patrol_seconds = r.patrol_seconds.clamp(5, 3600);
+    cam.ptz.patrol_seconds = r.patrol_seconds.min(3600);
+    cam.ptz.roam = Some(r.roam);
+    cam.ptz.follow = r.follow;
     match m.update_camera(&id, cam, false).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            crate::ptz_auto::reset(&id);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => bad(e),
     }
+}
+
+/// Delete a preset (also taken out of the roaming list).
+async fn ptz_delete_preset(State(m): App, Path((id, token)): Path<(String, String)>) -> Response {
+    let res = async { m.onvif(&id).remove_preset(&ptz_target(&m, &id)?, &token).await }.await;
+    if let Err(e) = res {
+        return bad(e);
+    }
+    if let Some(mut cam) = m.config().cameras.iter().find(|c| c.id == id).cloned()
+        && cam.ptz.patrol.contains(&token)
+    {
+        cam.ptz.patrol.retain(|t| *t != token);
+        let _ = m.update_camera(&id, cam, false).await;
+        crate::ptz_auto::reset(&id);
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn ptz_save_preset(
@@ -4024,6 +4058,30 @@ async fn talk_ws(
     })
 }
 
+/// Settings → voice: voices that can be downloaded (Piper).
+async fn tts_downloads() -> Response {
+    Json(crate::piper::catalog()).into_response()
+}
+
+async fn tts_download(Path(id): Path<String>) -> Response {
+    if !crate::piper::CATALOG.iter().any(|v| v.0 == id) {
+        return err(StatusCode::NOT_FOUND, "unknown voice");
+    }
+    tokio::spawn(async move {
+        if let Err(e) = crate::piper::download(&id).await {
+            tracing::warn!("voice {id}: {e:#}");
+        }
+    });
+    StatusCode::ACCEPTED.into_response()
+}
+
+async fn tts_download_delete(Path(id): Path<String>) -> Response {
+    match crate::piper::delete(&id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
 /// Settings → voice: the voices this computer has.
 async fn tts_voices() -> Response {
     Json(crate::tts::voices().await).into_response()
@@ -4173,14 +4231,28 @@ async fn say(
     if !cam.talk {
         return err(StatusCode::BAD_REQUEST, "two-way audio is off for this camera (camera settings → Audio)");
     }
+    // Made straight away (while anything before it is still being said).
     let samples = match crate::tts::speak(&cfg.server.ffmpeg_path, &r.text, &cfg.tts).await {
         Ok(s) => s,
         Err(e) => return bad(e),
     };
+    // One after another: messages sent quickly wait their turn, and so do
+    // messages while someone talks or the siren sounds (up to 2 minutes).
+    let line = {
+        static LINES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = std::sync::LazyLock::new(Default::default);
+        LINES.lock().unwrap().entry(cam.id.clone()).or_default().clone()
+    };
+    let _turn = line.lock().await;
     let url = if cam.talk_url.trim().is_empty() { cam.url.clone() } else { cam.talk_url.trim().to_string() };
-    let mut talk = match crate::talk::Talk::open(&cam.id, &url).await {
-        Ok(t) => t,
-        Err(e) => return bad(e),
+    let waited = std::time::Instant::now();
+    let mut talk = loop {
+        match crate::talk::Talk::open(&cam.id, &url).await {
+            Ok(t) => break t,
+            Err(e) if format!("{e}").contains("already talking") && waited.elapsed() < Duration::from_secs(120) => {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => return bad(e),
+        }
     };
     let who = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
     tracing::info!("[{}] {} had the camera say: {}", cam.name, if who.is_empty() { "someone" } else { &who }, r.text.trim());

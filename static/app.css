@@ -1331,16 +1331,35 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 .say-quick { display: flex; flex-wrap: wrap; gap: 4px; }
 .say-pop .say-msg:empty { display: none; }
 
-/* Roam between presets (on the PTZ overlay) */
-.ptz-presets #ptz-roam.on { background: rgba(79,140,255,.35); color: #fff; }
-.ptz-roam { margin-top: 6px; padding: 8px; border-radius: 10px; background: rgba(10,12,16,.82); color: #e6e8ec; font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; max-width: 240px; }
+/* Roaming / tracking mode, delete, and the drag grip (PTZ overlay) */
+.ptz-mode { display: flex; align-items: center; justify-content: center; gap: 6px; height: 30px; min-height: 0 !important; padding: 0 10px; border-radius: 9px;
+  background: rgba(0,0,0,.4); color: #cfd6e2; border: 1px solid rgba(255,255,255,.14); font-size: 12.5px; }
+.ptz-mode.on { background: rgba(34,197,94,.3); border-color: rgba(34,197,94,.7); color: #fff; }
+.ptz-mode.on b { display: inline-block; animation: ptzspin 2.4s linear infinite; }
+@keyframes ptzspin { to { transform: rotate(360deg); } }
+.ptz-presets #ptz-del:hover { background: rgba(239,68,68,.25); }
+.ptz-grip { height: 10px; margin: -6px 30% 0; border-radius: 6px; cursor: grab; touch-action: none;
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,.35) 0 2px, transparent 2px 5px); background-size: 100% 3px; background-repeat: no-repeat; background-position: center; }
+.ptz-ov.dragging, .ptz-ov.dragging .ptz-grip { cursor: grabbing; opacity: 1 !important; }
+.ptz-roam { padding: 8px; border-radius: 10px; background: rgba(10,12,16,.85); color: #e6e8ec; font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; max-width: 250px; }
 .ptz-roam .row { display: flex; align-items: center; gap: 6px; }
-.ptz-roam input[type=number] { width: 70px; height: 28px; min-height: 0; }
+.ptz-roam input[type=number] { width: 64px; height: 28px; min-height: 0; }
 .ptz-roam-list { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto; }
 .ptz-roam .check { margin: 0; color: inherit; }
 .ptz-roam .hint { color: #9aa3b2; margin: 0; }
 .ptz-roam button { min-height: 0 !important; height: 28px; padding: 0 10px; }
+.ptz-seg { display: flex; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,.18); }
+.ptz-seg button { flex: 1; border: 0; border-radius: 0 !important; background: transparent; color: #cfd6e2; padding: 0 6px !important; font-size: 12px; }
+.ptz-seg button.on { background: var(--accent); color: #fff; }
 
 /* 🚨 Siren */
 .siren-btn.siren-on { background: var(--red) !important; color: #fff !important; border-color: var(--red) !important; animation: sirenpulse 1s ease-in-out infinite; }
 @keyframes sirenpulse { 50% { box-shadow: 0 0 0 4px rgba(239,68,68,.35); } }
+
+/* The version next to GAZE in the top bar */
+.brand .brand-ver { font-size: 11px; font-weight: 500; letter-spacing: 0; color: var(--muted); margin-left: 6px; align-self: flex-end; margin-bottom: 3px; }
+@media (max-width: 600px) { .brand .brand-ver { display: none; } }
+
+.dl-voices { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.dl-voice { display: flex; align-items: center; gap: 6px; }
+.dl-voice > span:first-child { flex: 1; }

@@ -606,6 +606,7 @@ impl Detector {
         let mut pending: std::collections::VecDeque<(Frame, Instant)> = Default::default();
         let mut tint = TintCheck::default();
         let (mut last_pic, mut last_prune): (Option<i64>, Instant) = (None, Instant::now() - Duration::from_secs(3600));
+        let mut was_settling = false;
 
         loop {
             let mut buf = vec![0u8; frame_len];
@@ -716,7 +717,17 @@ impl Detector {
                     }
                 }
                 let m = motion.feed(&frame.rgb);
-                let moving = d.motion && m.as_ref().is_some_and(|m| m.moving);
+                // The camera turning itself (roaming, following) changes the
+                // whole picture: that isn't motion. Afterwards the motion
+                // background starts afresh. The AI still looks meanwhile
+                // when the camera follows people.
+                let settling = self.cam.ptz.enabled && crate::ptz_auto::settling(&self.cam.id);
+                if was_settling && !settling {
+                    motion.restart();
+                }
+                was_settling = settling;
+                let look_anyway = settling && self.cam.ptz.follow;
+                let moving = d.motion && !settling && m.as_ref().is_some_and(|m| m.moving);
                 {
                     let mut s = self.status.lock().unwrap();
                     s.motion = moving;
@@ -786,7 +797,7 @@ impl Detector {
                 if d.ai
                     && ai.enabled()
                     && !ai_busy
-                    && moving
+                    && (moving || look_anyway)
                     && last_ai.elapsed().as_secs_f64() >= d.ai_interval * crate::load::ai_slowdown()
                 {
                     ai_busy = true;

@@ -401,6 +401,26 @@ impl Onvif {
         Ok(())
     }
 
+    /// Is the camera still moving (Some(true)), at rest (Some(false)), or
+    /// doesn't it say (None)?
+    pub async fn moving(&self, t: &Target) -> Option<bool> {
+        let d = self.discover(t).await.ok()?;
+        let body = format!(
+            r#"<GetStatus xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GetStatus>"#,
+            xml_escape(&d.profile)
+        );
+        let xml = self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/GetStatus", &body).await.ok()?;
+        let i = xml.find("MoveStatus")?;
+        let rest = &xml[i..];
+        let pt = rest.find("PanTilt>").map(|j| &rest[j + 8..])?;
+        let v = pt[..pt.find('<').unwrap_or(pt.len())].trim().to_ascii_uppercase();
+        match v.as_str() {
+            "MOVING" => Some(true),
+            "IDLE" => Some(false),
+            _ => None,
+        }
+    }
+
     /// Back to the camera's home position.
     pub async fn home(&self, t: &Target) -> Result<()> {
         let d = self.discover(t).await?;
@@ -409,6 +429,18 @@ impl Onvif {
             xml_escape(&d.profile)
         );
         self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/GotoHomePosition", &body).await?;
+        Ok(())
+    }
+
+    /// Delete a preset.
+    pub async fn remove_preset(&self, t: &Target, token: &str) -> Result<()> {
+        let d = self.discover(t).await?;
+        let body = format!(
+            r#"<RemovePreset xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken><PresetToken>{}</PresetToken></RemovePreset>"#,
+            xml_escape(&d.profile),
+            xml_escape(token)
+        );
+        self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/RemovePreset", &body).await?;
         Ok(())
     }
 

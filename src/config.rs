@@ -1047,10 +1047,21 @@ pub struct PtzConfig {
     pub patrol: Vec<String>,
     /// Seconds at each patrol preset.
     pub patrol_seconds: u32,
+    /// Roam between the patrol presets (None: older settings, where a
+    /// non-empty patrol list meant on).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roam: Option<bool>,
     /// Follow (auto-tracking): turn to keep what the AI finds in view.
     pub follow: bool,
     /// What to follow (empty = person).
     pub follow_objects: Vec<String>,
+}
+
+impl PtzConfig {
+    /// Roaming between presets is on (and there's somewhere to go).
+    pub fn roaming(&self) -> bool {
+        self.roam.unwrap_or(!self.patrol.is_empty()) && !self.patrol.is_empty()
+    }
 }
 
 impl Default for PtzConfig {
@@ -1065,6 +1076,7 @@ impl Default for PtzConfig {
             invert_pan: false,
             invert_tilt: false,
             patrol: Vec::new(),
+            roam: None,
             patrol_seconds: 30,
             follow: false,
             follow_objects: Vec::new(),

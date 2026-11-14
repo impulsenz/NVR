@@ -1,9 +1,11 @@
 //! Moving cameras on their own (camera → Pan / tilt / zoom):
-//! - Patrol: visit chosen presets in turn, a set time at each; paused while
-//!   something is going on, and for a while after someone steers by hand.
+//! - Roam: visit chosen presets in turn, staying a set time at each (0 =
+//!   straight on to the next); paused for a while after someone steers by
+//!   hand.
 //! - Follow: when the AI finds a person (or another chosen kind) off-centre,
-//!   nudge the camera towards it; when it's gone, go back (first patrol
-//!   preset, or the camera's home position).
+//!   nudge the camera towards it; when it's gone, carry on roaming, or go
+//!   back (first roam preset, or the camera's home position).
+//! While the camera moves itself, its movement isn't counted as motion.
 
 use crate::manager::Manager;
 use crate::onvif::Target;
@@ -20,10 +22,34 @@ pub fn manual(camera: &str) {
     MANUAL.lock().unwrap().insert(camera.to_string(), Instant::now());
 }
 
+/// The camera is moving by itself (roaming, following) or has only just
+/// stopped: its own movement isn't motion in the picture.
+static SETTLE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
+/// After a move ends, the picture settles for this long.
+const SETTLE_AFTER: Duration = Duration::from_millis(1500);
+
+pub fn settling(camera: &str) -> bool {
+    SETTLE.lock().unwrap().get(camera).is_some_and(|t| Instant::now() < *t)
+}
+
+fn settle_until(camera: &str, t: Instant) {
+    SETTLE.lock().unwrap().insert(camera.to_string(), t);
+}
+
+/// The roaming / tracking settings were changed: start afresh, now.
+pub fn reset(camera: &str) {
+    MANUAL.lock().unwrap().remove(camera);
+    RESET.lock().unwrap().push(camera.to_string());
+}
+static RESET: LazyLock<Mutex<Vec<String>>> = LazyLock::new(Default::default);
+
 #[derive(Default)]
 struct State {
     next: usize,
+    /// When to move to the next preset (None: now).
     next_at: Option<Instant>,
+    /// A move to a preset is under way, since then.
+    moving_since: Option<Instant>,
     following: bool,
     last_seen: Option<Instant>,
     last_nudge: Option<Instant>,
@@ -43,19 +69,25 @@ pub fn nudge(b: (f32, f32, f32, f32)) -> Option<(f32, f32)> {
 pub async fn run(mgr: Arc<Manager>) {
     let mut states: HashMap<String, State> = HashMap::new();
     loop {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        for c in std::mem::take(&mut *RESET.lock().unwrap()) {
+            states.remove(&c);
+        }
         let cfg = mgr.config();
-        for cam in cfg.cameras.iter().filter(|c| c.enabled && c.ptz.enabled && (c.ptz.follow || (!c.ptz.patrol.is_empty() && c.ptz.patrol_seconds > 0))) {
+        for cam in cfg.cameras.iter().filter(|c| c.enabled && c.ptz.enabled && (c.ptz.follow || c.ptz.roaming())) {
             let st = states.entry(cam.id.clone()).or_default();
+            let p = &cam.ptz;
+            let stay = Duration::from_secs(p.patrol_seconds as u64);
             if MANUAL.lock().unwrap().get(&cam.id).is_some_and(|t| t.elapsed() < HANDS_OFF) {
-                st.next_at = Some(Instant::now() + Duration::from_secs(cam.ptz.patrol_seconds.max(5) as u64));
+                st.next_at = Some(Instant::now() + stay);
+                st.moving_since = None;
                 continue;
             }
             let Ok(t) = Target::from(cam, &cam.ptz) else { continue };
             let onvif = mgr.onvif(&cam.id);
             let det = mgr.camera(&cam.id).and_then(|r| r.detector()).map(|d| d.status());
-            let p = &cam.ptz;
-            // Follow.
+            // Follow: a person (or what's chosen) found by the AI takes over
+            // from roaming until it's gone.
             if p.follow
                 && let Some(d) = &det
             {
@@ -68,6 +100,9 @@ pub async fn run(mgr: Arc<Manager>) {
                     st.last_seen = Some(Instant::now());
                     if !st.following {
                         st.following = true;
+                        st.moving_since = None;
+                        // Stop where it is (a roam move may be under way).
+                        let _ = onvif.stop(&t).await;
                         info!("[{}] following a {}", cam.name, b.label);
                     }
                     // One nudge, then let the AI look again.
@@ -75,6 +110,7 @@ pub async fn run(mgr: Arc<Manager>) {
                         && let Some((pan, tilt)) = nudge((b.x, b.y, b.w, b.h))
                     {
                         st.last_nudge = Some(Instant::now());
+                        settle_until(&cam.id, Instant::now() + Duration::from_millis(350) + SETTLE_AFTER);
                         let (sx, sy) = (if p.invert_pan { -1.0 } else { 1.0 }, if p.invert_tilt { -1.0 } else { 1.0 });
                         if let Err(e) = onvif.move_continuous(&t, pan * p.speed * sx, tilt * p.speed * sy, 0.0).await {
                             warn!("[{}] follow: {e:#}", cam.name);
@@ -84,33 +120,56 @@ pub async fn run(mgr: Arc<Manager>) {
                     }
                     continue;
                 }
-                if st.following && st.last_seen.is_some_and(|t| t.elapsed() > Duration::from_secs(10)) {
+                if st.following && st.last_seen.is_some_and(|t| t.elapsed() > Duration::from_secs(8)) {
                     st.following = false;
-                    info!("[{}] nothing to follow any more: going back", cam.name);
-                    let back = match p.patrol.first() {
-                        Some(tok) => onvif.goto_preset(&t, tok).await,
-                        None => onvif.home(&t).await,
-                    };
-                    if let Err(e) = back {
-                        warn!("[{}] going back: {e:#}", cam.name);
+                    info!("[{}] nobody to follow any more: going back", cam.name);
+                    if p.roaming() {
+                        // Carry on roaming, from the next preset.
+                        st.next_at = None;
+                    } else {
+                        settle_until(&cam.id, Instant::now() + Duration::from_secs(6));
+                        let back = match p.patrol.first() {
+                            Some(tok) => onvif.goto_preset(&t, tok).await,
+                            None => onvif.home(&t).await,
+                        };
+                        if let Err(e) = back {
+                            warn!("[{}] going back: {e:#}", cam.name);
+                        }
                     }
-                    st.next_at = Some(Instant::now() + Duration::from_secs(p.patrol_seconds.max(5) as u64));
                 }
                 if st.following {
                     continue;
                 }
             }
-            // Patrol (paused while something is going on).
-            if p.patrol.is_empty() || p.patrol_seconds == 0 || det.as_ref().is_some_and(|d| d.event_active) {
+            if !p.roaming() {
                 continue;
+            }
+            // A move under way: wait until the camera's there (it says so,
+            // or after a few seconds when it doesn't), then stay.
+            if let Some(since) = st.moving_since {
+                let arrived = match onvif.moving(&t).await {
+                    Some(m) => !m && since.elapsed() > Duration::from_millis(600),
+                    None => since.elapsed() > Duration::from_secs(4),
+                } || since.elapsed() > Duration::from_secs(20);
+                if !arrived {
+                    settle_until(&cam.id, Instant::now() + SETTLE_AFTER);
+                    continue;
+                }
+                st.moving_since = None;
+                st.next_at = Some(Instant::now() + stay);
+                settle_until(&cam.id, Instant::now() + SETTLE_AFTER);
             }
             if st.next_at.is_none_or(|n| Instant::now() >= n) {
                 let tok = &p.patrol[st.next % p.patrol.len()];
+                settle_until(&cam.id, Instant::now() + Duration::from_secs(20));
                 if let Err(e) = onvif.goto_preset(&t, tok).await {
-                    warn!("[{}] patrol: {e:#}", cam.name);
+                    warn!("[{}] roaming: {e:#}", cam.name);
+                    st.next_at = Some(Instant::now() + Duration::from_secs(10));
+                    settle_until(&cam.id, Instant::now());
+                } else {
+                    st.moving_since = Some(Instant::now());
                 }
                 st.next = (st.next + 1) % p.patrol.len();
-                st.next_at = Some(Instant::now() + Duration::from_secs(p.patrol_seconds.max(5) as u64));
             }
         }
     }

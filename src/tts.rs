@@ -110,8 +110,18 @@ async fn powershell(script: &str, env: &[(&str, String)]) -> Result<std::process
     c.output().await.context("couldn't start Windows' voice (PowerShell)")
 }
 
-/// The voices this computer has.
+/// The voices this computer has: downloaded ones first, then its own.
 pub async fn voices() -> Vec<Voice> {
+    let mut v: Vec<Voice> = crate::piper::CATALOG
+        .iter()
+        .filter(|c| crate::piper::installed(c.0))
+        .map(|(id, name, lang, _)| Voice { id: format!("piper:{id}"), name: format!("{name} — downloaded"), lang: lang.to_string() })
+        .collect();
+    v.extend(system_voices().await);
+    v
+}
+
+async fn system_voices() -> Vec<Voice> {
     #[cfg(windows)]
     {
         let mut out = Vec::new();
@@ -160,6 +170,9 @@ pub async fn voices() -> Vec<Voice> {
 
 /// Make a WAV file of the text being said.
 async fn voice(ffmpeg: &str, text: &str, t: &TtsConfig, wav: &Path) -> Result<()> {
+    if let Some(id) = t.voice.strip_prefix("piper:") {
+        return crate::piper::speak(id, text, t.rate, wav).await;
+    }
     #[cfg(windows)]
     {
         let _ = ffmpeg;
