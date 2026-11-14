@@ -204,6 +204,9 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/search/status", get(describe_status))
         .route("/api/remotes", get(remotes_list))
         .route("/remote/{i}/{cam}/frame.jpg", get(remote_frame))
+        .route("/remote/{i}/{cam}/stream.mjpeg", get(remote_mjpeg))
+        .route("/api/remotes/check", post(remotes_check))
+        .route("/api/remotes/record", post(remotes_record))
         .route("/api/safe-mode/config", get(safe_config_get).post(safe_config_save))
         .route("/api/safe-mode/restore", post(safe_config_restore))
         .route("/api/snooze", get(snooze_link).post(snooze_link))
@@ -269,6 +272,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/live/{id}/audio.mp3", get(live_audio))
         .route("/live/{id}/frame.jpg", get(live_frame))
         .route("/live/{id}/video", get(live_video_ws))
+        .route("/live/{id}/stream.mp4", get(live_stream_mp4))
         .route("/overview.jpg", get(overview_jpg))
         .route("/overview.mjpeg", get(overview_mjpeg))
         .route("/api/overview/key", get(overview_key).post(overview_key_renew))
@@ -3848,6 +3852,103 @@ async fn remote_frame(State(m): App, user: Option<axum::Extension<CurrentUser>>,
     }
 }
 
+/// A camera of another GAZE, moving (view only): its picture stream, passed on.
+async fn remote_mjpeg(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((i, cam)): Path<(usize, String)>) -> Response {
+    if visible(&user).is_some() {
+        return err(StatusCode::FORBIDDEN, "your account can't see other servers' cameras");
+    }
+    let Some(r) = m.config().remotes.get(i).cloned() else {
+        return err(StatusCode::NOT_FOUND, "no such server");
+    };
+    match crate::remote::mjpeg(&r, &cam).await {
+        Ok(mut resp) => {
+            let ct = resp.headers().get(header::CONTENT_TYPE).cloned();
+            // Passed on piece by piece.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+            tokio::spawn(async move {
+                while let Ok(Some(chunk)) = resp.chunk().await {
+                    if tx.send(Ok(chunk)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut out = Body::from_stream(futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))).into_response();
+            if let Some(ct) = ct {
+                out.headers_mut().insert(header::CONTENT_TYPE, ct);
+            }
+            out.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+            out
+        }
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct RemoteCheck {
+    url: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    trust_own_cert: bool,
+    /// Which saved server (to use its saved token when none is typed).
+    #[serde(default)]
+    index: Option<usize>,
+}
+
+/// Settings → other GAZE servers → Check: the cameras it offers.
+async fn remotes_check(State(m): App, Json(q): Json<RemoteCheck>) -> Response {
+    let mut token = q.token.trim().to_string();
+    if token.is_empty()
+        && let Some(r) = q.index.and_then(|i| m.config().remotes.get(i).cloned())
+    {
+        token = r.token;
+    }
+    let r = crate::config::RemoteServer { name: String::new(), url: q.url, token, trust_own_cert: q.trust_own_cert, ..Default::default() };
+    Json(crate::remote::cameras_fresh(&r).await).into_response()
+}
+
+#[derive(Deserialize)]
+struct RemoteRecord {
+    /// Which saved server.
+    index: usize,
+    camera: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    has_sub: bool,
+}
+
+/// "Record here": one of another GAZE's cameras becomes a camera of this
+/// one (recorded, with alerts and AI here), reached through that GAZE.
+async fn remotes_record(State(m): App, Json(q): Json<RemoteRecord>) -> Response {
+    let Some(r) = m.config().remotes.get(q.index).cloned() else {
+        return err(StatusCode::NOT_FOUND, "save the server first");
+    };
+    if !crate::storage::valid_component(&q.camera) {
+        return err(StatusCode::BAD_REQUEST, "bad camera id");
+    }
+    let base = r.url.trim().trim_end_matches('/');
+    let (tls, hostport) = match base.split_once("://") {
+        Some(("https", h)) => (true, h),
+        Some((_, h)) => (false, h),
+        None => (false, base),
+    };
+    let enc_token: String = r.token.trim().bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+    // Its stream through that GAZE, with the server's token.
+    let cam_url = |stream: &str| format!("{}://gaze:{enc_token}@{hostport}/{}?q={stream}", if tls { "gazes" } else { "gaze" }, q.camera);
+    let name = if q.name.trim().is_empty() { format!("{} – {}", r.name, q.camera) } else { q.name.trim().to_string() };
+    let cam = CameraConfig {
+        name,
+        url: cam_url("main"),
+        live_url: if q.has_sub { cam_url("sub") } else { String::new() },
+        ..Default::default()
+    };
+    match m.add_camera(cam).await {
+        Ok(c) => (StatusCode::CREATED, Json(json!({"ok": true, "id": c.id, "name": c.name}))).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
 /// The secure address: on or not, and with which certificate.
 async fn https_status(State(m): App) -> Response {
     let s = crate::tls::status();
@@ -3891,6 +3992,54 @@ struct LiveVideoQuery {
 /// viewer's own graphics hardware, and almost no work for this computer.
 /// The first message is the MP4 header; the browser reads the codec from
 /// it. A text message {"error": ..} means: use the picture stream instead.
+/// A camera's video as one endless fragmented MP4 over plain HTTP (the
+/// camera's own video, not converted): for another GAZE that records this
+/// camera as one of its own (its address: gaze://…).
+async fn live_stream_mp4(State(m): App, Path(id): Path<String>, Query(lq): Query<LiveVideoQuery>) -> Response {
+    let c = camera!(m, id);
+    let main = !matches!(lq.q, Some(Quality::Sub)) || !c.cfg.has_sub();
+    let relay = if main { c.relay_main.clone() } else { c.relay_sub.clone() };
+    let ffmpeg_path = m.config().server.ffmpeg_path.clone();
+    let child = crate::load::cmd(&ffmpeg_path)
+        .args(["-hide_banner", "-loglevel", "error", "-fflags", "+genpts"])
+        .args(relay.input_args())
+        .args(["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy"])
+        .args(["-f", "mp4", "-movflags", "empty_moov+default_base_moof+frag_keyframe", "-frag_duration", "500000", "pipe:1"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn();
+    let Ok(mut child) = child else { return err(StatusCode::INTERNAL_SERVER_ERROR, "ffmpeg") };
+    let stop = tokio_util::sync::CancellationToken::new();
+    let feed = crate::relay::feed(relay.subscribe(), child.stdin.take().unwrap(), stop.clone());
+    let out = child.stdout.take().unwrap();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+    tokio::spawn(async move {
+        let _child = child;
+        let _feed = feed;
+        let _stop = stop.drop_guard();
+        let mut out = out;
+        let mut buf = vec![0u8; 128 * 1024];
+        use tokio::io::AsyncReadExt;
+        loop {
+            match out.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(Ok(Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    (
+        [(header::CONTENT_TYPE, "video/mp4"), (header::CACHE_CONTROL, "no-store")],
+        Body::from_stream({ let mut rx = rx; futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx)) }),
+    )
+        .into_response()
+}
+
 async fn live_video_ws(
     State(m): App,
     Path(id): Path<String>,

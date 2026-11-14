@@ -1202,7 +1202,7 @@ table.modes tr.mode-on td { border-bottom: 1px solid var(--border); }
 #remotes { margin-top: 18px; }
 #remotes .remote h3 { margin: 12px 0 8px; font-size: 15px; display: flex; gap: 10px; align-items: center; }
 #remotes .remote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-#remotes .remote-tile { aspect-ratio: 16/9; display: block; color: inherit; text-decoration: none; }
+#remotes .remote-tile { position: relative; aspect-ratio: 16/9; display: block; color: inherit; text-decoration: none; }
 .tok-new { background: rgba(34,197,94,.1); border: 1px solid rgba(34,197,94,.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
 
 .ov-cams { display: grid; gap: 10px; margin-top: 8px; }
@@ -1371,3 +1371,26 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
 .cpu-where { margin-top: 4px; font-size: 12px; }
 .cpu-where summary { cursor: pointer; }
 .cpu-bd { display: flex; justify-content: space-between; gap: 8px; }
+
+/* Other GAZE servers */
+#y-remotes .rm { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+#y-remotes .rm-cam { gap: 6px; align-items: center; margin: 2px 0; }
+.remote-tile { cursor: pointer; }
+.remote-view { width: min(1100px, 96vw); padding: 0; }
+.remote-view .head { display: flex; align-items: center; gap: 6px; padding: 10px 14px; }
+.remote-view .head h2 { margin: 0; font-size: 16px; }
+.remote-view .surface { aspect-ratio: 16/9; border-radius: 0; }
+.remote-view .surface img { width: 100%; height: 100%; object-fit: contain; }
+
+/* Layouts: while hovering, the cameras behind show the layout */
+.lay-dlg.previewing::backdrop { background: rgba(0,0,0,.08); }
+.lay-dlg.previewing { margin-right: 12px; margin-left: auto; max-width: min(560px, 46vw); max-height: 92vh; }
+.lay-dlg.previewing .lay-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+
+/* The start of a camera's footage while the oldest is deleted for room */
+.tl-row .prune, .ctl-lane .prune { position: absolute; top: 0; bottom: 0; width: 34px; margin-left: -6px; pointer-events: auto; z-index: 3;
+  background: linear-gradient(90deg, rgba(239,68,68,0), rgba(239,68,68,.55) 30%, rgba(239,68,68,0));
+  background-size: 200% 100%; animation: prunesweep 1.6s linear infinite; border-radius: 4px; }
+.tl-row .prune span, .ctl-lane .prune span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 13px; animation: prunebob 1.6s ease-in-out infinite; }
+@keyframes prunesweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@keyframes prunebob { 50% { transform: translate(-50%, -62%); opacity: .6; } }

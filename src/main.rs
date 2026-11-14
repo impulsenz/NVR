@@ -317,6 +317,43 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         .with_context(|| format!("creating {}", cfg.storage.dir.display()))?;
     let ids: Vec<String> = cfg.cameras.iter().map(|c| c.id.clone()).collect();
     storage::migrate_flat_files(&cfg.storage.dir, &ids);
+    // Each camera's folder is called like the camera (0.6.91): older
+    // folders named by id are renamed once, before anything records (a
+    // rename on the same disk: instant). Kept as they are if that name is
+    // taken or the rename fails.
+    {
+        let mut changed = false;
+        for i in 0..cfg.cameras.len() {
+            let cam = cfg.cameras[i].clone();
+            if !cam.folder.is_empty() {
+                continue;
+            }
+            let want = cfg.folder_for(&cam.name, &cam.id, &cam.storage_dir);
+            let old = cfg.camera_dir(&cam);
+            let new = cfg.camera_dir(&config::CameraConfig { folder: want.clone(), ..cam.clone() });
+            let ok = if want == cam.id || new.exists() {
+                false
+            } else if old.exists() {
+                match std::fs::rename(&old, &new) {
+                    Ok(()) => {
+                        info!("[{}] recordings folder renamed to \"{}\"", cam.name, want);
+                        true
+                    }
+                    Err(e) => {
+                        warn!("[{}] couldn't rename {} to {}: {e}", cam.name, old.display(), new.display());
+                        false
+                    }
+                }
+            } else {
+                true
+            };
+            cfg.cameras[i].folder = if ok { want } else { cam.id.clone() };
+            changed = true;
+        }
+        if changed {
+            cfg.save(&path)?;
+        }
+    }
     // After a crash or power cut: cut incomplete data off the end of the
     // newest recordings so every file plays.
     let mut fixed = 0;

@@ -459,13 +459,34 @@ async function drawRemotes() {
     remotesAt = Date.now();
     let list = []; try { list = await api('api/remotes'); } catch (_) { list = []; }
     box.hidden = !list.length;
-    box.innerHTML = list.map(r => `<div class="remote"><h3>🌐 ${esc(r.name || r.server || r.url)} <a class="small muted" href="${esc(r.url)}" target="_blank" rel="noopener">open ↗</a></h3>
-      ${r.ok ? `<div class="remote-grid">${r.cameras.map(c => `<a class="surface tile remote-tile" href="${esc(r.url)}/#live/${enc(c.id)}" target="_blank" rel="noopener" title="Open on ${esc(r.name)}"><img alt="" data-src="remote/${r.i}/${enc(c.id)}/frame.jpg"><div class="ov ov-tl"><span class="name">${esc(c.name)}</span></div>${c.online ? '' : '<div class="msg">Offline</div>'}</a>`).join('')}</div>`
+    // View only: the picture opens bigger here (that GAZE's settings stay its own).
+    box.innerHTML = list.map(r => `<div class="remote"><h3>🌐 ${esc(r.name || r.server || r.url)} <span class="muted small">view only</span></h3>
+      ${r.ok ? `<div class="remote-grid">${r.cameras.map(c => `<div class="surface tile remote-tile" data-i="${r.i}" data-cam="${esc(c.id)}" data-name="${esc(c.name)}" data-server="${esc(r.name || r.server || '')}" title="${esc(c.name)} — click to watch"><img alt="" data-src="remote/${r.i}/${enc(c.id)}/frame.jpg"><div class="ov ov-tl"><span class="name">${esc(c.name)}</span></div>${c.online ? '' : '<div class="msg">Offline</div>'}</div>`).join('')}</div>`
         : `<div class="err">${esc(r.error || 'Not reachable')}</div>`}</div>`).join('');
+    box.querySelectorAll('.remote-tile').forEach(t => t.onclick = () => openRemoteView(t.dataset));
   }
   box.querySelectorAll('img[data-src]').forEach(im => { if (!im.dataset.busy) { im.dataset.busy = 1; const n = new Image(); n.onload = () => { im.src = n.src; delete im.dataset.busy; }; n.onerror = () => { delete im.dataset.busy; }; n.src = im.dataset.src + '?t=' + Date.now(); } });
 }
 setInterval(() => { if (!document.hidden) drawRemotes(); }, 2000);
+// Another GAZE's camera, big and moving (view only).
+function openRemoteView(d) {
+  let dlg = $('remote-view');
+  if (!dlg) {
+    document.body.insertAdjacentHTML('beforeend', `<dialog id="remote-view" class="remote-view"><div class="head"><h2></h2><span class="spacer"></span><button type="button" class="small" id="rv-fs">⛶ Full screen</button><button type="button" class="small" id="rv-x">✕</button></div><div class="surface"><img alt=""><div class="msg">Connecting…</div></div></dialog>`);
+    dlg = $('remote-view');
+    const close = () => { const im = dlg.querySelector('img'); im.removeAttribute('src'); dlg.close(); };
+    $('rv-x').onclick = close;
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+    $('rv-fs').onclick = () => fullscreen(dlg.querySelector('.surface'));
+  }
+  dlg.querySelector('h2').textContent = `${d.name}${d.server ? ' — ' + d.server : ''}`;
+  const im = dlg.querySelector('img'), msg = dlg.querySelector('.msg');
+  msg.hidden = false; msg.textContent = 'Connecting…';
+  im.onload = () => { msg.hidden = true; };
+  im.onerror = () => { msg.hidden = false; msg.textContent = 'Can’t show it right now'; };
+  im.src = `remote/${d.i}/${enc(d.cam)}/stream.mjpeg?t=${Date.now()}`;
+  dlg.showModal();
+}
 
 // Snoozing a camera's notifications (from here or the notification itself).
 function paintSnooze(c) {
@@ -1932,16 +1953,27 @@ $('dash-layouts').onclick = () => {
   const cams = viewCams(), n = cams.length;
   if (!n) return;
   const order = layoutOrder();
-  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg lay-dlg';
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg lay-dlg previewing';
   dlg.innerHTML = `<div class="head"><h2>▦ Layouts</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
     <div class="body"><p class="muted" style="margin-top:0">Shown with your ${n} camera${n === 1 ? '' : 's'}${group() ? ` in “${esc(group().name)}”` : ''}${wall ? ', for the full-screen view' : ''}. Pick one, choose which cameras get the big spots, and it's saved — use Edit layout afterwards to fine-tune.</p>
       <div class="lay-grid">${LAYOUTS.map(L => `<button type="button" class="lay" data-id="${L.id}">${layoutPreview(L, n)}<span>${esc(L.name)}${L.make(0).length > n ? `<br><small class="muted">${L.make(0).length - n} spot${L.make(0).length - n === 1 ? '' : 's'} left empty</small>` : ''}</span></button>`).join('')}</div>
       <div id="lay-big" class="lay-big" hidden></div>
       <div class="actions"><button type="button" data-x>Cancel</button><button type="button" class="primary" id="lay-go" disabled>Use this layout</button></div></div>`;
-  document.body.appendChild(dlg); dlg.showModal();
-  const close = () => { dlg.close(); dlg.remove(); };
+  (document.fullscreenElement || document.body).appendChild(dlg); dlg.showModal();
+  // Hovering a layout shows it on the cameras behind (moving away goes back
+  // to the one picked, or the one in use).
+  const before = layout.map(t => ({...t}));
+  const shown = (L) => { const spots = L.make(n); return order.map((c, i) => spots[i] ? {camera: c.id, ...spots[i]} : null).filter(Boolean); };
+  const preview = (L) => { layout = L ? shown(L) : before.map(t => ({...t})); placeTiles(); };
+  const close = () => { if (!applied) preview(null); dlg.close(); dlg.remove(); };
+  let applied = false;
   dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
   let pick = null;
+  dlg.querySelectorAll('.lay').forEach(b => {
+    b.addEventListener('mouseenter', () => preview(LAYOUTS.find(L => L.id === b.dataset.id)));
+    b.addEventListener('mouseleave', () => { preview(pick); });
+  });
   const camOpts = (sel) => order.map(c => `<option value="${esc(c.id)}" ${c.id === sel ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   dlg.querySelectorAll('.lay').forEach(b => b.onclick = () => {
     pick = LAYOUTS.find(L => L.id === b.dataset.id);
@@ -1958,6 +1990,7 @@ $('dash-layouts').onclick = () => {
     const seq = [...chosen.map(id => order.find(c => c.id === id)), ...order.filter(c => !chosen.includes(c.id))];
     const spots = pick.make(n);
     layout = seq.map((c, i) => ({camera: c.id, ...spots[i]}));
+    applied = true;
     close();
     if (editing) { renderDash(); return; }
     const d = JSON.parse(JSON.stringify(status.dashboard));
@@ -2496,6 +2529,10 @@ const camTl = {
       if (x1 > 0 && x0 < 100 && x1 > x0) pieces.push({a: x0, b: x1, cls: streamOf(sg) === 'main' ? 'clip' : 'rec', live});
     }
     lane += solidBars(pieces, 15000 / (b - a) * 100, 'div', 'seg');
+    if (this.data.pruning && this.data.segments.length) {
+      const x = pct(new Date(this.data.segments[0].start).getTime());
+      if (x >= -2 && x < 100) lane += `<div class="prune" style="left:${Math.max(0, x)}%" title="The oldest footage is being deleted to keep room free on the disk"><span>🗑</span></div>`;
+    }
     this.groups = [];
     lane += evMarks(this.data.events, pct, '', this.id, $('ctl-lane').clientWidth, this.groups);
     const lb = $('ctl-lane'), pv = lb.querySelector('.preview');
@@ -4477,6 +4514,11 @@ function drawTimeline() {
       if (b > 0 && a < 100 && b > a) pieces.push({a, b, cls: streamOf(s) === 'main' ? 'clip' : 'rec', live});
     }
     lane += solidBars(pieces, 15000 / span * 100, 'div', 'seg');
+    // The oldest footage being deleted to keep room free on the disk.
+    if (c.pruning && shown.length) {
+      const a = pct(new Date(shown[0].start).getTime());
+      if (a >= -2 && a < 100) lane += `<div class="prune" style="left:${Math.max(0, a)}%" title="The oldest footage is being deleted to keep room free on the disk"><span>🗑</span></div>`;
+    }
     lane += evMarks(c.events, pct, `data-cam="${esc(c.camera)}"`, c.camera, lanePx, tl.groups);
     const st = cam(c.camera), recOn = !!(st && st.recorder && st.recorder.state === 'recording');
     const nEv = c.events.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
@@ -7616,9 +7658,46 @@ async function renderSystemSettings(body) {
   $('y-port').oninput = $('y-bind').onchange = showAddr;
   showAddr();
   // Other GAZE servers.
-  const rmRow = (r) => `<div class="rm row" style="flex-wrap:wrap;gap:6px;margin-bottom:6px"><input type="text" class="rm-name" placeholder="Name, e.g. Holiday house" value="${esc(r.name || '')}" style="width:170px"><input type="text" class="rm-url" placeholder="https://its-address:8443" value="${esc(r.url || '')}" style="flex:1;min-width:200px"><input type="password" class="rm-token" placeholder="${r.url ? 'Token saved – leave empty to keep' : 'API token from that GAZE'}" style="width:230px" autocomplete="off"><label class="check" title="That GAZE uses its own certificate (browsers warn about it): accept it"><input type="checkbox" class="rm-trust" ${r.trust_own_cert ? 'checked' : ''}> trust its own certificate</label><button type="button" class="small danger rm-del">✕</button></div>`;
-  const rmWire = () => document.querySelectorAll('#y-remotes .rm-del').forEach(b => b.onclick = () => b.closest('.rm').remove());
-  $('y-remotes').innerHTML = (settings.remotes || []).map(rmRow).join(''); rmWire();
+  // Its address in parts (http or https, address, port), put together for you.
+  const rmParts = (u) => { const m = /^(https?):\/\/([^/:]+)(?::(\d+))?/i.exec((u || '').trim()); return m ? {s: m[1].toLowerCase(), h: m[2], p: m[3] || (m[1].toLowerCase() === 'https' ? '443' : '80')} : {s: 'http', h: '', p: '8080'}; };
+  const rmRow = (r, i) => { const a = rmParts(r.url); return `<div class="rm" data-i="${i == null ? '' : i}" data-cams="${esc(JSON.stringify(r.cameras || []))}">
+    <div class="row" style="flex-wrap:wrap;gap:6px"><input type="text" class="rm-name" placeholder="Name, e.g. Holiday house" value="${esc(r.name || '')}" style="width:170px">
+      <select class="rm-s"><option value="http" ${a.s === 'http' ? 'selected' : ''}>http://</option><option value="https" ${a.s === 'https' ? 'selected' : ''}>https://</option></select>
+      <input type="text" class="rm-h" placeholder="its address, e.g. 192.168.1.20" value="${esc(a.h)}" style="flex:1;min-width:160px"><span>:</span><input type="number" class="rm-p" min="1" max="65535" value="${esc(a.p)}" style="width:90px" title="Port (8080 for http, 8443 for https unless changed there)">
+      <button type="button" class="small danger rm-del" title="Remove">✕</button></div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:4px"><input type="password" class="rm-token" placeholder="${r.url ? 'Token saved – leave empty to keep' : 'API token made on that GAZE'}" style="flex:1;min-width:200px" autocomplete="off">
+      <label class="check" title="That GAZE uses its own certificate (browsers warn about it): accept it"><input type="checkbox" class="rm-trust" ${r.trust_own_cert ? 'checked' : ''}> trust its own certificate</label>
+      <button type="button" class="small rm-check">🔍 Check its cameras</button></div>
+    <div class="hint rm-addr"></div><div class="rm-cams"></div></div>`; };
+  const rmUrl = (el) => { const sch = el.querySelector('.rm-s').value, h = el.querySelector('.rm-h').value.trim().replace(/^https?:\/\//i, '').replace(/[/:].*$/, ''), p = el.querySelector('.rm-p').value.trim(); return h ? `${sch}://${h}${p ? ':' + p : ''}` : ''; };
+  const rmWire = () => document.querySelectorAll('#y-remotes .rm').forEach(el => {
+    el.querySelector('.rm-del').onclick = () => el.remove();
+    const paintAddr = () => { const u = rmUrl(el); el.querySelector('.rm-addr').textContent = u ? 'Address: ' + u : ''; };
+    for (const x of el.querySelectorAll('.rm-s, .rm-h, .rm-p')) x.oninput = x.onchange = paintAddr;
+    el.querySelector('.rm-s').addEventListener('change', () => { const p = el.querySelector('.rm-p'); if (p.value === '8080' && el.querySelector('.rm-s').value === 'https') p.value = '8443'; else if (p.value === '8443' && el.querySelector('.rm-s').value === 'http') p.value = '8080'; paintAddr(); });
+    paintAddr();
+    el.querySelector('.rm-check').onclick = async () => {
+      const box = el.querySelector('.rm-cams'), url = rmUrl(el);
+      if (!url) return toast('Enter its address first', true);
+      box.innerHTML = '<span class="muted small"><span class="spinner small"></span> Asking it…</span>';
+      const idx = el.dataset.i === '' ? null : +el.dataset.i;
+      const r = await api('api/remotes/check', {method: 'POST', json: {url, token: el.querySelector('.rm-token').value.trim(), trust_own_cert: el.querySelector('.rm-trust').checked, index: idx}}).catch(e => ({ok: false, error: e.message}));
+      if (!r.ok) { box.innerHTML = `<div class="err">${esc(r.error || 'Not reachable')}</div>`; return; }
+      const shown = JSON.parse(el.dataset.cams || '[]');
+      box.innerHTML = `<div class="muted small" style="margin:6px 0 2px">${esc(r.server || 'It')} has ${r.cameras.length} camera${r.cameras.length === 1 ? '' : 's'}${r.cameras.length ? ' — tick the ones to show here (view only), or record one here like your own cameras:' : ''}</div>`
+        + r.cameras.map(c => `<div class="rm-cam row"><label class="check" style="margin:0;flex:1"><input type="checkbox" class="rm-show" value="${esc(c.id)}" ${!shown.length || shown.includes(c.id) ? 'checked' : ''}> ${esc(c.name)} <span class="${c.online ? 'okc' : 'errc'} small">● ${c.online ? 'online' : 'offline'}</span></label>
+          <button type="button" class="small rm-rec" data-cam="${esc(c.id)}" data-name="${esc(c.name)}" data-sub="${c.has_sub ? 1 : ''}" title="Add it as a camera of this GAZE: recorded here, with alerts and AI here (the video comes through that GAZE)">＋ Record here</button></div>`).join('')
+        + (r.cameras.length < 2 ? `<div class="hint">Only seeing some cameras? The token was made by an account that can see only those: make one with an admin account on that GAZE.</div>` : '');
+      box.querySelectorAll('.rm-rec').forEach(b => b.onclick = async () => {
+        if (idx == null) return toast('Save the settings first (to keep the token), then Record here', true);
+        const name = prompt('Name for this camera here:', `${(el.querySelector('.rm-name').value.trim() || r.server || 'Remote')} – ${b.dataset.name}`);
+        if (!name) return;
+        try { await api('api/remotes/record', {method: 'POST', json: {index: idx, camera: b.dataset.cam, name, has_sub: !!b.dataset.sub}}); toast(`Added “${name}” — it records here like your other cameras`); await loadSettings(); }
+        catch (e) { toast(e.message, true); }
+      });
+    };
+  });
+  $('y-remotes').innerHTML = (settings.remotes || []).map((x, i) => rmRow(x, i)).join(''); rmWire();
   $('y-remote-add').onclick = () => { $('y-remotes').insertAdjacentHTML('beforeend', rmRow({})); rmWire(); };
   // https: which certificate, and how it's going.
   const certKind = () => !s.https_cert ? 'own' : /tailscale\.crt$/.test(s.https_cert) ? 'tailscale' : 'files';
@@ -7639,7 +7718,12 @@ async function renderSystemSettings(body) {
   $('f-sys').onsubmit = async (e) => {
     e.preventDefault();
     const listen = `${val('y-bind')}:${Math.round(num('y-port'))}`;
-    const remotes = [...document.querySelectorAll('#y-remotes .rm')].map(el => ({name: el.querySelector('.rm-name').value.trim(), url: el.querySelector('.rm-url').value.trim(), token: el.querySelector('.rm-token').value.trim(), trust_own_cert: el.querySelector('.rm-trust').checked})).filter(r => r.url);
+    const remotes = [...document.querySelectorAll('#y-remotes .rm')].map(el => {
+      const boxes = [...el.querySelectorAll('.rm-show')], ticked = boxes.filter(b => b.checked).map(b => b.value);
+      // (All ticked, or never checked: every camera, including ones added there later.)
+      const cameras = boxes.length ? (ticked.length === boxes.length ? [] : ticked) : JSON.parse(el.dataset.cams || '[]');
+      return {name: el.querySelector('.rm-name').value.trim(), url: rmUrl(el), token: el.querySelector('.rm-token').value.trim(), trust_own_cert: el.querySelector('.rm-trust').checked, cameras};
+    }).filter(r => r.url);
     const kind = val('y-cert'), files = kind === 'files';
     const server = {name: val('y-name'), listen, ffmpeg_path: val('y-ffmpeg'), https_port: Math.max(0, Math.round(num('y-hport')) || 0)};
     if (kind === 'own') { server.https_cert = ''; server.https_key = ''; }

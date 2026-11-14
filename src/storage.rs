@@ -26,6 +26,16 @@ pub struct Recording {
     pub end: DateTime<Local>,
 }
 
+/// A camera's folder name: any name that's one safe folder on every system
+/// (no path separators or reserved characters, nothing hidden or "..").
+pub fn valid_folder(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 120
+        && !s.starts_with('.')
+        && !s.ends_with([' ', '.'])
+        && !s.chars().any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+}
+
 pub fn valid_component(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('.')
@@ -401,8 +411,7 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
             }
         }
     }
-    if cfg.storage.min_free_gb > 0.0 {
-        let min_free = gb(cfg.storage.min_free_gb);
+    {
         let rest: Vec<Candidate> = all.collect();
         // Check each disk the cameras use.
         let mut by_disk: HashMap<u64, Vec<&Candidate>> = HashMap::new();
@@ -414,23 +423,51 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
             let key = crate::sysmon::disk_space(&dir).map(|(_, t)| t).unwrap_or(0);
             by_disk.entry(key).or_default().push(c);
         }
-        for list in by_disk.values() {
+        for (total, list) in &by_disk {
+            // Always some room kept free (at least 2 GB or 1% of the disk,
+            // even when the setting is lower or 0): a full disk stops
+            // recording. Once clearing starts, a little more goes, so it
+            // isn't done file by file right at the edge.
+            let reserve = gb(cfg.storage.min_free_gb).max(gb(2.0)).max(total / 100);
+            let target = reserve + gb(1.0).max(total / 200);
+            let mut clearing = false;
             for c in list {
                 let dir = match &c.item {
                     Item::File { dir, .. } => dir.clone(),
                     Item::Clip { store, .. } => store.dir().to_path_buf(),
                 };
-                if crate::sysmon::disk_space(&dir).is_some_and(|(free, _)| free < min_free) {
-                    if c.delete("disk almost full") {
-                        removed += 1;
-                    }
-                } else {
+                let free = crate::sysmon::disk_space(&dir).map(|(f, _)| f);
+                let need = free.is_some_and(|f| f < if clearing { target } else { reserve });
+                if !need {
                     break;
+                }
+                clearing = true;
+                if c.delete("keeping room free on the disk") {
+                    removed += 1;
+                    pruned(&dir);
                 }
             }
         }
     }
     removed
+}
+
+/// Cameras whose oldest footage was just deleted to make room (by their
+/// folder): the timeline shows it.
+static PRUNED: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, std::time::Instant>>> = std::sync::LazyLock::new(Default::default);
+
+fn pruned(dir: &Path) {
+    let cam = match dir.file_name().and_then(|n| n.to_str()) {
+        Some("timeline" | "events") => dir.parent().unwrap_or(dir),
+        _ => dir,
+    };
+    PRUNED.lock().unwrap().insert(cam.to_path_buf(), std::time::Instant::now());
+}
+
+/// Is this camera's oldest footage being deleted to make room (in the last
+/// few minutes)?
+pub fn pruning(camera_dir: &Path) -> bool {
+    PRUNED.lock().unwrap().get(camera_dir).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(300))
 }
 
 fn gb(x: f64) -> u64 {

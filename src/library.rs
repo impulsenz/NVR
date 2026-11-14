@@ -315,6 +315,8 @@ pub struct CameraTimeline {
     pub name: String,
     pub segments: Vec<Segment>,
     pub events: Vec<Event>,
+    /// Its oldest footage is being deleted to make room on the disk.
+    pub pruning: bool,
 }
 
 pub fn timeline(
@@ -380,6 +382,7 @@ pub fn timeline(
             name: rt.cfg.name.clone(),
             segments,
             events,
+            pruning: crate::storage::pruning(&rt.dir),
         });
     }
     out

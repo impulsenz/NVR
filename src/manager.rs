@@ -511,6 +511,8 @@ impl Manager {
         let mut cfg = self.config();
         cam.name = cam.name.trim().to_string();
         cam.id = cfg.new_camera_id(&cam.name);
+        // Its recordings go in a folder called like the camera.
+        cam.folder = cfg.folder_for(&cam.name, &cam.id, &cam.storage_dir);
         cam.validate()?;
         cfg.cameras.push(cam.clone());
         self.commit(cfg)?;
@@ -534,9 +536,24 @@ impl Manager {
         };
         cam.id = id.to_string();
         cam.name = cam.name.trim().to_string();
+        // The folder stays (the camera window doesn't send it), and follows
+        // the name when the camera is renamed (if it was named after it).
+        let old_cam = old_cfg.cameras.iter().find(|c| c.id == id).cloned();
+        let mut folder_moves = false;
+        if let Some(o) = &old_cam {
+            cam.folder = o.folder.clone();
+            let auto = o.folder.is_empty() || o.folder == old_cfg.folder_for(&o.name, id, &o.storage_dir);
+            if auto && !o.folder.is_empty() && o.name != cam.name {
+                let f = old_cfg.folder_for(&cam.name, id, &cam.storage_dir);
+                if f != cam.folder && !old_cfg.camera_dir(&CameraConfig { folder: f.clone(), ..cam.clone() }).exists() {
+                    cam.folder = f;
+                    folder_moves = true;
+                }
+            }
+        }
+        let move_recordings = move_recordings || folder_moves;
         cam.validate()?;
         *slot = cam.clone();
-        let old_cam = old_cfg.cameras.iter().find(|c| c.id == id).cloned();
         self.commit(cfg.clone())?;
         info!("updated camera \"{}\"", cam.name);
         // Display, live-view and PTZ options apply without interrupting recording.

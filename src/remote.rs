@@ -19,9 +19,27 @@ fn base(r: &RemoteServer) -> String {
     r.url.trim().trim_end_matches('/').to_string()
 }
 
-/// One server's cameras (or why it can't be reached), kept a few seconds.
+/// One server's cameras (or why it can't be reached), kept a few seconds;
+/// only those chosen to show here (all when none are chosen).
 pub async fn cameras(r: &RemoteServer) -> serde_json::Value {
-    static CACHE: LazyLock<Mutex<HashMap<String, (Instant, serde_json::Value)>>> = LazyLock::new(Default::default);
+    let mut v = cameras_cached(r).await;
+    if !r.cameras.is_empty()
+        && let Some(a) = v["cameras"].as_array_mut()
+    {
+        a.retain(|c| c["id"].as_str().is_some_and(|id| r.cameras.iter().any(|x| x == id)));
+    }
+    v
+}
+
+/// Every camera it offers, asked now.
+pub async fn cameras_fresh(r: &RemoteServer) -> serde_json::Value {
+    CACHE.lock().unwrap().remove(&format!("{}|{}", base(r), r.token));
+    cameras_cached(r).await
+}
+
+static CACHE: LazyLock<Mutex<HashMap<String, (Instant, serde_json::Value)>>> = LazyLock::new(Default::default);
+
+async fn cameras_cached(r: &RemoteServer) -> serde_json::Value {
     let key = format!("{}|{}", base(r), r.token);
     if let Some((t, v)) = CACHE.lock().unwrap().get(&key)
         && t.elapsed() < Duration::from_secs(10)
@@ -47,7 +65,7 @@ pub async fn cameras(r: &RemoteServer) -> serde_json::Value {
             .map(|a| {
                 a.iter()
                     .filter(|c| c["enabled"].as_bool().unwrap_or(true))
-                    .map(|c| serde_json::json!({"id": c["id"], "name": c["name"], "online": c["streams"]["main"]["state"] == "connected"}))
+                    .map(|c| serde_json::json!({"id": c["id"], "name": c["name"], "online": c["streams"]["main"]["state"] == "connected", "has_sub": c["streams"]["sub"].is_object()}))
                     .collect()
             })
             .unwrap_or_default();
@@ -73,4 +91,24 @@ pub async fn frame(r: &RemoteServer, camera: &str) -> anyhow::Result<bytes::Byte
         anyhow::bail!("it answered {}", resp.status());
     }
     Ok(resp.bytes().await?)
+}
+
+/// One of its cameras, moving (its picture stream).
+pub async fn mjpeg(r: &RemoteServer, camera: &str) -> anyhow::Result<reqwest::Response> {
+    if !crate::storage::valid_component(camera) {
+        anyhow::bail!("bad camera id");
+    }
+    let c = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .danger_accept_invalid_certs(r.trust_own_cert)
+        .build()?;
+    let resp = c
+        .get(format!("{}/live/{}/stream.mjpeg?fps=8", base(r), camera))
+        .bearer_auth(r.token.trim())
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("it answered {}", resp.status());
+    }
+    Ok(resp)
 }

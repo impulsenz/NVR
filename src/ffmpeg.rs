@@ -8,9 +8,46 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 
+/// A camera of another GAZE: `gaze://gaze:TOKEN@host:port/CAMERA?q=main`
+/// (`gazes://` for https) → (its HTTP stream address, the token).
+pub fn gaze_url(url: &str) -> Option<(String, String)> {
+    let (tls, rest) = if let Some(r) = url.strip_prefix("gazes://") { (true, r) } else { (false, url.strip_prefix("gaze://")?) };
+    let (auth, hostpath) = rest.rsplit_once('@').unwrap_or(("", rest));
+    let token = auth.split_once(':').map(|(_, t)| t).unwrap_or(auth);
+    let token = percent_decode(token);
+    let (hostport, path) = hostpath.split_once('/')?;
+    let (cam, query) = path.split_once('?').unwrap_or((path, ""));
+    let q = if query.contains("q=sub") { "sub" } else { "main" };
+    Some((format!("{}://{hostport}/live/{cam}/stream.mp4?q={q}", if tls { "https" } else { "http" }), token))
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Input options for a camera URL.
 pub fn input_args(url: &str, transport: &str) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
+    if let Some((http, token)) = gaze_url(url) {
+        args.extend(["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-rw_timeout", "15000000"].map(String::from));
+        args.push("-headers".into());
+        args.push(format!("Authorization: Bearer {token}\r\n"));
+        args.push("-i".into());
+        args.push(http);
+        return args;
+    }
     if url.starts_with("rtsp://") || url.starts_with("rtsps://") {
         let t = if transport == "udp" { "udp" } else { "tcp" };
         // Socket timeout in microseconds.
@@ -1036,6 +1073,19 @@ fn parse_rate(r: &str) -> Option<f64> {
     let (n, d) = r.split_once('/')?;
     let (n, d): (f64, f64) = (n.parse().ok()?, d.parse().ok()?);
     (d > 0.0 && n > 0.0).then(|| (n / d * 100.0).round() / 100.0)
+}
+
+#[cfg(test)]
+mod gaze_tests {
+    #[test]
+    fn gaze_addresses() {
+        let (u, t) = super::gaze_url("gaze://gaze:abc%2Bdef@192.168.1.9:8080/front?q=sub").unwrap();
+        assert_eq!(u, "http://192.168.1.9:8080/live/front/stream.mp4?q=sub");
+        assert_eq!(t, "abc+def");
+        let (u, _) = super::gaze_url("gazes://gaze:x@cabin.ts.net:8443/drive").unwrap();
+        assert_eq!(u, "https://cabin.ts.net:8443/live/drive/stream.mp4?q=main");
+        assert!(super::gaze_url("rtsp://a/b").is_none());
+    }
 }
 
 #[cfg(test)]

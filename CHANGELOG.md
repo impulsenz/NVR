@@ -1,5 +1,17 @@
 # What's new in GAZE
 
+## 0.6.91 — November 2026
+- **Other GAZE servers, reworked** (Settings → System):
+  - The address is entered in parts — http or https, the address, and the port — and shown put together.
+  - **Check its cameras** lists every camera that server offers. Tick the ones to show on your Live page; if only some appear, the token was made by an account that can see only those (make it with an admin account there).
+  - **View only**: clicking another server's camera on the Live page opens it bigger, moving, right here — no more being sent to that server's sign-in page, and its settings stay its own.
+  - **Record here**: any of its cameras can become a camera of this GAZE — recorded here, with motion, AI and alerts here, like your own cameras (the video comes through that GAZE, so it works across networks the other GAZE can reach).
+- **Layouts preview as you hover**: in the Layouts window (also in full screen), hovering a layout arranges the cameras behind it that way, so you can see it before choosing; Cancel puts yours back.
+- **Room is always kept free on the disk**: at least 2 GB or 1% of the disk (or more, if set), even if the setting is lower or 0 — a full disk would stop recording. When room is needed, a little extra is cleared in one go, rather than file by file at the edge.
+- **Deleting shown on the timeline**: while a camera's oldest footage is being deleted to keep room free, the start of its footage on the timeline shows a moving 🗑 mark.
+- **Recordings folders are called like the cameras** (e.g. "Front Door" instead of "front"). Existing folders are renamed once when GAZE starts (instantly, on the same disk; kept as they are if that name is taken). Renaming a camera renames its folder too, in the background.
+- Fixed: the other servers' camera pictures on the Live page could pile on top of each other.
+
 ## 0.6.90 — November 2026
 - **CPU and GPU readings, accurate and every second**: the System page's CPU, GPU and memory now update every second (the history graph keeps its one-minute steps). The readings come from counters that keep running, the way Task Manager reads them: before, a counter program was started for every reading, and its own start-up work made the CPU look busier than it was (e.g. 73% where Task Manager said 50%).
 - **Where the processor time goes**: under the CPU card, *Where GAZE's share goes* shows how much motion detection, live pictures, live video, recording, conversions, sound detection and GAZE itself are using.

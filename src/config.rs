@@ -78,6 +78,9 @@ pub struct RemoteServer {
     pub token: String,
     /// It uses its own certificate (not a trusted one): accept it anyway.
     pub trust_own_cert: bool,
+    /// Its cameras shown here (empty: all of them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cameras: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -1262,6 +1265,10 @@ pub struct CameraConfig {
     pub segment_seconds: u64,
     /// Storage folder for this camera (empty = default folder).
     pub storage_dir: String,
+    /// Name of the camera's own folder in there: its name (empty: its id,
+    /// as before 0.6.91). Follows the camera's name when it's renamed.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub folder: String,
     /// Days to keep this camera's recordings (0 = default).
     pub retention_days: u64,
     /// Space this camera may use in GB (0 = no per-camera limit).
@@ -1319,6 +1326,7 @@ impl Default for CameraConfig {
             record_fps: 0,
             segment_seconds: 0,
             storage_dir: String::new(),
+            folder: String::new(),
             retention_days: 0,
             max_storage_gb: 0.0,
             timeline_copy: true,
@@ -1804,11 +1812,39 @@ impl Config {
 
     /// Folder a camera records into.
     pub fn camera_dir(&self, cam: &CameraConfig) -> PathBuf {
+        let name = if cam.folder.trim().is_empty() || !crate::storage::valid_folder(cam.folder.trim()) { cam.id.as_str() } else { cam.folder.trim() };
         if cam.storage_dir.trim().is_empty() {
-            self.storage.dir.join(&cam.id)
+            self.storage.dir.join(name)
         } else {
-            PathBuf::from(cam.storage_dir.trim()).join(&cam.id)
+            PathBuf::from(cam.storage_dir.trim()).join(name)
         }
+    }
+
+    /// A folder name for a camera called `name`: its name, made safe for
+    /// every file system (and different from the other cameras' folders in
+    /// the same place).
+    pub fn folder_for(&self, name: &str, id: &str, storage_dir: &str) -> String {
+        let mut f: String = name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || " -_.()'&".contains(c) { c } else { ' ' })
+            .collect();
+        f = f.split_whitespace().collect::<Vec<_>>().join(" ");
+        let f = f.trim_matches(['.', ' ']).chars().take(60).collect::<String>();
+        let reserved = ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "lpt1", "lpt2", "lpt3"];
+        let base = if f.is_empty() || reserved.contains(&f.to_lowercase().as_str()) || !crate::storage::valid_folder(&f) { id.to_string() } else { f };
+        let taken = |n: &str| {
+            self.cameras.iter().any(|c| c.id != id && c.storage_dir.trim() == storage_dir.trim() && {
+                let other = if c.folder.trim().is_empty() { c.id.as_str() } else { c.folder.trim() };
+                other.eq_ignore_ascii_case(n)
+            })
+        };
+        let mut out = base.clone();
+        let mut n = 2;
+        while taken(&out) {
+            out = format!("{base} {n}");
+            n += 1;
+        }
+        out
     }
 }
 
