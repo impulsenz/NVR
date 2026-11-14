@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 0.6.97 — November 2026
+- **Recordings play the stream you choose**: with **Sub-stream** chosen above the timeline, every camera plays its sub-stream recording only (the full-quality alert clips no longer cut in, also not for an alert you click); with **Main stream**, only full-quality footage (24/7 HD recording and alert clips). Where the chosen stream has nothing at that moment, the camera says so ("No sub-stream recording at this time"). The time-lapse while scrubbing works whichever is chosen. A stream that wasn't recorded can still be chosen (marked "not recorded here").
+- **See what's loading on the timeline**: footage is streamed a few seconds at a time, about 20 seconds ahead of where you're watching. Each camera's timeline now shows:
+  - a light strip under the footage that's already loaded (it plays without waiting);
+  - a moving striped block at the playhead while that camera is still waiting for its video — from a NAS, another GAZE, or a busy disk.
+
 ## 0.6.96 — November 2026
 - **A warning when the recordings folder can't be reached** (a NAS that's off or disconnected): a banner at the top says which folder, and that nothing is recorded there until it's back (GAZE keeps trying by itself).
   - When GAZE runs as a **Windows service** and the folder is a mapped drive letter (e.g. Z:), it explains why: a service can't see drive letters mapped for your account. Use the NAS's network address instead, e.g. `\\NAS\cameras`, in the camera's Recording → Storage folder.

@@ -4215,7 +4215,8 @@ function tlPreload(el, c, from) {
 }
 // Play camera `el` at tl.T with the continuous stream; false: play the file.
 function tlHls(el, c, s, force) {
-  const hd = tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
+  // (An alert clicked plays its HD clip only with the main stream chosen.)
+  const hd = tlQ() === 'main' && tl.hd && tl.hd.camera === c.camera && tl.T >= tl.hd.from - 2000 && tl.T < tl.hd.until;
   // (Converted playback is for files this browser can't play, e.g. H.265
   // HD clips: the stream is tried for the rest; it says if it can't.)
   if (s.kind === 'clip' && !hd && hlsReady() && !(el._noHls && Date.now() - el._noHls < 60000)) { leaveHls(el, true); return false; }
@@ -4360,19 +4361,23 @@ function tlStreams() {
   const v = new Set(tl.data.flatMap(c => c.segments.map(streamOf)));
   tlStreamsMemo = {data: tl.data, n, v}; return v;
 }
-function tlQ() { const have = tlStreams(); return have.has(tl.quality) || !have.size ? tl.quality : [...have][0]; }
+// The stream chosen above the timeline is the one that plays, on every
+// camera: where it has no footage, that camera says so (the time-lapse
+// while scrubbing works whichever is chosen).
+function tlQ() { return tl.quality === 'main' ? 'main' : 'sub'; }
 // Footage drawn and played for the chosen stream: main stream = HD only
-// (full-quality 24/7 recording and alert clips); sub-stream = the sub-stream
-// recording, with the HD alert clips still marked (alerts play in HD).
-function tlShows(s) { return tlQ() === 'main' ? streamOf(s) === 'main' : streamOf(s) === 'sub' || s.kind === 'clip'; }
+// (full-quality 24/7 recording and alert clips); sub-stream = only the
+// sub-stream recording.
+function tlShows(s) { return tlQ() === 'main' ? streamOf(s) === 'main' : streamOf(s) === 'sub'; }
+const noFootageMsg = () => tlQ() === 'main' ? 'No main-stream (HD) recording at this time' : 'No sub-stream recording at this time';
 // The stream choice shows what's recorded: a stream with no footage here
 // can't be picked.
 function paintQualityChoice() {
   const sel = $('tl-quality'), have = tlStreams(), q = tlQ();
   for (const o of sel.options) {
     const rec = !have.size || have.has(o.value);
-    o.disabled = !rec;
-    o.textContent = (o.value === 'main' ? 'Main stream (HD)' : 'Sub-stream') + (rec ? '' : ' — not recorded');
+    o.disabled = false;
+    o.textContent = (o.value === 'main' ? 'Main stream (HD)' : 'Sub-stream') + (rec ? '' : ' — not recorded here');
   }
   sel.value = q;
   for (const el of document.querySelectorAll('#tl-videos .surface .msg'))
@@ -4392,13 +4397,10 @@ function segAt(c, T, force) {
   const hit = (s) => segMs(s)._a <= T && T < end(s);
   // Normally the light stream 2 copy (opens instantly); after clicking an
   // alert, its full-quality footage until the alert is over.
-  const hd = tl.hd && tl.hd.camera === c.camera && T >= tl.hd.from - 2000 && T < tl.hd.until;
-  // Watching stream 2, the alerts' HD clips play where there are any: the
-  // picture goes to full quality for the alert and back afterwards.
   const order = force === 'main' ? ['clip', 'recording', 'sub'] : force === 'sub' ? ['sub', 'recording', 'clip']
-    : ['clip', 'sub', 'recording'];
-  // Only the chosen stream (an alert you clicked plays in HD either way).
-  const ok = force || hd ? () => true : tlShows;
+    : tlQ() === 'main' ? ['clip', 'recording'] : ['sub', 'recording'];
+  // Only the chosen stream.
+  const ok = force ? () => true : tlShows;
   for (const k of order) {
     const s = c.segments.find(x => x.kind === k && ok(x) && hit(x) && !(k === 'clip' && tl.badClips.has(x.url)));
     if (s) return s;
@@ -4425,7 +4427,7 @@ function tlSync(force) {
     let v = activeVideo(el);
     el.querySelectorAll('.tl-t').forEach(t => t.textContent = fmtDate(new Date(tl.T), t.dataset.fmt || undefined));
     const s = c && segAt(c, tl.T);
-    if (!s) { msg.hidden = false; el.querySelector('.sprite').hidden = true; [...el._vids, el._hlsV].forEach(x => { x.pause(); x.style.visibility = 'hidden'; }); continue; }
+    if (!s) { msg.textContent = noFootageMsg(); msg.hidden = false; el.querySelector('.sprite').hidden = true; [...el._vids, el._hlsV].forEach(x => { x.pause(); x.style.visibility = 'hidden'; }); continue; }
     msg.hidden = true;
     // Played as one continuous stream where it can be (see tlHls).
     if (tlHls(el, c, s, force)) continue;
@@ -4493,7 +4495,7 @@ function tlSync(force) {
     // Near the end of this file (or of the alert's HD part): load what comes
     // next in the other player, at the right moment, for a seamless switch.
     const segEnd = new Date(s.end).getTime();
-    const boundary = tl.hd && tl.hd.camera === c.camera && s.kind !== 'sub' ? Math.min(segEnd, tl.hd.until) : segEnd;
+    const boundary = tlQ() === 'main' && tl.hd && tl.hd.camera === c.camera && s.kind !== 'sub' ? Math.min(segEnd, tl.hd.until) : segEnd;
     const left = (boundary - tl.T) / 1000;
     const nx = left < 10 * Math.max(1, tl.speed) && segAt(c, boundary + 100);
     const other = el._vids[1 - el._active];
@@ -4652,7 +4654,7 @@ function drawTimeline() {
     lane += evMarks(c.events, pct, `data-cam="${esc(c.camera)}"`, c.camera, lanePx, tl.groups);
     const st = cam(c.camera), recOn = !!(st && st.recorder && st.recorder.state === 'recording');
     const nEv = c.events.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
-    rows += `<div class="tl-row"><button type="button" class="label" data-cam="${esc(c.camera)}" title="${esc(c.name)} — show just this camera"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">${esc(c.name)}</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</button><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}</div>
+    rows += `<div class="tl-row"><button type="button" class="label" data-cam="${esc(c.camera)}" title="${esc(c.name)} — show just this camera"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">${esc(c.name)}</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</button><div class="lanes"><div class="lane" data-cam="${esc(c.camera)}"><div class="tl-grid">${grid}</div>${lane}<div class="tl-buf"></div></div>
       <div class="tlp" data-cam="${esc(c.camera)}" title="Time-lapse previews — blue: ready to scrub · striped: loading · grey: not loaded yet · red: couldn't be made"></div></div></div>`;
   }
   // A clip mark shows as soon as it's set (one alone: an orange line).
@@ -4675,6 +4677,50 @@ function drawTimeline() {
   $('tl-export').innerHTML = has ? tl.data.map(c => `<a class="btn small" href="api/export?camera=${enc(c.camera)}&from=${enc(new Date(tl.inT).toISOString())}&to=${enc(new Date(tl.outT).toISOString())}">⇩ ${esc(c.name)}</a>`).join('') : '';
   drawHead();
 }
+// What each camera has loaded, shown on its timeline: a light strip over
+// the footage already in the browser (ready to play without waiting), and a
+// moving stripe at the playhead while that camera waits for its video
+// (a NAS or a busy disk can take a moment). Footage is streamed: a few
+// seconds at a time, about 20 s ahead of where you're watching.
+function videoWallRanges(el) {
+  const out = [];
+  const v = activeVideo(el); if (!v || !v.buffered) return out;
+  const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) return out;
+  let toWall = null;
+  if (el._mode === 'hls' && el._h && el._h.frags && el._h.frags.length) {
+    const fr = el._h.frags;
+    toWall = (t) => {
+      let f = fr[0];
+      for (const x of fr) { if (x.m <= t) f = x; else break; }
+      return f.w + (t - f.m) * 1000;
+    };
+  } else if (v.dataset.url) {
+    const u = v.dataset.url.replace(/#tc$/, ''), sg = c.segments.find(x => x.url === u);
+    if (sg) { const a = new Date(sg.start).getTime(), base = v.dataset.url.endsWith('#tc') ? (v._base || 0) : 0; toWall = (t) => a + (base + t) * 1000; }
+  }
+  if (!toWall) return out;
+  for (let i = 0; i < v.buffered.length; i++) out.push([toWall(v.buffered.start(i)), toWall(v.buffered.end(i))]);
+  return out;
+}
+function paintLoaded() {
+  if (page !== 'recordings' || rec.mode !== 'timeline' || !tl.winStart || document.hidden) return;
+  const span = tl.zoom * 1000, pct = (t) => (t - tl.winStart) / span * 100;
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    const box = document.querySelector(`#tl .lane[data-cam="${CSS.escape(el.dataset.cam)}"] .tl-buf`); if (!box) continue;
+    let html = '';
+    for (const [a, b] of videoWallRanges(el)) {
+      const l = Math.max(0, pct(a)), r = Math.min(100, pct(b));
+      if (r > l) html += `<i class="ld" style="left:${l}%;width:${Math.max(.15, r - l)}%"></i>`;
+    }
+    // Waiting for this camera's video at the playhead.
+    const v = activeVideo(el), c = tl.data.find(x => x.camera === el.dataset.cam);
+    const has = !!(c && tl.T != null && segAt(c, tl.T));
+    const waiting = !tl.live && !tl.dragging && has && (el._pending != null || (v && (v.seeking || v.readyState < 3) && (tl.playing || v.readyState < 2)));
+    if (waiting) { const p = pct(tl.T); if (p >= 0 && p <= 100) html += `<i class="wait" style="left:${p}%" title="Loading this camera's video…"></i>`; }
+    if (box._html !== html) { box._html = html; box.innerHTML = html; }
+  }
+}
+setInterval(paintLoaded, 400);
 function drawHead() {
   paintTlBar();
   const h = $('tl-head'); if (!h) return;
@@ -5252,7 +5298,7 @@ function previewAll() {
     // whose HD footage plays converted.)
     const s = (c && segAt(c, T)) || (tl.scrub === 'timelapse' ? ps : null), sp = el.querySelector('.sprite');
     if (sp.classList.contains('fading')) { sp._gen = (sp._gen || 0) + 1; sp.classList.remove('fading'); }
-    el.querySelector('.msg').hidden = !!s;
+    { const m = el.querySelector('.msg'); m.hidden = !!s; if (!s) m.textContent = noFootageMsg(); }
     if (!s) [...el._vids, el._hlsV].forEach(x => x.style.visibility = 'hidden');
     if (!s) { sp.hidden = true; srcMark(el, null); continue; }
     // Scrubbing with the video itself (sub-stream or main stream): seek it.
