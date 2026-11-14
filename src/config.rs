@@ -1396,9 +1396,9 @@ impl CameraConfig {
         if self.record_fps > 60 {
             bail!("recording frame rate must be 0 (camera default) to 60");
         }
-        if self.segment_seconds != 0 && !(10..=MAX_SEGMENT_SECONDS).contains(&self.segment_seconds)
+        if self.segment_seconds != 0 && !(1..=MAX_SEGMENT_SECONDS).contains(&self.segment_seconds)
         {
-            bail!("file length must be between 10 seconds and 24 hours");
+            bail!("file length must be between 1 second and 24 hours");
         }
         if self.max_storage_gb < 0.0 {
             bail!("storage limit cannot be negative");
@@ -1696,8 +1696,8 @@ impl Config {
         if !(1..=120).contains(&s.timelapse_seconds) {
             bail!("time-lapse: one picture every 1 to 120 seconds");
         }
-        if s.segment_seconds < 10 || s.segment_seconds > MAX_SEGMENT_SECONDS {
-            bail!("file length must be between 10 seconds and 24 hours");
+        if s.segment_seconds < 1 || s.segment_seconds > MAX_SEGMENT_SECONDS {
+            bail!("file length must be between 1 second and 24 hours");
         }
         if s.max_storage_gb < 0.0 || s.min_free_gb < 0.0 {
             bail!("storage limits cannot be negative");
@@ -2201,7 +2201,9 @@ mod tests {
         c.detect.motion = false;
         assert!(c.validate().is_err());
         c.detect.motion = true;
-        c.segment_seconds = 5;
+        c.segment_seconds = 1;
+        c.validate().unwrap();
+        c.segment_seconds = MAX_SEGMENT_SECONDS + 1;
         assert!(c.validate().is_err());
         c.segment_seconds = MAX_SEGMENT_SECONDS;
         c.validate().unwrap();

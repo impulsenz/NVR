@@ -5966,7 +5966,7 @@ async function openCameraDialog(id, clone, prof) {
   const more = ((sysinfo && sysinfo.ai_more) || []).filter(o => !objs.includes(o));
   const aiOn = settings && settings.ai.provider !== 'none';
   const brandOpts = '<option value="">Choose brand…</option>' + BRANDS.map(b => `<option value="${b[0]}">${esc(b[1])}</option>`).join('');
-  const segOpts = [[0, 'Default (' + fmtDur(settings ? settings.storage.segment_seconds : 300) + ')'], [300, '5 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [86400, 'One long file per day']];
+  const segOpts = [[0, 'Default (' + fmtDur(settings ? settings.storage.segment_seconds : 300) + ')'], [1, '1 second'], [5, '5 seconds'], [10, '10 seconds'], [15, '15 seconds'], [300, '5 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [86400, 'One long file per day']];
   $('f-cam').innerHTML = `
     <div class="head"><h2>${clone ? 'Clone camera' : id ? 'Edit camera' : 'Add camera'}</h2>
       ${id && !clone && cameraCfgs.length > 1 ? (() => { const i = cameraCfgs.findIndex(x => x.id === id); return `<span class="cam-nav"><button type="button" class="small" data-nav="-1" title="Previous camera">◀</button><span class="muted small">${i + 1} of ${cameraCfgs.length}</span><button type="button" class="small" data-nav="1" title="Next camera">▶</button></span>`; })() : ''}
@@ -6045,7 +6045,7 @@ async function openCameraDialog(id, clone, prof) {
           <div class="hint">A lower frame rate saves space but re-encodes the video (uses the GPU encoder if set up).</div></div>
         <span></span><div><label class="check"><input type="checkbox" id="c-transcode" ${c.transcode ? 'checked' : ''}> Convert recordings to H.264${tip('H.265 (HEVC) is a newer video format some cameras use; not every browser or phone can play it. Converting to H.264 makes recordings play everywhere, but uses more of the computer while recording.')}</label>
           <div class="hint">For H.265 cameras, so recordings play in every browser.</div></div>
-        <label for="c-seg">File length${tip('Recordings are saved as a series of files of this length. Shorter files are quicker to open and download; it doesn’t change how much is kept. 5 minutes suits most cameras.')}</label>
+        <label for="c-seg">File length${tip('Recordings are saved as a series of files of this length. Shorter files are quicker to open and download; it doesn’t change how much is kept. 5 minutes suits most cameras. Files of a few seconds make thousands of files a day (slower browsing and time-lapse previews), and can’t be shorter than the camera’s keyframe interval.')}</label>
         <div><select id="c-seg">${segOpts.map(([v, t]) => `<option value="${v}" ${c.segment_seconds === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <h3>Storage</h3>
         <label for="c-dir">Storage folder</label>
@@ -7208,7 +7208,7 @@ function pickFolder(initial, title) {
 // ---------- storage ----------
 async function renderStorage(body) {
   const s = settings.storage;
-  const segs = [[300, '5 minutes'], [600, '10 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [43200, '12 hours'], [86400, 'One long file per day']];
+  const segs = [[1, '1 second'], [5, '5 seconds'], [10, '10 seconds'], [15, '15 seconds'], [300, '5 minutes'], [600, '10 minutes'], [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'], [7200, '2 hours'], [21600, '6 hours'], [43200, '12 hours'], [86400, 'One long file per day']];
   if (!segs.some(x => x[0] === s.segment_seconds)) segs.unshift([s.segment_seconds, fmtDur(s.segment_seconds)]);
   const usage = await api('api/usage').catch(() => null);
   const used = (id) => usage && usage.cameras.find(u => u.camera === id);
@@ -7217,7 +7217,7 @@ async function renderStorage(body) {
       <div class="hint">Cameras save into a sub-folder here, unless they have their own folder (below).</div>
       <label class="check" id="s-move-row" hidden><input type="checkbox" id="s-move" checked> Move existing recordings to the new folder</label></div>
     <label for="s-seg">Default file length</label><div><select id="s-seg">${segs.map(([v, t]) => `<option value="${v}" ${v === s.segment_seconds ? 'selected' : ''}>${t}</option>`).join('')}</select>
-      <div class="hint">Recordings are split into files of this length. Cameras can override it.</div></div>
+      <div class="hint">Recordings are split into files of this length. Cameras can override it. Very short files (seconds) make thousands of files a day: browsing and time-lapse previews get slower, and a file can't be shorter than the camera's keyframe interval (often 1–4 s).</div></div>
     <label for="s-ret">Keep recordings for</label><div class="row"><input type="number" id="s-ret" min="0" value="${s.retention_days}" style="width:110px"><span class="muted">days (0 = forever)</span></div>
     <label for="s-aret">Keep alerts for${tip('Alerts are what you look back at, so they can be kept longer than ordinary footage. An alert’s clip, picture and the stretch of 24/7 recording it plays from are kept this long; everything else goes after “Keep recordings for”. When space runs out, ordinary footage is deleted first. Example: recordings 7 days, alerts 60 days.')}</label><div class="row"><input type="number" id="s-aret" min="0" value="${s.alert_retention_days || 0}" style="width:110px"><span class="muted">days (0 = as long as recordings)</span></div>
     <label for="s-max">Maximum storage${tip('The most space all recordings together may use. When it’s reached, the oldest recordings are deleted to make room. Example: 1000 on a 2 TB drive leaves the other half for your own files.')}</label><div class="row"><input type="number" id="s-max" min="0" step="0.5" value="${s.max_storage_gb}" style="width:110px"><span class="muted">GB in total (0 = use the whole disk)</span></div>

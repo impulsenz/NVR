@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.93 — November 2026
+- **Shorter recording files**: Default file length (Settings → Recording & storage) and each camera's File length now also offer **1 second, 5 seconds, 10 seconds and 15 seconds**. Very short files make thousands of files a day, so browsing and time-lapse previews get slower; a file also can't be shorter than the camera's keyframe interval (often 1–4 seconds).
+
 ## 0.6.92 — November 2026
 - **Bring in another GAZE's cameras** (Settings → System → Other GAZE servers → Check its cameras): tick the cameras you want and press **Bring in the ticked cameras**. They become cameras of this GAZE — on the Live page, the timeline, time-lapse, Recordings and Alerts — while **their footage stays on that server** and is read from it as you watch, as if it were stored here. Nothing opens that server's own page or address.
   - Choose **Record here too** instead to record them on this GAZE as well (with alerts and AI here).
