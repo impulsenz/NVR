@@ -278,6 +278,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/overview/key", get(overview_key).post(overview_key_renew))
         .route("/snapshot/{id}", get(snapshot))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(middleware::from_fn_with_state(mgr.clone(), remote_footage))
         .layer(middleware::from_fn_with_state(mgr.clone(), auth))
         .with_state(mgr)
 }
@@ -561,6 +562,21 @@ struct SeenReq {
 
 async fn alerts_seen(State(m): App, Json(r): Json<SeenReq>) -> Response {
     m.seen.mark(&r.ids);
+    // Alerts of cameras brought in from other servers are marked there.
+    let mut servers: Vec<crate::config::RemoteServer> = Vec::new();
+    for i in crate::remote::imported(&m.config()) {
+        if !servers.iter().any(|s| s.url == i.server.url) {
+            servers.push(i.server);
+        }
+    }
+    if !servers.is_empty() {
+        let body = json!({"ids": r.ids}).to_string().into_bytes();
+        tokio::spawn(async move {
+            for s in servers {
+                let _ = crate::remote::fetch(&s, reqwest::Method::POST, "api/alerts/seen", None, Some(body.clone())).await;
+            }
+        });
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -2081,10 +2097,55 @@ async fn search(
         },
         limit: q.limit.unwrap_or(500).min(5000),
     };
-    let items = tokio::task::spawn_blocking(move || library::search(&m, &lq))
+    let limit = lq.limit;
+    let asked = lq.cameras.clone();
+    let m2 = m.clone();
+    let items = tokio::task::spawn_blocking(move || library::search(&m2, &lq))
         .await
         .unwrap_or_default();
-    Json(items).into_response()
+    // Cameras brought in from other servers: their alerts and recordings
+    // are asked for there.
+    let far = imported_asked(&m, &asked);
+    if far.is_empty() || !q.who.is_empty() {
+        return Json(items).into_response();
+    }
+    let mut all: Vec<serde_json::Value> = items.into_iter().filter_map(|i| serde_json::to_value(i).ok()).collect();
+    let qs = |rid: &str| {
+        let mut p = vec![("cameras", rid.to_string()), ("from", from.to_rfc3339()), ("to", to.to_rfc3339()), ("limit", limit.to_string())];
+        for (k, v) in [("tod_from", &q.tod_from), ("tod_to", &q.tod_to)] {
+            if let Some(v) = v {
+                p.push((k, v.clone()));
+            }
+        }
+        if !q.types.is_empty() {
+            p.push(("types", q.types.clone()));
+        }
+        if !q.seen.is_empty() {
+            p.push(("seen", q.seen.clone()));
+        }
+        format!("api/recordings?{}", p.iter().map(|(k, v)| format!("{k}={}", library::enc(v))).collect::<Vec<_>>().join("&"))
+    };
+    let got = futures_util::future::join_all(far.iter().map(|imp| { let p = qs(&imp.remote_id); async move { crate::remote::json(imp, &p).await } })).await;
+    for (imp, g) in far.iter().zip(got) {
+        match g {
+            Ok(serde_json::Value::Array(a)) => all.extend(a),
+            Ok(_) => {}
+            Err(e) => tracing::debug!("alerts of {} from {}: {e:#}", imp.name, imp.server.name),
+        }
+    }
+    let at = |v: &serde_json::Value| v["start"].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|t| t.timestamp_millis()).unwrap_or(0);
+    all.sort_by_key(|v| std::cmp::Reverse(at(v)));
+    all.truncate(limit);
+    Json(all).into_response()
+}
+
+/// The cameras asked for (none: all) that were brought in from another
+/// server.
+fn imported_asked(m: &Manager, asked: &[String]) -> Vec<crate::remote::Imported> {
+    crate::remote::imported(&m.config())
+        .into_iter()
+        .filter(|i| asked.is_empty() || asked.contains(&i.id))
+        .collect()
 }
 
 async fn timeline(
@@ -2094,10 +2155,145 @@ async fn timeline(
 ) -> Response {
     let (from, to) = range(q.from, q.to);
     let cams = allowed_cameras(split_list(&q.cameras), visible(&user));
-    let t = tokio::task::spawn_blocking(move || library::timeline(&m, &cams, from, to))
+    let far = imported_asked(&m, &cams);
+    let m2 = m.clone();
+    let t = tokio::task::spawn_blocking(move || library::timeline(&m2, &cams, from, to))
         .await
         .unwrap_or_default();
-    Json(t).into_response()
+    if far.is_empty() {
+        return Json(t).into_response();
+    }
+    // A camera brought in from another server: its timeline from there.
+    let path = |rid: &str| format!("api/timeline?cameras={}&from={}&to={}", library::enc(rid), library::enc(&from.to_rfc3339()), library::enc(&to.to_rfc3339()));
+    let got = futures_util::future::join_all(far.iter().map(|imp| { let p = path(&imp.remote_id); async move { crate::remote::json(imp, &p).await } })).await;
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    for c in t {
+        let Ok(mut v) = serde_json::to_value(&c) else { continue };
+        if let Some((imp, g)) = far.iter().zip(got.iter()).find(|(i, _)| i.id == c.camera) {
+            match g {
+                Ok(serde_json::Value::Array(a)) if !a.is_empty() => {
+                    v = a[0].clone();
+                    v["camera"] = json!(imp.id);
+                    v["name"] = json!(imp.name);
+                    v["remote"] = json!(imp.server.name);
+                }
+                _ => v["remote_error"] = json!(format!("{} can't be reached", imp.server.name)),
+            }
+        }
+        out.push(v);
+    }
+    Json(out).into_response()
+}
+
+/// Files of a camera brought in from another server (its recordings, alert
+/// clips and pictures, time-lapse, video pieces): passed on from there, so
+/// it plays here like this server's own.
+async fn remote_footage(State(m): App, req: Request, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    let seg: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let at = match seg.as_slice() {
+        ["media", _, _, ..] => 1,
+        ["api", "sprite" | "hls-file" | "hls", _, ..] => 2,
+        ["api", "cameras", _, "events" | "recordings", _, ..] => 2,
+        _ => 0,
+    };
+    let query = req.uri().query().unwrap_or("").to_string();
+    let by_query = matches!(path.as_str(), "/api/export" | "/api/timelapse-export");
+    if at == 0 && !by_query {
+        return next.run(req).await;
+    }
+    let cfg = m.config();
+    let id = if by_query {
+        query.split('&').find_map(|kv| kv.strip_prefix("camera=")).map(|v| percent_decode(v)).unwrap_or_default()
+    } else {
+        percent_decode(seg[at])
+    };
+    let Some(imp) = crate::remote::find(&cfg, &id) else { return next.run(req).await };
+    let user = req.extensions().get::<CurrentUser>().cloned().map(axum::Extension);
+    if visible(&user).is_some_and(|v| !v.contains(&id)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let rid = library::enc(&imp.remote_id);
+    let there = if by_query {
+        let q: Vec<String> = query.split('&').map(|kv| if kv.starts_with("camera=") { format!("camera={rid}") } else { kv.to_string() }).collect();
+        format!("{}?{}", path.trim_start_matches('/'), q.join("&"))
+    } else {
+        let mut s2: Vec<String> = seg.iter().map(|x| x.to_string()).collect();
+        s2[at] = rid;
+        format!("{}{}{}", s2.join("/"), if query.is_empty() { "" } else { "?" }, query)
+    };
+    let method = req.method().clone();
+    let range = req.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).map(String::from);
+    let method = match method {
+        axum::http::Method::DELETE => reqwest::Method::DELETE,
+        axum::http::Method::GET | axum::http::Method::HEAD => reqwest::Method::GET,
+        _ => return err(StatusCode::METHOD_NOT_ALLOWED, "not for a camera of another server"),
+    };
+    let mut resp = match crate::remote::fetch(&imp.server, method, &there, range.as_deref(), None).await {
+        Ok(r) => r,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{} can't be reached: {e:#}", imp.server.name)),
+    };
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let keep = [header::CONTENT_TYPE, header::CONTENT_LENGTH, header::CONTENT_RANGE, header::ACCEPT_RANGES, header::CACHE_CONTROL, header::CONTENT_DISPOSITION, header::LAST_MODIFIED, header::ETAG];
+    let headers: Vec<(header::HeaderName, header::HeaderValue)> = keep
+        .iter()
+        .filter_map(|k| resp.headers().get(k.as_str()).and_then(|v| header::HeaderValue::from_bytes(v.as_bytes()).ok()).map(|v| (k.clone(), v)))
+        .collect();
+    let ct = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    // Playlists and lists name the camera: as it's called here.
+    if ct.contains("mpegurl") || ct.contains("json") {
+        let text = resp.text().await.unwrap_or_default();
+        let text = if ct.contains("json") {
+            match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(mut v) => {
+                    crate::remote::localize(&mut v, &imp);
+                    v.to_string()
+                }
+                Err(_) => text,
+            }
+        } else {
+            crate::remote::localize_text(&text, &imp)
+        };
+        let mut out = (status, text).into_response();
+        for (k, v) in headers {
+            if k != header::CONTENT_LENGTH {
+                out.headers_mut().insert(k, v);
+            }
+        }
+        return out;
+    }
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+    tokio::spawn(async move {
+        while let Ok(Some(chunk)) = resp.chunk().await {
+            if tx.send(Ok(chunk)).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut out = Body::from_stream(futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))).into_response();
+    *out.status_mut() = status;
+    for (k, v) in headers {
+        out.headers_mut().insert(k, v);
+    }
+    out
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if b[i] == b'+' { b' ' } else { b[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Space taken by each kind of footage, per camera (counted every few
@@ -3831,6 +4027,11 @@ async fn remotes_list(State(m): App, user: Option<axum::Extension<CurrentUser>>)
     let mut out = Vec::new();
     for (i, r) in m.config().remotes.iter().enumerate() {
         let mut v = crate::remote::cameras(r).await;
+        // Cameras brought in are this server's own now (not shown twice).
+        let brought: Vec<String> = crate::remote::imported(&m.config()).into_iter().filter(|x| x.server.url == r.url).map(|x| x.remote_id).collect();
+        if let Some(a) = v["cameras"].as_array_mut() {
+            a.retain(|c| c["id"].as_str().is_none_or(|id| !brought.iter().any(|b| b == id)));
+        }
         v["i"] = json!(i);
         v["name"] = json!(r.name);
         v["url"] = json!(r.url);
@@ -3904,7 +4105,16 @@ async fn remotes_check(State(m): App, Json(q): Json<RemoteCheck>) -> Response {
         token = r.token;
     }
     let r = crate::config::RemoteServer { name: String::new(), url: q.url, token, trust_own_cert: q.trust_own_cert, ..Default::default() };
-    Json(crate::remote::cameras_fresh(&r).await).into_response()
+    let mut v = crate::remote::cameras_fresh(&r).await;
+    // Which of them are brought in here already.
+    let here = crate::remote::address(&r);
+    let cfg = m.config();
+    v["imported"] = json!(cfg
+        .cameras
+        .iter()
+        .filter_map(|c| c.remote.as_ref().filter(|s| s.server.trim().trim_end_matches('/') == here).map(|s| json!({"camera": s.camera, "id": c.id, "name": c.name})))
+        .collect::<Vec<_>>());
+    Json(v).into_response()
 }
 
 #[derive(Deserialize)]
@@ -3916,6 +4126,10 @@ struct RemoteRecord {
     name: String,
     #[serde(default)]
     has_sub: bool,
+    /// Its footage stays on that server (read from there: timeline,
+    /// alerts, time-lapse); otherwise it's recorded here too.
+    #[serde(default)]
+    footage_there: bool,
 }
 
 /// "Record here": one of another GAZE's cameras becomes a camera of this
@@ -3941,8 +4155,13 @@ async fn remotes_record(State(m): App, Json(q): Json<RemoteRecord>) -> Response 
         name,
         url: cam_url("main"),
         live_url: if q.has_sub { cam_url("sub") } else { String::new() },
+        record_mode: if q.footage_there { crate::config::RecordMode::Off } else { Default::default() },
+        remote: q.footage_there.then(|| crate::config::RemoteSource { server: crate::remote::address(&r), camera: q.camera.clone() }),
         ..Default::default()
     };
+    if q.footage_there && crate::remote::imported(&m.config()).iter().any(|i| i.server.url == r.url && i.remote_id == q.camera) {
+        return err(StatusCode::CONFLICT, "that camera is already brought in");
+    }
     match m.add_camera(cam).await {
         Ok(c) => (StatusCode::CREATED, Json(json!({"ok": true, "id": c.id, "name": c.name}))).into_response(),
         Err(e) => bad(e),

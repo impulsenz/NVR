@@ -618,9 +618,64 @@ fn sysfs_busy() -> Option<f32> {
         .reduce(f32::max)
 }
 
-/// Windows: total CPU as Task Manager shows it ("% Processor Utility").
+/// Windows: total CPU as Task Manager shows it ("% Processor Utility"),
+/// read straight from Windows (by the counter's English name, so it works
+/// on Windows in any language: through typeperf it could fail on some, and
+/// the plain busy time read instead didn't match Task Manager).
+#[cfg(windows)]
+mod pdh {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::System::Performance::*;
+
+    pub static LAST: Mutex<Option<(Instant, f32)>> = Mutex::new(None);
+
+    pub fn start() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = std::thread::Builder::new().name("cpu-counter".into()).spawn(run);
+        });
+    }
+
+    fn run() {
+        unsafe {
+            let mut q: PDH_HQUERY = std::ptr::null_mut();
+            if PdhOpenQueryW(std::ptr::null(), 0, &mut q) != 0 {
+                tracing::warn!("CPU counter: can't open a query");
+                return;
+            }
+            let path: Vec<u16> = "\\Processor Information(_Total)\\% Processor Utility\0".encode_utf16().collect();
+            let mut c: PDH_HCOUNTER = std::ptr::null_mut();
+            if PdhAddEnglishCounterW(q, path.as_ptr(), 0, &mut c) != 0 {
+                tracing::warn!("CPU counter: % Processor Utility isn't available");
+                return;
+            }
+            PdhCollectQueryData(q);
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                if PdhCollectQueryData(q) != 0 {
+                    continue;
+                }
+                let mut v: PDH_FMT_COUNTERVALUE = std::mem::zeroed();
+                // 0x8000: PDH_FMT_NOCAP100 (it can go over 100 with turbo).
+                if PdhGetFormattedCounterValue(c, PDH_FMT_DOUBLE | 0x8000, std::ptr::null_mut(), &mut v) == 0 && v.CStatus <= 1 {
+                    *LAST.lock().unwrap() = Some((Instant::now(), v.Anonymous.doubleValue as f32));
+                }
+            }
+        }
+    }
+
+    pub fn latest() -> Option<f32> {
+        start();
+        LAST.lock().unwrap().filter(|(t, _)| t.elapsed() < Duration::from_secs(4)).map(|(_, v)| v)
+    }
+}
+
 #[cfg(windows)]
 async fn cpu_utility() -> Option<f32> {
+    if let Some(v) = pdh::latest() {
+        return Some(v.min(100.0));
+    }
     let st = named_stream("cpuperf", "typeperf", &["\\Processor Information(_Total)\\% Processor Utility", "-si", "1"], None);
     parse_single_counter(&latest(&st)?).map(|v| v.min(100.0))
 }

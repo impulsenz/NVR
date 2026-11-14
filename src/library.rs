@@ -260,8 +260,10 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             } else {
                 play_at(&rt, recs(), Some(&e), e.start)
             };
-            let pending = play.is_none()
-                && e.clip.is_none()
+            // Its full-quality clip is still to come (saved a few seconds
+            // after the activity stops); meanwhile it plays from the
+            // continuous recording, if there is one.
+            let pending = e.clip.is_none()
                 && rt.cfg.record_mode.event_clips()
                 && (Local::now() - e.end).num_seconds() < 180;
             // (Not read from the disk per alert: that made the list slow.)

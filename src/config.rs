@@ -83,6 +83,15 @@ pub struct RemoteServer {
     pub cameras: Vec<String>,
 }
 
+/// Where an imported camera's footage is: that server (its address, as in
+/// the list of other servers) and the camera's id there.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct RemoteSource {
+    pub server: String,
+    pub camera: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct Webhook {
@@ -1269,6 +1278,11 @@ pub struct CameraConfig {
     /// as before 0.6.91). Follows the camera's name when it's renamed.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub folder: String,
+    /// A camera of another GAZE (Settings → System → Other GAZE servers),
+    /// brought in here: its footage stays on that server and is read from
+    /// there (timeline, alerts, time-lapse) as if it were on this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteSource>,
     /// Days to keep this camera's recordings (0 = default).
     pub retention_days: u64,
     /// Space this camera may use in GB (0 = no per-camera limit).
@@ -1327,6 +1341,7 @@ impl Default for CameraConfig {
             segment_seconds: 0,
             storage_dir: String::new(),
             folder: String::new(),
+            remote: None,
             retention_days: 0,
             max_storage_gb: 0.0,
             timeline_copy: true,

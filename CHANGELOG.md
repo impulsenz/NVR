@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## 0.6.92 — November 2026
+- **Bring in another GAZE's cameras** (Settings → System → Other GAZE servers → Check its cameras): tick the cameras you want and press **Bring in the ticked cameras**. They become cameras of this GAZE — on the Live page, the timeline, time-lapse, Recordings and Alerts — while **their footage stays on that server** and is read from it as you watch, as if it were stored here. Nothing opens that server's own page or address.
+  - Choose **Record here too** instead to record them on this GAZE as well (with alerts and AI here).
+  - Alerts you view are marked as viewed on that server too; deleting one of their clips deletes it there (admins only).
+  - Cameras already brought in are shown as such, and no longer appear a second time as view-only pictures.
+- **Alerts switch to full quality by themselves**: an alert opened while it's still going (or just over) plays from the continuous recording — often the lower-quality stream 2 — until its full-quality clip is saved a few seconds after the activity stops. It now changes over to the full-quality clip at the same moment as soon as it's ready, instead of staying in standard quality. This was most noticeable with sound alerts, which last as long as the sound does.
+- **CPU reading matches Task Manager more closely** (Windows): GAZE now reads Windows' own "% Processor Utility" figure directly (the one Task Manager shows), in any Windows language. Before, it went through a helper program, and if that failed GAZE quietly used a different measure that didn't line up with Task Manager.
+
 ## 0.6.91 — November 2026
 - **Other GAZE servers, reworked** (Settings → System):
   - The address is entered in parts — http or https, the address, and the port — and shown put together.

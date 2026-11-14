@@ -457,8 +457,18 @@ impl Manager {
         let dir = cfg.camera_dir(cam);
         let _ = std::fs::create_dir_all(&dir);
         let store = self.store(cam, &dir);
+        // An imported camera: the other server records and detects; here
+        // it's only watched live (its footage is read from there).
+        let mut cam = cam.clone();
+        if cam.remote.is_some() {
+            cam.record_mode = crate::config::RecordMode::Off;
+            cam.detect.motion = false;
+            cam.detect.ai = false;
+            cam.sound.enabled = false;
+            cam.onvif_events = false;
+        }
         CameraRuntime::start(
-            cam.clone(),
+            cam,
             dir,
             Arc::new(RuntimeEnv::from(&cfg)),
             self.ai.clone(),
@@ -542,6 +552,10 @@ impl Manager {
         let mut folder_moves = false;
         if let Some(o) = &old_cam {
             cam.folder = o.folder.clone();
+            // (Nor where an imported camera's footage is.)
+            if cam.remote.is_none() {
+                cam.remote = o.remote.clone();
+            }
             let auto = o.folder.is_empty() || o.folder == old_cfg.folder_for(&o.name, id, &o.storage_dir);
             if auto && !o.folder.is_empty() && o.name != cam.name {
                 let f = old_cfg.folder_for(&cam.name, id, &cam.storage_dir);
