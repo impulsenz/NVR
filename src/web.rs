@@ -409,6 +409,8 @@ async fn status(
         "alerts_unseen": library::unseen_count(&m),
         "say_phrases": m.config().tts.phrases,
         "ffmpeg_missing": crate::getffmpeg::MISSING.load(std::sync::atomic::Ordering::SeqCst),
+        "storage_unreachable": crate::storage::unreachable(),
+        "service": crate::winservice::installed(),
         "sirens": crate::siren::running(),
         "timelapse": crate::picturelog::enabled(),
         "timelapse_seconds": crate::picturelog::seconds(),
@@ -2856,19 +2858,30 @@ async fn ensure_sprite(
             .then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok())
             .flatten()
     };
-    if fresh(&first, &src)
-        && let Some(i) = load()
-    {
-        return Ok((prefix, i));
-    }
-    // The file still being recorded: show the preview made a minute or
-    // two ago straight away; the background job keeps it up to date.
-    let growing = std::fs::metadata(&src)
-        .and_then(|m| m.modified())
-        .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(120));
-    if growing
-        && let Some(i) = load()
-    {
+    // The quick answer (already made) is looked up off the web server's
+    // threads: on a network drive each look at a file is a trip to the NAS.
+    let (ready, growing) = {
+        let (first, src, meta) = (first.clone(), src.clone(), meta.clone());
+        tokio::task::spawn_blocking(move || {
+            let load = || -> Option<ffmpeg::SpriteInfo> {
+                sprite_meta_current(&meta, every).then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()).flatten()
+            };
+            if fresh(&first, &src)
+                && let Some(i) = load()
+            {
+                return (Some(i), false);
+            }
+            // The file still being recorded: show the preview made a minute
+            // or two ago straight away; the background job keeps it up to date.
+            let growing = std::fs::metadata(&src)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(120));
+            (if growing { load() } else { None }, growing)
+        })
+        .await
+        .unwrap_or((None, false))
+    };
+    if let Some(i) = ready {
         return Ok((prefix, i));
     }
     let _p = THUMB_JOBS.acquire().await;

@@ -449,6 +449,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(rtmp::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));
     tokio::spawn(infer::run(mgr.clone()));
+    tokio::spawn(storage::watch_roots(mgr.clone()));
     if let Some(caps) = bench_later {
         tokio::spawn(ffmpeg::auto_in_background(mgr.clone(), caps));
     }

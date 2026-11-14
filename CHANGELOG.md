@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 0.6.96 — November 2026
+- **A warning when the recordings folder can't be reached** (a NAS that's off or disconnected): a banner at the top says which folder, and that nothing is recorded there until it's back (GAZE keeps trying by itself).
+  - When GAZE runs as a **Windows service** and the folder is a mapped drive letter (e.g. Z:), it explains why: a service can't see drive letters mapped for your account. Use the NAS's network address instead, e.g. `\\NAS\cameras`, in the camera's Recording → Storage folder.
+- **Time-lapse while scrubbing, quicker on a NAS**: checking whether a recording's time-lapse is ready no longer holds up the web server while the NAS answers.
+
 ## 0.6.95 — November 2026
 - **Recordings on a NAS (network drive)**: Recordings, the timeline and the time-lapse load again with footage on a NAS. They used to make thousands of separate trips to the NAS — reading each recording's header, checking each alert clip and each time-lapse preview one by one — so the page never finished. Now:
   - Each recording's header is read once and remembered on this computer (nvr-data), and new ones are read many at a time.

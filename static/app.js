@@ -1184,6 +1184,13 @@ async function refreshStatus() {
   } else if (status.ffmpeg_missing) {
     gb.hidden = false; delete gb.dataset.safe;
     gb.innerHTML = `<b>⏳ Getting ffmpeg ready</b> — GAZE needs it to record and play video. It's downloading by itself (progress under <a href="#system">System → Tasks</a>) and GAZE restarts with it when it's done.`;
+  } else if ((status.storage_unreachable || []).length) {
+    // The recordings folder (often a NAS) can't be reached.
+    gb.hidden = false; delete gb.dataset.safe;
+    const f = status.storage_unreachable, letter = f.some(x => /^[A-Za-z]:/.test(x) && !/^[A-Za-z]:\\(Users|ProgramData|Program Files)/i.test(x));
+    gb.innerHTML = `<b>⚠ The recordings folder can't be reached</b>: ${f.map(esc).join(', ')} — nothing is recorded there and Recordings shows nothing from it until it's back (GAZE keeps trying).`
+      + (letter && status.service ? ` <span class="muted">GAZE runs as a Windows service, which can't see drive letters you've mapped to a NAS: use the NAS's network address instead, e.g. <code>\\\\NAS\\cameras</code> (Settings → Cameras → Recording → Storage folder).</span>`
+        : letter ? ` <span class="muted">On a NAS, its network address (e.g. <code>\\\\NAS\\cameras</code>) is more reliable than a mapped drive letter.</span>` : '');
   } else if (status.new_cameras && !store.get('newcam-dismissed-' + status.new_cameras, false)) {
     gb.hidden = false;
     gb.innerHTML = `<b>📷 New camera${status.new_cameras > 1 ? 's' : ''} found on your network</b> (${status.new_cameras}) — <a href="#settings/cameras">add ${status.new_cameras > 1 ? 'them' : 'it'}</a> · <a href="javascript:void 0" id="gb-x">dismiss</a>`;
