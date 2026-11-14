@@ -816,7 +816,6 @@ table.where td:first-child { width: 44px; }
 .surface.has-pov .pov .p-play { background: var(--accent); border-color: var(--accent); }
 .surface.has-pov .pov .p-clip { background: var(--amber); border-color: var(--amber); color: #111; }
 .surface.has-pov .pov .timecode { color: #e5e7eb; font-size: 12.5px; text-shadow: 0 1px 2px #000; }
-.surface.has-pov .pov select option { color: initial; }
 .surface.pov-idle .pov { opacity: 0; pointer-events: none; }
 .surface.pov-idle { cursor: none; }
 .pov-osdbox .ov { transition: bottom .25s ease; }
@@ -1110,7 +1109,6 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .eye-btn { flex: none; margin-left: -1px; padding: 0 9px; min-width: 36px; font-size: 14px; line-height: 1; opacity: .7; }
 .eye-btn.on { opacity: 1; background: var(--accent); border-color: var(--accent); }
 #c-url, #c-live, #c-talk-url { width: calc(100% - 44px); }
-.ptz-presets select option { color: initial; background: initial; }
 .fspov.tl-panel .fs-tlslot #cam-tl { margin: 0 0 6px; background: transparent; border: 0; padding: 0; box-shadow: none; }
 .fspov.tl-panel .fs-tlslot #cam-tl .hint { display: none; }
 .fspov .p-golive { color: #fca5a5; }
@@ -1363,3 +1361,7 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 .dl-voices { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
 .dl-voice { display: flex; align-items: center; gap: 6px; }
 .dl-voice > span:first-child { flex: 1; }
+
+/* Drop-down lists: their options always readable, in day and night colours
+   and over pictures (full screen), where the text is light. */
+select option, select optgroup { background-color: var(--panel); color: var(--text); }

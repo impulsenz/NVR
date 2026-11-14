@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.6.87 — November 2026
+- **Drop-down lists over the video are readable**: the playback speed list in full screen (and the presets list on a pan / tilt / zoom camera) showed white text on white, visible only under the mouse. Every drop-down list now shows its choices clearly, in day and night colours.
+
 ## 0.6.86 — November 2026
 - **Opening a camera shows only that camera**: switching from one camera straight to another could bring back the previous camera's picture a few seconds later (until a page refresh). The previous camera's video, kept a few seconds in case you come back, no longer touches the picture of the camera you opened.
 - **No more frozen picture when a camera is both in the grid and opened on the same stream** (e.g. S2 in both): the opened picture now plays its own video instead of sitting on a still.
