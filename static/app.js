@@ -5767,6 +5767,8 @@ async function openCameraDialog(id, clone, prof) {
           <div class="hint">Shows a <b>🎙️ Push to talk</b> button on the camera's live view.</div>
           <label class="check" style="margin-top:6px"><input type="checkbox" id="c-chime" ${c.talk_chime !== false ? 'checked' : ''}> Ring a doorbell chime first, to get the attention of whoever is there (and a short "goodbye" tune when you stop)</label>
           <input type="text" id="c-talk-url" value="${esc(c.talk_url || '')}" placeholder="Speaker address (optional) – empty uses the main stream address" style="margin-top:6px">
+          <div class="tapo-talk" id="c-tapo-row" hidden><div class="row" style="margin-top:6px"><span class="muted">Tapo camera:</span><input type="password" id="c-tapo-pw" placeholder="TP-Link account password" autocomplete="new-password" style="flex:1"><button type="button" id="c-tapo-use">Use for talking</button></div>
+            <div class="hint">Tapo cameras talk through their own connection, not the camera account made for the video. Enter the password of the TP-Link / Tapo app account the camera is in. GAZE then uses <code>tapo://admin:…@camera</code> as the speaker address (the password stays hidden like the others).</div></div>
           <div class="row" style="margin-top:6px"><button type="button" id="c-talk-test">🔊 Test (plays a beep on the camera)</button><span class="hint" id="c-talk-res" style="margin:0"></span></div></div>
         <label>Sound detection</label>
         <div><label class="check"><input type="checkbox" id="c-snd-on" ${c.sound && c.sound.enabled ? 'checked' : ''}> Listen for sounds and alert on them${tip('GAZE listens to the camera’s microphone with a small AI model (YAMNet, by Google; downloads once, 16 MB) that knows hundreds of everyday sounds. What you tick below makes an alert with a notification, even when nothing moves in the picture — e.g. glass breaking round the back, or the smoke alarm while you’re out. Runs on this computer; the sound never leaves it.')}</label>
@@ -5913,6 +5915,21 @@ async function openCameraDialog(id, clone, prof) {
     const pm = $('d-parked-more') && $('d-parked-more').querySelector(`input[value="${CSS.escape(o)}"]`);
     if (pm) $('d-parked-objs').appendChild(pm.closest('label'));
     else if (!$('d-parked-objs').querySelector(`input[value="${CSS.escape(o)}"]`)) $('d-parked-objs').insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${esc(o)}">${esc(o)}</label>`);
+  };
+  // Tapo: the account password makes the speaker address.
+  const tapoLike = () => /tapo|vigi/i.test(val('q-brand') || '') || /^tapo:\/\//i.test(val('c-talk-url').trim()) || /:554\/stream[12]\s*$/.test(val('c-url').trim());
+  const paintTapo = () => { $('c-tapo-row').hidden = !tapoLike(); };
+  paintTapo();
+  for (const x of ['q-brand', 'c-url', 'c-talk-url']) if ($(x)) $(x).addEventListener('change', paintTapo);
+  $('c-tapo-use').onclick = () => {
+    const pw = val('c-tapo-pw'), host = cameraHost();
+    if (!pw) return toast('Enter the TP-Link account password', true);
+    if (!host) return toast('Enter the camera’s IP address first (General tab)', true);
+    const el = $('c-talk-url'); el.value = `tapo://admin:${encodeURIComponent(pw)}@${host}`;
+    el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true}));
+    $('c-tapo-pw').value = '';
+    if (!chk('c-talk')) { $('c-talk').checked = true; $('c-talk').dispatchEvent(new Event('change', {bubbles: true})); }
+    toast('Speaker address set — press Test, then Save camera');
   };
   $('c-talk-test').onclick = async () => {
     const r = $('c-talk-res'); r.textContent = 'Connecting to the speaker…'; r.className = 'hint';

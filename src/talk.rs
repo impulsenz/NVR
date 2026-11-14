@@ -423,7 +423,9 @@ fn alaw(s: i16) -> u8 {
 
 /// An open speaker: send audio with `send`, close with `stop`.
 pub struct Talk {
-    rtsp: Rtsp,
+    /// A Tapo camera's own speaker connection (instead of RTSP).
+    tapo: Option<crate::tapo::Speaker>,
+    rtsp: Option<Rtsp>,
     channel: u8,
     speaker: Speaker,
     seq: u16,
@@ -439,7 +441,7 @@ pub struct Talk {
 
 impl Talk {
     pub fn codec(&self) -> &str {
-        &self.speaker.codec
+        if self.tapo.is_some() { "PCMA" } else { &self.speaker.codec }
     }
 
     pub async fn open(camera: &str, url: &str) -> Result<Talk> {
@@ -460,6 +462,23 @@ impl Talk {
     }
 
     async fn open_inner(camera: &str, url: &str) -> Result<Talk> {
+        if crate::tapo::is_tapo(url) {
+            let sp = crate::tapo::Speaker::open(url).await?;
+            return Ok(Talk {
+                tapo: Some(sp),
+                rtsp: None,
+                channel: 0,
+                speaker: Speaker { codec: "PCMA".into(), payload: 8, control: String::new() },
+                seq: 0,
+                ts: 0,
+                ssrc: 0,
+                pending: Vec::new(),
+                camera: camera.to_string(),
+                last_keepalive: std::time::Instant::now(),
+                play_at: std::time::Instant::now(),
+                uri: String::new(),
+            });
+        }
         let t = parse_url(url)?;
         let uri = t.url.clone();
         let mut rtsp = Rtsp::connect(t).await?;
@@ -506,7 +525,8 @@ impl Talk {
             bail!("the camera answered {} to PLAY", r.status);
         }
         Ok(Talk {
-            rtsp,
+            tapo: None,
+            rtsp: Some(rtsp),
             channel,
             speaker,
             seq: rand_core::RngCore::next_u32(&mut rand_core::OsRng) as u16,
@@ -543,6 +563,12 @@ impl Talk {
                 tokio::time::sleep(self.play_at - now - Duration::from_millis(100)).await;
             }
             self.play_at += step;
+            if let Some(t) = self.tapo.as_mut() {
+                let a: Vec<u8> = chunk.iter().map(|&s| alaw(s)).collect();
+                t.send(&a).await?;
+                continue;
+            }
+            let Some(rtsp) = self.rtsp.as_mut() else { bail!("not connected") };
             let len = (12 + PACKET) as u16;
             let mut out = Vec::with_capacity(4 + 12 + PACKET);
             out.extend_from_slice(&[b'$', self.channel]);
@@ -555,7 +581,7 @@ impl Talk {
             out.extend(chunk.iter().map(|&s| if pcmu { ulaw(s) } else { alaw(s) }));
             self.seq = self.seq.wrapping_add(1);
             self.ts = self.ts.wrapping_add(PACKET as u32);
-            self.rtsp
+            rtsp
                 .wr
                 .write_all(&out)
                 .await
@@ -567,31 +593,37 @@ impl Talk {
     /// Call now and then: keeps the camera from closing the session, and
     /// reads anything it sent so its buffers don't fill up.
     pub async fn tick(&mut self) -> Result<()> {
+        if let Some(t) = self.tapo.as_mut() {
+            return t.tick().await;
+        }
+        let Some(rtsp) = self.rtsp.as_mut() else { return Ok(()) };
         // Drain whatever arrived (answers, RTCP) without waiting.
         while let Ok(r) =
-            tokio::time::timeout(Duration::from_millis(1), self.rtsp.rd.fill_buf()).await
+            tokio::time::timeout(Duration::from_millis(1), rtsp.rd.fill_buf()).await
         {
             let n = r?.len();
             if n == 0 {
                 bail!("the camera closed the connection");
             }
-            self.rtsp.rd.consume(n);
+            rtsp.rd.consume(n);
         }
         if self.last_keepalive.elapsed() > Duration::from_secs(25) {
             self.last_keepalive = std::time::Instant::now();
             let uri = self.uri.clone();
-            self.rtsp.send("GET_PARAMETER", &uri, &[]).await?;
+            rtsp.send("GET_PARAMETER", &uri, &[]).await?;
         }
         Ok(())
     }
 
     pub async fn stop(mut self) {
+        if let Some(t) = self.tapo.take() {
+            t.stop().await;
+            return;
+        }
         let uri = self.uri.clone();
-        let _ = tokio::time::timeout(
-            Duration::from_secs(2),
-            self.rtsp.send("TEARDOWN", &uri, &[]),
-        )
-        .await;
+        if let Some(rtsp) = self.rtsp.as_mut() {
+            let _ = tokio::time::timeout(Duration::from_secs(2), rtsp.send("TEARDOWN", &uri, &[])).await;
+        }
     }
 }
 

@@ -51,6 +51,7 @@ mod storage;
 mod sysmon;
 mod talk;
 mod talkmix;
+mod tapo;
 mod tls;
 mod tray;
 mod tts;
