@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 0.7.7 — November 2026
+- **What's in a recording the browser refuses, in the log**: when the browser can't play a camera's recording, GAZE now looks at that recording and the one before it and writes what's in each to Settings → Logs — picture format, profile, size and frame rate, and the sound's format, rate and channels (or "no sound"). A difference between the two (sound coming and going, a size or format change) is the usual reason, and tells whether a camera setting is behind it. The browser's full message is kept too.
+
 ## 0.7.6 — November 2026
 - **Restart GAZE from the user menu** (top right, your name → ⟳ Restart GAZE): anyone signed in can restart GAZE. It asks first; recording and live view stop for about half a minute, and the page reloads by itself when GAZE is back. Who restarted it is written to the log.
 - **Cameras whose recordings the browser refuses play properly**: some cameras' recordings are in a picture or sound format the browser can't stream (the log showed "bufferAddCodecError" / "bufferAppendError"). GAZE then went back and forth every minute between two ways of playing them — the loaded strip filling and resetting, choppy loading, black pictures. Now such a camera plays converted by GAZE for the rest of the visit; for a camera whose picture is H.264, the picture is passed on as it is and only the sound is converted (light work).

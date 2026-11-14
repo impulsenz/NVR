@@ -4279,8 +4279,10 @@ function hlsFor(el, cam) {
   });
   hls.on(hlsLib.Events.ERROR, (_, d) => {
     // (What the browser refused, for the log: its format.)
-    const why = d.mimeType ? ` [${d.mimeType}]` : d.error && d.error.message ? ` [${String(d.error.message).slice(0, 80)}]` : '';
+    const why = d.mimeType ? ` [${d.mimeType}]` : d.error && d.error.message ? ` [${String(d.error.message).slice(0, 150)}]` : '';
     playbackNote(cam, d.details + (d.fatal ? ' (fatal)' : '') + why, hls);
+    // (Which recording it was: GAZE looks at what's in it.)
+    if (d.fatal && d.frag && d.frag.url) { const n = playbackNotes.get(cam); if (n) n.file = String(d.frag.url).replace(/^.*?(media\/)/, 'media/'); }
     if (!d.fatal) return;
     console.warn('continuous playback off for', cam, d.details);
     hls.destroy(); el._h = null;
@@ -4311,7 +4313,7 @@ function playbackNote(cam, what, hls) {
 }
 setInterval(() => {
   if (!playbackNotes.size) return;
-  const report = [...playbackNotes].map(([camera, n]) => ({camera, codecs: n.codecs, counts: n.counts}));
+  const report = [...playbackNotes].map(([camera, n]) => ({camera, codecs: n.codecs, counts: n.counts, file: n.file || ''}));
   playbackNotes.clear();
   api('api/playback-report', {method: 'POST', json: {report, speed: tl.speed, stream: tlQ()}}).catch(() => {});
 }, 60000);

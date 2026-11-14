@@ -724,6 +724,57 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
 // ---------- recorded files ----------
 
 /// Video codec of a media file (e.g. "h264", "hevc").
+/// A recording's picture and sound in one line (for the log): codec,
+/// profile, size, frame rate; sound codec, rate, channels — or "no sound".
+pub async fn describe(ffmpeg: &str, file: &std::path::Path) -> String {
+    let o = run(
+        crate::load::cmd(ffprobe_path(ffmpeg))
+            .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,codec_tag_string,profile,width,height,r_frame_rate,sample_rate,channels", "-of", "json"])
+            .arg(file),
+        20,
+    )
+    .await;
+    let Ok(o) = o else { return "couldn't be read".into() };
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_default();
+    let streams = v["streams"].as_array().cloned().unwrap_or_default();
+    let s = |x: &serde_json::Value, k: &str| x[k].as_str().map(String::from).or_else(|| x[k].as_u64().map(|n| n.to_string())).unwrap_or_default();
+    let mut parts = Vec::new();
+    for st in &streams {
+        match st["codec_type"].as_str() {
+            Some("video") => parts.push(format!(
+                "picture {} ({}{}) {}×{} {} fps",
+                s(st, "codec_name"),
+                s(st, "codec_tag_string"),
+                { let p = s(st, "profile"); if p.is_empty() { p } else { format!(", {p}") } },
+                s(st, "width"),
+                s(st, "height"),
+                s(st, "r_frame_rate").split('/').collect::<Vec<_>>().as_slice().pipe_fps()
+            )),
+            Some("audio") => parts.push(format!("sound {} {} Hz {} ch", s(st, "codec_name"), s(st, "sample_rate"), s(st, "channels"))),
+            _ => {}
+        }
+    }
+    if !streams.iter().any(|x| x["codec_type"] == "audio") {
+        parts.push("no sound".into());
+    }
+    parts.join(", ")
+}
+
+trait PipeFps {
+    fn pipe_fps(&self) -> String;
+}
+impl PipeFps for [&str] {
+    fn pipe_fps(&self) -> String {
+        match self {
+            [n, d] => match (n.parse::<f64>(), d.parse::<f64>()) {
+                (Ok(n), Ok(d)) if d > 0.0 => format!("{:.0}", n / d),
+                _ => "?".into(),
+            },
+            _ => "?".into(),
+        }
+    }
+}
+
 pub async fn video_codec(ffmpeg: &str, file: &std::path::Path) -> Option<String> {
     let o = run(
         crate::load::cmd(ffprobe_path(ffmpeg))

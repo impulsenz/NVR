@@ -2347,6 +2347,9 @@ struct PlaybackCam {
     codecs: String,
     #[serde(default)]
     counts: HashMap<String, u32>,
+    /// The recording the browser refused (its address), if any.
+    #[serde(default)]
+    file: String,
 }
 
 /// What went wrong for a browser playing recordings (stalls, holes in the
@@ -2357,7 +2360,7 @@ async fn playback_report(State(m): App, Json(r): Json<PlaybackReport>) -> Respon
     }
     for c in r.report.into_iter().take(64) {
         let Some(rt) = m.camera(&c.camera) else { continue };
-        let what: Vec<String> = c.counts.iter().take(12).map(|(k, n)| format!("{} ×{n}", k.chars().take(60).collect::<String>())).collect();
+        let what: Vec<String> = c.counts.iter().take(12).map(|(k, n)| format!("{} ×{n}", k.chars().take(160).collect::<String>())).collect();
         if what.is_empty() {
             continue;
         }
@@ -2369,6 +2372,27 @@ async fn playback_report(State(m): App, Json(r): Json<PlaybackReport>) -> Respon
             what.join(", "),
             if c.codecs.is_empty() { String::new() } else { format!(" — format {}", c.codecs.chars().take(60).collect::<String>()) }
         );
+        // The recording the browser refused, and the one before it: what's
+        // in them (a change from one to the next is the usual cause).
+        if let Some(rest) = c.file.split('?').next().and_then(|u| u.strip_prefix(&format!("media/{}/", library::enc(&c.camera))))
+            && let Some((kind, name)) = rest.split_once('/')
+            && let Ok(path) = media_path(&rt, kind, &percent_decode(name))
+        {
+            let ffmpeg = m.config().server.ffmpeg_path;
+            let (cam, dir) = (rt.cfg.name.clone(), path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+            let fname = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            tokio::spawn(async move {
+                let list = storage::list(&dir);
+                // (Newest first: the one before is the next in the list.)
+                let prev = list.iter().position(|r| r.name == fname).and_then(|i| list.get(i + 1)).map(|r| dir.join(&r.name));
+                let this = crate::ffmpeg::describe(&ffmpeg, &path).await;
+                let before = match &prev {
+                    Some(p) => format!("; the one before ({}): {}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), crate::ffmpeg::describe(&ffmpeg, p).await),
+                    None => String::new(),
+                };
+                tracing::warn!("[{cam}] the browser refused {fname}: {this}{before}");
+            });
+        }
     }
     StatusCode::NO_CONTENT.into_response()
 }
