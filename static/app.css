@@ -1340,3 +1340,7 @@ label .pw-wrap, .form .pw-wrap { display: flex; }
 .ptz-roam .check { margin: 0; color: inherit; }
 .ptz-roam .hint { color: #9aa3b2; margin: 0; }
 .ptz-roam button { min-height: 0 !important; height: 28px; padding: 0 10px; }
+
+/* 🚨 Siren */
+.siren-btn.siren-on { background: var(--red) !important; color: #fff !important; border-color: var(--red) !important; animation: sirenpulse 1s ease-in-out infinite; }
+@keyframes sirenpulse { 50% { box-shadow: 0 0 0 4px rgba(239,68,68,.35); } }

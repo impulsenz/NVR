@@ -186,6 +186,9 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}/talk", get(talk_ws))
         .route("/api/talk-test", post(talk_test))
         .route("/api/cameras/{id}/say", post(say))
+        .route("/api/cameras/{id}/siren", post(siren_start))
+        .route("/api/cameras/{id}/siren/stop", post(siren_stop))
+        .route("/api/tts/siren-preview", post(siren_preview))
         .route("/api/tts/voices", get(tts_voices))
         .route("/api/tts/preview", post(tts_preview))
         .route("/api/jobs", get(jobs_list))
@@ -396,6 +399,7 @@ async fn status(
             .collect::<Vec<_>>(),
         "alerts_unseen": library::unseen_count(&m),
         "say_phrases": m.config().tts.phrases,
+        "sirens": crate::siren::running(),
         "timelapse": crate::picturelog::enabled(),
         "timelapse_seconds": crate::picturelog::seconds(),
         "safe_mode": Config::safe_mode(),
@@ -4041,6 +4045,114 @@ async fn tts_preview(State(m): App, Json(r): Json<PreviewReq>) -> Response {
     }
 }
 
+/// Live view → 🚨 Siren: the alarm and spoken warnings through the
+/// camera's speaker, in the background, for the set time or until stopped.
+async fn siren_start(State(m): App, Path(id): Path<String>, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let vis = visible(&user);
+    let cfg = m.config();
+    let Some(cam) = cfg.cameras.iter().find(|c| c.id == id && vis.as_ref().is_none_or(|v| v.contains(&id))).cloned() else {
+        return err(StatusCode::NOT_FOUND, "no such camera");
+    };
+    if !cam.talk {
+        return err(StatusCode::BAD_REQUEST, "two-way audio is off for this camera (camera settings → Audio)");
+    }
+    let url = if cam.talk_url.trim().is_empty() { cam.url.clone() } else { cam.talk_url.trim().to_string() };
+    // Connect first, so a camera that can't play it says so now.
+    let mut talk = match crate::talk::Talk::open(&cam.id, &url).await {
+        Ok(t) => t,
+        Err(e) => return bad(e),
+    };
+    if !crate::siren::begin(&cam.id) {
+        talk.stop().await;
+        return err(StatusCode::CONFLICT, "the siren is already sounding on this camera");
+    }
+    let who = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
+    tracing::warn!("[{}] siren sounded by {}", cam.name, if who.is_empty() { "someone" } else { &who });
+    let t = cfg.tts.clone();
+    let ffmpeg = cfg.server.ffmpeg_path.clone();
+    let seconds = t.siren_seconds.clamp(5, 300);
+    // The warnings are made while the first wail plays.
+    let voices = tokio::spawn({
+        let t = t.clone();
+        async move {
+            let mut v = Vec::new();
+            if t.siren_voice {
+                let plain = crate::config::TtsConfig { chime: false, volume: 100, ..t.clone() };
+                for msg in &t.siren_messages {
+                    if let Ok(s) = crate::tts::speak(&ffmpeg, msg, &plain).await {
+                        v.push(s);
+                    }
+                }
+            }
+            v
+        }
+    });
+    let id2 = cam.id.clone();
+    tokio::spawn(async move {
+        let end = std::time::Instant::now() + Duration::from_secs(seconds as u64);
+        let from = Local::now();
+        let mut kept: Vec<i16> = Vec::new();
+        let mut voices = Some(voices);
+        let mut said: Vec<Vec<i16>> = Vec::new();
+        let mut turn = 0usize;
+        'outer: while std::time::Instant::now() < end && crate::siren::is_running(&id2) {
+            for chunk in crate::siren::wail(4.8).chunks(800) {
+                if !crate::siren::is_running(&id2) || std::time::Instant::now() >= end {
+                    break 'outer;
+                }
+                if talk.send(chunk).await.is_err() {
+                    break 'outer;
+                }
+                kept.extend_from_slice(chunk);
+            }
+            let _ = talk.tick().await;
+            if let Some(v) = voices.take() {
+                said = v.await.unwrap_or_default();
+            }
+            if !said.is_empty() {
+                let msg = said[turn % said.len()].clone();
+                turn += 1;
+                for chunk in msg.chunks(800) {
+                    if !crate::siren::is_running(&id2) {
+                        break 'outer;
+                    }
+                    if talk.send(chunk).await.is_err() {
+                        break 'outer;
+                    }
+                    kept.extend_from_slice(chunk);
+                }
+            }
+        }
+        talk.stop().await;
+        crate::siren::stop(&id2);
+        tracing::info!("[{id2}] siren stopped");
+        if let Some(c) = m.camera(&id2) {
+            let _ = crate::talkmix::save(&c.dir, from, &kept);
+        }
+    });
+    Json(json!({"ok": true, "seconds": seconds})).into_response()
+}
+
+async fn siren_stop(Path(id): Path<String>) -> Response {
+    crate::siren::stop(&id);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Settings → Voice & talking: hear a few seconds of the siren here.
+async fn siren_preview(State(m): App, Json(t): Json<crate::config::TtsConfig>) -> Response {
+    let ffmpeg = m.config().server.ffmpeg_path.clone();
+    let mut s = crate::siren::wail(3.6);
+    if t.siren_voice
+        && let Some(msg) = t.siren_messages.first()
+    {
+        match crate::tts::speak(&ffmpeg, msg, &crate::config::TtsConfig { chime: false, volume: 100, ..t.clone() }).await {
+            Ok(mut v) => s.append(&mut v),
+            Err(e) => return bad(e),
+        }
+    }
+    ([(axum::http::header::CONTENT_TYPE, "audio/wav")], crate::tts::wav(&s)).into_response()
+}
+
 #[derive(Deserialize)]
 struct SayReq {
     text: String,
@@ -4391,7 +4503,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         return false;
     }
     // Talking through a camera's speaker: not for viewers.
-    if path.ends_with("/talk") || path.ends_with("/say") {
+    if path.ends_with("/talk") || path.ends_with("/say") || path.ends_with("/siren") || path.ends_with("/siren/stop") {
         return role != Viewer;
     }
     if read {

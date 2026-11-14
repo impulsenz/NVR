@@ -802,6 +802,8 @@ impl Manager {
             t.volume = t.volume.clamp(10, 100);
             t.voice = t.voice.trim().chars().filter(|c| !c.is_control()).take(120).collect();
             t.phrases = t.phrases.into_iter().map(|p| p.trim().chars().take(200).collect::<String>()).filter(|p| !p.is_empty()).take(20).collect();
+            t.siren_seconds = t.siren_seconds.clamp(5, 300);
+            t.siren_messages = t.siren_messages.into_iter().map(|p| p.trim().chars().take(300).collect::<String>()).filter(|p| !p.is_empty()).take(10).collect();
             cfg.tts = t;
         }
         if let Some(w) = up.webhooks {

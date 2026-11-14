@@ -283,6 +283,12 @@ pub struct TtsConfig {
     pub phrases: Vec<String>,
     /// A short chime before speaking, to get attention.
     pub chime: bool,
+    /// Siren: how long it sounds (seconds).
+    pub siren_seconds: u32,
+    /// Siren: warnings spoken between the wails, in turn.
+    pub siren_messages: Vec<String>,
+    /// Siren: speak the warnings (off: only the alarm).
+    pub siren_voice: bool,
 }
 
 impl Default for TtsConfig {
@@ -298,6 +304,12 @@ impl Default for TtsConfig {
                 "Please leave now.".into(),
             ],
             chime: false,
+            siren_seconds: 30,
+            siren_messages: vec![
+                "Warning! You are being recorded. The homeowner has been notified.".into(),
+                "Leave the property now. The police have been notified.".into(),
+            ],
+            siren_voice: true,
         }
     }
 }

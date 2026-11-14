@@ -36,6 +36,7 @@ mod onvif;
 mod picturelog;
 mod onvif_device;
 mod onvif_events;
+mod siren;
 mod sound;
 mod clip;
 mod overview;

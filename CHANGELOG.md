@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 0.6.84 — November 2026
+- **🚨 Siren** to scare off intruders: on the live view (and full-screen toolbar) of a camera with two-way audio, Siren sounds a loud wailing alarm through the camera's speaker with spoken warnings in between, such as "You are being recorded. The homeowner has been notified" and "Leave the property now. The police have been notified". It runs for the set time or until you press **Stop siren**, and is kept in the recordings. Set it up in **Settings → Voice & talking → Siren**: how long it sounds, your own warnings (or pick from ready ones), whether to speak them, and **Hear the siren here**.
+- **Tapo cameras**: choosing the Tapo brand in a camera's settings now picks **UDP** for the video (much smoother on Tapo's Wi-Fi cameras) and Tapo's pan / tilt / zoom control port **2020**. Nothing else is changed, and cameras already set up stay as they are.
+
 ## 0.6.83 — November 2026
 - **Presets from the keyboard**: on a pan / tilt / zoom camera's live view, press **1–9** (and 0 for the tenth) to go to that preset. The preset list shows each one's number.
 - **Roam between presets** right from the camera's picture: the new ⟲ button next to ☆ lets you turn roaming on or off, tick which presets to visit and set how long to stay at each. It lights up while roaming. The same settings are in the camera's Pan / tilt / zoom tab.

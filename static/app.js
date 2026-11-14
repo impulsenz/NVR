@@ -1050,6 +1050,9 @@ function dropStillWhenShown(v) {
 async function refreshStatus() {
   try { status = await api('api/status?device=' + deviceKind()); } catch (e) { return; }
   $('nvr-name').title = status.name;
+  // The server knows which sirens are sounding.
+  for (const id of [...sirenOn]) if (!(status.sirens || []).includes(id)) sirenOn.delete(id);
+  paintSirens();
   document.title = status.name && status.name !== 'GAZE' ? `GAZE — ${status.name}` : 'GAZE';
   // How live pictures fill their boxes, everywhere (stream 2 is often a
   // squeezed 4:3 picture: stretched, it fills the box like the main stream).
@@ -2094,6 +2097,7 @@ function showLive(id) {
   };
   setupTalkButton(c);
   setupSayButton(c);
+  setupSirenButton(c);
   $('focus-recs').href = '#recordings/' + enc(c.id) + '/timeline';
   $('focus-edit').onclick = () => openCameraDialog(c.id);
   paintSnooze(c);
@@ -2793,6 +2797,35 @@ function setupSayButton(c, b = $('focus-say')) {
   b.hidden = !c.talk || !me || me.role === 'viewer';
   b.onclick = (e) => { e.stopPropagation(); openSay(c, b); };
 }
+// 🚨 Siren: loud alarm with spoken warnings, through the camera's speaker.
+const sirenOn = new Set();
+function setupSirenButton(c, b = $('focus-siren')) {
+  if (!b) return;
+  b.hidden = !c.talk || !me || me.role === 'viewer';
+  const paint = () => {
+    const on = sirenOn.has(c.id) || ((status && status.sirens) || []).includes(c.id);
+    b.classList.toggle('siren-on', on);
+    const t = b.querySelector('span') || b; t.textContent = on ? 'Stop siren' : (b.querySelector('span') ? 'Siren' : '🚨 Siren');
+  };
+  paint(); b._paint = paint;
+  b.onclick = async (e) => {
+    e.stopPropagation();
+    if (sirenOn.has(c.id) || ((status && status.sirens) || []).includes(c.id)) {
+      sirenOn.delete(c.id); paint();
+      await api(`api/cameras/${enc(c.id)}/siren/stop`, {method: 'POST'}).catch(() => {});
+      return refreshStatus();
+    }
+    if (!confirm(`Sound the siren on ${c.name}? It's loud, with spoken warnings, until you stop it or the set time is up.`)) return;
+    b.disabled = true;
+    try {
+      const r = await api(`api/cameras/${enc(c.id)}/siren`, {method: 'POST'});
+      sirenOn.add(c.id); paint();
+      clearTimeout(b._t); b._t = setTimeout(() => { sirenOn.delete(c.id); paint(); }, r.seconds * 1000 + 3000);
+    } catch (err) { toast(err.message, true); } finally { b.disabled = false; }
+  };
+}
+// The siren buttons follow what the server says is sounding.
+function paintSirens() { document.querySelectorAll('#focus-siren, .p-siren').forEach(b => b._paint && b._paint()); }
 const SAY_RECENT = 'gaze-say-recent';
 function openSay(c, anchor) {
   document.querySelectorAll('.say-pop').forEach(x => x.remove());
@@ -4372,7 +4405,7 @@ function tlFsBar(el) {
       <button type="button" class="p-back" title="Back one frame">−1 frame</button><button type="button" class="p-fwd" title="Forward one frame">+1 frame</button>
       <button type="button" class="p-pev" title="Previous alert">⏮ Alert</button><button type="button" class="p-nev" title="Next alert">Alert ⏭</button>
       <button type="button" class="p-live" title="Watch this camera live now (Play or the timeline goes back to the recording)">● Live</button>
-      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk" hidden title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button><button type="button" class="p-say" hidden title="Type words for the camera to say">💬 Say…</button>' : ''}
+      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk" hidden title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button><button type="button" class="p-say" hidden title="Type words for the camera to say">💬 Say…</button><button type="button" class="p-siren siren-btn" hidden title="Sound the siren">🚨 Siren</button>' : ''}
       <select class="p-speed">${[1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === tl.speed ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
@@ -4401,6 +4434,7 @@ function tlFsBar(el) {
   q('.p-live').onclick = () => { tl.live ? (tlLeaveLive(), tlSync(true)) : tlGoLive(); paintTlBar(); };
   if (q('.p-talk')) setupTalkButton(c, q('.p-talk'));
   if (q('.p-say')) { const sb = q('.p-say'), hid = sb.hidden; setupSayButton(c, sb); sb.hidden = hid; }
+  if (q('.p-siren')) { const sb = q('.p-siren'), hid = sb.hidden; setupSirenButton(c, sb); sb.hidden = hid; }
   q('.p-speed').onchange = (e) => { $('tl-speed').value = e.target.value; $('tl-speed').dispatchEvent(new Event('change')); };
   q('.p-in').onclick = () => $('tl-in').click(); q('.p-out').onclick = () => $('tl-out').click();
   q('.p-clip').download = '';
@@ -4422,6 +4456,7 @@ function paintTlBar() {
   const lv = bar.querySelector('.p-live'); if (lv) { lv.classList.toggle('live-on', !!tl.live); lv.textContent = tl.live ? '● Live — back to recording' : '● Live'; }
   const tk = bar.querySelector('.p-talk'); if (tk) tk.hidden = !tl.live;
   const sy = bar.querySelector('.p-say'); if (sy) sy.hidden = !tl.live;
+  const sr = bar.querySelector('.p-siren'); if (sr) sr.hidden = !tl.live;
   bar.querySelector('.p-time').textContent = fmtDate(new Date(tl.T));
   bar.querySelector('.p-play').textContent = tl.playing ? '❚❚' : '▶';
   const z = bar.querySelector('.p-zoom'); if (z && z.value !== $('tl-zoom').value) z.value = $('tl-zoom').value;
@@ -4446,7 +4481,7 @@ function liveFsBar(el, camId) {
       <button type="button" class="p-pback play-only" title="Back one frame">−1 frame</button><button type="button" class="p-pfwd play-only" title="Forward one frame">+1 frame</button>
       <select class="p-pspeed play-only">${[0.5, 1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === 1 ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
-      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk live-only" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button><button type="button" class="p-say live-only" title="Type words for the camera to say">💬 Say…</button>' : ''}
+      ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk live-only" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button><button type="button" class="p-say live-only" title="Type words for the camera to say">💬 Say…</button><button type="button" class="p-siren siren-btn live-only" title="Sound the siren">🚨 Siren</button>' : ''}
       <a class="btn p-snap live-only" title="Save a full-quality picture">📷 Snapshot</a>
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
@@ -4486,6 +4521,7 @@ function liveFsBar(el, camId) {
   snap.onclick = () => { snap.download = `${c.name} ${stamp(new Date())}.jpg`; };
   if (q('.p-talk')) setupTalkButton(c, q('.p-talk'));
   if (q('.p-say')) { const sb = q('.p-say'), hid = sb.hidden; setupSayButton(c, sb); sb.hidden = hid; }
+  if (q('.p-siren')) { const sb = q('.p-siren'), hid = sb.hidden; setupSirenButton(c, sb); sb.hidden = hid; }
   // Clip marks: of what's playing (the player's), or of the live picture
   // (from the recording, between the marks).
   let a = null, b = null;
@@ -5366,7 +5402,7 @@ async function loadSettings() { [settings, cameraCfgs] = await Promise.all([api(
 // ---------- searching the settings ----------
 // Every setting's name (from each settings page and the camera window's
 // tabs): [section, name, camera tab].
-const SETTINGS_INDEX = [["cameras", "Cameras"], ["profiles", "Profiles"], ["storage", "Default recordings folder"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Full-screen button"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Also use the graphics card for sub-streams"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "System"], ["system", "trust its own certificate"], ["info", "Update from"], ["info", "About"], ["info", "Updates"], ["info", "What's new"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
+const SETTINGS_INDEX = [["cameras", "Cameras"], ["profiles", "Profiles"], ["storage", "Default recordings folder"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Full-screen button"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Also use the graphics card for sub-streams"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Sounds for"], ["voice", "Warnings"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["voice", "Speak warnings between the wails (in the voice above)"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "System"], ["system", "trust its own certificate"], ["info", "Update from"], ["info", "About"], ["info", "Updates"], ["info", "What's new"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
 const CAM_TABS = {general: 'General', recording: 'Recording', detection: 'Motion', ai: 'AI', audio: 'Audio', osd: 'On-screen display', ptz: 'Pan / tilt / zoom', device: 'ONVIF', zones: 'Zones'};
 function sectionName(sec) { const a = document.querySelector(`#side a[data-s="${sec}"]`); return a ? a.textContent.trim() : sec; }
 // Find a setting's row on the page (or in the camera window) and show it.
@@ -5567,13 +5603,18 @@ function renderScan(out, found) {
     $('c-name').value = f.name || `${(f.manufacturer || 'Camera')} ${f.ip.split('.').pop()}`;
     $('q-ip').value = f.ip;
     $('q-brand').value = guessBrand(f);
-    $('q-brand').onchange();
+    $('q-brand').onchange(); tapoDefaults();
     if (f.onvif_port && $('p-port')) $('p-port').value = f.onvif_port;
     $('q-user').focus();
     toast('Enter the camera’s login, then Test connection');
   });
 }
 
+function tapoDefaults() {
+  if (val('q-brand') !== 'tapo') return;
+  $('c-transport').value = 'udp';
+  if ($('p-port')) $('p-port').value = 2020;
+}
 // Common RTSP URL formats. {auth} = user:password@
 const BRANDS = [
   ['hikvision', 'Hikvision / Annke / HiLook / HiWatch', 554, '/Streaming/Channels/{ch}01', '/Streaming/Channels/{ch}02'],
@@ -5714,7 +5755,7 @@ async function openCameraDialog(id, clone, prof) {
         <div><label class="check"><input type="checkbox" id="c-rtmp-on" ${c.stream_live ? 'checked' : ''}> Stream this camera live</label>
           <input type="password" id="c-rtmp" value="${esc(c.stream_url || '')}" placeholder="rtmp://a.rtmp.youtube.com/live2/your-stream-key" autocomplete="off" style="margin-top:6px">
           <div class="hint">${(() => { const st = id && cam(id) && cam(id).streaming; return !st ? 'The address includes your stream key: keep it private.' : st.live ? `<span class="okc">● Live since ${fmtTime(st.since)}</span>` : `<span class="errc">● ${esc(st.error || 'Not streaming')}</span>`; })()}</div></div>
-        <label for="c-transport">Connection type${tip('How the video travels from the camera. TCP is reliable and right for almost every camera, especially on Wi-Fi. Only try UDP if a camera won’t connect with TCP.')}</label>
+        <label for="c-transport">Connection type${tip('How the video travels from the camera. TCP is reliable and right for most cameras. Tapo cameras are much smoother with UDP (chosen for you when you pick the Tapo brand). Try the other one if a camera stutters or won’t connect.')}</label>
         <div><select id="c-transport"><option value="tcp">TCP — reliable (recommended)</option><option value="udp">UDP</option></select></div>
         <span></span><div><button type="button" id="c-test">▶ Test connection</button><div id="c-probe"></div></div>
         <h3>Live view</h3>
@@ -6009,6 +6050,9 @@ async function openCameraDialog(id, clone, prof) {
     const b = val('q-brand'); if (!b) return;
     $('c-url').value = brandUrl(b, 'main'); $('c-live').value = brandUrl(b, 'sub');
   };
+  // Choosing Tapo: UDP video (much smoother from these Wi-Fi cameras) and
+  // Tapo's control port for pan / tilt / zoom. Nothing else changes.
+  $('q-brand').addEventListener('change', tapoDefaults);
   // Changing the address or login updates the stream URLs: from the brand
   // template if one is chosen, otherwise by editing the existing URLs (e.g.
   // after cloning a camera, just type the new IP).
@@ -7843,6 +7887,12 @@ function renderVoice(body) {
       <label for="v-phr">Ready phrases${tip('Shown as buttons under the text box of Say…, one per line.')}</label><div><textarea id="v-phr" rows="5">${esc((t.phrases || []).join('\n'))}</textarea></div>
       <label for="v-try">Try it</label><div><div class="row"><input type="text" id="v-try" value="Hello, this is GAZE." maxlength="400" style="flex:1"><button type="button" id="v-hear">▶ Hear it here</button>${talkers.length ? `<select id="v-cam">${talkers.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select><button type="button" id="v-say">🔊 Say on camera</button>` : ''}</div>
         <div class="hint" id="v-msg">${talkers.length ? 'Say on camera uses the saved settings: save first.' : 'No camera has two-way audio turned on (camera settings → Audio).'}</div></div>
+      <h3>🚨 Siren${tip('The 🚨 Siren button on the live view of a camera with two-way audio: a loud wailing alarm through the camera\u2019s speaker, with the warnings below spoken in between, to scare off an intruder. It stops after the time set here, or when you press Stop siren.')}</h3>
+      <label for="v-sir-s">Sounds for</label><div class="row"><input type="number" id="v-sir-s" min="5" max="300" value="${t.siren_seconds || 30}" style="width:90px"><span class="muted">seconds (or until stopped)</span></div>
+      <span></span><label class="check"><input type="checkbox" id="v-sir-voice" ${t.siren_voice !== false ? 'checked' : ''}> Speak warnings between the wails (in the voice above)</label>
+      <label for="v-sir-msg">Warnings${tip('Spoken in turn, one between each wail. One per line.')}</label><div><textarea id="v-sir-msg" rows="3">${esc((t.siren_messages || []).join('\n'))}</textarea>
+        <div class="chips" style="margin-top:4px">${['Warning! You are being recorded. The homeowner has been notified.', 'Leave the property now. The police have been notified.', 'Security has been alerted. You are on camera.', 'This is private property. Leave immediately.'].map(m => `<button type="button" class="small v-sir-add">${esc(m)}</button>`).join('')}</div></div>
+      <label>Try it</label><div class="row"><button type="button" id="v-sir-hear">▶ Hear the siren here</button><span class="hint" style="margin:0">a few seconds, at a sensible volume</span></div>
     </div>
     <div class="actions"><span class="spacer"></span><button type="submit" class="primary">Save</button></div></form>`;
   const rateTxt = (v) => +v === 0 ? 'normal' : (+v < 0 ? 'slower ' : 'faster ') + Math.abs(v);
@@ -7850,11 +7900,22 @@ function renderVoice(body) {
   $('v-rate').oninput = $('v-vol').oninput = paint; paint();
   api('api/tts/voices').then(list => {
     const sel = $('v-voice'), cur = t.voice;
+    if (!sel) return;
     sel.innerHTML = '<option value="">The computer\'s default voice</option>' + list.map(v => `<option value="${esc(v.id)}" ${v.id === cur ? 'selected' : ''}>${esc(v.name)}${v.lang ? ' — ' + esc(v.lang) : ''}</option>`).join('')
       + (cur && !list.some(v => v.id === cur) ? `<option value="${esc(cur)}" selected>${esc(cur.replace(/^\w+:/, ''))} (not found)</option>` : '');
     if (!list.length) $('v-msg').textContent = 'No voices found on this computer — the default one is used.';
-  }).catch(() => {}).finally(() => { $('v-load').remove(); });
-  const form = () => ({voice: val('v-voice'), rate: +val('v-rate'), volume: +val('v-vol'), chime: chk('v-chime'), phrases: val('v-phr').split('\n').map(x => x.trim()).filter(Boolean)});
+  }).catch(() => {}).finally(() => { const l = $('v-load'); if (l) l.remove(); });
+  const form = () => ({voice: val('v-voice'), rate: +val('v-rate'), volume: +val('v-vol'), chime: chk('v-chime'), phrases: val('v-phr').split('\n').map(x => x.trim()).filter(Boolean),
+    siren_seconds: Math.max(5, Math.min(300, Math.round(+val('v-sir-s')) || 30)), siren_voice: chk('v-sir-voice'), siren_messages: val('v-sir-msg').split('\n').map(x => x.trim()).filter(Boolean)});
+  body.querySelectorAll('.v-sir-add').forEach(b => b.onclick = () => { const ta = $('v-sir-msg'); if (!ta.value.includes(b.textContent)) ta.value = (ta.value.trim() ? ta.value.trim() + '\n' : '') + b.textContent; });
+  $('v-sir-hear').onclick = async () => {
+    const b = $('v-sir-hear'); b.disabled = true; msg('Making the siren…');
+    try {
+      const r = await fetch('api/tts/siren-preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(form())});
+      if (!r.ok) throw new Error((await r.text()) || r.statusText);
+      const a = new Audio(URL.createObjectURL(await r.blob())); a.volume = 0.35; await a.play(); msg('Playing the siren (quieter here than on the camera).');
+    } catch (e) { msg(e.message, true); } finally { b.disabled = false; }
+  };
   const msg = (m, bad) => { $('v-msg').textContent = m; $('v-msg').className = 'hint' + (bad ? ' err' : ''); };
   $('v-hear').onclick = async () => {
     const b = $('v-hear'); b.disabled = true; msg('Making the speech…');
