@@ -8931,11 +8931,25 @@ $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   const light = t === 'light' || (t === 'auto' && matchMedia('(prefers-color-scheme: light)').matches);
+  document.documentElement.dataset.mode = light ? 'light' : 'dark';
   const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = light ? '#ffffff' : '#14161c';
 }
 $('um-theme').value = store.get('theme', 'auto'); applyTheme($('um-theme').value);
 $('um-theme').onchange = () => { store.set('theme', val('um-theme')); applyTheme(val('um-theme')); };
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(store.get('theme', 'auto')));
+// Look on this device (static/skins.css): layout, shapes, type and colours.
+// Classic = no data-skin. Only changes how the page is drawn, never settings.
+const SKINS = [['classic', 'Classic · dark top bar'], ['rail', 'Rail · icon sidebar'], ['dock', 'Dock · floating bottom dock'], ['terminal', 'Terminal · green phosphor'],
+  ['hud', 'HUD · mission control'], ['paper', 'Paper · newspaper masthead'], ['brute', 'Brutal · loud blocks'], ['neon', 'Neon · synthwave, right rail'],
+  ['soft', 'Soft · clay sidebar'], ['aurora', 'Aurora · frosted glass'], ['swiss', 'Swiss · numbered grid']];
+function applySkin(k) {
+  if (!SKINS.some(x => x[0] === k)) k = 'classic';
+  if (k === 'classic') delete document.documentElement.dataset.skin; else document.documentElement.dataset.skin = k;
+  window.dispatchEvent(new Event('resize'));  // the page area changed shape: grids and timelines re-measure
+}
+$('um-skin').innerHTML = SKINS.map(([k, n]) => `<option value="${esc(k)}">${esc(n)}</option>`).join('');
+$('um-skin').value = store.get('skin', 'classic'); applySkin($('um-skin').value);
+$('um-skin').onchange = () => { store.set('skin', val('um-skin')); applySkin(val('um-skin')); };
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
 // Restart GAZE (anyone signed in): it's back in about half a minute; the
 // page waits for it and reloads.

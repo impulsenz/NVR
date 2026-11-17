@@ -22,3 +22,9 @@ the entry when it is fixed.** Source of the first entries: `AUDIT-2026-11.md`
 | S8 | M | Sign-in lockout: per user only? | `users.rs` | Check; add per-address limit | — |
 | X-1 | M | Not audited: `onvif_device.rs` input handling, `remote.rs` trust model, checksum pinning of ffmpeg/go2rtc/voice downloads, power-cut test of recording repair | — | Targeted review | — |
 | X-2 | L | 850 rustfmt differences | all | Not enforced; a mass reformat would bury blame | — |
+
+## Looks (skins.css)
+
+* The ten looks were checked on Live, Alerts, Settings (day and night, 1440 px) and the account menu; not yet every dialog, the Recordings timeline, System graphs and Evidence page in every look. Pages with hard-coded colours (tags, timeline segments, `.tag.person`) keep them in every look.
+* `skins.css` needs CSS nesting (Chrome/Edge 120+, Safari 17.2+, Firefox 117+); on older browsers a look keeps its colours but loses its layout.
+* Stored but unreviewed: the Windows-only code is untouched by this change.

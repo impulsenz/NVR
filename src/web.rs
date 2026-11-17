@@ -40,6 +40,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         // plays the recordings as one continuous stream.
         .route("/hls.min.js", get(|h: axum::http::HeaderMap| async move { static_text(&h, &HLS_JS, "text/javascript; charset=utf-8", "public, max-age=86400") }))
         .route("/app.css", get(|h: axum::http::HeaderMap| async move { static_text(&h, &APP_CSS, "text/css; charset=utf-8", "no-cache") }))
+        .route("/skins.css", get(|h: axum::http::HeaderMap| async move { static_text(&h, &SKINS_CSS, "text/css; charset=utf-8", "no-cache") }))
         .route(
             "/logo.png",
             get(|| async {
@@ -311,6 +312,7 @@ fn pack(text: &str) -> Packed {
 
 static APP_JS: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| pack(include_str!("../static/app.js")));
 static APP_CSS: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| pack(include_str!("../static/app.css")));
+static SKINS_CSS: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| pack(include_str!("../static/skins.css")));
 static HLS_JS: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| pack(include_str!("../static/vendor/hls.min.js")));
 
 /// Send a packed text: 304 when the browser already has this version, gzip
@@ -349,6 +351,7 @@ async fn index(h: axum::http::HeaderMap) -> Response {
         pack(
             &include_str!("../static/index.html")
                 .replace("href=\"app.css\"", &format!("href=\"app.css?v={v}\""))
+                .replace("href=\"skins.css\"", &format!("href=\"skins.css?v={v}\""))
                 .replace("src=\"app.js\"", &format!("src=\"app.js?v={v}\"")),
         )
     });
@@ -6090,6 +6093,7 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
         "/" | "/app.js"
             | "/hls.min.js"
             | "/app.css"
+            | "/skins.css"
             | "/logo.png"
             | "/icon.png"
             | "/favicon.png"

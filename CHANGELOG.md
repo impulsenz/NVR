@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Eleven looks** (👤 menu → *Look on this device*): Classic (as before), Rail (icon sidebar), Dock (floating bottom dock), Terminal (green phosphor), HUD (mission control), Paper (newspaper masthead), Brutal (loud blocks), Neon (synthwave, menu on the right), Soft (clay sidebar), Aurora (frosted glass) and Swiss (numbered grid). Each changes the layout, shapes, type and colours, and each has a day and a night version that follow *Colours on this device*. Chosen per device; no GAZE setting changes, recording is untouched, and phones keep the bottom tab bar in every look.
+
 ## 1.1.10 — November 2026
 - **Faster page loads**: the page, its script and styles are compressed and remembered by the browser: the first load is about 70 % smaller (900 KB → 260 KB) and a reload downloads almost nothing.
 - **Security**: the Evidence Locker no longer lets an account that can't see a camera change or delete cases and items holding that camera's footage; the streaming (HLS) addresses are covered by the central camera check; a camera's address must be a streaming address (rtsp://, rtsps://, http(s)://, rtmp(s)://, srt://, rtp://, udp://, tcp://) — addresses that read files or run programs are refused when entered (cameras already saved are not affected).
