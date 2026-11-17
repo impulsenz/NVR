@@ -1444,6 +1444,16 @@ impl CameraConfig {
 
     /// Whether going from `old` to `self` needs the camera restarted.
     /// Display, live-view and PTZ settings apply without a restart.
+    /// The stream addresses are streaming addresses (see `stream_url_ok`).
+    pub fn check_urls(&self) -> Result<()> {
+        for (what, u) in [("main stream", &self.url), ("sub-stream", &self.live_url), ("talk address", &self.talk_url)] {
+            if !stream_url_ok(u) {
+                bail!("the {what} address must be a streaming address such as rtsp://, rtsps://, http:// or rtmp://");
+            }
+        }
+        Ok(())
+    }
+
     pub fn needs_restart(&self, old: &CameraConfig) -> bool {
         let strip = |c: &CameraConfig| CameraConfig {
             osd: OsdConfig::default(),
@@ -1895,6 +1905,26 @@ pub fn slug(name: &str) -> String {
     if s.is_empty() { "camera".into() } else { s }
 }
 
+/// May this be a camera's stream address? Streaming protocols only: ffmpeg
+/// and go2rtc also take addresses that read files or run programs (`file:`,
+/// `exec:`, `pipe:` …), which an address filled in from what a device on the
+/// network says about itself must never reach. Checked when an address is
+/// entered (adding or changing a camera, trying a stream), not when the
+/// settings file is read, so settings made earlier always load.
+pub fn stream_url_ok(url: &str) -> bool {
+    let u = url.trim();
+    if u.is_empty() {
+        return true; // (optional addresses)
+    }
+    let Some((scheme, rest)) = u.split_once("://") else { return false };
+    let scheme = scheme.to_ascii_lowercase();
+    ["rtsp", "rtsps", "rtmp", "rtmps", "http", "https", "srt", "rtp", "udp", "tcp"].contains(&scheme.as_str())
+        && !rest.is_empty()
+        // go2rtc source options that run programs.
+        && !rest.to_ascii_lowercase().contains("#exec")
+        && !rest.chars().any(|c| c.is_control())
+}
+
 /// Hide the password in a URL like `rtsp://user:pass@host/...`.
 /// Only the owner may read this file (Unix; on Windows the user's own
 /// folders already are).
@@ -2189,6 +2219,20 @@ mod tests {
         assert_eq!(cfg.cameras[1].folder, "");
         assert_eq!(cfg.camera_dir(&cfg.cameras[0]), base.join("Front Door"));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn only_streaming_addresses_are_cameras() {
+        for ok in ["rtsp://admin:x@10.0.0.5:554/s1", "RTSPS://cam/s", "http://cam/mjpeg", "rtmp://cam/live/1", "srt://cam:9000", ""] {
+            assert!(stream_url_ok(ok), "{ok}");
+        }
+        for bad in ["file:///etc/passwd", "exec:touch /tmp/x", "pipe:0", "concat:a|b", "lavfi://x", "ffmpeg:rtsp://a#video=h264", "/etc/passwd", "rtsp://", "rtsp://a#exec=ls", "rtsp://a\nb", "javascript:alert(1)"] {
+            assert!(!stream_url_ok(bad), "{bad}");
+        }
+        let mut c = CameraConfig { url: "rtsp://10.0.0.5/s".into(), ..Default::default() };
+        assert!(c.check_urls().is_ok());
+        c.live_url = "exec:evil".into();
+        assert!(c.check_urls().is_err());
     }
 
     #[test]

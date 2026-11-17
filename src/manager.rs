@@ -543,6 +543,7 @@ impl Manager {
         cam.id = cfg.new_camera_id(&cam.name);
         // Its recordings go in a folder called like the camera.
         cam.folder = cfg.folder_for(&cam.name, &cam.id, &cam.storage_dir);
+        cam.check_urls()?;
         cam.validate()?;
         cfg.cameras.push(cam.clone());
         self.commit(cfg)?;
@@ -586,6 +587,7 @@ impl Manager {
             }
         }
         let move_recordings = move_recordings || folder_moves;
+        cam.check_urls()?;
         cam.validate()?;
         *slot = cam.clone();
         self.commit(cfg.clone())?;

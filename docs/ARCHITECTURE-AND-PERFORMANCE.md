@@ -1,3 +1,9 @@
+> **Status (November 2026):** this is the record of the 1.0 audit and its
+> benchmark figures, which still stand. Some statements are out of date: camera
+> folders are now named after the camera (not its id); the page is ~9,800
+> lines; recordings can move to deep storage. The current map is
+> `ARCHITECTURE.md`; the latest audit is `AUDIT-2026-11.md`.
+
 # GAZE: architecture, performance audit and changes (1.0)
 
 This is the record of the 1.0 audit: how GAZE moves video from the cameras to

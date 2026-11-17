@@ -87,6 +87,10 @@ pub fn yaml(cameras: &[crate::config::CameraConfig]) -> String {
 /// picture at all — and GAZE talks through cameras itself anyway.
 fn source_for(url: &str) -> String {
     let u = url.trim();
+    // Only streaming addresses (go2rtc also reads files and runs programs).
+    if !crate::config::stream_url_ok(u) {
+        return String::new();
+    }
     if (u.starts_with("rtsp://") || u.starts_with("rtsps://")) && !u.contains("#backchannel") {
         format!("{u}#backchannel=0")
     } else {

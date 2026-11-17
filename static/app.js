@@ -8294,7 +8294,6 @@ async function renderWatchdog(body) {
 const CLOCK_FORMATS = ['DD/MM/YYYY HH:mm:ss', 'DD/MM/YYYY h:mm:ss a', 'MM/DD/YYYY h:mm:ss A', 'YYYY-MM-DD HH:mm:ss', 'ddd D MMM YYYY HH:mm:ss', 'dddd D MMMM YYYY h:mm a', 'HH:mm:ss'];
 function renderDisplay(body) {
   const l = settings.live, d = settings.display;
-  const corners = SPOTS;
   const custom = !CLOCK_FORMATS.includes(d.clock_format);
   body.innerHTML = `<form class="card" id="f-display"><h2>Live view</h2><div class="form">
     <label for="l-fps">Smoothness in the grid${tip('Pictures per second (fps) for each camera in the Live grid. Higher is smoother but uses more of the computer and network. 5 is plenty for watching several cameras at once.')}</label><div class="row"><input type="number" id="l-fps" min="1" max="30" value="${l.fps}" style="width:110px"><span class="muted">pictures per second</span></div>

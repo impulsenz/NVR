@@ -35,44 +35,11 @@ type App = State<Arc<Manager>>;
 pub fn router(mgr: Arc<Manager>) -> Router {
     Router::new()
         .route("/", get(index))
-        .route(
-            "/app.js",
-            get(|| async {
-                (
-                    [
-                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-                        (header::CACHE_CONTROL, "no-cache"),
-                    ],
-                    include_str!("../static/app.js"),
-                )
-            }),
-        )
-        .route(
-            "/hls.min.js",
-            get(|| async {
-                (
-                    [
-                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-                        (header::CACHE_CONTROL, "public, max-age=86400"),
-                    ],
-                    // hls.js 1.5.20 (Apache-2.0, see static/vendor/hls.js-LICENSE.txt):
-                    // plays the recordings as one continuous stream.
-                    include_str!("../static/vendor/hls.min.js"),
-                )
-            }),
-        )
-        .route(
-            "/app.css",
-            get(|| async {
-                (
-                    [
-                        (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-                        (header::CACHE_CONTROL, "no-cache"),
-                    ],
-                    include_str!("../static/app.css"),
-                )
-            }),
-        )
+        .route("/app.js", get(|h: axum::http::HeaderMap| async move { static_text(&h, &APP_JS, "text/javascript; charset=utf-8", "no-cache") }))
+        // hls.js 1.5.20 (Apache-2.0, see static/vendor/hls.js-LICENSE.txt):
+        // plays the recordings as one continuous stream.
+        .route("/hls.min.js", get(|h: axum::http::HeaderMap| async move { static_text(&h, &HLS_JS, "text/javascript; charset=utf-8", "public, max-age=86400") }))
+        .route("/app.css", get(|h: axum::http::HeaderMap| async move { static_text(&h, &APP_CSS, "text/css; charset=utf-8", "no-cache") }))
         .route(
             "/logo.png",
             get(|| async {
@@ -322,19 +289,70 @@ fn boot_id() -> u64 {
     *ID
 }
 
+/// A page's text, ready to send: as it is, gzipped once (not on every
+/// request), and a fingerprint so a browser that has it gets "304 not
+/// modified" instead of the whole file again.
+struct Packed {
+    plain: Bytes,
+    gz: Bytes,
+    etag: String,
+}
+
+fn pack(text: &str) -> Packed {
+    use flate2::{Compression, write::GzEncoder};
+    use sha2::Digest;
+    use std::io::Write;
+    let mut z = GzEncoder::new(Vec::new(), Compression::best());
+    let _ = z.write_all(text.as_bytes());
+    let gz = z.finish().unwrap_or_default();
+    let tag: String = sha2::Sha256::digest(text.as_bytes()).iter().take(12).map(|b| format!("{b:02x}")).collect();
+    Packed { plain: Bytes::from(text.to_string()), gz: Bytes::from(gz), etag: format!("\"{tag}\"") }
+}
+
+static APP_JS: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| pack(include_str!("../static/app.js")));
+static APP_CSS: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| pack(include_str!("../static/app.css")));
+static HLS_JS: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| pack(include_str!("../static/vendor/hls.min.js")));
+
+/// Send a packed text: 304 when the browser already has this version, gzip
+/// when it accepts it.
+fn static_text(h: &axum::http::HeaderMap, p: &Packed, ctype: &'static str, cache: &'static str) -> Response {
+    let same = h.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|t| t.trim().trim_start_matches("W/") == p.etag));
+    let mut r = if same {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else if h.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|e| e.trim().split(';').next() == Some("gzip"))) && !p.gz.is_empty() {
+        let mut r = Response::new(Body::from(p.gz.clone()));
+        r.headers_mut().insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        r
+    } else {
+        Response::new(Body::from(p.plain.clone()))
+    };
+    let hd = r.headers_mut();
+    if !same {
+        hd.insert(header::CONTENT_TYPE, HeaderValue::from_static(ctype));
+    }
+    hd.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    hd.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    if let Ok(v) = HeaderValue::from_str(&p.etag) {
+        hd.insert(header::ETAG, v);
+    }
+    r
+}
+
 /// The page. Its script and styles are asked for with this version in
 /// their address, and none of the three is kept by the browser without
 /// asking: after an update the browser always runs the new page (an old
 /// script kept in its cache, talking to the new server, broke things until
 /// the cache was cleared).
-async fn index() -> Response {
-    static PAGE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+async fn index(h: axum::http::HeaderMap) -> Response {
+    static PAGE: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| {
         let v = env!("CARGO_PKG_VERSION");
-        include_str!("../static/index.html")
-            .replace("href=\"app.css\"", &format!("href=\"app.css?v={v}\""))
-            .replace("src=\"app.js\"", &format!("src=\"app.js?v={v}\""))
+        pack(
+            &include_str!("../static/index.html")
+                .replace("href=\"app.css\"", &format!("href=\"app.css?v={v}\""))
+                .replace("src=\"app.js\"", &format!("src=\"app.js?v={v}\"")),
+        )
     });
-    ([(header::CACHE_CONTROL, "no-cache")], Html(PAGE.as_str())).into_response()
+    static_text(&h, &PAGE, "text/html; charset=utf-8", "no-cache")
 }
 
 // ---------- status & system ----------
@@ -1801,6 +1819,9 @@ async fn probe(State(m): App, Json(req): Json<StreamReq>) -> Response {
     if req.url.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "enter a stream URL first");
     }
+    if !crate::config::stream_url_ok(&req.url) {
+        return err(StatusCode::BAD_REQUEST, "that isn't a streaming address (use rtsp://, rtsps://, http:// or rtmp://)");
+    }
     let ffmpeg = m.config().server.ffmpeg_path;
     if let Some((c, q)) = running_stream(&m, req.url.trim()) {
         let relay = if q == Quality::Main {
@@ -1834,6 +1855,9 @@ async fn probe(State(m): App, Json(req): Json<StreamReq>) -> Response {
 async fn start_preview(State(m): App, Json(req): Json<StreamReq>) -> Response {
     if req.url.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "enter a stream URL first");
+    }
+    if !crate::config::stream_url_ok(&req.url) {
+        return err(StatusCode::BAD_REQUEST, "that isn't a streaming address (use rtsp://, rtsps://, http:// or rtmp://)");
     }
     // Already connected: show the NVR's own live stream instead of a new session.
     if let Some((c, q)) = running_stream(&m, req.url.trim()) {
@@ -2961,14 +2985,37 @@ async fn cases_create(user: Option<axum::Extension<CurrentUser>>, Json(r): Json<
     }
 }
 
-async fn cases_update(Path(id): Path<String>, Json(r): Json<CaseReq>) -> Response {
+/// A case holding footage of cameras this account can't see: only accounts
+/// that see every camera may change or delete it as a whole.
+fn case_hidden_from(user: &Option<axum::Extension<CurrentUser>>, id: &str) -> bool {
+    match (visible(user), crate::cases::get(id)) {
+        (Some(v), Some(c)) => c.items.iter().any(|i| !v.contains(&i.camera)),
+        _ => false,
+    }
+}
+
+/// An item of footage from a camera this account can't see.
+fn case_item_hidden_from(user: &Option<axum::Extension<CurrentUser>>, id: &str, item: &str) -> bool {
+    match (visible(user), crate::cases::get(id)) {
+        (Some(v), Some(c)) => c.items.iter().any(|i| i.id == item && !v.contains(&i.camera)),
+        _ => false,
+    }
+}
+
+async fn cases_update(user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Json(r): Json<CaseReq>) -> Response {
+    if case_hidden_from(&user, &id) {
+        return err(StatusCode::FORBIDDEN, "this case holds footage of cameras your account can't see");
+    }
     match crate::cases::rename(&id, &r.name, &r.notes) {
         Ok(c) => Json(c).into_response(),
         Err(e) => bad(e),
     }
 }
 
-async fn cases_delete(Path(id): Path<String>) -> Response {
+async fn cases_delete(user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>) -> Response {
+    if case_hidden_from(&user, &id) {
+        return err(StatusCode::FORBIDDEN, "this case holds footage of cameras your account can't see");
+    }
     let name = crate::cases::get(&id).map(|c| c.name).unwrap_or_default();
     match crate::cases::delete(&id) {
         Ok(()) => {
@@ -3164,6 +3211,9 @@ async fn cases_update_item(
     Path((id, item)): Path<(String, String)>,
     Json(r): Json<CaseItemUpdate>,
 ) -> Response {
+    if case_item_hidden_from(&user, &id, &item) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
     // Unprotecting lets the footage be deleted: administrators only.
     let admin = user.as_ref().is_none_or(|u| u.0.0.role == crate::users::Role::Admin);
     if r.protected == Some(false) && !admin {
@@ -3180,7 +3230,10 @@ async fn cases_update_item(
     }
 }
 
-async fn cases_remove_item(Path((id, item)): Path<(String, String)>) -> Response {
+async fn cases_remove_item(user: Option<axum::Extension<CurrentUser>>, Path((id, item)): Path<(String, String)>) -> Response {
+    if case_item_hidden_from(&user, &id, &item) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
     match crate::cases::remove_item(&id, &item) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err(StatusCode::CONFLICT, format!("{e:#}")),
@@ -5880,7 +5933,7 @@ pub struct CurrentUser(pub Arc<crate::users::User>);
 fn camera_in_path(path: &str) -> Option<&str> {
     let mut parts = path.trim_start_matches('/').split('/');
     match (parts.next()?, parts.next()?) {
-        ("api", "cameras") | ("api", "sprite") => parts.next(),
+        ("api", "cameras") | ("api", "sprite") | ("api", "hls") | ("api", "hls-file") => parts.next(),
         ("media", id) | ("live", id) | ("snapshot", id) => Some(id),
         _ => None,
     }
@@ -6394,6 +6447,49 @@ async fn users_delete(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn camera_ids_are_found_in_every_camera_path() {
+        // The sign-in check keeps a restricted account away from other cameras on all these.
+        for (p, want) in [
+            ("/api/cameras/front/ptz/move", "front"),
+            ("/api/sprite/front/rec/x.mp4", "front"),
+            ("/api/hls/front/main", "front"),
+            ("/api/hls-file/front/rec/x.mp4.m3u8", "front"),
+            ("/media/front/rec/x.mp4", "front"),
+            ("/live/front/stream.mjpeg", "front"),
+            ("/snapshot/front", "front"),
+        ] {
+            assert_eq!(camera_in_path(p), Some(want), "{p}");
+        }
+        assert_eq!(camera_in_path("/api/status"), None);
+        assert_eq!(camera_in_path("/api/cases/c1/items"), None);
+    }
+
+    #[test]
+    fn a_packed_page_is_gzipped_once_and_answers_not_modified() {
+        use std::io::Read;
+        let text = "console.log('hello');\n".repeat(200);
+        let p = pack(&text);
+        assert!(p.gz.len() < p.plain.len() / 5);
+        let mut h = axum::http::HeaderMap::new();
+        // A browser that takes gzip gets it, and it unpacks to the same text.
+        h.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip, br"));
+        let r = static_text(&h, &p, "text/javascript", "no-cache");
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "gzip");
+        let mut out = String::new();
+        flate2::read::GzDecoder::new(&p.gz[..]).read_to_string(&mut out).unwrap();
+        assert_eq!(out, text);
+        // One that doesn't gets the text as it is.
+        let r = static_text(&axum::http::HeaderMap::new(), &p, "text/javascript", "no-cache");
+        assert!(r.headers().get(header::CONTENT_ENCODING).is_none());
+        // One that already has this version gets 304.
+        h.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&p.etag).unwrap());
+        assert_eq!(static_text(&h, &p, "text/javascript", "no-cache").status(), StatusCode::NOT_MODIFIED);
+        // A changed file has another fingerprint.
+        assert_ne!(pack("other").etag, p.etag);
+    }
     use super::*;
 
     fn req(method: &str, origin: Option<&str>, host: &str) -> Request {

@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 1.1.10 — November 2026
+- **Faster page loads**: the page, its script and styles are compressed and remembered by the browser: the first load is about 70 % smaller (900 KB → 260 KB) and a reload downloads almost nothing.
+- **Security**: the Evidence Locker no longer lets an account that can't see a camera change or delete cases and items holding that camera's footage; the streaming (HLS) addresses are covered by the central camera check; a camera's address must be a streaming address (rtsp://, rtsps://, http(s)://, rtmp(s)://, srt://, rtp://, udp://, tcp://) — addresses that read files or run programs are refused when entered (cameras already saved are not affected).
+- Audit report and project documentation (`docs/AUDIT-2026-11.md`, architecture map, technical-debt register, configuration inventory, security checklist, tooling), rules for future development (`CLAUDE.md`), and a pull-request quality workflow (tests, lints, Windows compile check).
+
 ## 1.1.9 — November 2026
 - **Watchdog reopens GAZE however it stopped**: crashed, hung, ended in Task Manager or closed with Quit. (Before, it left GAZE closed after Quit. That's now an opt-in setting: “Leave GAZE closed when I quit it myself”.)
 - **The watchdog is its own Windows service** (Settings → Watchdog → “As its own Windows service”): starts with the computer, before anyone signs in, and Windows restarts the watchdog itself if it ever stops. It updates itself as a service too.

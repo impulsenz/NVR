@@ -1,0 +1,39 @@
+# Quality gates: run on pull requests and by hand (not on every push to the
+# default branch: the release workflow builds there).
+#
+# - tests (GAZE and the watchdog) and clippy's correctness / suspicious lints
+#   on Linux;
+# - a Windows compile check: the service, tray, watchdog and updater code only
+#   compiles on Windows, and until now was first built by the release.
+# (Dependency advisories: security.yml.)
+name: Quality
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --locked
+      - name: Clippy (correctness and suspicious code)
+        run: cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile check (GAZE and the watchdog)
+        run: cargo check --locked --all-targets
