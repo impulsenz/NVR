@@ -45,7 +45,8 @@ nav a.active { color: var(--text); border-bottom-color: var(--accent); }
 #clock { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 nav .ni, .bi { display: none; font-style: normal; }
 .focus-actions .bi { display: inline; margin-right: 5px; }
-main { padding: 16px; max-width: 1800px; margin: 0 auto; }
+/* The whole width of the window (wide screens included). */
+main { padding: 16px; max-width: none; margin: 0; }
 
 /* controls */
 button, .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
@@ -151,7 +152,13 @@ dt { color: var(--muted); } dd { margin: 0; text-align: right; word-break: break
 .tile.dragging { z-index: 10; opacity: .85; transition: none; }
 
 /* focus view */
-#focus-surface { aspect-ratio: 16/9; }
+/* The opened camera: the picture edge to edge, in the camera's own shape
+   (set from its stream), no frame or black bars. */
+#focus-surface { aspect-ratio: 16/9; border: 0; border-radius: 0; }
+#focus-surface > img, #focus-surface > video { object-fit: fill; }
+.focus-snd-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.focus-snd-wrap .snd-vol { width: 80px; }
+.focus-snd-wrap #focus-sound { min-width: 44px; font-size: 18px; }
 .side-list { max-height: 60vh; overflow-y: auto; margin: 0 -8px; }
 .act { display: flex; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; align-items: center; }
 .act:hover { background: var(--panel2); }
@@ -617,6 +624,8 @@ dialog.alert-dlg .head h2 { margin: 0; font-size: 15px; }
 .ptz-presets button { width: 32px; height: 32px; min-height: 0 !important; padding: 0; border-radius: 9px; background: rgba(0,0,0,.4);
   border: 1px solid rgba(255,255,255,.16); color: #fbbf24; font-size: 15px; justify-content: center; }
 .ptz-presets button:hover { background: rgba(251,191,36,.18); }
+.ptz-presets button svg { display: block; margin: auto; }
+#ptz-pad { overflow-y: auto; overscroll-behavior: contain; }
 .ptz-msg { font-size: 10.5px; color: rgba(255,255,255,.55); text-align: center; line-height: 1.35;
   /* as wide as the controls (a long message wraps instead of widening the panel) */
   width: 0; min-width: 100%; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -1431,3 +1440,71 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
 
 /* Recordings: a camera's last picture held while pausing / starting. */
 #tl-videos .surface > canvas.hold { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; z-index: 2; pointer-events: none; }
+
+/* Live: the camera menu (all cameras, a group, or cameras ticked by hand). */
+.cam-pick { position: relative; }
+.cam-pick-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 240px; max-height: min(70vh, 520px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.25); padding: 6px; }
+.cam-pick-menu > button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 6px; }
+.cam-pick-menu > button:hover { background: var(--panel2); }
+.cam-pick-menu > button.on { background: var(--accent2); font-weight: 600; }
+.cam-pick-menu .cp-head { margin: 8px 10px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.cam-pick-menu .cp-cams { display: grid; gap: 2px; padding: 0 6px; }
+.cam-pick-menu .cp-cams .check { padding: 4px; }
+.cam-pick-menu .cp-foot { gap: 6px; padding: 6px; }
+
+/* Digital zoom (mouse wheel): the picture only, overlays stay put. */
+.surface.dz > img, .surface.dz > video, .surface.dz > .sprite { transform-origin: 0 0; transform: var(--dz); }
+.surface.dz { cursor: grab; }
+.surface.dz.dz-drag { cursor: grabbing; }
+
+/* System: how busy, by colour (green under 50 %, yellow 50–80 %, red over 80 %). */
+.card.lv-ok .stat { color: var(--green); } .card.lv-ok .bar > div { background: var(--green); }
+.card.lv-warn .stat { color: var(--amber); } .card.lv-warn .bar > div { background: var(--amber); }
+.card.lv-bad .stat { color: var(--red); } .card.lv-bad .bar > div { background: var(--red); }
+
+/* Hardware bar along the bottom of the page. */
+.hw-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: center;
+  padding: 5px 16px; background: var(--panel); border-top: 1px solid var(--border); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.hw-bar[hidden] { display: none; }
+.hw-i { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.hw-i b { font-weight: 500; color: var(--muted); }
+.hw-i em { font-style: normal; font-weight: 600; min-width: 3.2em; }
+.hw-meter { display: inline-block; width: 46px; height: 5px; border-radius: 3px; background: var(--panel3); overflow: hidden; }
+.hw-meter > i { display: block; height: 100%; background: var(--accent); }
+.hw-i.lv-ok em { color: var(--green); } .hw-i.lv-ok .hw-meter > i { background: var(--green); }
+.hw-i.lv-warn em { color: var(--amber); } .hw-i.lv-warn .hw-meter > i { background: var(--amber); }
+.hw-i.lv-bad em { color: var(--red); } .hw-i.lv-bad .hw-meter > i { background: var(--red); }
+body.has-hw-bar main { padding-bottom: 52px; }
+@media (max-width: 760px) { .hw-bar { gap: 2px 12px; padding: 4px 8px; font-size: 11.5px; } .hw-meter { display: none; } body.has-hw-bar main { padding-bottom: 64px; } }
+/* Full screen: the same readings in a drawer that slides up from the bottom. */
+.hw-drawer { position: absolute; left: 50%; right: auto; bottom: 0; transform: translate(-50%, 100%); z-index: 60; border: 1px solid var(--border);
+  border-bottom: 0; border-radius: 12px 12px 0 0; padding: 10px 18px; background: rgba(18, 20, 26, .88); color: #e6e8ec;
+  backdrop-filter: blur(8px); box-shadow: 0 -6px 24px rgba(0,0,0,.35); transition: transform .22s ease; max-width: calc(100% - 16px); }
+.hw-drawer.open { transform: translate(-50%, 0); }
+#live-grid:not(.wall) .hw-drawer { display: none; }
+
+/* Recordings watching live: the LIVE label instead of PLAYBACK. */
+#tl-videos.tl-is-live .pb-tag { display: none; }
+#tl-videos:not(.tl-is-live) .tl-livetag { display: none; }
+
+/* A clip with only its start (or end) set: one edge, looking exactly like
+   that edge of a whole clip. */
+.tl-sel.tl-sel1 { background: none; }
+.tl-sel.tl-sel1.only-in { border-right: 0; }
+.tl-sel.tl-sel1.only-out { border-left: 0; margin-left: -2px; }
+.tl-h1 { position: absolute; top: 0; bottom: 0; width: 14px; pointer-events: none; }
+.tl-sel1.only-in .tl-h1 { left: -8px; } .tl-sel1.only-out .tl-h1 { right: -8px; }
+.tl-h1::after { content: ""; position: absolute; top: 40%; height: 26px; left: 4px; width: 6px; border-radius: 3px; background: var(--amber); box-shadow: 0 0 0 1px #111; }
+
+/* Evidence Locker */
+.ev-case .ev-head { gap: 8px; align-items: flex-start; }
+.ev-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-top: 10px; }
+.ev-item { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--panel2); }
+.ev-item.prot { border-color: var(--amber); }
+.ev-media video, .ev-media img { width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #000; border-radius: 6px; display: block; }
+.ev-acts { gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.ev-prot.on { background: rgba(245,158,11,.18); border-color: var(--amber); }
+.ev-pick { width: min(520px, calc(100vw - 16px)); }
+.ev-pick-list { display: grid; gap: 4px; max-height: 50vh; overflow: auto; }
+.ev-pick-list .check { display: flex; align-items: center; gap: 6px; }

@@ -119,6 +119,9 @@ pub fn canon_list(list: &mut Vec<String>) -> bool {
 }
 
 /// Animals the built-in model knows ("ignore motion set off by animals").
+/// Pets (Ignore pets).
+pub const PETS: &[&str] = &["dog", "cat"];
+
 pub const ANIMALS: &[&str] = &[
     "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
 ];

@@ -4,6 +4,7 @@
 
 mod ai;
 mod buffer;
+mod cases;
 mod cloud;
 mod config;
 mod detect;
@@ -28,6 +29,7 @@ mod known;
 mod library;
 mod vstore;
 mod live;
+mod livemux;
 mod load;
 mod logs;
 mod manager;
@@ -306,6 +308,8 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating {}", data_dir.display()))?;
     logs::buffer().set_file(data_dir.join("nvr.log"));
+    // Before anything that may delete footage (retention) starts.
+    cases::init(&data_dir);
     if needs_save {
         cfg.save(&path)?;
         info!("wrote {}", path.display());

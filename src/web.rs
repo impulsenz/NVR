@@ -133,6 +133,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/monitor", get(monitor))
         .route("/api/monitor/now", get(monitor_now))
         .route("/api/usage", get(usage))
+        .route("/api/activity", get(activity))
         .route("/api/usage/kinds", get(usage_kinds))
         .route("/api/logs", get(get_logs))
         .route("/api/playback-report", post(playback_report))
@@ -239,6 +240,11 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/recordings", get(search))
         .route("/api/timeline", get(timeline))
         .route("/api/export", get(export_clip))
+        .route("/api/cases", get(cases_list).post(cases_create))
+        .route("/api/cases/{id}", put(cases_update).delete(cases_delete))
+        .route("/api/cases/{id}/items", post(cases_add_item))
+        .route("/api/cases/{id}/items/{item}", put(cases_update_item).delete(cases_remove_item))
+        .route("/api/cases/{id}/files/{name}", get(cases_file))
         .route("/api/timelapse-export", get(timelapse_export))
         .route("/api/sprite/{id}/{kind}/{name}", get(sprite_info))
         .route("/api/sprites-ready", post(sprites_ready))
@@ -482,7 +488,14 @@ async fn monitor(State(m): App, Query(q): Query<MonitorQuery>) -> Response {
 
 /// This moment's CPU, RAM and GPU (System page, every second).
 async fn monitor_now(State(m): App) -> Response {
-    Json(m.monitor.current()).into_response()
+    // With the recordings drive's free space, for the hardware bar.
+    let mut v = serde_json::to_value(m.monitor.current()).unwrap_or_default();
+    let dir = m.config().storage.dir.clone();
+    if let Ok(Some((free, total))) = tokio::task::spawn_blocking(move || crate::sysmon::disk_space(&dir)).await {
+        v["disk_free"] = json!(free);
+        v["disk_total"] = json!(total);
+    }
+    Json(v).into_response()
 }
 
 async fn usage(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
@@ -504,6 +517,24 @@ async fn usage(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Res
         }
     }
     Json(u).into_response()
+}
+
+/// Alerts per hour for each camera over the last day (System → Recording
+/// per camera).
+async fn activity(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let vis = visible(&user);
+    let to = Local::now();
+    let from = to - chrono::Duration::hours(24);
+    let list: Vec<_> = m
+        .cameras()
+        .into_iter()
+        .filter(|c| vis.as_ref().is_none_or(|v| v.contains(&c.cfg.id)))
+        .map(|c| {
+            let a = crate::events::activity_per_hour(&c.events.between(from, to), 24.0);
+            json!({"camera": c.cfg.id, "name": c.cfg.name, "alerts": a.alerts, "motion": a.motion, "vehicles": a.vehicles, "people": a.people})
+        })
+        .collect();
+    Json(list).into_response()
 }
 
 async fn get_logs(Query(q): Query<LogQuery>) -> Response {
@@ -2674,10 +2705,277 @@ async fn export_clip(
     serve_file(out, req, Some(name), true).await
 }
 
+// ---------- Evidence Locker (cases) ----------
+
+/// The cases this account may see: every case, but only the items of
+/// cameras it can see.
+async fn cases_list(user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let vis = visible(&user);
+    let mut list = crate::cases::list();
+    if let Some(v) = vis {
+        for c in &mut list {
+            c.items.retain(|i| v.contains(&i.camera));
+        }
+    }
+    list.sort_by(|a, b| b.created.cmp(&a.created));
+    Json(list).into_response()
+}
+
+#[derive(Deserialize)]
+struct CaseReq {
+    name: String,
+    #[serde(default)]
+    notes: String,
+}
+
+async fn cases_create(user: Option<axum::Extension<CurrentUser>>, Json(r): Json<CaseReq>) -> Response {
+    match crate::cases::create(&r.name, &r.notes) {
+        Ok(c) => {
+            tracing::info!("Evidence Locker: case “{}” created{}", c.name, user.map(|u| format!(" by {}", u.0.0.username)).unwrap_or_default());
+            Json(c).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn cases_update(Path(id): Path<String>, Json(r): Json<CaseReq>) -> Response {
+    match crate::cases::rename(&id, &r.name, &r.notes) {
+        Ok(c) => Json(c).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn cases_delete(Path(id): Path<String>) -> Response {
+    let name = crate::cases::get(&id).map(|c| c.name).unwrap_or_default();
+    match crate::cases::delete(&id) {
+        Ok(()) => {
+            tracing::info!("Evidence Locker: case “{name}” deleted");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => err(StatusCode::CONFLICT, format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct CaseItemReq {
+    kind: crate::cases::Kind,
+    camera: String,
+    /// An alert (kind "alert", or a picture of an alert).
+    #[serde(default)]
+    event: Option<String>,
+    /// A stretch of recording (kind "clip").
+    #[serde(default)]
+    from: Option<DateTime<chrono::FixedOffset>>,
+    #[serde(default)]
+    to: Option<DateTime<chrono::FixedOffset>>,
+    /// The moment of a picture (kind "image").
+    #[serde(default)]
+    at: Option<DateTime<chrono::FixedOffset>>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    notes: String,
+}
+
+/// Add footage to a case: it's copied into the case (an alert's picture and
+/// video, a stretch of recording, one picture) and protected.
+async fn cases_add_item(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Path(id): Path<String>,
+    Json(r): Json<CaseItemReq>,
+) -> Response {
+    use crate::cases::Kind;
+    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let Some(dir) = crate::cases::case_dir(&id) else {
+        return err(StatusCode::NOT_FOUND, "no such case");
+    };
+    let c = camera!(m, r.camera);
+    let ffmpeg_path = m.config().server.ffmpeg_path;
+    let local = |t: DateTime<chrono::FixedOffset>| t.with_timezone(&Local);
+    let ev = r.event.as_deref().and_then(|e| c.events.get(e));
+    if r.event.is_some() && ev.is_none() {
+        return err(StatusCode::NOT_FOUND, "that alert no longer exists");
+    }
+    // The time covered.
+    let (from, to) = match (r.kind, &ev) {
+        (Kind::Alert, Some(e)) => (e.start - chrono::Duration::seconds(5), e.end.max(e.start + chrono::Duration::seconds(10)) + chrono::Duration::seconds(5)),
+        (Kind::Clip, _) => match (r.from.map(local), r.to.map(local)) {
+            (Some(a), Some(b)) if b > a => (a, b),
+            _ => return err(StatusCode::BAD_REQUEST, "a clip needs a start and an end"),
+        },
+        (Kind::Image, Some(e)) => {
+            let t = e.thumb_at.unwrap_or(e.start);
+            (t, t)
+        }
+        (Kind::Image, None) => match r.at.map(local) {
+            Some(t) => (t, t),
+            None => return err(StatusCode::BAD_REQUEST, "a picture needs a moment"),
+        },
+        (Kind::Alert, None) => return err(StatusCode::BAD_REQUEST, "which alert?"),
+    };
+    if (to - from).num_hours() > 24 {
+        return err(StatusCode::BAD_REQUEST, "a clip can be at most 24 hours long");
+    }
+    let what = ev.as_ref().map(|e| e.labels.iter().map(|l| l.label.clone()).collect::<Vec<_>>().join(", ")).filter(|w| !w.is_empty()).unwrap_or_else(|| "motion".into());
+    let title = r.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| match r.kind {
+        Kind::Alert => format!("{} — {what} at {}", c.cfg.name, from.format("%d %b %Y %H:%M:%S")),
+        Kind::Clip => format!("{} — {} to {}", c.cfg.name, from.format("%d %b %Y %H:%M:%S"), to.format("%H:%M:%S")),
+        Kind::Image => format!("{} — picture at {}", c.cfg.name, from.format("%d %b %Y %H:%M:%S")),
+    });
+    let (mut video, mut picture) = (None, None);
+    // The alert's own picture and clip, copied as they are.
+    if let Some(e) = &ev {
+        if let Some(t) = &e.thumb {
+            let name = crate::cases::file_name(&title, "jpg");
+            if tokio::fs::copy(c.events.dir().join(t), dir.join(&name)).await.is_ok() {
+                picture = Some(name);
+            }
+        }
+        if r.kind == Kind::Alert && let Some(clip) = &e.clip {
+            let name = crate::cases::file_name(&title, "mp4");
+            if tokio::fs::copy(c.events.dir().join(clip), dir.join(&name)).await.is_ok() {
+                video = Some(name);
+            }
+        }
+    }
+    // Otherwise from the recordings.
+    if video.is_none() && matches!(r.kind, Kind::Alert | Kind::Clip) {
+        let parts = library::export_parts(&c, from, to);
+        if !parts.is_empty() {
+            let name = crate::cases::file_name(&title, "mp4");
+            if let Err(e) = ffmpeg::export(&ffmpeg_path, &parts, &dir.join(&name)).await {
+                return bad(e);
+            }
+            video = Some(name);
+        } else if r.kind == Kind::Clip {
+            return err(StatusCode::NOT_FOUND, "no recordings in that time range");
+        }
+    }
+    if picture.is_none() && r.kind == Kind::Image {
+        // One frame from the recording at that moment.
+        let parts = library::export_parts(&c, from, from + chrono::Duration::seconds(2));
+        if parts.is_empty() {
+            return err(StatusCode::NOT_FOUND, "no recording at that moment");
+        }
+        let tmp = m.data_dir.join("tmp").join(crate::cases::file_name("frame", "mp4"));
+        let _ = std::fs::create_dir_all(m.data_dir.join("tmp"));
+        if let Err(e) = ffmpeg::export(&ffmpeg_path, &parts, &tmp).await {
+            return bad(e);
+        }
+        let name = crate::cases::file_name(&title, "jpg");
+        let ok = crate::load::cmd(&ffmpeg_path)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(&tmp)
+            .args(["-frames:v", "1", "-q:v", "2"])
+            .arg(dir.join(&name))
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+        let _ = tokio::fs::remove_file(&tmp).await;
+        if !ok {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "the picture couldn't be taken from the recording");
+        }
+        picture = Some(name);
+    }
+    if video.is_none() && picture.is_none() {
+        return err(StatusCode::NOT_FOUND, "no footage found to add");
+    }
+    let item = crate::cases::Item {
+        id: String::new(),
+        kind: r.kind,
+        title,
+        camera: c.cfg.id.clone(),
+        camera_name: c.cfg.name.clone(),
+        event: r.event.clone(),
+        from,
+        to,
+        video,
+        picture,
+        notes: r.notes.trim().to_string(),
+        added: Local::now(),
+        added_by: user.map(|u| u.0.0.username.clone()).unwrap_or_default(),
+        protected: true,
+    };
+    match crate::cases::add(&id, item) {
+        Ok(it) => {
+            tracing::info!("Evidence Locker: “{}” added to a case (protected)", it.title);
+            Json(it).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct CaseItemUpdate {
+    #[serde(default)]
+    protected: Option<bool>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+}
+
+async fn cases_update_item(
+    user: Option<axum::Extension<CurrentUser>>,
+    Path((id, item)): Path<(String, String)>,
+    Json(r): Json<CaseItemUpdate>,
+) -> Response {
+    // Unprotecting lets the footage be deleted: administrators only.
+    let admin = user.as_ref().is_none_or(|u| u.0.0.role == crate::users::Role::Admin);
+    if r.protected == Some(false) && !admin {
+        return err(StatusCode::FORBIDDEN, "only an administrator can unprotect evidence");
+    }
+    match crate::cases::update_item(&id, &item, r.protected, r.title.as_deref(), r.notes.as_deref()) {
+        Ok(it) => {
+            if let Some(p) = r.protected {
+                tracing::info!("Evidence Locker: “{}” {}{}", it.title, if p { "protected" } else { "unprotected" }, user.map(|u| format!(" by {}", u.0.0.username)).unwrap_or_default());
+            }
+            Json(it).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn cases_remove_item(Path((id, item)): Path<(String, String)>) -> Response {
+    match crate::cases::remove_item(&id, &item) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err(StatusCode::CONFLICT, format!("{e:#}")),
+    }
+}
+
+/// A file kept in a case (only the case's own files, by name).
+async fn cases_file(user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+    let Some(case) = crate::cases::get(&id) else {
+        return err(StatusCode::NOT_FOUND, "no such case");
+    };
+    let vis = visible(&user);
+    let ok = case.items.iter().any(|i| {
+        (i.video.as_deref() == Some(name.as_str()) || i.picture.as_deref() == Some(name.as_str()))
+            && vis.as_ref().is_none_or(|v| v.contains(&i.camera))
+    });
+    let Some(dir) = crate::cases::case_dir(&id) else {
+        return err(StatusCode::NOT_FOUND, "no such case");
+    };
+    if !ok || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return err(StatusCode::NOT_FOUND, "no such file in this case");
+    }
+    let dl = name.clone();
+    serve_file(dir.join(&name), req, Some(dl), false).await
+}
+
 async fn delete_recording(State(m): App, Path((id, name)): Path<(String, String)>) -> Response {
     let c = camera!(m, id);
     if storage::resolve(&c.dir, &name).is_err() {
         return err(StatusCode::NOT_FOUND, "recording not found");
+    }
+    // Locked in an Evidence Locker case: not deleted (it says which case).
+    if let Some(r) = storage::list(&c.dir).into_iter().find(|r| r.name == name)
+        && let Some(case) = crate::cases::locks_time(&c.cfg.id, r.start, r.end)
+    {
+        return err(StatusCode::CONFLICT, crate::cases::locked_message(&case));
     }
     match storage::delete_recording(&c.dir, &name) {
         Ok(()) => {
@@ -2690,6 +2988,11 @@ async fn delete_recording(State(m): App, Path((id, name)): Path<(String, String)
 
 async fn delete_event(State(m): App, Path((id, eid)): Path<(String, String)>) -> Response {
     let c = camera!(m, id);
+    let locked = crate::cases::locks_event(&c.cfg.id, &eid)
+        .or_else(|| c.events.get(&eid).and_then(|e| crate::cases::locks_time(&c.cfg.id, e.start, e.end)));
+    if let Some(case) = locked {
+        return err(StatusCode::CONFLICT, crate::cases::locked_message(&case));
+    }
     if c.events.delete(&eid) {
         StatusCode::NO_CONTENT.into_response()
     } else {
@@ -3683,18 +3986,41 @@ async fn delete_all_footage(State(m): App) -> Response {
                 .and_then(|m| m.modified())
                 .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20))
         };
-        // Every camera's alerts, also cameras that aren't running.
-        for store in m.event_stores().values() {
-            alerts += store.remove_where(|_| true);
+        // Every camera's alerts, also cameras that aren't running — except
+        // those locked in an Evidence Locker case.
+        let locked_ev = |cam: &str, e: &crate::events::Event| {
+            crate::cases::locks_event(cam, &e.id).is_some() || crate::cases::locks_time(cam, e.start, e.end).is_some()
+        };
+        let mut kept = 0usize;
+        for (cam, store) in m.event_stores() {
+            alerts += store.remove_where(|e| !locked_ev(&cam, e));
+            kept += store.all().len();
         }
         for c in m.cameras() {
             let _ = std::fs::remove_dir_all(crate::talkmix::talk_dir(&c.dir));
+            // Files of locked footage stay: recordings covering a locked
+            // time, and the pictures and clips of locked alerts.
+            let mut keep: std::collections::HashSet<std::path::PathBuf> = Default::default();
+            for dir in [c.dir.clone(), crate::storage::timeline_dir(&c.dir)] {
+                for r in crate::storage::list(&dir) {
+                    if crate::cases::locks_time(&c.cfg.id, r.start, r.end).is_some() {
+                        keep.insert(dir.join(&r.name));
+                    }
+                }
+            }
+            for e in c.events.all() {
+                for f in e.thumb.iter().chain(e.clip.iter()).chain(e.faces.iter().map(|f| &f.file)) {
+                    keep.insert(c.events.dir().join(f));
+                }
+            }
             for dir in [
                 c.dir.clone(),
                 crate::storage::timeline_dir(&c.dir),
                 c.events.dir().to_path_buf(),
             ] {
-                let _ = std::fs::remove_dir_all(dir.join(".thumbs"));
+                if keep.is_empty() {
+                    let _ = std::fs::remove_dir_all(dir.join(".thumbs"));
+                }
                 let Ok(rd) = std::fs::read_dir(&dir) else {
                     continue;
                 };
@@ -3705,6 +4031,7 @@ async fn delete_all_footage(State(m): App) -> Response {
                     if !p.is_file()
                         || !["mp4", "jpg", "ts", "part"].contains(&ext)
                         || (ext != "jpg" && busy(&p))
+                        || keep.contains(&p)
                     {
                         continue;
                     }
@@ -3716,17 +4043,18 @@ async fn delete_all_footage(State(m): App) -> Response {
                 }
             }
         }
-        (files, bytes, alerts)
+        (files, bytes, alerts, kept)
     })
     .await;
     match res {
-        Ok((files, bytes, alerts)) => {
+        Ok((files, bytes, alerts, kept)) => {
             tracing::warn!(
                 "all saved footage deleted from the toolbar: {files} file(s), {:.1} GB, {alerts} alert(s)",
                 bytes as f64 / 1e9
             );
+            let locked = if kept > 0 { format!(" {kept} alert(s) and their footage locked in Evidence Locker cases were kept.") } else { String::new() };
             Json(json!({"ok": true, "message": format!(
-                "Deleted {files} file(s) ({:.1} GB) and {alerts} alert(s). Recording carries on.",
+                "Deleted {files} file(s) ({:.1} GB) and {alerts} alert(s). Recording carries on.{locked}",
                 bytes as f64 / 1e9
             )}))
             .into_response()
@@ -4561,8 +4889,7 @@ async fn live_video_ws(
 ) -> Response {
     let c = camera!(m, id);
     let main = !matches!(lq.q, Some(Quality::Sub)) || !c.cfg.has_sub();
-    let relay = if main { c.relay_main.clone() } else { c.relay_sub.clone() };
-    let ffmpeg_path = m.config().server.ffmpeg_path.clone();
+    let mux = if main { c.mux_main.clone() } else { c.mux_sub.clone() };
     let rotated = c.cfg.rotate % 360 != 0 || !c.cfg.privacy.is_empty() || c.cfg.dewarp.enabled;
     ws.on_upgrade(move |mut socket| async move {
         // Rotation and privacy areas are applied while decoding: those
@@ -4571,35 +4898,14 @@ async fn live_video_ws(
             let _ = socket.send(Message::Text(json!({"error": "rotated"}).to_string().into())).await;
             return;
         }
-        let child = crate::load::cmd(&ffmpeg_path)
-            .args(["-hide_banner", "-loglevel", "error", "-fflags", "+genpts"])
-            .args(relay.input_args())
-            .args(["-map", "0:v:0", "-c:v", "copy", "-tag:v", if relay.info().is_some_and(|i| i.codec.contains("265") || i.codec.contains("hevc")) { "hvc1" } else { "avc1" }, "-an"])
-            .args([
-                "-f", "mp4", "-movflags", "empty_moov+default_base_moof+frag_keyframe",
-                "-frag_duration", "100000", "pipe:1",
-            ])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn();
-        let Ok(mut child) = child else {
-            let _ = socket.send(Message::Text(json!({"error": "ffmpeg"}).to_string().into())).await;
-            return;
-        };
-        let stop = tokio_util::sync::CancellationToken::new();
-        let _feed = crate::relay::feed(relay.subscribe(), child.stdin.take().unwrap(), stop.clone());
-        let _stop = stop.drop_guard();
-        let mut out = child.stdout.take().unwrap();
-        let mut buf = vec![0u8; 256 * 1024];
-        use tokio::io::AsyncReadExt;
+        // One repackaging of the camera's video, shared by every viewer
+        // (see livemux.rs): this browser joins it.
+        let mut rx = mux.subscribe();
         loop {
             tokio::select! {
-                n = out.read(&mut buf) => {
-                    let Ok(n) = n else { break };
-                    if n == 0 { break; }
-                    if socket.send(Message::Binary(bytes::Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                piece = rx.recv() => {
+                    let Some(piece) = piece else { break };
+                    if socket.send(Message::Binary(piece)).await.is_err() {
                         break;
                     }
                 }
@@ -5286,7 +5592,6 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/ai/",
         "/api/cloud/",
         "/api/ptz/test",
-        "/api/profiles",
         "/api/maintenance",
         "/api/notify",
         "/api/talk-test",
@@ -5331,6 +5636,11 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         || path == "/api/sprites-ready"
         || path.starts_with("/api/auth/")
     {
+        return true;
+    }
+    // Operators may keep evidence: make cases and add to them (deleting a
+    // case or an item, and unprotecting, is for administrators).
+    if role == Operator && path.starts_with("/api/cases") && method != axum::http::Method::DELETE {
         return true;
     }
     // Operators: move cameras, pause recording, switch Home / Away / Night.

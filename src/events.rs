@@ -459,6 +459,29 @@ impl EventStore {
     }
 }
 
+/// How many alerts of each kind came in per hour (System → Recording per
+/// camera): all alerts, motion only (nothing recognized), vehicles and
+/// people.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct Activity {
+    pub alerts: f32,
+    pub motion: f32,
+    pub vehicles: f32,
+    pub people: f32,
+}
+
+pub fn activity_per_hour(events: &[Event], hours: f32) -> Activity {
+    let h = hours.max(1.0 / 60.0);
+    let has = |e: &Event, what: &[&str]| e.labels.iter().any(|l| what.contains(&l.label.as_str()));
+    let count = |f: &dyn Fn(&Event) -> bool| events.iter().filter(|e| f(e)).count() as f32 / h;
+    Activity {
+        alerts: count(&|_| true),
+        motion: count(&|e| e.labels.is_empty()),
+        vehicles: count(&|e| has(e, &["vehicle", "car", "truck", "bus", "motorcycle"])),
+        people: count(&|e| has(e, &["person"])),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,5 +550,17 @@ mod tests {
         s2.flush();
         assert_eq!(EventStore::open(&dir).all().len(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn counts_alerts_per_hour_by_kind() {
+        let mk = |labels: &[&str]| -> Event {
+            let labels: Vec<_> = labels.iter().map(|l| serde_json::json!({"label": l, "score": 0.9})).collect();
+            serde_json::from_value(serde_json::json!({"id": "x", "camera": "c", "start": "2026-01-01T00:00:00+00:00",
+                "end": "2026-01-01T00:01:00+00:00", "labels": labels})).unwrap()
+        };
+        let ev = [mk(&[]), mk(&[]), mk(&["person"]), mk(&["person", "vehicle"]), mk(&["dog"]), mk(&["vehicle"])];
+        let a = activity_per_hour(&ev, 2.0);
+        assert_eq!(a, Activity { alerts: 3.0, motion: 1.0, vehicles: 1.0, people: 1.0 });
     }
 }

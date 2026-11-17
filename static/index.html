@@ -24,6 +24,7 @@
     <a href="#live" data-page="live"><i class="ni">📹</i><span>Live</span></a>
     <a href="#alerts" data-page="alerts"><i class="ni">🔔</i><span>Alerts</span> <span class="badge" id="alert-badge" hidden></span></a>
     <a href="#recordings" data-page="recordings"><i class="ni">🎞️</i><span>Recordings</span></a>
+    <a href="#evidence" data-page="evidence"><i class="ni">🗄️</i><span>Evidence</span></a>
     <a href="#system" data-page="system"><i class="ni">📊</i><span>System</span></a>
     <a href="#settings" data-page="settings" class="admin-only"><i class="ni">⚙️</i><span>Settings</span> <span class="badge" id="log-badge" hidden></span></a>
   </nav>
@@ -66,9 +67,11 @@
   <!-- ============ LIVE ============ -->
   <section id="page-live" hidden>
     <div id="live-grid">
+      <!-- Full screen: the same readings in a drawer that slides up when the mouse is near the bottom. -->
+      <div id="hw-drawer" class="hw-bar hw-drawer" hidden></div>
       <div class="row dash-bar" id="dash-bar" style="margin-bottom:10px">
         <button id="grp-prev" class="icon" title="Previous group">◀</button>
-        <select id="grp-sel" title="Camera group"></select>
+        <div class="cam-pick" id="cam-pick"><button type="button" id="grp-sel" title="Which cameras to show: all, a group, or the ones you tick" aria-haspopup="true">All cameras ▾</button><div class="cam-pick-menu" id="cam-pick-menu" hidden></div></div>
         <button id="grp-next" class="icon" title="Next group">▶</button>
         <button id="grp-manage" title="Create and edit camera groups">Groups…</button>
         <span class="muted" id="dash-info"></span>
@@ -120,7 +123,7 @@
                 </div>
                 <div class="ptz-zoom"><button type="button" data-ptz="0,0,1" title="Zoom in (+ or scroll)">＋</button><span>ZOOM</span><button type="button" data-ptz="0,0,-1" title="Zoom out (− or scroll)">－</button></div>
               </div>
-              <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position (or press its number)"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Save the current position as a preset">☆</button><button type="button" id="ptz-del" title="Delete the chosen preset">🗑</button></div>
+              <div class="ptz-presets"><select id="ptz-presets" title="Go to a saved position (or press its number)"><option value="">Presets…</option></select><button type="button" id="ptz-save" title="Add the current position as a preset" aria-label="Add preset"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></button><button type="button" id="ptz-del" title="Delete the chosen preset" aria-label="Delete preset"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></button></div>
               <button type="button" class="ptz-mode" id="ptz-roam" title="Roaming and tracking: click to change"><b>⟲</b> <span>Off</span></button>
               <div class="ptz-roam" id="ptz-roam-box" hidden>
                 <div class="ptz-seg" id="ptz-mode-seg"><button type="button" data-m="off">Off</button><button type="button" data-m="roam">Roam</button><button type="button" data-m="track">Track</button><button type="button" data-m="both">Roam + track</button></div>
@@ -136,6 +139,8 @@
           <div class="row focus-actions" style="margin-top:10px">
             <button id="focus-back"><i class="bi">←</i><span>All cameras</span></button>
             <button id="focus-live" class="primary" hidden>● Back to live</button>
+            <button id="focus-stream" title="Switch between stream 1 (main, full quality) and stream 2 (sub-stream, lighter)"><i class="bi">S1</i><span>Stream</span></button>
+            <span class="snd-wrap focus-snd-wrap"><button id="focus-sound" class="snd" title="Sound on/off">🔇</button><input type="range" class="snd-vol" min="0" max="1" step="0.05" title="Volume"></span>
             <button id="focus-rec" class="op-only"></button>
             <audio id="focus-audio" preload="none"></audio>
             <button id="focus-talk" class="op-only" hidden title="Push (hold) to talk through the camera's speaker (tap to keep talking)"><i class="bi">🎙️</i><span>Push to talk</span></button>
@@ -233,6 +238,8 @@
         <button id="tl-clear" hidden>Clear</button>
         <span class="timecode" id="tl-sel-info"></span>
         <span class="spacer"></span>
+        <button type="button" id="tl-case-pic" class="op-only" title="Keep the picture at the playhead (each camera shown) in an Evidence Locker case">🗄️ Picture to case</button>
+        <button type="button" id="tl-case-clip" class="op-only" hidden title="Keep this clip (each camera shown) in an Evidence Locker case, protected from deletion">🗄️ Clip to case</button>
         <span id="tl-export" class="row"></span>
       </div>
       <div class="tl" id="tl"></div>
@@ -242,6 +249,12 @@
   </section>
 
   <!-- ============ SYSTEM ============ -->
+  <section id="page-evidence" hidden>
+    <div class="row" style="margin-bottom:10px"><h2 style="margin:0;flex:1">Evidence Locker</h2>
+      <button type="button" class="primary op-only" id="ev-new">＋ New case</button></div>
+    <p class="muted" style="margin-top:0">Cases keep important clips and pictures together. Everything added is copied into the case and <b>protected</b>: the footage it came from can't be deleted anywhere in GAZE (not even by the automatic clean-up) until it's unprotected here. Add footage with <b>🗄️ Add to case</b> on an alert, or on a clip or picture in Recordings.</p>
+    <div id="ev-list"></div>
+  </section>
   <section id="page-system" hidden>
     <div class="grid2" id="sys-cards"></div>
     <div class="card" id="sys-tasks-card">
@@ -323,6 +336,7 @@
   <div class="head"><h2 id="ad-title">Alert</h2><span class="spacer"></span>
     <button type="button" class="small" id="ad-prev" title="Newer alert (←)">◀</button><button type="button" class="small" id="ad-next" title="Older alert (→)">▶</button>
     <button type="button" class="small" id="ad-share" title="Send this alert to someone: Messenger, WhatsApp, email…">⤴ Share</button>
+    <button type="button" class="small op-only" id="ad-case" title="Keep this alert (picture and video) in an Evidence Locker case, protected from deletion">🗄️ Add to case</button>
     <button type="button" class="small" id="ad-unseen" title="Mark as new again">Mark new</button>
     <button type="button" class="small danger admin-only" id="ad-del" title="Delete this alert and its clip">🗑 Delete</button>
     <button type="button" class="small" id="ad-close" title="Close (Esc)">✕</button></div>
@@ -353,6 +367,8 @@
 <dialog id="cam-dialog"><form id="f-cam" method="dialog"></form></dialog>
 <dialog id="grp-dialog"><form id="f-grp" method="dialog"></form></dialog>
 <dialog id="fs-dialog"><form id="f-fs" method="dialog"></form></dialog>
+<!-- Live hardware readings along the bottom of the page. -->
+<div id="hw-bar" class="hw-bar" hidden></div>
 <div id="toast" hidden></div>
 <script src="app.js"></script>
 </body>

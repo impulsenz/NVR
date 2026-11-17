@@ -64,6 +64,10 @@ pub struct CameraRuntime {
     /// Shared camera connections (the same one twice when there is no sub-stream).
     pub relay_main: Arc<Relay>,
     pub relay_sub: Arc<Relay>,
+    /// Live video for browsers (fragmented MP4), one per stream, shared by
+    /// every viewer; runs only while someone watches.
+    pub mux_main: Arc<crate::livemux::LiveMux>,
+    pub mux_sub: Arc<crate::livemux::LiveMux>,
     cancel: CancellationToken,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -210,6 +214,12 @@ impl CameraRuntime {
             cancel.clone(),
         );
 
+        let mux_main = crate::livemux::LiveMux::new(relay_main.clone(), &env.ffmpeg_path);
+        let mux_sub = if Arc::ptr_eq(&relay_sub, &relay_main) {
+            mux_main.clone()
+        } else {
+            crate::livemux::LiveMux::new(relay_sub.clone(), &env.ffmpeg_path)
+        };
         Arc::new(Self {
             dir,
             recorder,
@@ -221,6 +231,8 @@ impl CameraRuntime {
             events,
             relay_main,
             relay_sub,
+            mux_main,
+            mux_sub,
             cancel,
             tasks: Mutex::new(tasks),
             cfg,

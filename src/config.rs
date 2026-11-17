@@ -901,6 +901,12 @@ pub struct DetectConfig {
     /// Motion set off by an animal that isn't in `objects` (a cat, a
     /// dog, a bird …) doesn't make an alert. Needs object detection on.
     pub ignore_animals: bool,
+    /// Ignore pets: motion set off only by a dog or a cat never makes an
+    /// alert (indoor pets, the back yard), whatever "What makes an alert"
+    /// says. A person (or anything else alerted on) seen with the pet still
+    /// makes one. Can't be on while alerting on, or following, dogs or cats.
+    #[serde(default)]
+    pub ignore_pets: bool,
     /// Objects the AI finds mostly inside the areas drawn to ignore are left
     /// out too (not only motion there), whatever started the look.
     pub ai_ignores_mask: bool,
@@ -950,6 +956,7 @@ impl Default for DetectConfig {
             ai_interval: 1.0,
             ignore_parked: true,
             ignore_animals: true,
+            ignore_pets: false,
             ai_ignores_mask: true,
             hd_check: "mark".into(),
             parked_seconds: 60,
@@ -1295,6 +1302,15 @@ impl CameraConfig {
             bail!("storage limit cannot be negative");
         }
         let d = &self.detect;
+        if d.ignore_pets {
+            let pet = |l: &Vec<String>| l.iter().any(|o| crate::ai::PETS.contains(&o.as_str()));
+            if pet(&d.objects) {
+                bail!("“Ignore pets” can't be on while this camera alerts on dogs or cats: untick dog and cat under “Alert on”, or turn “Ignore pets” off");
+            }
+            if self.ptz.follow && pet(&self.ptz.follow_objects) {
+                bail!("“Ignore pets” can't be on while this camera follows dogs or cats (pan / tilt / zoom tracking): stop following them, or turn “Ignore pets” off");
+            }
+        }
         if !(1..=255).contains(&d.min_contrast) {
             bail!("motion contrast must be 1 to 255");
         }
@@ -2104,5 +2120,24 @@ mod tests {
         assert_eq!(hw.resolved_encoder(), "h264_nvenc");
         hw.encoder = "libx264".into();
         assert_eq!(hw.resolved_encoder(), "libx264");
+    }
+
+    #[test]
+    fn ignore_pets_and_pet_alerts_exclude_each_other() {
+        let mut c = CameraConfig { id: "yard".into(), name: "Yard".into(), url: "rtsp://x".into(), ..Default::default() };
+        c.detect.ignore_pets = true;
+        c.detect.objects = vec!["person".into(), "vehicle".into()];
+        assert!(c.validate().is_ok());
+        c.detect.objects.push("dog".into());
+        assert!(c.validate().unwrap_err().to_string().contains("Ignore pets"));
+        c.detect.objects.pop();
+        c.ptz.follow = true;
+        c.ptz.follow_objects = vec!["cat".into()];
+        assert!(c.validate().is_err());
+        c.ptz.follow = false;
+        assert!(c.validate().is_ok());
+        // Old settings files (without the setting) load with it off.
+        let d: DetectConfig = toml::from_str("motion = true").unwrap();
+        assert!(!d.ignore_pets);
     }
 }

@@ -948,7 +948,8 @@ impl Detector {
         // becomes an alert; motion with an animal that isn't watched for
         // never does (and is dropped when it ends, see finish()).
         let d = &self.cam.detect;
-        let wait_for_ai = d.ignore_animals
+        // (Ignore pets works the same way, for dogs and cats.)
+        let wait_for_ai = (d.ignore_animals || d.ignore_pets)
             && d.ai
             && self.ai.get().enabled()
             && (a.animal_seen || (a.ai_looks < 2 && a.began.elapsed() < Duration::from_secs(4)));
@@ -1018,8 +1019,9 @@ impl Detector {
             }
             a.ai_looks += 1;
             let animal = best.iter().any(|x| {
+                let l = x.label.as_str();
                 x.score >= d.min_confidence.min(0.4)
-                    && crate::ai::ANIMALS.contains(&x.label.as_str())
+                    && ((d.ignore_animals && crate::ai::ANIMALS.contains(&l)) || (d.ignore_pets && crate::ai::PETS.contains(&l)))
                     && !d.objects.contains(&x.label)
             });
             if animal && !a.animal_seen {
@@ -1405,7 +1407,9 @@ impl Detector {
         let d = &self.cam.detect;
         // Motion that turned out to be a cat (or another animal that isn't
         // watched for), with nothing watched for seen: not kept as an alert.
-        if d.ignore_animals
+        // (A person or anything else alerted on, seen with it, keeps the
+        // alert: it then has labels.)
+        if (d.ignore_animals || d.ignore_pets)
             && a.animal_seen
             && a.event.labels.is_empty()
             && a.event.items.is_empty()
