@@ -1551,9 +1551,11 @@ body.has-hw-bar main { padding-bottom: 52px; }
 @media (min-width: 901px) {
   #rec-timeline.vert { display: grid; grid-template-columns: minmax(0, 1fr) var(--vtl-w, 260px); column-gap: 14px; align-items: start; }
   #rec-timeline.vert > .tl-videos { grid-column: 1; grid-row: 1; }
-  #rec-timeline.vert > .vtl { display: block; grid-column: 2; grid-row: 1; position: sticky; top: 64px; height: calc(100vh - 80px); min-height: 420px; user-select: none; touch-action: none;
+  #rec-timeline.vert > .vtl { display: block; grid-column: 2; grid-row: 1 / span 8; position: sticky; top: 64px; height: calc(100vh - 80px); min-height: 420px; user-select: none; touch-action: none;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  #rec-timeline.vert > .controls, #rec-timeline.vert > .legend, #rec-timeline.vert > .hint { grid-column: 1 / -1; }
+  /* The controls, key and hint sit under the pictures (left); the timeline runs down the whole right side. */
+  #rec-timeline.vert > .controls, #rec-timeline.vert > .legend, #rec-timeline.vert > .hint { grid-column: 1; min-width: 0; }
+  #rec-timeline.vert > .controls { flex-wrap: wrap; }
   #rec-timeline.vert > #tl { display: none; }
 }
 @media (max-width: 900px) { #tl-orient, #tl-vmerge { display: none !important; } }

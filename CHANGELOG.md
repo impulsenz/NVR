@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## 1.1.7 — November 2026
+- **Recordings, vertical timeline**: the controls (Zoom, ◀ ▶, Merge cameras, Layout, Horizontal, Clip start / end …) are no longer hidden behind the timeline: they sit under the camera pictures, and the timeline runs down the whole right side.
+
 ## 1.1.6 — November 2026
 - **GAZE Watchdog** (optional, its own program `GAZE-Watchdog.exe`): watches GAZE and opens it again if it crashes or stops answering. It starts with Windows — when someone signs in, or when the computer starts — so after a restart it opens GAZE too. Install, set up, monitor and update it from the browser: **Settings → Watchdog** (status, last check, restarts, log, check interval, restarts allowed before it waits, how GAZE is opened — program or Windows service). It has its own updates (it can install them by itself, or you update it from the same page). If you quit GAZE yourself, the watchdog leaves it closed.
 
