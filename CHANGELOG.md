@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.1.2 — November 2026
 - **Live view**: the camera timeline is now a panel over the bottom of the picture that slides up when the pointer is at (or below) the bottom of the picture, as in full screen. A mini pan / tilt / zoom pad shows in full screen. The grid shrinks to fit the browser window without scrolling. Switching back to Live no longer flashes blank pictures.
 - **Live view & display**: the overlay settings run down the left, the camera preview sits on the right.
 - **Siren** sounds for 60 seconds by default.
