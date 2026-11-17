@@ -302,6 +302,15 @@ macro_rules! camera {
     };
 }
 
+/// Identifies this run of GAZE (its start time): a restart or an update
+/// gives a new one, and every open page then reloads itself.
+fn boot_id() -> u64 {
+    static ID: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(1)
+    });
+    *ID
+}
+
 /// The page. Its script and styles are asked for with this version in
 /// their address, and none of the three is kept by the browser without
 /// asking: after an update the browser always runs the new page (an old
@@ -389,6 +398,8 @@ async fn status(
     Json(json!({
         "name": cfg.server.name,
         "version": env!("CARGO_PKG_VERSION"),
+        // Different on every start of GAZE: open pages reload when it changes.
+        "boot": boot_id(),
         "uptime_seconds": m.started.elapsed().as_secs(),
         "display": cfg.display,
         "live": cfg.live,
@@ -2733,9 +2744,39 @@ async fn export_clip(
 
 /// The cases this account may see: every case, but only the items of
 /// cameras it can see.
-async fn cases_list(user: Option<axum::Extension<CurrentUser>>) -> Response {
+async fn cases_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
     let vis = visible(&user);
     let mut list = crate::cases::list();
+    // Videos kept before thumbnails were made get theirs now: once, in the
+    // background, and then kept with the item (not made again).
+    static TRIED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::LazyLock::new(Default::default);
+    for c in &list {
+        for i in c.items.iter().filter(|i| i.picture.is_none() && i.video.is_some()) {
+            if !TRIED.lock().unwrap().insert(i.id.clone()) {
+                continue;
+            }
+            let (cid, iid, v, title) = (c.id.clone(), i.id.clone(), i.video.clone().unwrap_or_default(), i.title.clone());
+            let ff = m.config().server.ffmpeg_path;
+            tokio::spawn(async move {
+                let Some(dir) = crate::cases::case_dir(&cid) else { return };
+                let name = crate::cases::file_name(&title, "jpg");
+                for ss in ["1", "0"] {
+                    let ok = crate::load::cmd(&ff)
+                        .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", ss, "-i"])
+                        .arg(dir.join(&v))
+                        .args(["-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "3"])
+                        .arg(dir.join(&name))
+                        .status()
+                        .await
+                        .is_ok_and(|s| s.success());
+                    if ok && dir.join(&name).exists() {
+                        let _ = crate::cases::set_picture(&cid, &iid, &name);
+                        break;
+                    }
+                }
+            });
+        }
+    }
     if let Some(v) = vis {
         for c in &mut list {
             c.items.retain(|i| v.contains(&i.camera));
@@ -3049,7 +3090,14 @@ async fn cases_file(user: Option<axum::Extension<CurrentUser>>, Path((id, name))
         return err(StatusCode::NOT_FOUND, "no such file in this case");
     }
     let dl = name.clone();
-    serve_file(dir.join(&name), req, Some(dl), false).await
+    let download = req.uri().query().is_some_and(|q| q.contains("download"));
+    let mut res = serve_file(dir.join(&name), req, Some(dl), false).await;
+    // A case's files never change (each has its own name): the browser keeps
+    // them, so thumbnails aren't fetched or made again every time.
+    if !download && res.status().is_success() {
+        res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("private, max-age=31536000, immutable"));
+    }
+    res
 }
 
 async fn delete_recording(State(m): App, Path((id, name)): Path<(String, String)>) -> Response {

@@ -215,6 +215,7 @@
 
     <div id="rec-timeline" hidden>
       <div class="tl-videos" id="tl-videos"></div>
+      <div class="vtl" id="vtl" hidden></div>
       <div class="controls">
         <button id="tl-back" hidden title="Back to all the cameras you were looking at">← All cameras</button>
         <button id="tl-play" class="primary">▶ Play</button>
@@ -231,6 +232,7 @@
         <span class="muted">Zoom</span>
         <select id="tl-zoom"><option value="86400">24 h</option><option value="21600">6 h</option><option value="3600" selected>1 h</option><option value="900">15 min</option><option value="300">5 min</option></select>
         <button id="tl-left">◀</button><button id="tl-right">▶</button>
+        <button id="tl-orient" title="Switch the timeline between along the bottom (one line for each camera) and down the side (all cameras in one line, with the pictures bigger)">⇅ Vertical</button>
       </div>
       <div class="controls">
         <button id="tl-in" title="The clip starts here">[ Clip start</button>

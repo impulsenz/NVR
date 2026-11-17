@@ -1232,6 +1232,9 @@ pub struct CameraConfig {
     pub stream_live: bool,
     pub stream_url: String,
     pub privacy: Vec<[f32; 4]>,
+    /// The modes (home, away, night) in which the privacy areas are blacked
+    /// out. In the others the picture is shown whole.
+    pub privacy_modes: Vec<String>,
     pub onvif_events: bool,
     /// …and also the camera's own (plain) motion detection.
     pub onvif_motion: bool,
@@ -1276,6 +1279,7 @@ impl Default for CameraConfig {
             stream_live: false,
             stream_url: String::new(),
             privacy: Vec::new(),
+            privacy_modes: MODES.iter().map(|m| m.to_string()).collect(),
             onvif_events: false,
             onvif_motion: false,
             rotate: 0,
@@ -1407,6 +1411,11 @@ impl CameraConfig {
             ..c.clone()
         };
         strip(self) != strip(old)
+    }
+
+    /// Are the privacy areas blacked out in this mode?
+    pub fn privacy_on_in(&self, mode: &str) -> bool {
+        !self.privacy.is_empty() && self.privacy_modes.iter().any(|m| m == mode)
     }
 
     pub fn has_sub(&self) -> bool {

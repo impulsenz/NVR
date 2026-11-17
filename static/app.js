@@ -1159,8 +1159,30 @@ function dropStillWhenShown(v) {
   setTimeout(ck, 80); setTimeout(done, 10000);
 }
 
+let bootSeen = null, reloadingForBoot = false, serverWasDown = false;
 async function refreshStatus() {
-  try { status = await api('api/status?device=' + deviceKind()); } catch (e) { return; }
+  try { status = await api('api/status?device=' + deviceKind()); } catch (e) {
+    // GAZE not answering (restarting): when it answers again — even if this
+    // page's sign-in didn't survive the restart — the page reloads.
+    if (!reloadingForBoot) {
+      try {
+        const r = await fetch('api/auth/state?t=' + Date.now(), {cache: 'no-store'});
+        if (r.ok && serverWasDown) { reloadingForBoot = true; location.reload(); }
+      } catch (_) { serverWasDown = true; }
+    }
+    return;
+  }
+  serverWasDown = false;
+  // GAZE was restarted or updated: this page reloads to the new version
+  // (every open page does, not only the one that started the update).
+  if (status.boot) {
+    if (bootSeen != null && status.boot !== bootSeen && !reloadingForBoot) {
+      reloadingForBoot = true;
+      toast('GAZE was updated or restarted — reloading…');
+      setTimeout(() => location.reload(), 1200);
+    }
+    bootSeen = status.boot;
+  }
   $('nvr-name').title = status.name;
   if (status.version && $('brand-ver')) $('brand-ver').textContent = 'v' + status.version;
   // The server knows which sirens are sounding.
@@ -3444,6 +3466,7 @@ function setRecMode(mode) {
   $('rec-title').textContent = mode === 'list' ? 'Alerts' : 'Recordings';
   $('rec-list').hidden = mode !== 'list';
   $('rec-timeline').hidden = mode !== 'timeline';
+  applyTlOrient();
   // Recordings: the title and filters in a column on the left (the video
   // gets the height); Alerts keep them across the top.
   $('page-recordings').classList.toggle('tl-mode', mode === 'timeline');
@@ -5031,6 +5054,7 @@ function drawTimeline() {
   $('tl-sel-info').textContent = has ? `Clip ${fmtTime(new Date(tl.inT))} – ${fmtTime(new Date(tl.outT))} (${fmtClock((tl.outT - tl.inT) / 1000)})` : '';
   $('tl-export').innerHTML = has ? tl.data.map(c => `<a class="btn small" href="api/export?camera=${enc(c.camera)}&from=${enc(new Date(tl.inT).toISOString())}&to=${enc(new Date(tl.outT).toISOString())}">⇩ ${esc(c.name)}</a>`).join('') : '';
   drawHead();
+  drawVTimeline();
 }
 // What each camera has loaded, shown on its timeline: a light strip over
 // the footage already in the browser (ready to play without waiting), and a
@@ -5116,6 +5140,7 @@ function paintLoaded() {
 setInterval(paintLoaded, 400);
 function drawHead() {
   paintTlBar();
+  drawVHead();
   const h = $('tl-head'); if (!h) return;
   const p = (tl.T - tl.winStart) / (tl.zoom * 1000);
   h.hidden = p < 0 || p > 1;
@@ -5487,6 +5512,159 @@ function markAt(e) {
     hideSpritesWhenReady().then(() => { if (page === 'recordings' && !tl.dragging) prefetchSprites(); });
   };
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+})();
+
+
+// ---------- Recordings: the timeline down the side ----------
+// The same time line as along the bottom, but vertical and with every
+// camera's footage and alerts merged into one lane, beside the pictures
+// (which then get the room the rows took). Time runs downwards: the latest
+// at the bottom. Drag, click, scroll the wheel to move through the day.
+const tlVertical = () => store.get('tl-vertical', false) === true && innerWidth > 900;
+function applyTlOrient() {
+  const v = tlVertical();
+  $('rec-timeline').classList.toggle('vert', v);
+  $('vtl').hidden = !v;
+  $('tl-orient').textContent = store.get('tl-vertical', false) === true ? '⇄ Horizontal' : '⇅ Vertical';
+  if (v && tl.winStart != null) drawVTimeline();
+}
+$('tl-orient').onclick = () => { store.set('tl-vertical', store.get('tl-vertical', false) !== true); applyTlOrient(); };
+window.addEventListener('resize', () => { applyTlOrient(); });
+function drawVTimeline() {
+  const box = $('vtl'); if (!box || box.hidden || tl.winStart == null) return;
+  const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
+  const cams = tl.data.filter(x => !tl.solo || x.camera === tl.solo);
+  const H = Math.max(200, box.clientHeight - 24);
+  // Footage of every camera as one run of bars.
+  const pcs = [];
+  for (const c of cams) {
+    const shown = c.segments.filter(tlShows), lastRec = shown.filter(x => x.kind !== 'clip').slice(-1)[0];
+    for (const sg of shown) {
+      const live = sg === lastRec && isGrowing(sg);
+      const a = Math.max(0, pct(new Date(sg.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(sg.end).getTime()));
+      if (b > a && a < 100) pcs.push({a, b, live});
+    }
+  }
+  pcs.sort((x, y) => x.a - y.a);
+  const runs = [], gap = 15000 / span * 100;
+  for (const p of pcs.filter(x => !x.live)) { const r = runs[runs.length - 1]; if (r && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p}); }
+  // (What is being recorded right now is its own red bar.)
+  const bars = runs.map(r => `<div class="vseg" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></div>`).join('')
+    + pcs.filter(x => x.live).map(r => `<div class="vseg live" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%" title="Recording now"></div>`).join('');
+  // Time marks.
+  const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map(x => x * 1000);
+  const step = steps.find(x => span / x <= Math.max(4, H / 50)) || 86400000;
+  let axis = '';
+  for (let t = Math.ceil(W0 / step) * step; t <= W0 + span; t += step) {
+    const d = new Date(t), midnight = d.getHours() === 0 && d.getMinutes() === 0, y = pct(t);
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    axis += `<i class="vmj ${midnight ? 'day' : ''}" style="top:${y}%"></i><span class="${midnight ? 'day' : ''}" style="top:${y}%">${step >= 86400000 ? fmtDay(d) : hm + (midnight ? ' ' + fmtDay(d) : '')}</span>`;
+  }
+  // Alerts of every camera: a bar for how long, and a symbol (stacked where
+  // they'd touch) in the colour of the kind of alert.
+  const evs = [];
+  for (const c of cams) for (const e of c.events) { const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime()); if (b >= 0 && a <= 100) evs.push({c, e, a, b}); }
+  evs.sort((x, y) => x.a - y.a);
+  tl.vgroups = []; let evHtml = '', evBars = '';
+  for (const {e, a, b} of evs) evBars += `<div class="vev cat-${evCat(e)}" style="top:${Math.max(0, a)}%;height:${Math.max(0.25, Math.min(100, b) - Math.max(0, a))}%"></div>`;
+  let g = null;
+  const flush = () => {
+    if (!g) return;
+    const n = g.evs.length, gi = tl.vgroups.push({cam: g.cam, evs: g.evs}) - 1, e0 = g.evs[0];
+    const nm = (cam(g.cam) || {}).name || g.cam;
+    evHtml += `<button type="button" class="vevt cat-${evCat(e0)}" data-g="${gi}" style="top:${g.a}%" title="${esc(nm)} · ${n > 1 ? n + ' alerts' : esc(e0.labels.length ? e0.labels.map(l => l.label).join(', ') : 'motion') + ' · ' + fmtTime(e0.start)} — click to watch">${n > 1 ? n : e0.labels.length ? labelIcon(e0.labels[0].label) : '•'}</button>`;
+    g = null;
+  };
+  for (const {c, e, a} of evs) {
+    if (a < 0 || a > 100 || (!e.labels.length && cams.length > 1 && evs.length > 60)) continue;
+    if (g && g.cam === c.camera && (a - g.a) / 100 * H < 18) { g.evs.push(e); continue; }
+    flush(); g = {cam: c.camera, evs: [e], a};
+  }
+  flush();
+  const sel = tl.inT != null && tl.outT != null ? `<div class="vsel" style="top:${pct(tl.inT)}%;height:${pct(tl.outT) - pct(tl.inT)}%"></div>` : '';
+  const nowP = pct(Date.now());
+  box.innerHTML = `<div class="vbar" id="vbar"><div class="vax">${axis}</div><div class="vlane">${bars}${evBars}${sel}</div><div class="vevs">${evHtml}</div>
+    ${nowP >= 0 && nowP <= 100 ? `<div class="vnow" style="top:${nowP}%" title="Now"><em>NOW</em></div>` : ''}
+    <div class="vhead" id="vhead"><em></em></div><div class="vhover" id="vhover" hidden><em></em></div></div>
+    <div class="vtl-note">${cams.length > 1 ? 'All cameras' : esc((cams[0] || {}).name || '')}</div>`;
+  drawVHead();
+}
+function drawVHead() {
+  const h = $('vhead'); if (!h) return;
+  const p = (tl.T - tl.winStart) / (tl.zoom * 1000);
+  h.hidden = !(p >= 0 && p <= 1);
+  h.style.top = p * 100 + '%';
+  const em = h.querySelector('em'); if (em) em.textContent = fmtTime(new Date(tl.T));
+}
+(function wireVTimeline() {
+  const box = $('vtl');
+  let drag = false, was = false, lastY = null, raf = 0;
+  const tAt = (e) => {
+    const lane = box.querySelector('.vbar'); if (!lane) return null;
+    const r = lane.getBoundingClientRect();
+    return tl.winStart + Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1) * tl.zoom * 1000;
+  };
+  // Dragging past the top or bottom slides the timeline along.
+  const EDGE = 28;
+  const edgeStep = () => {
+    raf = 0; if (!drag || lastY == null) return;
+    const bar = box.querySelector('.vbar'); if (!bar) return;
+    const r = bar.getBoundingClientRect(), span = tl.zoom * 1000;
+    const out = lastY < r.top + EDGE ? lastY - (r.top + EDGE) : lastY > r.bottom - EDGE ? lastY - (r.bottom - EDGE) : 0;
+    if (!out) return;
+    const speed = Math.sign(out) * Math.min(Math.abs(out) / EDGE, 4);
+    const min = Math.min(tl.winStart, rec.from.getTime()), max = Math.max(tl.winStart, Date.now() - span * 0.95);
+    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.012));
+    if (ws !== tl.winStart) {
+      tl.winStart = ws;
+      tl.T = Math.min(ws + Math.min(Math.max((lastY - r.top) / r.height, 0), 1) * span, Date.now());
+      drawTimeline(); previewSoon();
+    }
+    raf = requestAnimationFrame(edgeStep);
+  };
+  box.addEventListener('pointerdown', (e) => {
+    const ev = e.target.closest('.vevt');
+    if (ev) {
+      e.preventDefault();
+      const g = tl.vgroups[+ev.dataset.g]; if (!g) return;
+      if (g.evs.length === 1) tlShowEvent(g.cam, new Date(g.evs[0].start).getTime());
+      else openAlertPicker(ev, g.evs[0].thumb ? g : {...g, evs: g.evs.filter(x => x.thumb).length ? g.evs.filter(x => x.thumb) : g.evs}, (x) => tlShowEvent(g.cam, new Date(x.start).getTime()));
+      return;
+    }
+    const t = tAt(e); if (t == null) return;
+    tlLeaveLive();
+    drag = true; tl.dragging = true; was = tl.playing; if (was) tlPlay(false);
+    box.setPointerCapture(e.pointerId);
+    tl.T = Math.min(t, Date.now()); drawHead(); previewAll();
+  });
+  box.addEventListener('pointermove', (e) => {
+    const bar = box.querySelector('.vbar'), g = $('vhover');
+    if (bar && g) {
+      const r = bar.getBoundingClientRect(), p = (e.clientY - r.top) / r.height;
+      g.hidden = drag || p < 0 || p > 1;
+      if (!g.hidden) { g.style.top = p * 100 + '%'; g.querySelector('em').textContent = fmtTime(new Date(tl.winStart + p * tl.zoom * 1000)); }
+    }
+    if (!drag) return;
+    tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewSoon();
+    lastY = e.clientY; if (!raf) raf = requestAnimationFrame(edgeStep);
+  });
+  box.addEventListener('pointerleave', () => { const g = $('vhover'); if (g) g.hidden = true; });
+  const end = () => {
+    if (!drag) return; drag = false; tl.dragging = false;
+    cancelAnimationFrame(raf); raf = 0; lastY = null;
+    document.querySelectorAll('#tl-videos video').forEach(v => { v._want = null; });
+    cutSpriteDownloads();
+    tlSync(true); if (was) tlPlay(true);
+    hideSpritesWhenReady().then(() => { if (page === 'recordings' && !tl.dragging) prefetchSprites(); });
+  };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  // The wheel moves along the timeline.
+  box.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const span = tl.zoom * 1000, max = Math.max(tl.winStart, Date.now() - span * 0.95), min = Math.min(tl.winStart, rec.from.getTime());
+    tl.winStart = Math.max(min, Math.min(max, tl.winStart + Math.sign(e.deltaY) * span * 0.12));
+    drawTimeline(); prefetchSprites();
+  }, {passive: false});
 })();
 
 // The file still being recorded keeps growing: ask for its newer preview
@@ -6610,7 +6788,9 @@ async function openCameraDialog(id, clone) {
             <div class="seg" id="c-priv-tool"><button type="button" class="small on" data-v="paint">🖌 Draw</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
             <label class="muted small" style="margin:0">Brush size <select id="c-priv-brush" class="small"><option value="1">Fine</option><option value="3">Small</option><option value="7" selected>Medium</option><option value="15">Large</option><option value="30">Extra large</option></select></label>
             <button type="button" class="small" id="c-priv-clear">Clear all</button></div>
-          <div class="hint" style="margin:4px 0 0">Draw over the picture to black out an area (shown dark red here); switch to Erase to take it back. Right-click (or hold Shift) erases too.</div></div>
+          <div class="hint" style="margin:4px 0 0">Draw over the picture to black out an area (shown dark red here); switch to Erase to take it back. Right-click (or hold Shift) erases too.</div>
+          <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:12px"><b class="small">Black out in:</b>${[['home', 'Home'], ['away', 'Away'], ['night', 'Night']].map(([k, t]) => `<label class="check" style="margin:0"><input type="checkbox" class="c-priv-mode" value="${k}" ${(c.privacy_modes || ['home', 'away', 'night']).includes(k) ? 'checked' : ''}> ${t}</label>`).join('')}</div>
+          <div class="hint" style="margin:2px 0 0">The areas are only blacked out while GAZE is in a ticked mode (Home, Away or Night — the switch at the top). In the others the whole picture shows and is recorded; the camera reconnects for a moment when the mode changes. Recordings made while blacked out stay blacked out.</div></div>
         <label>Fisheye (360°) camera${tip('For cameras with a round, fisheye picture: the live view and snapshots become a normal flat picture of one direction \u2014 choose where to look and how wide. Recordings keep the whole circle, so nothing outside the view is lost. Example: point the view at the front gate.')}</label>
         <div><label class="check"><input type="checkbox" id="c-fe" ${c.dewarp && c.dewarp.enabled ? 'checked' : ''}> Show a flat picture instead of the circle</label>
           <div class="fe-sl" style="margin-top:6px">${[['yaw', 'Look left / right', -180, 180, 0], ['pitch', 'Look up / down', -90, 90, 0], ['width', 'Width of view (smaller = zoomed in)', 30, 160, 100], ['lens', 'Lens angle', 120, 360, 180]].map(([k, t, a, b, d]) => `<label class="muted small" style="display:flex;gap:8px;align-items:center;margin:2px 0"><span style="width:240px">${t}</span><input type="range" id="c-fe-${k}" min="${a}" max="${b}" value="${(c.dewarp && c.dewarp[k] != null) ? c.dewarp[k] : d}" style="flex:1"><span id="c-fe-${k}-v" style="width:44px">${(c.dewarp && c.dewarp[k] != null) ? c.dewarp[k] : d}°</span></label>`).join('')}</div>
@@ -7326,7 +7506,7 @@ function collectCamera() {
     record_audio: chk('c-audio'), transcode: chk('c-transcode'), record_fps: num('c-fps'), segment_seconds: num('c-seg'),
     storage_dir: val('c-dir').trim(), retention_days: Math.round(num('c-ret')), max_storage_gb: num('c-max'),
     rotate: +val('c-rotate') || 0, zones: dlgZones.map(z => ({...z})),
-    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true, onvif_events: chk('c-onvif-ev'), onvif_motion: chk('c-onvif-mo'), privacy: privacyValue(), stream_live: chk('c-rtmp-on'), stream_url: val('c-rtmp').trim(), dewarp: {enabled: chk('c-fe'), yaw: num('c-fe-yaw'), pitch: num('c-fe-pitch'), width: num('c-fe-width'), lens: num('c-fe-lens')},
+    timeline_copy: $('c-tlcopy') ? chk('c-tlcopy') : true, onvif_events: chk('c-onvif-ev'), onvif_motion: chk('c-onvif-mo'), privacy: privacyValue(), privacy_modes: [...document.querySelectorAll('.c-priv-mode')].filter(x => x.checked).map(x => x.value), stream_live: chk('c-rtmp-on'), stream_url: val('c-rtmp').trim(), dewarp: {enabled: chk('c-fe'), yaw: num('c-fe-yaw'), pitch: num('c-fe-pitch'), width: num('c-fe-width'), lens: num('c-fe-lens')},
     osd: readOsd(),
     view: {grid_quality: val('c-vq') || 'auto', grid_fps: +val('c-vg') || 0, hd_fps: +val('c-vh') || 0},
     ptz: {enabled: chk('p-on'), host: val('p-host').trim(), port: Math.round(num('p-port')) || 80, username: val('p-user').trim(), password: $('p-pass').value,

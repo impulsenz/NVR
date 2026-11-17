@@ -475,6 +475,11 @@ impl Manager {
         // An imported camera: the other server records and detects; here
         // it's only watched live (its footage is read from there).
         let mut cam = cam.clone();
+        // Privacy areas only in the modes chosen for them (Home / Away / Night).
+        let mode = cfg.modes.effective(crate::notify::is_night(&cfg.notify, chrono::Local::now())).to_string();
+        if !cam.privacy_on_in(&mode) {
+            cam.privacy.clear();
+        }
         if cam.remote.is_some() {
             cam.record_mode = crate::config::RecordMode::Off;
             cam.detect.motion = false;
@@ -733,6 +738,25 @@ impl Manager {
         let mut cfg = self.config();
         cfg.dashboard = d;
         self.commit(cfg)
+    }
+
+    /// Privacy areas follow the mode: when Home, Away or Night changes (also by
+    /// itself at night), the cameras whose areas turn on or off reconnect.
+    pub async fn privacy_watch(self: Arc<Self>) {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            tick.tick().await;
+            let cfg = self.config();
+            let mode = cfg.modes.effective(crate::notify::is_night(&cfg.notify, chrono::Local::now())).to_string();
+            for cam in cfg.cameras.iter().filter(|c| !c.privacy.is_empty()) {
+                let Some(rt) = self.camera(&cam.id) else { continue };
+                if cam.privacy_on_in(&mode) != !rt.cfg.privacy.is_empty() {
+                    info!("[{}] privacy areas {} ({mode} mode)", cam.name, if cam.privacy_on_in(&mode) { "on" } else { "off" });
+                    let _g = self.edit.lock().await;
+                    self.restart_camera(cam).await;
+                }
+            }
+        }
     }
 
     /// Switch Home / Away / Night.

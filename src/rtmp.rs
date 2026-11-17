@@ -43,10 +43,10 @@ async fn stream(mgr: &Arc<Manager>, cam: &CameraConfig) -> anyhow::Result<()> {
         cmd.args(["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]);
     }
     cmd.args(["-map", "0:v:0", "-map", if has_audio { "0:a:0" } else { "1:a:0" }]);
-    if hevc || !cam.privacy.is_empty() {
+    if hevc || !rt.cfg.privacy.is_empty() {
         // Not every service takes H.265, and privacy areas must be painted in.
         cmd.args(["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-g", "50", "-b:v", "3000k", "-maxrate", "3500k", "-bufsize", "6000k"]);
-        if let Some(f) = cam.privacy_filter() {
+        if let Some(f) = rt.cfg.privacy_filter() {
             cmd.args(["-vf", &f]);
         }
     } else {

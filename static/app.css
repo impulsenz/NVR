@@ -1545,3 +1545,42 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .ev-ta { width: 100%; min-height: 64px; resize: vertical; font: inherit; box-sizing: border-box; }
 .ev-case-notes { padding: 4px 4px 10px; }
 .ev-media video, .ev-media img { background: #000; }
+
+/* Recordings: the timeline down the side (all cameras in one line) */
+#orient-hide { display: none; }
+.vtl { display: none; }
+@media (min-width: 901px) {
+  #rec-timeline.vert { display: grid; grid-template-columns: minmax(0, 1fr) 176px; column-gap: 14px; align-items: start; }
+  #rec-timeline.vert > .tl-videos { grid-column: 1; grid-row: 1; }
+  #rec-timeline.vert > .vtl { display: block; grid-column: 2; grid-row: 1; position: sticky; top: 64px; height: calc(100vh - 150px); min-height: 360px; user-select: none; touch-action: none; }
+  #rec-timeline.vert > .controls, #rec-timeline.vert > .legend, #rec-timeline.vert > .hint { grid-column: 1 / -1; }
+  #rec-timeline.vert > #tl { display: none; }
+  #page-recordings.tl-mode #rec-timeline.vert .tl-videos:has(> .surface:only-child) { grid-template-columns: min(100%, calc((100vh - 230px) * 16 / 9)); }
+  #page-recordings.tl-mode #rec-timeline.vert .tl-videos.solo .surface.solo { width: min(100%, calc((100vh - 230px) * 16 / 9)); }
+  #page-recordings.tl-mode #rec-timeline.vert .tl-videos { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+}
+@media (max-width: 900px) { #tl-orient { display: none; } }
+.vbar { position: absolute; left: 0; right: 0; top: 12px; bottom: 12px; cursor: ns-resize; }
+.vax { position: absolute; left: 0; width: 52px; top: 0; bottom: 0; }
+.vax span { position: absolute; right: 8px; transform: translateY(-50%); font-size: 11.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.vax span.day { color: var(--text); font-weight: 600; }
+.vax i { position: absolute; right: 0; width: 6px; height: 1px; background: var(--muted); opacity: .8; }
+.vax i.day { width: 10px; opacity: 1; }
+.vlane { position: absolute; left: 56px; width: 26px; top: 0; bottom: 0; background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+.vseg { position: absolute; left: 0; right: 0; background: #3b82f6; opacity: .75; min-height: 2px; }
+.vseg.live { background: #ef4444; }
+.vev { position: absolute; right: 0; width: 8px; background: var(--evc, #f59e0b); min-height: 3px; }
+.vev.cat-person { --evc: #60a5fa; } .vev.cat-vehicle { --evc: #fbbf24; } .vev.cat-animal { --evc: #34d399; } .vev.cat-package { --evc: #f472b6; } .vev.cat-motion { --evc: #f59e0b; }
+.vsel { position: absolute; left: 0; right: 0; background: rgba(245,158,11,.3); border-top: 2px solid var(--amber); border-bottom: 2px solid var(--amber); }
+.vevs { position: absolute; left: 88px; right: 0; top: 0; bottom: 0; pointer-events: none; }
+.vevt { position: absolute; transform: translateY(-50%); pointer-events: auto; min-height: 0 !important; height: 22px; min-width: 22px; padding: 0 5px; border-radius: 11px; font-size: 12px; line-height: 1; cursor: pointer;
+  background: var(--panel); border: 2px solid var(--evc, #f59e0b); color: var(--text); display: inline-flex; align-items: center; justify-content: center; }
+.vevt.cat-person { --evc: #60a5fa; } .vevt.cat-vehicle { --evc: #fbbf24; } .vevt.cat-animal { --evc: #34d399; } .vevt.cat-package { --evc: #f472b6; } .vevt.cat-motion { --evc: #f59e0b; }
+.vevt:hover { background: var(--evc); color: #111; }
+.vnow { position: absolute; left: 50px; width: 36px; border-top: 1px dashed #ef4444; pointer-events: none; }
+.vnow em { position: absolute; left: -48px; top: -7px; font: 700 9.5px/1 system-ui; color: #ef4444; }
+.vhead { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid #fff; box-shadow: 0 0 6px rgba(0,0,0,.6); pointer-events: none; z-index: 3; }
+.vhead em { position: absolute; right: 0; top: -9px; font: 600 11px/1 system-ui; background: var(--accent); color: #fff; padding: 3px 6px; border-radius: 4px; font-style: normal; }
+.vhover { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed rgba(255,255,255,.5); pointer-events: none; z-index: 2; }
+.vhover em { position: absolute; right: 0; top: -9px; font: 11px/1 system-ui; background: rgba(15,18,24,.9); color: #e6e9f0; padding: 3px 6px; border-radius: 4px; font-style: normal; }
+.vtl-note { position: absolute; left: 0; right: 0; bottom: -2px; text-align: center; font-size: 11px; color: var(--muted); }

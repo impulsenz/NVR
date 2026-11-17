@@ -426,6 +426,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     }
     remove_smart_search_files(&mgr);
     tokio::spawn(mgr.clone().housekeeping());
+    tokio::spawn(mgr.clone().privacy_watch());
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
     #[cfg(windows)]

@@ -211,6 +211,19 @@ pub fn update_item(case: &str, item: &str, protected: Option<bool>, title: Optio
     })
 }
 
+/// Remember the thumbnail made for an item that had none.
+pub fn set_picture(case: &str, item: &str, name: &str) -> Result<()> {
+    with(|l| {
+        let c = l.cases.iter_mut().find(|c| c.id == case).context("no such case")?;
+        let it = c.items.iter_mut().find(|i| i.id == item).context("no such item in this case")?;
+        if it.picture.is_none() {
+            it.picture = Some(name.to_string());
+            save(l)?;
+        }
+        Ok(())
+    })
+}
+
 /// Remove an item (and its copied files) from a case: only when unprotected.
 pub fn remove_item(case: &str, item: &str) -> Result<()> {
     with(|l| {

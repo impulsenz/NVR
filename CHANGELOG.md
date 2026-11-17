@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 1.1.3 — November 2026
+- **Recordings**: a timeline down the side (button above the timeline: ⇅ Vertical / ⇄ Horizontal). All cameras' footage and alerts are merged into one line with the pictures bigger beside it; drag, click, scroll the wheel to move through time. Full screen keeps the bottom timeline.
+- **Privacy areas can follow the mode**: black them out only in Home, Away and/or Night (camera → Privacy areas). The camera reconnects for a moment when the mode changes (also when Home turns into Night by itself).
+- **Updates and restarts reload every open GAZE page**, not only the one that started the update. A page that loses GAZE during a restart reloads when it's back.
+- **Evidence Locker**: thumbnails are made once and kept (older items get theirs the first time they're shown), and the browser keeps them.
+
 ## 1.1.2 — November 2026
 - **Live view**: the camera timeline is now a panel over the bottom of the picture that slides up when the pointer is at (or below) the bottom of the picture, as in full screen. A mini pan / tilt / zoom pad shows in full screen. The grid shrinks to fit the browser window without scrolling. Switching back to Live no longer flashes blank pictures.
 - **Live view & display**: the overlay settings run down the left, the camera preview sits on the right.
