@@ -73,12 +73,38 @@ pub fn yaml(cameras: &[crate::config::CameraConfig]) -> String {
     out += "log:\n  level: warn\n";
     out += "streams:\n";
     for c in cameras.iter().filter(|c| c.enabled) {
-        out += &format!("  {}: {}\n", stream_name(&c.id, false), q(c.url.trim()));
+        out += &format!("  {}: {}\n", stream_name(&c.id, false), q(&source_for(&c.url)));
         if c.has_sub() {
-            out += &format!("  {}: {}\n", stream_name(&c.id, true), q(c.live_url.trim()));
+            out += &format!("  {}: {}\n", stream_name(&c.id, true), q(&source_for(&c.live_url)));
         }
     }
     out
+}
+
+/// A camera address as a go2rtc source. RTSP: without two-way audio
+/// (`#backchannel=0`). go2rtc otherwise asks the camera for its talk-back
+/// channel, which some cameras (TP-Link Tapo among them) answer badly — no
+/// picture at all — and GAZE talks through cameras itself anyway.
+fn source_for(url: &str) -> String {
+    let u = url.trim();
+    if (u.starts_with("rtsp://") || u.starts_with("rtsps://")) && !u.contains("#backchannel") {
+        format!("{u}#backchannel=0")
+    } else {
+        u.to_string()
+    }
+}
+
+/// What go2rtc says about one stream (its connection to the camera and any
+/// error), for the log when a camera gets no picture through it.
+pub async fn stream_report(camera: &str, sub: bool, secrets: &[&str]) -> Option<String> {
+    let name = stream_name(camera, sub);
+    let c = reqwest::Client::builder().timeout(Duration::from_secs(3)).build().ok()?;
+    let v: serde_json::Value = c.get(format!("http://127.0.0.1:{API_PORT}/api/streams?src={name}")).send().await.ok()?.json().await.ok()?;
+    let mut text = v.to_string();
+    for s in secrets {
+        text = crate::config::redact(&text, s);
+    }
+    Some(text.chars().take(1500).collect())
 }
 
 /// The go2rtc program: the one set in Settings, GAZE's own, or none.
@@ -272,8 +298,8 @@ mod tests {
         b.enabled = true;
         let off = CameraConfig { id: "off".into(), enabled: false, url: "rtsp://10.0.0.7/x".into(), ..Default::default() };
         let y = yaml(&[a, b, off]);
-        assert!(y.contains("  front_door_main: \"rtsp://admin:p@ss#1@10.0.0.5/main\"\n"));
-        assert!(y.contains("  front_door_sub: \"rtsp://admin:p@ss#1@10.0.0.5/sub\"\n"));
+        assert!(y.contains("  front_door_main: \"rtsp://admin:p@ss#1@10.0.0.5/main#backchannel=0\"\n"));
+        assert!(y.contains("  front_door_sub: \"rtsp://admin:p@ss#1@10.0.0.5/sub#backchannel=0\"\n"));
         assert!(y.contains("  yard_main:"));
         assert!(!y.contains("yard_sub") && !y.contains("off_main"));
         assert!(y.contains("listen: \"127.0.0.1:18554\"") && y.contains("listen: \"127.0.0.1:11984\""));

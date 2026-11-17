@@ -70,6 +70,11 @@ pub struct Relay {
     pub label: &'static str,
     /// The camera's id and which of its streams (for go2rtc).
     stream: (String, bool),
+    /// Connecting through go2rtc failed for this stream: straight to the
+    /// camera until then.
+    bypass_until: Mutex<Option<Instant>>,
+    /// Failures in a row through go2rtc.
+    go2rtc_fails: std::sync::atomic::AtomicU32,
     url: String,
     transport: String,
     ffmpeg: String,
@@ -100,6 +105,8 @@ impl Relay {
             name: name.into(),
             label,
             stream: (stream.0.to_string(), stream.1),
+            bypass_until: Mutex::new(None),
+            go2rtc_fails: std::sync::atomic::AtomicU32::new(0),
             url: url.into(),
             transport: transport.into(),
             ffmpeg: ffmpeg.into(),
@@ -130,6 +137,9 @@ impl Relay {
     /// Where to connect now: through go2rtc when it's chosen and running,
     /// the camera itself otherwise (asked again at every reconnect).
     fn source(&self) -> String {
+        if self.bypass_until.lock().unwrap().is_some_and(|t| Instant::now() < t) {
+            return self.url.clone();
+        }
         crate::go2rtc::source(&self.url, &self.stream.0, self.stream.1)
     }
 
@@ -227,9 +237,34 @@ impl Relay {
             }
             self.shared.lock().unwrap().status.retry_in = None;
             self.set_state(RelayState::Connecting, None);
+            let via_go2rtc = self.source() != self.url;
             info!("{tag}: connecting to {}", mask_url(&self.source()));
             let started = Instant::now();
             let (got_data, err) = self.clone().session().await;
+            // go2rtc running but not getting this camera's picture (it can't
+            // reach the camera, or the camera refuses it): after two tries,
+            // straight to the camera for 10 minutes, so recording carries on.
+            if via_go2rtc && err.is_some() && !got_data {
+                use std::sync::atomic::Ordering::Relaxed;
+                // go2rtc's own account of this stream, in the log.
+                let (cam, sub, url) = (self.stream.0.clone(), self.stream.1, self.url.clone());
+                let tag2 = tag.clone();
+                tokio::spawn(async move {
+                    if let Some(r) = crate::go2rtc::stream_report(&cam, sub, &[&url]).await {
+                        warn!("{tag2}: go2rtc says: {r}");
+                    }
+                });
+                if self.go2rtc_fails.fetch_add(1, Relaxed) + 1 >= 2 {
+                    self.go2rtc_fails.store(0, Relaxed);
+                    *self.bypass_until.lock().unwrap() = Some(Instant::now() + Duration::from_secs(600));
+                    warn!("{tag}: no picture through go2rtc (see the go2rtc lines in the log) — connecting straight to the camera for 10 minutes");
+                    backoff = Duration::from_secs(2);
+                    last_fail = None;
+                    continue;
+                }
+            } else if got_data {
+                self.go2rtc_fails.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
             // Ending the connection ends every consumer; they restart and
             // re-subscribe (keeps their timestamps consistent).
             {
