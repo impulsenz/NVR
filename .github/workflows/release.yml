@@ -82,8 +82,11 @@ jobs:
         run: |
           mkdir dist
           cp "${{ matrix.exe }}" "dist/${{ matrix.asset }}"
+          # The optional watchdog (its own program, built from the same source).
+          cp "target/release/gaze-watchdog.exe" "dist/GAZE-Watchdog.exe"
           cd dist
           sha256sum "${{ matrix.asset }}" | cut -d' ' -f1 > "${{ matrix.asset }}.sha256"
+          sha256sum "GAZE-Watchdog.exe" | cut -d' ' -f1 > "GAZE-Watchdog.exe.sha256"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}

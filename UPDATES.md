@@ -190,3 +190,8 @@ Start it again. If it runs as a Windows service, start the *GAZE NVR*
 service in Windows *Services*, or use the tray icon → *Restart GAZE*.
 `nvr.old.exe` next to it is the previous version: rename it back to
 `nvr.exe` to undo the update.
+
+
+## The watchdog
+
+Each release also has **GAZE-Watchdog.exe** (and its `.sha256`): an optional small program that keeps GAZE running. GAZE downloads it for you from **Settings → Watchdog** (checked against its checksum) into its data folder (`nvr-data\watchdog`), sets it up to start with Windows and starts it. It has its own updates, from the same releases: it tells GAZE's Watchdog page when a newer one is out, and installs it when asked there (or by itself, if chosen). The watchdog and GAZE only talk through files in that folder.

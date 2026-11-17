@@ -157,6 +157,12 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/known-inbox/assign", post(inbox_assign))
         .route("/api/known-inbox/dismiss", post(inbox_dismiss))
         .route("/api/cloud/status", get(cloud_status))
+        .route("/api/watchdog", get(watchdog_overview))
+        .route("/api/watchdog/settings", put(watchdog_settings))
+        .route("/api/watchdog/install", post(watchdog_install))
+        .route("/api/watchdog/uninstall", post(watchdog_uninstall))
+        .route("/api/watchdog/start", post(watchdog_start))
+        .route("/api/watchdog/command", post(watchdog_command))
         .route("/api/archive", get(archive_overview))
         .route("/api/archive/run", post(archive_run))
         .route("/api/archive/test", post(archive_test))
@@ -2748,6 +2754,62 @@ async fn export_clip(
     serve_file(out, req, Some(name), true).await
 }
 
+
+
+// ---------- the watchdog ----------
+
+fn wd_data(m: &Manager) -> PathBuf {
+    std::path::absolute(&m.data_dir).unwrap_or(m.data_dir.clone())
+}
+
+async fn watchdog_overview(State(m): App) -> Response {
+    Json(crate::watchdog_ctl::overview(&wd_data(&m), &m)).into_response()
+}
+
+async fn watchdog_settings(State(m): App, Json(v): Json<serde_json::Value>) -> Response {
+    match crate::watchdog_ctl::save_settings(&wd_data(&m), &m, &v) {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct WatchdogInstall {
+    mode: String,
+}
+
+async fn watchdog_install(State(m): App, Json(r): Json<WatchdogInstall>) -> Response {
+    match crate::watchdog_ctl::install(&m, &r.mode).await {
+        Ok(msg) => Json(json!({"ok": true, "message": msg})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn watchdog_uninstall(State(m): App) -> Response {
+    match crate::watchdog_ctl::uninstall(&m).await {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn watchdog_start(State(m): App) -> Response {
+    match crate::watchdog_ctl::start(&wd_data(&m)) {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct WatchdogCommand {
+    cmd: String,
+}
+
+async fn watchdog_command(State(m): App, Json(r): Json<WatchdogCommand>) -> Response {
+    match crate::watchdog_ctl::command(&wd_data(&m), &r.cmd) {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => bad(e),
+    }
+}
 
 // ---------- deep storage ----------
 
@@ -5840,6 +5902,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/hw-test",
         "/api/ai/",
         "/api/cloud/",
+        "/api/watchdog",
         "/api/ptz/test",
         "/api/maintenance",
         "/api/notify",

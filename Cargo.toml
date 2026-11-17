@@ -1,8 +1,18 @@
 [package]
 name = "nvr"
-version = "1.1.5"
+version = "1.1.6"
 edition = "2024"
 description = "GAZE — network video recorder for IP cameras"
+default-run = "nvr"
+
+[[bin]]
+name = "nvr"
+path = "src/main.rs"
+
+# The optional watchdog: its own program, GAZE-Watchdog.exe.
+[[bin]]
+name = "gaze-watchdog"
+path = "src/watchdog/main.rs"
 
 [dependencies]
 if-addrs = "0.15"

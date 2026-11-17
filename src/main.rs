@@ -64,6 +64,7 @@ mod tls;
 mod tray;
 mod tts;
 mod update;
+mod watchdog_ctl;
 mod users;
 mod web;
 mod winservice;
@@ -220,7 +221,13 @@ fn main() -> Result<()> {
                 .arg(&path)
                 .spawn()?;
         }
-        _ => {}
+        _ => {
+            // Closed on purpose (Quit): the watchdog, if there is one, leaves it closed.
+            if res.is_ok() {
+                let data = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).join("nvr-data");
+                watchdog_ctl::mark_quit(&std::path::absolute(&data).unwrap_or(data));
+            }
+        }
     }
     res
 }
@@ -309,6 +316,8 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         .join("nvr-data");
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating {}", data_dir.display()))?;
+    // GAZE is running: a "closed on purpose" mark for the watchdog no longer holds.
+    watchdog_ctl::clear_quit(&data_dir);
     logs::buffer().set_file(data_dir.join("nvr.log"));
     // Before anything that may delete footage (retention) starts.
     cases::init(&data_dir);
@@ -431,6 +440,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
     tokio::spawn(archive::run(mgr.clone()));
+    tokio::spawn(watchdog_ctl::run(mgr.clone()));
     #[cfg(windows)]
     if getffmpeg::MISSING.load(std::sync::atomic::Ordering::SeqCst) {
         tokio::spawn(getffmpeg::fetch_and_use(mgr.clone()));
