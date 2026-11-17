@@ -251,7 +251,7 @@
   <!-- ============ SYSTEM ============ -->
   <section id="page-evidence" hidden>
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0;flex:1">Evidence Locker</h2>
-      <button type="button" class="primary op-only" id="ev-new">＋ New case</button></div>
+      <a class="btn" id="ev-export-all" href="api/cases/export" title="Every case in one ZIP: a folder per case, a folder per video with its notes">⇩ Export all</a> <button type="button" class="primary op-only" id="ev-new">＋ New case</button></div>
     <p class="muted" style="margin-top:0">Cases keep important clips and pictures together. Everything added is copied into the case and <b>protected</b>: the footage it came from can't be deleted anywhere in GAZE (not even by the automatic clean-up) until it's unprotected here. Add footage with <b>🗄️ Add to case</b> on an alert, or on a clip or picture in Recordings.</p>
     <div id="ev-list"></div>
   </section>

@@ -230,8 +230,9 @@ fn pending(
     mode: &str,
     store: Option<&crate::events::EventStore>,
     done: &HashSet<String>,
+    older_than: Option<chrono::DateTime<chrono::Local>>,
 ) -> Vec<(PathBuf, String)> {
-    let all = mode == "all";
+    let all = mode == "all" || older_than.is_some();
     // Event files are named after their event: "<event id>.mp4" / ".jpg".
     let verified = |name: &str| {
         let id = name.rsplit_once('.').map(|x| x.0).unwrap_or(name);
@@ -264,6 +265,10 @@ fn pending(
         // Skip the newest file: it may still be recording.
         for r in recs.iter().skip(1) {
             let p = dir.join(&r.name);
+            // Moving to the NAS after a while: only what's old enough.
+            if older_than.is_some_and(|c| r.end > c) {
+                continue;
+            }
             if !done.contains(&r.name) && settled(&p) {
                 out.push((p, r.name.clone()));
             }
@@ -300,17 +305,34 @@ pub async fn run(mgr: Arc<Manager>) {
             let dir = cfg.camera_dir(cam);
             let done = uploaded_list(&dir);
             let store = stores.get(&cam.id).map(|s| s.as_ref());
-            let todo = pending(&dir, &cfg.cloud.upload, store, &done);
+            let offload_cut = cfg.cloud.offload.then(|| {
+                chrono::Local::now() - chrono::Duration::hours(cfg.cloud.local_hours.max(1) as i64)
+            });
+            let todo = pending(&dir, &cfg.cloud.upload, store, &done, offload_cut);
             STATUS.lock().unwrap().waiting = todo.len();
+            let sizes: Vec<u64> = todo
+                .iter()
+                .map(|(p, _)| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+                .collect();
+            let total_bytes: u64 = sizes.iter().sum();
+            let n_files = todo.len();
+            let mut bytes_done = 0u64;
+            let began = std::time::Instant::now();
             let job = (!todo.is_empty()).then(|| {
-                let j = crate::jobs::start("cloud", format!("Cloud backup — {}", cam.name));
+                let title = if cfg.cloud.offload {
+                    format!("Moving to the NAS — {}", cam.name)
+                } else {
+                    format!("Cloud backup — {}", cam.name)
+                };
+                let j = crate::jobs::start("cloud", title);
                 j.total(todo.len() as u64);
+                j.transfer(0, total_bytes, 0);
                 j
             });
-            for (path, rel) in todo {
+            for (i, (path, rel)) in todo.into_iter().enumerate() {
                 if let Some(j) = &job {
                     j.pause_point().await;
-                    j.step(rel.clone());
+                    j.step(format!("{rel} (file {} of {n_files})", i + 1));
                 }
                 let res = if crate::ftp::is_ftp(&remote) {
                     match crate::ftp::parse(&remote) {
@@ -347,8 +369,24 @@ pub async fn run(mgr: Arc<Manager>) {
                     Ok(()) => {
                         fails = 0;
                         mark_uploaded(&dir, &rel);
+                        bytes_done += sizes[i];
+                        // Moving: the copy is checked, so the local file can go
+                        // (never footage locked in an Evidence Locker case).
+                        if offload_cut.is_some() && !rel.starts_with("events/") {
+                            let rec = crate::storage::list(&dir).into_iter().find(|r| r.name == rel);
+                            let locked = rec
+                                .as_ref()
+                                .is_some_and(|r| crate::cases::locks_time(&cam.id, r.start, r.end).is_some());
+                            if !locked {
+                                if let Err(e) = crate::storage::delete_recording(&dir, &rel) {
+                                    warn!("[{}] could not remove {rel} after moving it: {e}", cam.name);
+                                }
+                            }
+                        }
                         if let Some(j) = &job {
                             j.done_one();
+                            let secs = began.elapsed().as_secs_f64().max(0.001);
+                            j.transfer(bytes_done, total_bytes, (bytes_done as f64 / secs) as u64);
                         }
                         info!("[{}] cloud: uploaded {rel}", cam.name);
                         last_error.clear();
@@ -454,14 +492,14 @@ mod tests {
                 .unwrap();
         }
         store.flush();
-        let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new())
+        let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new(), None)
             .into_iter()
             .map(|x| x.1)
             .collect();
         ai.sort();
         assert_eq!(ai, ["events/ev-person.jpg", "events/ev-person.mp4"]);
         assert_eq!(
-            pending(&dir, "events", Some(&store), &HashSet::new()).len(),
+            pending(&dir, "events", Some(&store), &HashSet::new(), None).len(),
             4
         );
         std::fs::remove_dir_all(&dir).unwrap();

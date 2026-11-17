@@ -1,5 +1,14 @@
 # What's new in GAZE
 
+## Unreleased
+- **Live view**: the camera timeline is now a panel over the bottom of the picture that slides up when the pointer is at (or below) the bottom of the picture, as in full screen. A mini pan / tilt / zoom pad shows in full screen. The grid shrinks to fit the browser window without scrolling. Switching back to Live no longer flashes blank pictures.
+- **Live view & display**: the overlay settings run down the left, the camera preview sits on the right.
+- **Siren** sounds for 60 seconds by default.
+- **Data retention** (Settings → Backup): keep recordings on this computer for a set time (24 hours by default), then move them to the NAS — copied and checked first, then removed locally (never footage held in an Evidence Locker case). Shows under System → Tasks with files left, size and speed.
+- **Evidence Locker**: thumbnails for clips; playing one video pauses the others; notes are typed in place (for each video and for the whole case); **Export all** makes a ZIP with a folder per video (video, picture, notes), an `index.html` to review it, and a SHA-256 manifest. Export one case or every case.
+- **Privacy areas** are drawn with a brush (draw, erase, brush size).
+- The "GAZE CPU" line is gone from the server load graph.
+
 ## 1.1.1 — November 2026
 - **go2rtc with TP-Link Tapo (and similar) cameras**: go2rtc no longer asks cameras for their two-way audio channel, which left some cameras (Tapo among them) with no picture ("could not find codec parameters"). GAZE talks through cameras itself as before.
 - **A camera that gets no picture through go2rtc connects straight to the camera** after two tries (for 10 minutes, then tries go2rtc again), so it keeps recording. What go2rtc said about it is written to Settings → Logs.

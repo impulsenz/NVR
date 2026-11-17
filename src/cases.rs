@@ -252,6 +252,118 @@ pub fn locked_message(case: &str) -> String {
     format!("This is locked in the Evidence Locker case “{case}”. To delete it, open that case (Evidence) and unprotect it first.")
 }
 
+
+pub fn safe_part(s: &str) -> String {
+    let t: String = s.chars().map(|c| if c.is_alphanumeric() || " -_.".contains(c) { c } else { '_' }).collect();
+    let t = t.trim().trim_matches('.').to_string();
+    let t: String = t.chars().take(80).collect();
+    if t.is_empty() { "item".into() } else { t }
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Everything in `cases` as one ZIP, for handing to somebody else.
+///
+/// ```text
+/// <Case>/
+///   index.html          open it: every video with its notes beside it
+///   case-notes.txt      the notes about the case as a whole
+///   manifest.txt        SHA-256 of every file
+///   01 <item title>/
+///     <video>.mp4  <picture>.jpg
+///     notes.txt         the notes for this video, with when / where
+/// ```
+/// With several cases, each is a folder of its own. `allow` says which
+/// cameras the person exporting may see.
+pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool) -> Result<()> {
+    use sha2::Digest;
+    use std::io::{Read, Write};
+    use zip::write::SimpleFileOptions;
+    let l_dir = with(|l| Ok(l.dir.clone()))?;
+    let mut z = zip::ZipWriter::new(std::io::BufWriter::new(std::fs::File::create(out)?));
+    let text = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).large_file(true);
+    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(true);
+    let many = cases.len() > 1;
+    let mut used = std::collections::HashSet::new();
+    for c in cases {
+        let mut root = safe_part(&c.name);
+        while !used.insert(root.clone()) {
+            root = format!("{root}-2");
+        }
+        let prefix = if many { format!("{root}/") } else { String::new() };
+        let items: Vec<&Item> = c.items.iter().filter(|i| allow(&i.camera)).collect();
+        let mut manifest = String::new();
+        let mut html = format!(
+            "<!doctype html><meta charset=utf-8><title>{n}</title><style>body{{font:15px system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#222}}video,img{{max-width:100%;border-radius:6px;background:#000}}.i{{border-top:1px solid #ccc;padding:16px 0}}pre{{white-space:pre-wrap;font:inherit;background:#f4f4f4;padding:10px;border-radius:6px}}.m{{color:#666;font-size:13px}}</style><h1>{n}</h1><p class=m>Exported {now} · {k} item(s)</p><h2>Notes</h2><pre>{cn}</pre>",
+            n = esc(&c.name),
+            now = Local::now().format("%d %b %Y %H:%M"),
+            k = items.len(),
+            cn = if c.notes.trim().is_empty() { "(none)".into() } else { esc(&c.notes) },
+        );
+        z.start_file(format!("{prefix}case-notes.txt"), text)?;
+        write!(z, "{}\r\n\r\nCreated: {}\r\n\r\nNotes\r\n-----\r\n{}\r\n", c.name, c.created.format("%d %b %Y %H:%M:%S"), c.notes)?;
+        for (n, i) in items.iter().enumerate() {
+            let folder = format!("{prefix}{:02} {}", n + 1, safe_part(&i.title));
+            let rel_folder = format!("{:02} {}", n + 1, safe_part(&i.title));
+            z.start_file(format!("{folder}/notes.txt"), text)?;
+            write!(
+                z,
+                "{}\r\n\r\nCamera: {}\r\nFrom: {}\r\nTo: {}\r\nType: {:?}\r\nAdded: {}{}\r\nProtected: {}\r\n\r\nNotes\r\n-----\r\n{}\r\n",
+                i.title,
+                if i.camera_name.is_empty() { &i.camera } else { &i.camera_name },
+                i.from.format("%d %b %Y %H:%M:%S"),
+                i.to.format("%d %b %Y %H:%M:%S"),
+                i.kind,
+                i.added.format("%d %b %Y %H:%M:%S"),
+                if i.added_by.is_empty() { String::new() } else { format!(" by {}", i.added_by) },
+                if i.protected { "yes" } else { "no" },
+                i.notes
+            )?;
+            html.push_str(&format!(
+                "<div class=i><h2>{}</h2><p class=m>{} · {} – {}</p>",
+                esc(&i.title),
+                esc(if i.camera_name.is_empty() { &i.camera } else { &i.camera_name }),
+                i.from.format("%d %b %Y %H:%M:%S"),
+                i.to.format("%H:%M:%S")
+            ));
+            let enc_path = |f: &str| format!("{}/{}", rel_folder.replace(' ', "%20"), f.replace(' ', "%20"));
+            for (file, is_video) in i.video.iter().map(|f| (f, true)).chain(i.picture.iter().map(|f| (f, false))) {
+                if file.contains('/') || file.contains('\\') || file.contains("..") {
+                    continue;
+                }
+                let src = l_dir.join(&c.id).join(file);
+                let Ok(mut f) = std::fs::File::open(&src) else { continue };
+                z.start_file(format!("{folder}/{file}"), stored)?;
+                let mut h = sha2::Sha256::new();
+                let mut buf = vec![0u8; 1 << 20];
+                loop {
+                    let k = f.read(&mut buf)?;
+                    if k == 0 {
+                        break;
+                    }
+                    h.update(&buf[..k]);
+                    z.write_all(&buf[..k])?;
+                }
+                manifest.push_str(&format!("{}  {rel_folder}/{file}\r\n", h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()));
+                if is_video {
+                    html.push_str(&format!("<video controls preload=metadata src=\"{}\"></video>", enc_path(file)));
+                } else if i.video.is_none() {
+                    html.push_str(&format!("<img src=\"{}\" alt=\"\">", enc_path(file)));
+                }
+            }
+            html.push_str(&format!("<h3>Notes for this video</h3><pre>{}</pre></div>", if i.notes.trim().is_empty() { "(none)".into() } else { esc(&i.notes) }));
+        }
+        z.start_file(format!("{prefix}index.html"), text)?;
+        z.write_all(html.as_bytes())?;
+        z.start_file(format!("{prefix}manifest.txt"), text)?;
+        z.write_all(manifest.as_bytes())?;
+    }
+    z.finish()?.flush()?;
+    Ok(())
+}
+
 /// A safe file name from a title.
 pub fn file_name(title: &str, ext: &str) -> String {
     let base: String = title.chars().map(|c| if c.is_alphanumeric() || " -_".contains(c) { c } else { '_' }).collect();
@@ -301,6 +413,28 @@ mod tests {
         // Kept across a restart.
         init(&dir);
         assert_eq!(get(&c.id).unwrap().items.len(), 1);
+        // Export: a folder per item with its video and notes, and a manifest.
+        {
+            let cd = case_dir(&c.id).unwrap();
+            std::fs::write(cd.join("v.mp4"), b"video").unwrap();
+            update_item(&c.id, &it.id, None, None, Some("saw a man")).unwrap();
+            with(|l| {
+                l.cases[0].items[0].video = Some("v.mp4".into());
+                Ok(())
+            })
+            .unwrap();
+            let out = dir.join("x.zip");
+            export_zip(&list(), &out, &|_| true).unwrap();
+            let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
+            let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().unwrap().to_string()).collect();
+            assert!(names.iter().any(|n| n == "index.html"), "{names:?}");
+            assert!(names.iter().any(|n| n.starts_with("01 ") && n.ends_with("/notes.txt")), "{names:?}");
+            assert!(names.iter().any(|n| n.ends_with("/v.mp4")), "{names:?}");
+            // Someone who can't see the camera gets none of its items.
+            export_zip(&list(), &out, &|_| false).unwrap();
+            let z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
+            assert!(z.file_names().all(|n| !n.unwrap().contains("v.mp4")));
+        }
         // Unprotected: the footage is free again, and the item can go.
         update_item(&c.id, &it.id, Some(false), None, None).unwrap();
         assert!(locks_event("back", "e1").is_none());

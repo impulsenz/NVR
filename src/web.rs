@@ -241,6 +241,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/timeline", get(timeline))
         .route("/api/export", get(export_clip))
         .route("/api/cases", get(cases_list).post(cases_create))
+        .route("/api/cases/export", get(cases_export_all))
+        .route("/api/cases/{id}/export", get(cases_export))
         .route("/api/cases/{id}", put(cases_update).delete(cases_delete))
         .route("/api/cases/{id}/items", post(cases_add_item))
         .route("/api/cases/{id}/items/{item}", put(cases_update_item).delete(cases_remove_item))
@@ -2902,6 +2904,24 @@ async fn cases_add_item(
         }
         picture = Some(name);
     }
+    // A video without a picture gets one from its own footage (a thumbnail).
+    if picture.is_none() && let Some(v) = &video {
+        let name = crate::cases::file_name(&title, "jpg");
+        for ss in ["1", "0"] {
+            let ok = crate::load::cmd(&ffmpeg_path)
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", ss, "-i"])
+                .arg(dir.join(v))
+                .args(["-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "3"])
+                .arg(dir.join(&name))
+                .status()
+                .await
+                .is_ok_and(|s| s.success());
+            if ok && dir.join(&name).exists() {
+                picture = Some(name.clone());
+                break;
+            }
+        }
+    }
     if video.is_none() && picture.is_none() {
         return err(StatusCode::NOT_FOUND, "no footage found to add");
     }
@@ -2966,6 +2986,50 @@ async fn cases_remove_item(Path((id, item)): Path<(String, String)>) -> Response
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err(StatusCode::CONFLICT, format!("{e:#}")),
     }
+}
+
+
+/// One case, or all of them, as a ZIP to hand to somebody.
+async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cases: Vec<crate::cases::Case>, name: String, req: Request) -> Response {
+    let vis = visible(user);
+    let tmpdir = m.data_dir.join("tmp");
+    let _ = std::fs::create_dir_all(&tmpdir);
+    // Old exports (an hour or more) are cleared away.
+    if let Ok(rd) = std::fs::read_dir(&tmpdir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with("evidence-") && n.ends_with(".zip") && e.metadata().and_then(|x| x.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default().as_secs() > 3600) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let out = tmpdir.join(format!("evidence-{}.zip", Local::now().format("%Y%m%d%H%M%S%3f")));
+    let o2 = out.clone();
+    let res = tokio::task::spawn_blocking(move || crate::cases::export_zip(&cases, &o2, &|cam| vis.as_ref().is_none_or(|v| v.iter().any(|x| x == cam)))).await;
+    match res {
+        Ok(Ok(())) => {
+            tracing::info!("Evidence Locker: exported “{name}”");
+            let mut req = req;
+            // Always a download.
+            if let Ok(u) = format!("{}?download=1", req.uri().path()).parse() { *req.uri_mut() = u; }
+            let fname = format!("{}.zip", crate::cases::safe_part(&name));
+            serve_file(out, req, Some(fname), true).await
+        }
+        Ok(Err(e)) => { let _ = std::fs::remove_file(&out); bad(e) }
+        Err(e) => bad(anyhow::anyhow!("{e}")),
+    }
+}
+
+async fn cases_export(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, req: Request) -> Response {
+    let Some(c) = crate::cases::get(&id) else { return err(StatusCode::NOT_FOUND, "no such case") };
+    let name = c.name.clone();
+    cases_zip(&m, &user, vec![c], name, req).await
+}
+
+async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUser>>, req: Request) -> Response {
+    let all = crate::cases::list();
+    if all.is_empty() { return err(StatusCode::NOT_FOUND, "no cases to export"); }
+    cases_zip(&m, &user, all, "Evidence Locker".into(), req).await
 }
 
 /// A file kept in a case (only the case's own files, by name).

@@ -1119,7 +1119,7 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .fspov .p-clip { background: var(--amber) !important; border-color: var(--amber) !important; color: #111 !important; }
 .fspov .scrub { position: relative; height: 14px; cursor: pointer; margin-bottom: 4px; }
 /* Recordings in full screen: the timeline in a panel that slides up from the bottom */
-.surface:fullscreen .fspov.tl-panel { padding: 10px 12px 12px; background: rgba(10,12,17,.94); backdrop-filter: blur(6px);
+.surface:fullscreen .fspov.tl-panel, .surface.inl-panel .fspov.tl-panel { padding: 10px 12px 12px; background: rgba(10,12,17,.94); backdrop-filter: blur(6px);
   border-top: 1px solid rgba(255,255,255,.08); transition: transform .25s ease, opacity .25s ease; }
 .fspov.tl-panel.away { transform: translateY(calc(100% - 4px)); opacity: 0; transition: none; }
 .fspov.tl-panel .fs-tlslot #tl { max-height: 42vh; overflow-y: auto; margin: 0 0 6px; }
@@ -1524,3 +1524,24 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .job-pv { position: relative; width: 192px; min-height: 60px; border-radius: 6px; background-color: #000; background-repeat: no-repeat; border: 1px solid var(--border); }
 .job-pv-t { position: absolute; left: 4px; bottom: 4px; font: 600 11px/1.4 ui-monospace, Consolas, monospace; color: #fff; background: rgba(0,0,0,.6); padding: 0 4px; border-radius: 3px; }
 .job-log { margin: 0; padding-left: 18px; color: var(--muted); max-width: 520px; }
+
+/* Live view & display: the overlay settings down the left, the camera preview in the space on the right */
+.disp-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.disp-right { position: sticky; top: 70px; }
+@media (max-width: 900px) { .disp-split { grid-template-columns: minmax(0, 1fr); } .disp-right { position: static; order: -1; } }
+
+/* Camera view on the page: the timeline panel over the bottom of the picture */
+.surface.inl-panel .fspov.tl-panel { padding: 8px 10px 10px; }
+.surface.inl-panel .fspov .p-talk, .surface.inl-panel .fspov .p-say, .surface.inl-panel .fspov .p-snap, .surface.inl-panel .fspov .p-siren { display: none; }
+.surface.inl-panel .ptz-ov { top: auto; bottom: 12px; }
+.surface.inl-panel.has-pov:not(.pov-idle) .pov-osdbox .ov.bl, .surface.inl-panel.has-pov:not(.pov-idle) .pov-osdbox .ov.br, .surface.inl-panel.has-pov:not(.pov-idle) .pov-osdbox .ov.bc { bottom: 8px; }
+/* Full screen: a mini pan / tilt / zoom pad */
+#focus-surface:fullscreen .ptz-ov { zoom: .72; right: 14px; top: 64px; bottom: auto; padding: 8px; gap: 6px; opacity: .9; }
+#focus-surface:fullscreen .ptz-ov .ptz-roam, #focus-surface:fullscreen .ptz-ov .ptz-mode { display: none; }
+
+/* Evidence Locker: notes typed in place */
+.ev-notes { margin: 6px 0; }
+.ev-notes label { display: flex; gap: 8px; align-items: center; }
+.ev-ta { width: 100%; min-height: 64px; resize: vertical; font: inherit; box-sizing: border-box; }
+.ev-case-notes { padding: 4px 4px 10px; }
+.ev-media video, .ev-media img { background: #000; }

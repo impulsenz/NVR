@@ -29,6 +29,10 @@ pub struct JobInfo {
     /// Can be paused (Settings → Tasks).
     pub pausable: bool,
     pub error: String,
+    /// Transfer speed in bytes per second (file copies), 0 = not a transfer.
+    pub rate: u64,
+    /// Bytes copied and bytes to copy in all (file copies).
+    pub xfer: (u64, u64),
     /// What was just made, to show it going by (time-lapse previews: the
     /// page of pictures and how they're laid out).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,6 +97,8 @@ pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
         state: "running",
         pausable: PAUSABLE.contains(&kind),
         error: String::new(),
+        rate: 0,
+        xfer: (0, 0),
         preview: None,
         log: Vec::new(),
     });
@@ -127,6 +133,13 @@ impl Job {
             j.bytes = true;
             j.done = done;
             j.total = total;
+        });
+    }
+    /// A file copy's progress: bytes done of all, and the speed.
+    pub fn transfer(&self, done: u64, total: u64, rate: u64) {
+        self.with(|j| {
+            j.xfer = (done, total);
+            j.rate = rate;
         });
     }
     /// Show what was just made (see JobInfo::preview).

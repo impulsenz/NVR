@@ -316,7 +316,7 @@ impl Default for TtsConfig {
                 "Please leave now.".into(),
             ],
             chime: false,
-            siren_seconds: 30,
+            siren_seconds: 60,
             siren_messages: vec![
                 "Warning! You are being recorded. The homeowner has been notified.".into(),
                 "Leave the property now. The police have been notified.".into(),
@@ -704,6 +704,12 @@ pub struct CloudConfig {
     /// "ai" (only alerts confirmed by object recognition), "events" (all alert
     /// clips and pictures, including motion-only) or "all" (every recording).
     pub upload: String,
+    /// Keep recordings on this computer for `local_hours`, then move them to
+    /// the NAS / backup destination (copied and checked first, then the
+    /// local file is removed).
+    pub offload: bool,
+    /// How long recordings stay on this computer before moving (hours).
+    pub local_hours: u64,
 }
 
 impl Default for CloudConfig {
@@ -715,6 +721,8 @@ impl Default for CloudConfig {
             user: String::new(),
             password: String::new(),
             upload: "events".into(),
+            offload: false,
+            local_hours: 24,
         }
     }
 }
