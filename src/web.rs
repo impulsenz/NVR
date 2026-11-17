@@ -128,15 +128,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/users/{name}/two-step-off", post(two_step_off_admin))
         .route("/api/users", get(users_list).post(users_create))
         .route("/api/users/{name}", put(users_update).delete(users_delete))
-        .route(
-            "/api/changelog",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
-                    include_str!("../CHANGELOG.md"),
-                )
-            }),
-        )
         .route("/api/status", get(status))
         .route("/api/system", get(system))
         .route("/api/monitor", get(monitor))
@@ -150,7 +141,6 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/logs/download", get(download_logs))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/dashboard", put(put_dashboard))
-        .route("/api/profiles", get(get_profiles).put(put_profiles))
         .route("/api/discover", post(discover_now))
         .route("/api/known", get(known_list).post(known_create))
         .route("/api/known/{id}", put(known_update).delete(known_delete))
@@ -440,6 +430,7 @@ async fn system(State(m): App) -> Response {
         "storage_dir": cfg.storage.dir.canonicalize().unwrap_or(cfg.storage.dir.clone()),
         "log_file": logs::buffer().file_path(),
         "listen": m.bound_listen,
+        "https_port": cfg.server.https_port,
         "addresses": local_addresses(),
         "uptime_seconds": m.started.elapsed().as_secs(),
         "capabilities": caps,
@@ -1075,28 +1066,6 @@ async fn inbox_dismiss(State(m): App, Json(r): Json<InboxReq>) -> Response {
     }
     match crate::inbox::save_dismissed(&m.data_dir, &d) {
         Ok(()) => Json(json!({"ok": true})).into_response(),
-        Err(e) => bad(e),
-    }
-}
-
-async fn get_profiles(State(m): App) -> Response {
-    Json(m.config().profiles).into_response()
-}
-
-#[derive(Deserialize)]
-struct ProfileRename {
-    rename_from: Option<String>,
-    rename_to: Option<String>,
-}
-
-async fn put_profiles(
-    State(m): App,
-    Query(r): Query<ProfileRename>,
-    Json(p): Json<Vec<crate::config::Profile>>,
-) -> Response {
-    let rename = r.rename_from.zip(r.rename_to);
-    match m.update_profiles(p, rename).await {
-        Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => bad(e),
     }
 }

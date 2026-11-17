@@ -342,8 +342,6 @@ pub struct Config {
     pub notify: NotifyConfig,
     pub update: UpdateConfig,
     pub dashboard: DashboardConfig,
-    /// Saved recording / motion / AI settings to apply to cameras.
-    pub profiles: Vec<Profile>,
     /// Home / Away / Night: which cameras send phone notifications.
     pub modes: ModesConfig,
     /// MQTT (Home Assistant and other home automation).
@@ -1136,109 +1134,6 @@ impl Default for ZoneConfig {
     }
 }
 
-/// A named set of recording, motion and AI settings that can be applied to
-/// any camera (the camera's own detection mask is kept).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct Profile {
-    pub name: String,
-    pub record_mode: RecordMode,
-    pub schedule_enabled: bool,
-    pub schedule: Schedule,
-    pub record_audio: bool,
-    pub transcode: bool,
-    pub record_fps: u32,
-    pub segment_seconds: u64,
-    pub retention_days: u64,
-    pub max_storage_gb: f64,
-    pub detect: DetectConfig,
-    /// Sound detection (what to listen for, how sensitive). Missing in
-    /// profiles from before 0.6.79: the camera's own is kept.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sound: Option<SoundConfig>,
-    /// Speaker button on the live picture.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub live_sound: Option<bool>,
-    /// Doorbell chime before talking.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub talk_chime: Option<bool>,
-    /// Use what the camera itself detects (ONVIF events).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub onvif_events: Option<bool>,
-    /// Also the camera's plain motion detection.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub onvif_motion: Option<bool>,
-}
-
-impl Profile {
-    /// Put this profile's recording, motion and AI settings on a camera
-    /// (its motion mask and everything else stay).
-    pub fn apply(&self, cam: &mut CameraConfig) {
-        cam.record_mode = self.record_mode;
-        cam.schedule_enabled = self.schedule_enabled;
-        cam.schedule = self.schedule.clone();
-        cam.record_audio = self.record_audio;
-        cam.transcode = self.transcode;
-        cam.record_fps = self.record_fps;
-        cam.segment_seconds = self.segment_seconds;
-        cam.retention_days = self.retention_days;
-        cam.max_storage_gb = self.max_storage_gb;
-        // Areas drawn on this camera's own picture stay the camera's.
-        let mask = std::mem::take(&mut cam.detect.mask);
-        let (packages, area, spot) = (
-            cam.detect.packages,
-            std::mem::take(&mut cam.detect.package_area),
-            std::mem::take(&mut cam.detect.package_mask),
-        );
-        cam.detect = self.detect.clone();
-        cam.detect.mask = mask;
-        cam.detect.packages = packages;
-        cam.detect.package_area = area;
-        cam.detect.package_mask = spot;
-        if let Some(v) = &self.sound {
-            cam.sound = v.clone();
-        }
-        if let Some(v) = self.live_sound {
-            cam.live_sound = v;
-        }
-        if let Some(v) = self.talk_chime {
-            cam.talk_chime = v;
-        }
-        if let Some(v) = self.onvif_events {
-            cam.onvif_events = v;
-        }
-        if let Some(v) = self.onvif_motion {
-            cam.onvif_motion = v;
-        }
-        cam.profile = self.name.clone();
-    }
-}
-
-impl Default for Profile {
-    fn default() -> Self {
-        let c = CameraConfig::default();
-        Self {
-            name: String::new(),
-            record_mode: c.record_mode,
-            schedule_enabled: c.schedule_enabled,
-            schedule: c.schedule,
-            record_audio: c.record_audio,
-            transcode: c.transcode,
-            record_fps: c.record_fps,
-            segment_seconds: c.segment_seconds,
-            retention_days: c.retention_days,
-            max_storage_gb: c.max_storage_gb,
-            detect: c.detect,
-            // Not in older profiles: each camera keeps its own.
-            sound: None,
-            live_sound: None,
-            talk_chime: None,
-            onvif_events: None,
-            onvif_motion: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct CameraConfig {
@@ -1308,9 +1203,6 @@ pub struct CameraConfig {
     pub onvif_motion: bool,
     /// Turn the picture, degrees clockwise: 0, 90, 180 or 270.
     pub rotate: u16,
-    /// Name of the recording profile this camera follows ("" = none). When
-    /// the profile is changed, the camera's settings follow.
-    pub profile: String,
     /// Zones and lines on the picture.
     pub zones: Vec<ZoneConfig>,
     pub detect: DetectConfig,
@@ -1353,7 +1245,6 @@ impl Default for CameraConfig {
             onvif_events: false,
             onvif_motion: false,
             rotate: 0,
-            profile: String::new(),
             zones: Vec::new(),
             detect: DetectConfig::default(),
             osd: OsdConfig::default(),
@@ -1631,10 +1522,6 @@ impl Config {
             changed |= v(&mut self.notify.objects);
             for w in &mut self.webhooks {
                 changed |= v(&mut w.objects);
-            }
-            for p in &mut self.profiles {
-                changed |= v(&mut p.detect.objects);
-                changed |= v(&mut p.detect.parked_objects);
             }
             for c in &mut self.cameras {
                 changed |= v(&mut c.detect.objects);

@@ -28,6 +28,32 @@ pub fn port_of(config: &Path) -> u16 {
         .unwrap_or(8080)
 }
 
+/// The secure (https) port in a settings file: 8443 when not set (the
+/// default), 0 when it's turned off.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn https_port_of(config: &Path) -> u16 {
+    std::fs::read_to_string(config)
+        .ok()
+        .and_then(|t| {
+            t.lines()
+                .map(str::trim)
+                .find(|l| l.starts_with("https_port") && l.contains('='))
+                .and_then(|l| l.split('=').nth(1))
+                .and_then(|p| p.trim().parse().ok())
+        })
+        .unwrap_or(8443)
+}
+
+/// The address GAZE opens at on this computer: the secure (https) one
+/// when it's on, else the plain one.
+pub fn local_url(port: u16, https_port: u16) -> String {
+    if https_port > 0 {
+        format!("https://localhost:{https_port}/")
+    } else {
+        format!("http://localhost:{port}/")
+    }
+}
+
 /// Is a GAZE already answering on this port?
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn running(port: u16) -> bool {
@@ -44,8 +70,7 @@ pub fn running(port: u16) -> bool {
 
 /// Open GAZE for the person: the installed GAZE app when there is one,
 /// otherwise the web page in the default browser.
-pub fn open_ui(port: u16, data_dir: &Path) {
-    let url = format!("http://localhost:{port}/");
+pub fn open_ui(url: String, data_dir: &Path) {
     #[cfg(windows)]
     {
         let target = app_shortcut(data_dir).map(|p| p.display().to_string()).unwrap_or(url);
@@ -106,7 +131,7 @@ pub fn install_if_downloaded(config_given: bool) -> bool {
     let installed_running = dest.join("nvr.toml").exists() && running(port_of(&dest.join("nvr.toml")));
     if installed_running {
         // Already installed and running: just open it.
-        open_ui(port_of(&dest.join("nvr.toml")), &dest.join("nvr-data"));
+        open_ui(local_url(port_of(&dest.join("nvr.toml")), https_port_of(&dest.join("nvr.toml"))), &dest.join("nvr-data"));
         return true;
     }
     // This download replaces the installed program (the same or newer).
@@ -230,5 +255,21 @@ mod live_check {
         });
         assert!(super::running(port));
         assert!(!super::running(port));
+    }
+
+    #[test]
+    fn opens_the_secure_address_when_it_is_on() {
+        assert_eq!(super::local_url(8080, 8443), "https://localhost:8443/");
+        assert_eq!(super::local_url(8080, 0), "http://localhost:8080/");
+        let dir = std::env::temp_dir().join(format!("gaze-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("nvr.toml");
+        std::fs::write(&f, "[server]\nlisten = \"0.0.0.0:8080\"\n").unwrap();
+        assert_eq!(super::https_port_of(&f), 8443);
+        std::fs::write(&f, "[server]\nhttps_port = 0\n").unwrap();
+        assert_eq!(super::https_port_of(&f), 0);
+        std::fs::write(&f, "[server]\nhttps_port = 9443\n").unwrap();
+        assert_eq!(super::https_port_of(&f), 9443);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

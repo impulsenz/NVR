@@ -267,18 +267,20 @@ fn tags(e: &Event, sus: bool) -> &'static str {
 /// Where tapping the notification goes: that alert in GAZE. Without an
 /// address in the settings, this computer's address on the home network.
 /// The address the phone opens GAZE at.
-fn base(cfg: &NotifyConfig, listen: &str) -> Option<String> {
+/// The secure (https) address when it's on.
+fn base(cfg: &NotifyConfig, server: &crate::config::ServerConfig) -> Option<String> {
     Some(match cfg.link.trim().trim_end_matches('/') {
+        "" if server.https_port > 0 => format!("https://{}:{}", lan_ip()?, server.https_port),
         "" => {
-            let port = listen.rsplit(':').next().unwrap_or("8080");
+            let port = server.listen.rsplit(':').next().unwrap_or("8080");
             format!("http://{}:{port}", lan_ip()?)
         }
         b => b.to_string(),
     })
 }
 
-fn link(cfg: &NotifyConfig, listen: &str, e: &Event) -> Option<String> {
-    Some(format!("{}/#alerts?open={}~{}", base(cfg, listen)?, e.camera, e.id))
+fn link(cfg: &NotifyConfig, server: &crate::config::ServerConfig, e: &Event) -> Option<String> {
+    Some(format!("{}/#alerts?open={}~{}", base(cfg, server)?, e.camera, e.id))
 }
 
 /// This computer's address on the local network.
@@ -447,14 +449,14 @@ impl Notifier {
                         },
                         tags: tags(&e, sus.is_some()),
                         priority: if sus.is_some() { 4 } else { 3 },
-                        click: link(n, &cfg.server.listen, &e),
+                        click: link(n, &cfg.server, &e),
                         picture: alert_picture(&rt, &e).or(Some(pic)),
                         // Snooze this camera straight from the notification.
                         // Open the alert, or snooze this camera, straight
                         // from the notification.
-                        actions: base(n, &cfg.server.listen).map(|b| {
+                        actions: base(n, &cfg.server).map(|b| {
                             let l = |m| snooze_link(&mgr.data_dir, &b, &rt.cfg.id, m);
-                            let open = link(n, &cfg.server.listen, &e).map(|u| format!("view, Open alert, {u}; ")).unwrap_or_default();
+                            let open = link(n, &cfg.server, &e).map(|u| format!("view, Open alert, {u}; ")).unwrap_or_default();
                             format!("{open}http, Snooze 1 hour, {}, method=POST, clear=true; http, Snooze until tomorrow, {}, method=POST, clear=true", l(60), l(until_morning()))
                         }),
                     };
@@ -527,7 +529,7 @@ impl Notifier {
                     body,
                     tags: tags(&e, sus.is_some()),
                     priority: if sus.is_some() { 5 } else { 2 },
-                    click: link(n, &cfg.server.listen, &e),
+                    click: link(n, &cfg.server, &e),
                     picture: alert_picture(&rt, &e),
                     actions: None,
                 };

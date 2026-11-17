@@ -424,9 +424,6 @@ button.label { background: none; border: 0; border-radius: 4px; color: inherit; 
 #sys-legend span { cursor: pointer; user-select: none; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
 #sys-legend span.off { opacity: .4; text-decoration: line-through; }
 #sys-legend span:hover { border-color: var(--accent); }
-.profile-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--accent2); border-radius: 8px; }
-.profile-bar select { max-width: 240px; }
-.profile-bar .hint { flex-basis: 100%; margin: 0; }
 
 /* ===================== Phones ===================== */
 @media (max-width: 760px) {
@@ -656,7 +653,6 @@ body.signed-out > header, body.signed-out > main { visibility: hidden; }
 .auth-foot { text-align: center; font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); animation: blink 1.6s infinite; display: inline-block; }
 @keyframes blink { 50% { opacity: .25; } }
-.changelog h2 { margin-top: 0; } .changelog h3 { margin: 14px 0 4px; font-size: 15px; } .changelog ul { margin: 4px 0 8px; padding-left: 20px; } .changelog li { margin: 3px 0; }
 table.users .chips { margin: 0; }
 
 /* Phone layout editor */
@@ -955,10 +951,6 @@ table.where td:first-child { width: 44px; }
 .nf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 
 /* Settings → Profiles */
-.prof-list { display: grid; gap: 10px; }
-.prof { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
-.prof .row { gap: 6px; }
-.profile-mode .profile-bar { display: none; }
 @media (max-width: 760px) { .upd-bar { top: 0; } }
 
 /* "You're now running GAZE x" after an update */

@@ -160,7 +160,8 @@ fn main() -> Result<()> {
                 let port = launch::port_of(&path);
                 if launch::running(port) {
                     if dir.is_none() {
-                        launch::open_ui(port, &std::path::absolute("nvr-data").unwrap_or_default());
+                        let url = launch::local_url(port, launch::https_port_of(&path));
+                        launch::open_ui(url, &std::path::absolute("nvr-data").unwrap_or_default());
                     }
                     return Ok(());
                 }
@@ -249,7 +250,7 @@ fn companion(path: &std::path::Path, just_installed: bool) -> Result<()> {
         .to_string();
     tray::start(
         tray::TrayInfo {
-            url: format!("http://localhost:{port}/"),
+            url: launch::local_url(port.parse().unwrap_or(8080), cfg.server.https_port),
             recordings: std::path::absolute(&cfg.storage.dir).unwrap_or(cfg.storage.dir.clone()),
             log: std::path::absolute(base.join("nvr-data").join("nvr.log")).unwrap_or_default(),
             config: path.to_path_buf(),
@@ -475,7 +476,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     if with_tray {
         tray::start(
             tray::TrayInfo {
-                url: format!("http://localhost:{port}/"),
+                url: launch::local_url(port.parse().unwrap_or(8080), cfg.server.https_port),
                 recordings: std::path::absolute(&cfg.storage.dir)
                     .unwrap_or(cfg.storage.dir.clone()),
                 log: std::path::absolute(mgr.data_dir.join("nvr.log")).unwrap_or_default(),
@@ -494,10 +495,11 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     }
     // Started from the shortcut: open GAZE now it's ready.
     if launch::OPEN_WHEN_READY.swap(false, std::sync::atomic::Ordering::SeqCst) {
-        let (p, d): (u16, std::path::PathBuf) = (port.parse().unwrap_or(8080), mgr.data_dir.clone());
+        let url = launch::local_url(port.parse().unwrap_or(8080), mgr.config().server.https_port);
+        let d = mgr.data_dir.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(800));
-            launch::open_ui(p, &std::path::absolute(&d).unwrap_or(d.clone()));
+            launch::open_ui(url, &std::path::absolute(&d).unwrap_or(d.clone()));
         });
     }
 
