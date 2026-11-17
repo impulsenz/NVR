@@ -2751,7 +2751,7 @@ function openAlertPicker(anchor, g, pick) {
   document.querySelectorAll('.evt-pop').forEach(x => x.remove());
   const pop = document.createElement('div');
   pop.className = 'evt-pop';
-  pop.innerHTML = g.evs.map((e, i) => `<button type="button" class="it cat-${evCat(e)}" data-i="${i}"><img src="media/${enc(g.cam)}/events/${enc(e.thumb)}" alt="">
+  pop.innerHTML = g.evs.map((e, i) => `<button type="button" class="it cat-${evCat(e)}" data-i="${i}"><img src="media/${enc(e._cam || g.cam)}/events/${enc(e.thumb)}" alt="">
     <span class="cap">${e.labels.map(l => labelIcon(l.label)).join('')} ${esc(e.labels.map(l => l.label).join(', '))}<b>${fmtTime(e.start)}</b></span></button>`).join('');
   // In full screen only what's inside the full-screen picture shows.
   (document.fullscreenElement || document.body).appendChild(pop);
@@ -4283,6 +4283,7 @@ function buildTimelineVideos() {
       tl.soundCam = c.camera; tl.sound = on; store.set('tl-sound', on); tlApplySound();
     };
     el.querySelector('.solo-off').onclick = (e) => { e.stopPropagation(); tlSolo(null); };
+    layoutSoon();
     el._vids = [...el.querySelectorAll('video:not([data-hls])')]; el._vids.forEach(watchFps);
     // An alert clip this browser can't play (e.g. H.265): the sub-stream
     // stays on instead.
@@ -4989,6 +4990,7 @@ function tlSolo(camId) {
     const b = el.querySelector('.solo-off'); if (b) b.hidden = el.dataset.cam !== tl.solo;
   });
   $('tl').querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
+  layoutSoon(); drawVTimeline();
 }
 function jumpTo(T) { tlLeaveLive(); tl.T = T; if (T < tl.winStart || T > tl.winStart + tl.zoom * 1000) centerWindow(); drawTimeline(); tlSync(true); }
 $('tl-in').onclick = () => { tl.inT = tl.T; if (tl.outT != null && tl.outT <= tl.inT) tl.outT = null; drawTimeline(); };
@@ -5055,6 +5057,7 @@ function drawTimeline() {
   $('tl-export').innerHTML = has ? tl.data.map(c => `<a class="btn small" href="api/export?camera=${enc(c.camera)}&from=${enc(new Date(tl.inT).toISOString())}&to=${enc(new Date(tl.outT).toISOString())}">⇩ ${esc(c.name)}</a>`).join('') : '';
   drawHead();
   drawVTimeline();
+  layoutSoon();
 }
 // What each camera has loaded, shown on its timeline: a light strip over
 // the footage already in the browser (ready to play without waiting), and a
@@ -5085,6 +5088,8 @@ function paintLoaded() {
   if (page !== 'recordings' || rec.mode !== 'timeline' || !tl.winStart || document.hidden) return;
   const span = tl.zoom * 1000, pct = (t) => (t - tl.winStart) / span * 100;
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    const vb = document.querySelector(`#vtl .vlane[data-cam="${CSS.escape(el.dataset.cam)}"] .vbuf`);
+    if (vb) { let vh = ''; for (const [a, b] of videoWallRanges(el)) { const l = Math.max(0, pct(a)), r = Math.min(100, pct(b)); if (r > l) vh += `<i style="top:${l}%;height:${Math.max(.15, r - l)}%"></i>`; } if (vb._h !== vh) { vb._h = vh; vb.innerHTML = vh; } }
     const box = document.querySelector(`#tl .lane[data-cam="${CSS.escape(el.dataset.cam)}"] .tl-buf`); if (!box) continue;
     let html = '';
     for (const [a, b] of videoWallRanges(el)) {
@@ -5526,68 +5531,128 @@ function applyTlOrient() {
   $('rec-timeline').classList.toggle('vert', v);
   $('vtl').hidden = !v;
   $('tl-orient').textContent = store.get('tl-vertical', false) === true ? '⇄ Horizontal' : '⇅ Vertical';
+  $('tl-vmerge').hidden = !v;
+  $('tl-vmerge').textContent = tlMerged() ? '▥ By camera' : '▮ Merge cameras';
+  layoutSoon();
   if (v && tl.winStart != null) drawVTimeline();
 }
+$('tl-vmerge').onclick = () => { store.set('tl-vmerge', !tlMerged()); applyTlOrient(); drawVTimeline(); };
 $('tl-orient').onclick = () => { store.set('tl-vertical', store.get('tl-vertical', false) !== true); applyTlOrient(); };
 window.addEventListener('resize', () => { applyTlOrient(); });
+// Bars down a lane: footage runs of one kind joined when close; what is
+// being recorded now is drawn on its own.
+function vBars(pieces, gap) {
+  const runs = [];
+  for (const p of pieces.filter(x => !x.live).sort((x, y) => x.a - y.a)) {
+    const r = runs[runs.length - 1];
+    if (r && r.cls === p.cls && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p});
+  }
+  return runs.map(r => `<div class="vseg ${r.cls}" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></div>`).join('')
+    + pieces.filter(x => x.live).map(r => `<div class="vseg ${r.cls} live" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%" title="Recording now"></div>`).join('');
+}
+const tlMerged = () => store.get('tl-vmerge', false) === true;
 function drawVTimeline() {
   const box = $('vtl'); if (!box || box.hidden || tl.winStart == null) return;
   const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
   const cams = tl.data.filter(x => !tl.solo || x.camera === tl.solo);
-  const H = Math.max(200, box.clientHeight - 24);
-  // Footage of every camera as one run of bars.
-  const pcs = [];
-  for (const c of cams) {
-    const shown = c.segments.filter(tlShows), lastRec = shown.filter(x => x.kind !== 'clip').slice(-1)[0];
-    for (const sg of shown) {
-      const live = sg === lastRec && isGrowing(sg);
-      const a = Math.max(0, pct(new Date(sg.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(sg.end).getTime()));
-      if (b > a && a < 100) pcs.push({a, b, live});
-    }
-  }
-  pcs.sort((x, y) => x.a - y.a);
-  const runs = [], gap = 15000 / span * 100;
-  for (const p of pcs.filter(x => !x.live)) { const r = runs[runs.length - 1]; if (r && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p}); }
-  // (What is being recorded right now is its own red bar.)
-  const bars = runs.map(r => `<div class="vseg" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></div>`).join('')
-    + pcs.filter(x => x.live).map(r => `<div class="vseg live" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%" title="Recording now"></div>`).join('');
-  // Time marks.
+  const merged = tlMerged() || cams.length < 2;
+  const lanes = merged ? [{camera: '', name: 'All cameras', list: cams}] : cams.map(c => ({camera: c.camera, name: c.name, list: [c]}));
+  // Width: time scale, a lane for each camera, and a column for alert pictures.
+  const LW = lanes.length > 10 ? 18 : lanes.length > 6 ? 24 : 30, THUMB = 92;
+  const wantW = 58 + lanes.length * (LW + 4) + 10 + THUMB;
+  $('rec-timeline').style.setProperty('--vtl-w', Math.min(Math.max(wantW, 190), 460) + 'px');
+  const HEAD = 84, H = Math.max(200, box.clientHeight - HEAD - 28);
+  const gap = 15000 / span * 100;
+  // Time scale: bands, gridlines, minor ticks and labels.
   const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map(x => x * 1000);
-  const step = steps.find(x => span / x <= Math.max(4, H / 50)) || 86400000;
-  let axis = '';
-  for (let t = Math.ceil(W0 / step) * step; t <= W0 + span; t += step) {
-    const d = new Date(t), midnight = d.getHours() === 0 && d.getMinutes() === 0, y = pct(t);
-    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-    axis += `<i class="vmj ${midnight ? 'day' : ''}" style="top:${y}%"></i><span class="${midnight ? 'day' : ''}" style="top:${y}%">${step >= 86400000 ? fmtDay(d) : hm + (midnight ? ' ' + fmtDay(d) : '')}</span>`;
+  const step = steps.find(x => span / x <= Math.max(4, H / 46)) || 86400000;
+  const minor = step / ([120000, 600000, 1800000, 7200000].includes(step) ? 4 : [10800000, 43200000].includes(step) ? 3 : step === 86400000 ? 4 : 5);
+  let axis = '', grid = '';
+  for (let t = Math.floor(W0 / step) * step; t < W0 + span; t += step) {
+    if (Math.round(t / step) % 2) continue;
+    const y0 = Math.max(0, pct(t)), y1 = Math.min(100, pct(t + step));
+    if (y1 > y0) grid += `<b class="vband" style="top:${y0}%;height:${y1 - y0}%"></b>`;
   }
-  // Alerts of every camera: a bar for how long, and a symbol (stacked where
-  // they'd touch) in the colour of the kind of alert.
-  const evs = [];
-  for (const c of cams) for (const e of c.events) { const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime()); if (b >= 0 && a <= 100) evs.push({c, e, a, b}); }
-  evs.sort((x, y) => x.a - y.a);
-  tl.vgroups = []; let evHtml = '', evBars = '';
-  for (const {e, a, b} of evs) evBars += `<div class="vev cat-${evCat(e)}" style="top:${Math.max(0, a)}%;height:${Math.max(0.25, Math.min(100, b) - Math.max(0, a))}%"></div>`;
-  let g = null;
+  for (let t = Math.ceil(W0 / minor) * minor; t <= W0 + span; t += minor) {
+    const d = new Date(t), midnight = d.getHours() === 0 && d.getMinutes() === 0, y = pct(t);
+    const major = Math.abs(t % step) < 1 || (step >= 86400000 && midnight);
+    if (!major) { axis += `<i class="vmn" style="top:${y}%"></i>`; continue; }
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    axis += `<i class="vmj ${midnight ? 'day' : ''}" style="top:${y}%"></i><span class="${d.getMinutes() === 0 ? 'hr' : ''} ${midnight ? 'day' : ''}" style="top:${y}%">${step >= 86400000 ? fmtDay(d) : hm}${midnight && step < 86400000 ? `<small>${fmtDay(d)}</small>` : ''}</span>`;
+    grid += `<i class="vgl ${midnight ? 'day' : ''}" style="top:${y}%"></i>`;
+  }
+  tl.vgroups = [];
+  let thumbs = [], laneHtml = '', heads = '';
+  lanes.forEach((ln, li) => {
+    const pcs = [];
+    for (const c of ln.list) {
+      const shown = c.segments.filter(tlShows), lastRec = shown.filter(x => x.kind !== 'clip').slice(-1)[0];
+      for (const sg of shown) {
+        const live = sg === lastRec && isGrowing(sg);
+        const a = Math.max(0, pct(new Date(sg.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(sg.end).getTime()));
+        if (b > a && a < 100) pcs.push({a, b, live, cls: streamOf(sg) === 'main' ? 'clip' : 'rec'});
+      }
+    }
+    let evBars = '', prune = '';
+    for (const c of ln.list) {
+      for (const e of c.events) { const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime()); if (b >= 0 && a <= 100) evBars += `<div class="vev cat-${evCat(e)}" style="top:${Math.max(0, a)}%;height:${Math.max(0.25, Math.min(100, b) - Math.max(0, a))}%" data-cam="${esc(c.camera)}" data-t="${new Date(e.start).getTime()}" title="${esc(e.labels.length ? e.labels.map(l => l.label).join(', ') : 'motion')} · ${fmtTime(e.start)} — click to watch"></div>`; }
+      const shown = c.segments.filter(tlShows);
+      if (c.pruning && shown.length) { const a = pct(new Date(shown[0].start).getTime()); if (a >= -2 && a < 100) prune += `<div class="vprune" style="top:${Math.max(0, a)}%" title="The oldest footage is being deleted to keep room free on the disk">🗑</div>`; }
+    }
+    laneHtml += `<div class="vlane" data-cam="${esc(ln.camera)}" style="left:${58 + li * (LW + 4)}px;width:${LW}px"><div class="vtlp" data-cam="${esc(ln.camera)}"></div>${vBars(pcs, gap)}<div class="vbuf"></div>${evBars}${prune}</div>`;
+    const c0 = ln.list[0], st = c0 && cam(c0.camera), recOn = !!(st && st.recorder && st.recorder.state === 'recording');
+    heads += `<button type="button" class="vlab" ${merged ? '' : `data-cam="${esc(ln.camera)}"`} style="left:${58 + li * (LW + 4)}px;width:${LW}px" title="${esc(ln.name)}${merged ? '' : ' — show just this camera'}"><i class="dot ${recOn ? 'on' : ''}"></i><span>${esc(ln.name)}</span></button>`;
+    for (const c of ln.list) for (const e of c.events) if (e.labels.length && e.thumb) { const y = pct(new Date(e.start).getTime()); if (y >= 0 && y <= 100) thumbs.push({y, cam: c.camera, e: {...e, _cam: c.camera}}); }
+  });
+  // Pictures of AI alerts down the right, stacked where they'd touch.
+  thumbs.sort((x, y) => x.y - y.y);
+  let thumbHtml = '', g = null;
   const flush = () => {
     if (!g) return;
-    const n = g.evs.length, gi = tl.vgroups.push({cam: g.cam, evs: g.evs}) - 1, e0 = g.evs[0];
-    const nm = (cam(g.cam) || {}).name || g.cam;
-    evHtml += `<button type="button" class="vevt cat-${evCat(e0)}" data-g="${gi}" style="top:${g.a}%" title="${esc(nm)} · ${n > 1 ? n + ' alerts' : esc(e0.labels.length ? e0.labels.map(l => l.label).join(', ') : 'motion') + ' · ' + fmtTime(e0.start)} — click to watch">${n > 1 ? n : e0.labels.length ? labelIcon(e0.labels[0].label) : '•'}</button>`;
+    const n = g.evs.length, gi = tl.vgroups.push({cam: g.evs[0]._cam, evs: g.evs}) - 1, e0 = g.evs[0];
+    const nm = (cam(e0._cam) || {}).name || e0._cam;
+    const place = g.y > 94 ? 'transform:translateY(-100%)' : g.y < 4 ? 'transform:translateY(0)' : '';
+    thumbHtml += `<div class="vevt cat-${evCat(e0)}" data-g="${gi}" style="top:${g.y}%;${place}" title="${esc(nm)} · ${n > 1 ? n + ' alerts — click to see them all' : esc(e0.labels.map(l => l.label).join(', ')) + ' · ' + fmtTime(e0.start) + ' — click to watch'}">`
+      + `<img loading="lazy" src="media/${enc(e0._cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
     g = null;
   };
-  for (const {c, e, a} of evs) {
-    if (a < 0 || a > 100 || (!e.labels.length && cams.length > 1 && evs.length > 60)) continue;
-    if (g && g.cam === c.camera && (a - g.a) / 100 * H < 18) { g.evs.push(e); continue; }
-    flush(); g = {cam: c.camera, evs: [e], a};
+  for (const t of thumbs) {
+    if (g && (t.y - g.y) / 100 * H < 52) { g.evs.push(t.e); continue; }
+    flush(); g = {y: t.y, evs: [t.e]};
   }
   flush();
-  const sel = tl.inT != null && tl.outT != null ? `<div class="vsel" style="top:${pct(tl.inT)}%;height:${pct(tl.outT) - pct(tl.inT)}%"></div>` : '';
+  const lanesW = lanes.length * (LW + 4);
+  const hasIn = tl.inT != null, hasOut = tl.outT != null;
+  const sel = hasIn && hasOut ? `<div class="vsel" style="top:${pct(tl.inT)}%;height:${pct(tl.outT) - pct(tl.inT)}%;left:54px;width:${lanesW + 8}px"><div class="vh in" title="Drag to change the clip start"></div><div class="vh out" title="Drag to change the clip end"></div></div>`
+    : hasIn || hasOut ? `<div class="vsel vsel1" style="top:${pct(hasIn ? tl.inT : tl.outT)}%;left:54px;width:${lanesW + 8}px"><div class="vh ${hasIn ? 'in' : 'out'}"></div></div>` : '';
   const nowP = pct(Date.now());
-  box.innerHTML = `<div class="vbar" id="vbar"><div class="vax">${axis}</div><div class="vlane">${bars}${evBars}${sel}</div><div class="vevs">${evHtml}</div>
-    ${nowP >= 0 && nowP <= 100 ? `<div class="vnow" style="top:${nowP}%" title="Now"><em>NOW</em></div>` : ''}
-    <div class="vhead" id="vhead"><em></em></div><div class="vhover" id="vhover" hidden><em></em></div></div>
-    <div class="vtl-note">${cams.length > 1 ? 'All cameras' : esc((cams[0] || {}).name || '')}</div>`;
+  box.innerHTML = `<div class="vheads" style="height:${HEAD}px">${heads}</div>
+    <div class="vbar" id="vbar" style="top:${HEAD}px"><div class="vgrid" style="left:58px;width:${lanesW}px">${grid}</div><div class="vax">${axis}</div>${laneHtml}${sel}
+      <div class="vevs" style="left:${58 + lanesW + 8}px">${thumbHtml}</div>
+      ${nowP >= 0 && nowP <= 100 ? `<div class="vnow" style="top:${nowP}%;width:${lanesW + 12}px" title="Now"><em>NOW</em></div>` : ''}
+      <div class="vhead" id="vhead"><em></em></div><div class="vhover" id="vhover" hidden><em></em></div></div>`;
+  box.querySelectorAll('.vlab[data-cam]').forEach(b => { b.onpointerdown = (e) => e.stopPropagation(); b.onclick = (e) => { e.stopPropagation(); tlOnlyCamera(b.dataset.cam); }; });
+  paintVStrips();
   drawVHead();
+}
+// Time-lapse readiness of each camera's footage, as a thin strip on the lane.
+function paintVStrips() {
+  const box = $('vtl'); if (!box || box.hidden || tl.winStart == null) return;
+  const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100, gap = 15000 / span * 100;
+  for (const el of box.querySelectorAll('.vtlp')) {
+    const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
+    const h = [];
+    for (const sg of previewSources(c.segments)) {
+      const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
+      const st = (tl.pv && tl.pv.get(sg.url)) || {state: 'wait'};
+      const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
+      const a = Math.max(0, pct(s0)), b = Math.min(100, pct(end));
+      if (b > a && a < 100) h.push({a, b, cls: 's-' + st.state});
+    }
+    const runs = [];
+    for (const p of h.sort((x, y) => x.a - y.a)) { const r = runs[runs.length - 1]; if (r && r.cls === p.cls && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p}); }
+    el.innerHTML = runs.map(r => `<i class="${r.cls}" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></i>`).join('');
+  }
 }
 function drawVHead() {
   const h = $('vhead'); if (!h) return;
@@ -5598,7 +5663,7 @@ function drawVHead() {
 }
 (function wireVTimeline() {
   const box = $('vtl');
-  let drag = false, was = false, lastY = null, raf = 0;
+  let drag = false, was = false, lastY = null, raf = 0, handle = null;
   const tAt = (e) => {
     const lane = box.querySelector('.vbar'); if (!lane) return null;
     const r = lane.getBoundingClientRect();
@@ -5623,14 +5688,20 @@ function drawVHead() {
     raf = requestAnimationFrame(edgeStep);
   };
   box.addEventListener('pointerdown', (e) => {
+    // Clip start / end handles: drag to change the clip.
+    const hd = e.target.closest('.vh');
+    if (hd) { e.preventDefault(); handle = hd.classList.contains('in') ? 'in' : 'out'; box.setPointerCapture(e.pointerId); return; }
     const ev = e.target.closest('.vevt');
     if (ev) {
       e.preventDefault();
       const g = tl.vgroups[+ev.dataset.g]; if (!g) return;
-      if (g.evs.length === 1) tlShowEvent(g.cam, new Date(g.evs[0].start).getTime());
-      else openAlertPicker(ev, g.evs[0].thumb ? g : {...g, evs: g.evs.filter(x => x.thumb).length ? g.evs.filter(x => x.thumb) : g.evs}, (x) => tlShowEvent(g.cam, new Date(x.start).getTime()));
+      if (g.evs.length === 1) tlShowEvent(g.evs[0]._cam, new Date(g.evs[0].start).getTime());
+      else openAlertPicker(ev, g, (x) => tlShowEvent(x._cam || g.cam, new Date(x.start).getTime()));
       return;
     }
+    // An alert bar: watch that alert.
+    const bar = e.target.closest('.vev');
+    if (bar) { e.preventDefault(); tlShowEvent(bar.dataset.cam, +bar.dataset.t); return; }
     const t = tAt(e); if (t == null) return;
     tlLeaveLive();
     drag = true; tl.dragging = true; was = tl.playing; if (was) tlPlay(false);
@@ -5642,7 +5713,13 @@ function drawVHead() {
     if (bar && g) {
       const r = bar.getBoundingClientRect(), p = (e.clientY - r.top) / r.height;
       g.hidden = drag || p < 0 || p > 1;
-      if (!g.hidden) { g.style.top = p * 100 + '%'; g.querySelector('em').textContent = fmtTime(new Date(tl.winStart + p * tl.zoom * 1000)); }
+      if (!g.hidden) { g.style.top = p * 100 + '%'; const ln = e.target.closest && e.target.closest('.vlane'); const nm = ln && ln.dataset.cam ? (cam(ln.dataset.cam) || {}).name : ''; g.querySelector('em').textContent = fmtTime(new Date(tl.winStart + p * tl.zoom * 1000)) + (nm ? ' · ' + nm : ''); }
+    }
+    if (handle) {
+      const t = Math.min(tAt(e), Date.now());
+      if (handle === 'in') tl.inT = tl.outT != null ? Math.min(t, tl.outT - 1000) : t; else tl.outT = tl.inT != null ? Math.max(t, tl.inT + 1000) : t;
+      tl.T = handle === 'in' ? tl.inT : tl.outT; drawTimeline(); previewSoon();
+      return;
     }
     if (!drag) return;
     tl.T = Math.min(tAt(e), Date.now()); drawHead(); previewSoon();
@@ -5650,6 +5727,7 @@ function drawVHead() {
   });
   box.addEventListener('pointerleave', () => { const g = $('vhover'); if (g) g.hidden = true; });
   const end = () => {
+    if (handle) { handle = null; drawTimeline(); tlSync(true); hideSpritesWhenReady(); return; }
     if (!drag) return; drag = false; tl.dragging = false;
     cancelAnimationFrame(raf); raf = 0; lastY = null;
     document.querySelectorAll('#tl-videos video').forEach(v => { v._want = null; });
@@ -5666,6 +5744,44 @@ function drawVHead() {
     drawTimeline(); prefetchSprites();
   }, {passive: false});
 })();
+
+
+// ---------- Recordings: arranging the camera pictures ----------
+// Auto picks the number of columns that makes the pictures as big as the
+// room allows (the screen height left after the controls and the timeline);
+// or a number of columns is chosen.
+let layoutQueued = false;
+function layoutSoon() { if (layoutQueued) return; layoutQueued = true; requestAnimationFrame(() => { layoutQueued = false; layoutTlVideos(); }); }
+function layoutTlVideos() {
+  const box = $('tl-videos'), root = $('rec-timeline');
+  if (!box || !root || root.hidden || document.fullscreenElement) return;
+  const els = [...box.querySelectorAll(':scope > .surface')];
+  if (innerWidth <= 900 || !els.length) { box.classList.remove('fit'); box.style.gridTemplateColumns = ''; return; }
+  const mode = store.get('tl-layout', 'auto'), n = tl.solo ? 1 : els.length, gap = 8;
+  box.classList.add('fit');
+  box.style.gridTemplateColumns = '';
+  const W = box.clientWidth; if (W < 200) return;
+  // Height left for the pictures: the window, less what is above them and
+  // the rest of the page (controls, timeline, key).
+  let other = 0;
+  for (const ch of root.children) { if (ch === box || ch.id === 'vtl' || ch.hidden) continue; const cs = getComputedStyle(ch); if (cs.display === 'none') continue; other += ch.offsetHeight + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0); }
+  const top = box.getBoundingClientRect().top + scrollY;
+  const avail = Math.max(240, innerHeight - top - other - 16);
+  let best = null;
+  const tryCols = mode === 'auto' ? [...Array(n).keys()].map(i => i + 1) : [Math.min(+mode || 1, n)];
+  for (const c of tryCols) {
+    const rows = Math.ceil(n / c);
+    let cw = (W - gap * (c - 1)) / c;
+    if (mode === 'auto') cw = Math.min(cw, ((avail - gap * (rows - 1)) / rows) * 16 / 9);
+    cw = Math.max(cw, 180);
+    const area = cw * cw * 9 / 16 * n, empty = rows * c - n;
+    if (!best || area > best.area * 1.001 || (Math.abs(area - best.area) < best.area * 0.001 && empty < best.empty)) best = {c, cw, area, empty};
+  }
+  box.style.gridTemplateColumns = `repeat(${best.c}, ${Math.floor(best.cw)}px)`;
+}
+$('tl-layout').value = store.get('tl-layout', 'auto');
+$('tl-layout').onchange = () => { store.set('tl-layout', val('tl-layout')); layoutTlVideos(); };
+window.addEventListener('resize', layoutSoon);
 
 // The file still being recorded keeps growing: ask for its newer preview
 // every half minute (the old one stays in use meanwhile).
@@ -5779,6 +5895,7 @@ function paintPreviewStrips() {
     }
     el.innerHTML = solidBars(h, 15000 / span * 100, 'i');
   }
+  paintVStrips();
 }
 // A file's time-lapse showed while scrubbing: its part of the blue line
 // fills in now, not only after letting go.
@@ -6534,10 +6651,12 @@ function drawSettings() {
 }
 function settingsTick() {
   if (section !== 'cameras') return;
-  for (const row of document.querySelectorAll('#cam-table tr[data-id]')) {
+  for (const row of document.querySelectorAll('#cam-table .cam-card')) {
     const c = cam(row.dataset.id); if (!c) continue;
-    row.querySelector('.st').innerHTML = pillHtml(c) + camErr(c);
+    row.querySelector('.st').innerHTML = pillHtml(c);
+    row.querySelector('.cam-err').innerHTML = camErr(c);
   }
+  paintCamSummary();
 }
 function camErr(c) {
   const r = c.recorder || c.buffer, d = c.detect, out = streamErrors(c);
@@ -6561,10 +6680,15 @@ const chk = (id) => $(id).checked;
 
 // ---------- cameras ----------
 function renderCameras(body) {
-  body.innerHTML = `<div class="card">
-    <div class="row" style="margin-bottom:8px"><h2 style="flex:1;margin:0">Cameras</h2><input type="text" id="scan-nets" placeholder="Also search e.g. 192.168.5.0/24" title="Networks this computer isn't directly on (behind a router), separated by commas. The computer's own networks and your cameras' networks are always searched." style="width:230px" value="${esc(store.get('scan-nets', ''))}"><button id="scan-cams" title="Look for cameras on every network this computer is on, your cameras' networks and any you add (ONVIF and RTSP)">🔍 Scan network</button><button class="primary" id="add-cam">+ Add camera</button></div>
+  const size = store.get('cam-size', 'l');
+  body.innerHTML = `<div class="card cams-card">
+    <div class="cams-head"><h2 style="margin:0">Cameras</h2><span class="muted" id="cams-sum"></span><span class="spacer" style="flex:1"></span>
+      <input type="text" id="scan-nets" placeholder="Also search e.g. 192.168.5.0/24" title="Networks this computer isn't directly on (behind a router), separated by commas. Cameras on this computer's own network are found without it." style="width:200px">
+      <button id="scan-cams">🔍 Scan network</button><button class="primary" id="add-cam">+ Add camera</button></div>
+    <div class="cams-tools"><input type="search" id="cams-q" placeholder="Search cameras…" autocomplete="off">
+      <label class="muted small">Picture size <select id="cams-size" class="small"><option value="m">Medium</option><option value="l">Large</option><option value="xl">Extra large</option></select></label></div>
     <div id="scan-out"></div>
-    <table><thead><tr><th>Preview</th><th>Name</th><th class="hide-sm">Recording</th><th>Status</th><th></th></tr></thead><tbody id="cam-table"></tbody></table>
+    <div class="cam-grid sz-${size}" id="cam-table"></div>
     ${cameraCfgs.length ? '' : '<div class="empty">No cameras yet. Click “Add camera”.</div>'}</div>`;
   $('add-cam').onclick = () => openCameraDialog();
   $('scan-cams').onclick = () => scanNetwork();
@@ -6572,26 +6696,41 @@ function renderCameras(body) {
   // Scan network is pressed again.
   if (lastScan) renderScan($('scan-out'), lastScan); else if (status && status.new_cameras) scanNetwork();
   const tb = $('cam-table');
+  $('cams-size').value = size;
+  $('cams-size').onchange = () => { store.set('cam-size', val('cams-size')); tb.className = 'cam-grid sz-' + val('cams-size'); };
+  $('cams-q').oninput = () => { const q = val('cams-q').trim().toLowerCase(); tb.querySelectorAll('.cam-card').forEach(c => { c.hidden = !!q && !c.dataset.find.includes(q); }); };
   for (const cfg of cameraCfgs) {
     const c = cam(cfg.id);
-    const tr = document.createElement('tr');
-    tr.dataset.id = cfg.id;
-    const sched = cfg.schedule_enabled ? `<div class="sub">${cfg.schedule.days.map(d => DAYS[d]).join(', ')} ${esc(cfg.schedule.start)}–${esc(cfg.schedule.end)}</div>` : '';
-    tr.innerHTML = `<td><div class="surface camprev"><img alt=""><div class="msg">${cfg.enabled ? '…' : 'off'}</div></div></td>
-      <td><b>${esc(cfg.name)}</b><div class="sub">${esc(c ? c.url : '')}</div></td>
-      <td class="hide-sm">${esc(MODE_TEXT[cfg.record_mode])}${cfg.detect.ai ? ' · AI' : cfg.detect.motion ? ' · motion' : ''}${sched}</td>
-      <td class="st">${c ? pillHtml(c) + camErr(c) : ''}</td>
-      <td style="text-align:right"><div class="row" style="justify-content:flex-end">
-        <button class="small" data-a="edit">Edit</button><button class="small" data-a="clone">Clone</button><button class="small" data-a="del">Delete</button></div></td>`;
-    const img = tr.querySelector('img');
-    img.onload = () => tr.querySelector('.msg').hidden = true;
+    const el = document.createElement('div');
+    el.className = 'cam-card' + (cfg.enabled ? '' : ' off');
+    el.dataset.id = cfg.id;
+    el.dataset.find = (cfg.name + ' ' + (c ? c.url : '')).toLowerCase();
+    const sched = cfg.schedule_enabled ? `<span class="chip">🕒 ${cfg.schedule.days.map(d => DAYS[d]).join(', ')} ${esc(cfg.schedule.start)}–${esc(cfg.schedule.end)}</span>` : '';
+    const feats = [cfg.detect.ai ? '<span class="chip ai">AI</span>' : cfg.detect.motion ? '<span class="chip">Motion</span>' : '', cfg.ptz && cfg.ptz.enabled ? '<span class="chip">PTZ</span>' : '', cfg.talk ? '<span class="chip">🎙 Talk</span>' : '', cfg.sound && cfg.sound.enabled ? '<span class="chip">🔊 Sound</span>' : '', (cfg.privacy || []).length ? '<span class="chip">🙈 Privacy</span>' : ''].join('');
+    el.innerHTML = `<div class="surface camprev"><img alt=""><div class="msg">${cfg.enabled ? 'Connecting…' : 'Camera off'}</div><div class="st">${c ? pillHtml(c) : ''}</div></div>
+      <div class="cam-body"><div class="cam-name"><b>${esc(cfg.name)}</b></div>
+        <div class="cam-sub">${esc(MODE_TEXT[cfg.record_mode] || '')}</div>
+        <div class="cam-chips">${feats}${sched}</div>
+        <div class="cam-url sub" title="${esc(c ? c.url : '')}">${esc(c ? c.url : '')}</div>
+        <div class="cam-err">${c ? camErr(c) : ''}</div>
+        <div class="cam-acts"><button class="small primary" data-a="edit">✎ Edit</button><button class="small" data-a="live">▶ Live</button><span style="flex:1"></span><button class="small" data-a="clone">Clone</button><button class="small danger" data-a="del">Delete</button></div></div>`;
+    const img = el.querySelector('img');
+    img.onload = () => el.querySelector('.msg').hidden = true;
     camPreviewUnbind.push(Live.bind(img, cfg.id, 'sub'));
-    tr.querySelector('.surface').onclick = () => location.hash = '#live/' + enc(cfg.id);
-    tr.querySelector('[data-a=edit]').onclick = () => openCameraDialog(cfg.id);
-    tr.querySelector('[data-a=clone]').onclick = () => openCameraDialog(cfg.id, true);
-    tr.querySelector('[data-a=del]').onclick = () => deleteCamera(cfg.id);
-    tb.appendChild(tr);
+    el.querySelector('.surface').onclick = () => location.hash = '#live/' + enc(cfg.id);
+    el.querySelector('[data-a=edit]').onclick = () => openCameraDialog(cfg.id);
+    el.querySelector('[data-a=live]').onclick = () => location.hash = '#live/' + enc(cfg.id);
+    el.querySelector('[data-a=clone]').onclick = () => openCameraDialog(cfg.id, true);
+    el.querySelector('[data-a=del]').onclick = () => deleteCamera(cfg.id);
+    tb.appendChild(el);
   }
+  paintCamSummary();
+}
+function paintCamSummary() {
+  const el = $('cams-sum'); if (!el) return;
+  const cs = cameraCfgs.map(c => cam(c.id)).filter(Boolean);
+  const rec = cs.filter(c => c.recorder && c.recorder.state === 'recording').length, bad = cs.filter(c => streamErrors(c).length).length;
+  el.textContent = `${cameraCfgs.length} camera${cameraCfgs.length === 1 ? '' : 's'} · ${rec} recording${bad ? ` · ${bad} with problems` : ''}`;
 }
 
 async function deleteCamera(id) {
@@ -6599,7 +6738,7 @@ async function deleteCamera(id) {
   if (!confirm(`Delete camera "${cfg.name}"?`)) return;
   const delRecs = confirm(`Also delete all recordings and alerts from "${cfg.name}"?\n\nOK = delete them\nCancel = keep them on disk`);
   // Gone from the list straight away (deleting recordings can take a while).
-  document.querySelectorAll(`#cam-table tr[data-id="${CSS.escape(id)}"]`).forEach(r => r.remove());
+  document.querySelectorAll(`#cam-table .cam-card[data-id="${CSS.escape(id)}"]`).forEach(r => r.remove());
   cameraCfgs = cameraCfgs.filter(c => c.id !== id);
   if (status) status.cameras = status.cameras.filter(c => c.id !== id);
   dashSync();

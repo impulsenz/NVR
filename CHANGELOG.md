@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 1.1.4 — November 2026
+- **Recordings, vertical timeline in detail**: a line for each camera (or Merge cameras into one), day bands and gridlines with minor ticks, recording bars (sub-stream, HD, recording now), time-lapse and loaded strips, alert bars, **alert pictures** down the side (stacked with a count where they touch, click to watch or choose), clip start / end handles, the time and camera under the pointer, camera names to click for just that camera.
+- **Recordings layout**: Auto (best fit) picks the number of columns that makes the camera pictures as big as the screen allows, or choose 1–6 across.
+- **Settings → Cameras** is now a grid of cards with big pictures (Medium / Large / Extra large), a search box, a summary (how many are recording or have problems), and Edit / Live / Clone / Delete on each.
+
 ## 1.1.3 — November 2026
 - **Recordings**: a timeline down the side (button above the timeline: ⇅ Vertical / ⇄ Horizontal). All cameras' footage and alerts are merged into one line with the pictures bigger beside it; drag, click, scroll the wheel to move through time. Full screen keeps the bottom timeline.
 - **Privacy areas can follow the mode**: black them out only in Home, Away and/or Night (camera → Privacy areas). The camera reconnects for a moment when the mode changes (also when Home turns into Night by itself).
