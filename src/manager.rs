@@ -809,7 +809,11 @@ impl Manager {
             cfg.server.idle_minutes = s.idle_minutes.min(24 * 60);
             crate::users::set_sign_in_policy(cfg.server.remember_days, cfg.server.idle_minutes);
         }
-        if let Some(s) = up.storage {
+        if let Some(mut s) = up.storage {
+            // The form never receives the saved password; empty means "keep".
+            if s.archive.password.is_empty() {
+                s.archive.password = old.storage.archive.password.clone();
+            }
             cfg.storage = s;
         }
         if let Some(l) = up.live {

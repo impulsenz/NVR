@@ -428,6 +428,44 @@ pub struct StorageConfig {
     pub timelapse_seconds: u32,
     /// Time-lapse pictures' width in pixels (256, 384 or 512; 16:9).
     pub timelapse_width: u32,
+    /// Deep storage: recordings move there after a while.
+    pub archive: ArchiveConfig,
+}
+
+/// Deep storage (a NAS or a big drive). Recordings stay on the local disk
+/// for `after_hours`, then are moved (copied, checked, and only then removed
+/// from the local disk) to `dir/<camera folder>/`; there they are kept for
+/// `retention_days` (0 = until the size limit or for ever).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ArchiveConfig {
+    pub enabled: bool,
+    /// A folder on another drive or a network share (`\\NAS\cameras`).
+    pub dir: PathBuf,
+    /// Login for the share, if it needs one.
+    pub user: String,
+    pub password: String,
+    /// Hours on the local disk before moving (cameras can have their own).
+    pub after_hours: u64,
+    /// Days kept in deep storage (0 = no age limit).
+    pub retention_days: u64,
+    /// Delete the oldest above this size in deep storage (0 = unlimited).
+    pub max_gb: f64,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self { enabled: false, dir: PathBuf::new(), user: String::new(), password: String::new(), after_hours: 24, retention_days: 0, max_gb: 0.0 }
+    }
+}
+
+/// What deep storage does for one camera.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchivePlan {
+    pub after_hours: u64,
+    pub retention_days: u64,
+    /// The camera's folder in deep storage.
+    pub dest: PathBuf,
 }
 
 impl Default for StorageConfig {
@@ -442,6 +480,7 @@ impl Default for StorageConfig {
             timelapse: true,
             timelapse_seconds: 10,
             timelapse_width: 256,
+            archive: ArchiveConfig::default(),
         }
     }
 }
@@ -704,12 +743,6 @@ pub struct CloudConfig {
     /// "ai" (only alerts confirmed by object recognition), "events" (all alert
     /// clips and pictures, including motion-only) or "all" (every recording).
     pub upload: String,
-    /// Keep recordings on this computer for `local_hours`, then move them to
-    /// the NAS / backup destination (copied and checked first, then the
-    /// local file is removed).
-    pub offload: bool,
-    /// How long recordings stay on this computer before moving (hours).
-    pub local_hours: u64,
 }
 
 impl Default for CloudConfig {
@@ -721,8 +754,6 @@ impl Default for CloudConfig {
             user: String::new(),
             password: String::new(),
             upload: "events".into(),
-            offload: false,
-            local_hours: 24,
         }
     }
 }
@@ -1235,6 +1266,13 @@ pub struct CameraConfig {
     /// The modes (home, away, night) in which the privacy areas are blacked
     /// out. In the others the picture is shown whole.
     pub privacy_modes: Vec<String>,
+    /// Deep storage for this camera: "" (as in the storage settings), "off"
+    /// (stays on the local disk) or "custom" (the two numbers below).
+    pub archive_mode: String,
+    /// Custom: hours on the local disk before moving.
+    pub archive_after_hours: u64,
+    /// Custom: days kept in deep storage (0 = no age limit).
+    pub archive_retention_days: u64,
     pub onvif_events: bool,
     /// …and also the camera's own (plain) motion detection.
     pub onvif_motion: bool,
@@ -1280,6 +1318,9 @@ impl Default for CameraConfig {
             stream_url: String::new(),
             privacy: Vec::new(),
             privacy_modes: MODES.iter().map(|m| m.to_string()).collect(),
+            archive_mode: String::new(),
+            archive_after_hours: 24,
+            archive_retention_days: 0,
             onvif_events: false,
             onvif_motion: false,
             rotate: 0,
@@ -1408,6 +1449,10 @@ impl CameraConfig {
             osd: OsdConfig::default(),
             view: ViewConfig::default(),
             ptz: PtzConfig::default(),
+            // Deep storage rules apply without reconnecting the camera.
+            archive_mode: String::new(),
+            archive_after_hours: 0,
+            archive_retention_days: 0,
             ..c.clone()
         };
         strip(self) != strip(old)
@@ -1772,6 +1817,22 @@ impl Config {
         } else {
             PathBuf::from(cam.storage_dir.trim()).join(name)
         }
+    }
+
+    /// Does this camera's footage move to deep storage, and how?
+    pub fn archive_for(&self, cam: &CameraConfig) -> Option<ArchivePlan> {
+        let a = &self.storage.archive;
+        if !a.enabled || a.dir.as_os_str().is_empty() || cam.archive_mode == "off" {
+            return None;
+        }
+        let local = self.camera_dir(cam);
+        let name = local.file_name()?.to_os_string();
+        let (after_hours, retention_days) = if cam.archive_mode == "custom" {
+            (cam.archive_after_hours.max(1), cam.archive_retention_days)
+        } else {
+            (a.after_hours.max(1), a.retention_days)
+        };
+        Some(ArchivePlan { after_hours, retention_days, dest: a.dir.join(name) })
     }
 
     /// A folder name for a camera called `name`: its name, made safe for

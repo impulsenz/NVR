@@ -86,7 +86,7 @@ pub async fn remotes(cfg: &CloudConfig) -> Result<Vec<String>> {
 /// and only then renamed to its real name. A copy that doesn't match is
 /// removed and the upload fails (it's tried again later); the original is
 /// never touched.
-fn copy_local(src: &Path, dest: &Path) -> Result<()> {
+pub fn copy_local(src: &Path, dest: &Path) -> Result<()> {
     if let Some(p) = dest.parent() {
         std::fs::create_dir_all(p)?;
     }
@@ -135,8 +135,12 @@ fn sha256_file(p: &Path) -> Result<[u8; 32]> {
 /// copies there work, also when GAZE runs as a service.
 #[cfg(windows)]
 async fn connect_share(cfg: &CloudConfig) {
-    let r = cfg.remote.trim();
-    if !r.starts_with("\\\\") || cfg.user.trim().is_empty() {
+    connect_share_to(&cfg.remote, &cfg.user, &cfg.password).await;
+}
+#[cfg(windows)]
+pub async fn connect_share_to(remote: &str, user: &str, password: &str) {
+    let r = remote.trim();
+    if !r.starts_with("\\\\") || user.trim().is_empty() {
         return;
     }
     // \\server\share
@@ -151,8 +155,8 @@ async fn connect_share(cfg: &CloudConfig) {
         .args([
             "use",
             &share,
-            &cfg.password,
-            &format!("/user:{}", cfg.user.trim()),
+            password,
+            &format!("/user:{}", user.trim()),
             "/persistent:no",
         ])
         .stdin(std::process::Stdio::null())
@@ -161,6 +165,8 @@ async fn connect_share(cfg: &CloudConfig) {
 }
 #[cfg(not(windows))]
 async fn connect_share(_cfg: &CloudConfig) {}
+#[cfg(not(windows))]
+pub async fn connect_share_to(_remote: &str, _user: &str, _password: &str) {}
 
 /// Check that the destination is reachable.
 pub async fn test(cfg: &CloudConfig) -> Result<String> {
@@ -230,9 +236,8 @@ fn pending(
     mode: &str,
     store: Option<&crate::events::EventStore>,
     done: &HashSet<String>,
-    older_than: Option<chrono::DateTime<chrono::Local>>,
 ) -> Vec<(PathBuf, String)> {
-    let all = mode == "all" || older_than.is_some();
+    let all = mode == "all";
     // Event files are named after their event: "<event id>.mp4" / ".jpg".
     let verified = |name: &str| {
         let id = name.rsplit_once('.').map(|x| x.0).unwrap_or(name);
@@ -265,10 +270,6 @@ fn pending(
         // Skip the newest file: it may still be recording.
         for r in recs.iter().skip(1) {
             let p = dir.join(&r.name);
-            // Moving to the NAS after a while: only what's old enough.
-            if older_than.is_some_and(|c| r.end > c) {
-                continue;
-            }
             if !done.contains(&r.name) && settled(&p) {
                 out.push((p, r.name.clone()));
             }
@@ -305,10 +306,7 @@ pub async fn run(mgr: Arc<Manager>) {
             let dir = cfg.camera_dir(cam);
             let done = uploaded_list(&dir);
             let store = stores.get(&cam.id).map(|s| s.as_ref());
-            let offload_cut = cfg.cloud.offload.then(|| {
-                chrono::Local::now() - chrono::Duration::hours(cfg.cloud.local_hours.max(1) as i64)
-            });
-            let todo = pending(&dir, &cfg.cloud.upload, store, &done, offload_cut);
+            let todo = pending(&dir, &cfg.cloud.upload, store, &done);
             STATUS.lock().unwrap().waiting = todo.len();
             let sizes: Vec<u64> = todo
                 .iter()
@@ -319,12 +317,7 @@ pub async fn run(mgr: Arc<Manager>) {
             let mut bytes_done = 0u64;
             let began = std::time::Instant::now();
             let job = (!todo.is_empty()).then(|| {
-                let title = if cfg.cloud.offload {
-                    format!("Moving to the NAS — {}", cam.name)
-                } else {
-                    format!("Cloud backup — {}", cam.name)
-                };
-                let j = crate::jobs::start("cloud", title);
+                let j = crate::jobs::start("cloud", format!("Cloud backup — {}", cam.name));
                 j.total(todo.len() as u64);
                 j.transfer(0, total_bytes, 0);
                 j
@@ -370,19 +363,6 @@ pub async fn run(mgr: Arc<Manager>) {
                         fails = 0;
                         mark_uploaded(&dir, &rel);
                         bytes_done += sizes[i];
-                        // Moving: the copy is checked, so the local file can go
-                        // (never footage locked in an Evidence Locker case).
-                        if offload_cut.is_some() && !rel.starts_with("events/") {
-                            let rec = crate::storage::list(&dir).into_iter().find(|r| r.name == rel);
-                            let locked = rec
-                                .as_ref()
-                                .is_some_and(|r| crate::cases::locks_time(&cam.id, r.start, r.end).is_some());
-                            if !locked {
-                                if let Err(e) = crate::storage::delete_recording(&dir, &rel) {
-                                    warn!("[{}] could not remove {rel} after moving it: {e}", cam.name);
-                                }
-                            }
-                        }
                         if let Some(j) = &job {
                             j.done_one();
                             let secs = began.elapsed().as_secs_f64().max(0.001);
@@ -492,14 +472,14 @@ mod tests {
                 .unwrap();
         }
         store.flush();
-        let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new(), None)
+        let mut ai: Vec<String> = pending(&dir, "ai", Some(&store), &HashSet::new())
             .into_iter()
             .map(|x| x.1)
             .collect();
         ai.sort();
         assert_eq!(ai, ["events/ev-person.jpg", "events/ev-person.mp4"]);
         assert_eq!(
-            pending(&dir, "events", Some(&store), &HashSet::new(), None).len(),
+            pending(&dir, "events", Some(&store), &HashSet::new()).len(),
             4
         );
         std::fs::remove_dir_all(&dir).unwrap();

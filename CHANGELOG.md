@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## 1.1.5 — November 2026
+- **Deep storage** (Settings → Recording & storage, redesigned): footage stays on the fast local disk for as long as you say (24 hours by default), then moves to a NAS or big drive — copied, checked (size and checksum) and only then taken off the local disk. Deep storage has its own keep time (days) and size limit; footage in an Evidence Locker case is never deleted from it.
+- Set it for all cameras, or give a camera its own times, or keep it on the local disk. Each camera shows what's on the local disk, what's in deep storage and what's waiting to move; Browse plays or downloads footage from deep storage.
+- Moves show under System → Tasks (files left, size, speed) and can be paused; **Move now** and **Test the folder** buttons; a picture across the top shows the path footage takes.
+- With deep storage on, the local disk's age limit is replaced by the move; the disk-space limits (maximum storage, keep free) still apply.
+- The timeline shows what is on the local disk; older footage is in deep storage. (This replaces the "data retention" option of Backup added in 1.1.2.)
+
 ## 1.1.4 — November 2026
 - **Recordings, vertical timeline in detail**: a line for each camera (or Merge cameras into one), day bands and gridlines with minor ticks, recording bars (sub-stream, HD, recording now), time-lapse and loaded strips, alert bars, **alert pictures** down the side (stacked with a count where they touch, click to watch or choose), clip start / end handles, the time and camera under the pointer, camera names to click for just that camera.
 - **Recordings layout**: Auto (best fit) picks the number of columns that makes the camera pictures as big as the screen allows, or choose 1–6 across.

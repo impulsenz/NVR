@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Serialize)]
 pub struct JobInfo {
     pub id: u64,
-    /// "ai", "download", "previews", "cloud", "scan", "maintenance".
+    /// "ai", "download", "previews", "cloud", "archive", "scan", "maintenance".
     pub kind: &'static str,
     pub title: String,
     /// What it's on right now ("Front Door, 14:02").
@@ -46,7 +46,7 @@ static JOBS: Mutex<Vec<JobInfo>> = Mutex::new(Vec::new());
 /// Kinds of work paused by the user until resumed.
 static PAUSED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 /// Kinds of work that can be paused: background work that can wait.
-pub const PAUSABLE: &[&str] = &["ai", "previews", "cloud", "maintenance"];
+pub const PAUSABLE: &[&str] = &["ai", "previews", "cloud", "archive", "maintenance"];
 
 /// Pause or resume a kind of work. Returns false for a kind that can't be paused.
 pub fn set_paused(kind: &str, pause: bool) -> bool {

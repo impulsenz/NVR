@@ -333,6 +333,9 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
         }
     }
 
+    // Cameras whose footage moves to deep storage: the move (and deep
+    // storage's keep time) replaces the age limit on the local disk.
+    let archived: std::collections::HashSet<String> = cfg.cameras.iter().filter(|c| cfg.archive_for(c).is_some()).map(|c| c.id.clone()).collect();
     for (id, dir, days, max_gb, store) in cams {
         dirs.push(dir.clone());
         let alert_days = alert_days_for(days);
@@ -412,7 +415,7 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
         let cutoff = now - CDuration::days(days as i64);
         for c in cands {
             // An alert's footage goes with the alert; the rest with the recordings.
-            let old = if c.alert { false } else if matches!(c.item, Item::Clip { .. }) { alert_cutoff.is_some_and(|a| c.start < a) } else { days > 0 && c.start < cutoff };
+            let old = if c.alert { false } else if matches!(c.item, Item::Clip { .. }) { alert_cutoff.is_some_and(|a| c.start < a) } else { days > 0 && !archived.contains(&id) && c.start < cutoff };
             if old && c.delete("older than retention period") {
                 removed += 1;
                 continue;

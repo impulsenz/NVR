@@ -5,6 +5,7 @@
 mod ai;
 mod buffer;
 mod cases;
+mod archive;
 mod cloud;
 mod config;
 mod detect;
@@ -429,6 +430,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(mgr.clone().privacy_watch());
     tokio::spawn(mgr.monitor.clone().run());
     tokio::spawn(cloud::run(mgr.clone()));
+    tokio::spawn(archive::run(mgr.clone()));
     #[cfg(windows)]
     if getffmpeg::MISSING.load(std::sync::atomic::Ordering::SeqCst) {
         tokio::spawn(getffmpeg::fetch_and_use(mgr.clone()));

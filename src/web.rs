@@ -157,6 +157,11 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/known-inbox/assign", post(inbox_assign))
         .route("/api/known-inbox/dismiss", post(inbox_dismiss))
         .route("/api/cloud/status", get(cloud_status))
+        .route("/api/archive", get(archive_overview))
+        .route("/api/archive/run", post(archive_run))
+        .route("/api/archive/test", post(archive_test))
+        .route("/api/archive/{id}", get(archive_list))
+        .route("/api/archive/{id}/{name}", get(archive_file))
         .route("/api/cloud/remotes", post(cloud_remotes))
         .route("/api/alerts/seen", post(alerts_seen))
         .route("/api/alerts/seen-all", post(alerts_seen_all))
@@ -568,6 +573,8 @@ async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_token = !cfg.notify.token.is_empty();
     let has_cloud_password = !cfg.cloud.password.is_empty();
+    let has_archive_password = !cfg.storage.archive.password.is_empty();
+    cfg.storage.archive.password.clear();
     let has_mqtt_password = !cfg.mqtt.password.is_empty();
     for r in &mut cfg.remotes {
         r.token.clear();
@@ -579,6 +586,7 @@ async fn get_settings(State(m): App) -> Response {
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["notify"]["has_token"] = json!(has_token);
     v["cloud"]["has_password"] = json!(has_cloud_password);
+    v["storage"]["archive"]["has_password"] = json!(has_archive_password);
     v["mqtt"]["has_password"] = json!(has_mqtt_password);
     v["mqtt"]["status"] = json!(crate::mqtt::status());
     v.as_object_mut().unwrap().remove("cameras");
@@ -2738,6 +2746,94 @@ async fn export_clip(
     }
     tracing::info!("[{}] exported clip {name}", c.cfg.name);
     serve_file(out, req, Some(name), true).await
+}
+
+
+// ---------- deep storage ----------
+
+async fn archive_overview(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    if user.as_ref().is_some_and(|u| u.0.0.role != crate::users::Role::Admin) {
+        return err(StatusCode::FORBIDDEN, "only an administrator can see the storage overview");
+    }
+    let cfg = m.config();
+    match tokio::task::spawn_blocking(move || crate::archive::overview(&cfg)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => bad(anyhow::anyhow!("{e}")),
+    }
+}
+
+/// Move what's due now (instead of waiting for the next minute).
+async fn archive_run() -> Response {
+    crate::archive::RUN_NOW.notify_one();
+    Json(json!({"ok": true})).into_response()
+}
+
+#[derive(Deserialize)]
+struct ArchiveTest {
+    dir: String,
+    #[serde(default)]
+    user: String,
+    #[serde(default)]
+    password: String,
+}
+
+/// Check that deep storage can be written to (before saving it).
+async fn archive_test(State(m): App, Json(r): Json<ArchiveTest>) -> Response {
+    let dir = PathBuf::from(r.dir.trim());
+    if dir.as_os_str().is_empty() {
+        return Json(json!({"ok": false, "message": "Choose the deep storage folder first."})).into_response();
+    }
+    let mut password = r.password.clone();
+    if password.is_empty() && m.config().storage.archive.dir == dir {
+        password = m.config().storage.archive.password;
+    }
+    crate::cloud::connect_share_to(&r.dir, &r.user, &password).await;
+    let d2 = dir.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        std::fs::create_dir_all(&d2).map_err(|e| anyhow::anyhow!("can't use {}: {e}", d2.display()))?;
+        let probe = d2.join(".gaze-test");
+        std::fs::write(&probe, b"ok").map_err(|e| anyhow::anyhow!("can't write in {}: {e}", d2.display()))?;
+        let _ = std::fs::remove_file(probe);
+        let free = fs4::available_space(&d2).map(|b| format!(" — {:.0} GB free", b as f64 / 1e9)).unwrap_or_default();
+        Ok(format!("{} is ready{free}", d2.display()))
+    })
+    .await;
+    match res {
+        Ok(Ok(msg)) => Json(json!({"ok": true, "message": msg})).into_response(),
+        Ok(Err(e)) => Json(json!({"ok": false, "message": format!("{e:#}")})).into_response(),
+        Err(e) => bad(anyhow::anyhow!("{e}")),
+    }
+}
+
+/// The recordings in deep storage for a camera (newest first, up to 500).
+async fn archive_list(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&id)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let cfg = m.config();
+    let Some(plan) = cfg.cameras.iter().find(|c| c.id == id).and_then(|c| cfg.archive_for(c)) else {
+        return err(StatusCode::NOT_FOUND, "this camera has no deep storage");
+    };
+    let list: Vec<_> = tokio::task::spawn_blocking(move || storage::list(&plan.dest)).await.unwrap_or_default().into_iter().take(500).collect();
+    Json(list).into_response()
+}
+
+/// A recording in deep storage: played or downloaded straight from there.
+async fn archive_file(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+    if visible(&user).is_some_and(|v| !v.contains(&id)) {
+        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    }
+    let cfg = m.config();
+    let Some(plan) = cfg.cameras.iter().find(|c| c.id == id).and_then(|c| cfg.archive_for(c)) else {
+        return err(StatusCode::NOT_FOUND, "this camera has no deep storage");
+    };
+    match storage::resolve(&plan.dest, &name) {
+        Ok(p) => {
+            let dl = name.clone();
+            serve_file(p, req, Some(dl), false).await
+        }
+        Err(_) => err(StatusCode::NOT_FOUND, "recording not found"),
+    }
 }
 
 // ---------- Evidence Locker (cases) ----------
