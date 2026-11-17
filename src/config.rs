@@ -1669,6 +1669,25 @@ impl Config {
                 changed = true;
             }
         }
+        // A camera's recordings are in a folder named as the camera is called.
+        // Older cameras without a folder of their own record into one named
+        // after their id: that folder is renamed (instant, on the same drive).
+        for i in 0..self.cameras.len() {
+            let c = self.cameras[i].clone();
+            if !c.folder.trim().is_empty() {
+                continue;
+            }
+            let want = self.folder_for(&c.name, &c.id, &c.storage_dir);
+            if want == c.id {
+                continue;
+            }
+            let old = self.camera_dir(&c);
+            let new = old.with_file_name(&want);
+            if old.exists() && !new.exists() && std::fs::rename(&old, &new).is_ok() {
+                self.cameras[i].folder = want;
+                changed = true;
+            }
+        }
         changed
     }
 
@@ -2150,6 +2169,26 @@ mod tests {
                 .unwrap()
                 .contains("record_mode = \"continuous\"")
         );
+    }
+
+    #[test]
+    fn older_cameras_get_a_folder_named_after_them() {
+        let base = std::env::temp_dir().join(format!("gaze-folders-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("cam-1")).unwrap();
+        std::fs::write(base.join("cam-1").join("a.mp4"), b"x").unwrap();
+        let toml = format!(
+            "[storage]\ndir = {:?}\n[[cameras]]\nid = \"cam-1\"\nname = \"Front Door\"\nurl = \"rtsp://x\"\n[[cameras]]\nid = \"cam-2\"\nname = \"Garage\"\nurl = \"rtsp://y\"\n",
+            base.display().to_string()
+        );
+        let (cfg, migrated) = Config::from_toml(&toml).unwrap();
+        assert!(migrated);
+        assert_eq!(cfg.cameras[0].folder, "Front Door");
+        assert!(base.join("Front Door").join("a.mp4").exists() && !base.join("cam-1").exists());
+        // Nothing recorded yet: nothing to rename (new cameras are named when added).
+        assert_eq!(cfg.cameras[1].folder, "");
+        assert_eq!(cfg.camera_dir(&cfg.cameras[0]), base.join("Front Door"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

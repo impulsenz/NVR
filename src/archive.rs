@@ -127,10 +127,19 @@ pub fn overview(cfg: &Config) -> Value {
     json!({"enabled": a.enabled, "reachable": reachable, "free_bytes": free, "status": STATUS.lock().unwrap().clone(), "cameras": cams})
 }
 
+/// Tell `storage` where each camera's older footage is.
+pub fn sync_registry(cfg: &Config) {
+    for cam in &cfg.cameras {
+        storage::set_archive(&cfg.camera_dir(cam), cfg.archive_for(cam).map(|p| p.dest));
+    }
+}
+
 pub async fn run(mgr: Arc<Manager>) {
     let mut fails: u32 = 0;
     let mut next_try = tokio::time::Instant::now();
     let mut last_retention = std::time::Instant::now() - Duration::from_secs(3600);
+    // Playing footage that moved needs to know where it went, from the start.
+    sync_registry(&mgr.config());
     // A first look soon after start-up.
     tokio::time::sleep(Duration::from_secs(20)).await;
     loop {
@@ -139,6 +148,7 @@ pub async fn run(mgr: Arc<Manager>) {
             _ = RUN_NOW.notified() => true,
         };
         let cfg = mgr.config();
+        sync_registry(&cfg);
         if !cfg.storage.archive.enabled || cfg.storage.archive.dir.as_os_str().is_empty() {
             fails = 0;
             continue;
@@ -252,6 +262,14 @@ mod tests {
         assert!(local.join(&newest).exists());
         assert!(!local.join(&day_old).exists() && deep.join(&day_old).exists());
         assert_eq!(std::fs::read(deep.join(&two_days)).unwrap(), b"fifty hours");
+        // Moved footage is still found: listed, and read from deep storage.
+        assert!(storage::resolve(&local, &day_old).is_err());
+        storage::set_archive(&local, Some(deep.clone()));
+        assert_eq!(storage::resolve(&local, &day_old).unwrap(), deep.join(&day_old));
+        assert_eq!(storage::resolve(&local, &newest).unwrap(), local.join(&newest));
+        let names: Vec<String> = storage::list_archived(&local).into_iter().map(|r| r.name).collect();
+        assert!(names.contains(&day_old) && names.contains(&two_days) && !names.contains(&newest), "{names:?}");
+        storage::set_archive(&local, None);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

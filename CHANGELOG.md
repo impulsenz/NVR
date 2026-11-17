@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## 1.1.8 — November 2026
+- **Footage in deep storage stays on the timeline**, drawn darker so you can see it's no longer on the local disk (the key says "In deep storage (darker)"). It plays straight from deep storage (read there, not copied back), shows in the Alerts / Recordings list, plays from alerts, can be exported, and deleting it deletes it from there.
+- **Vertical timeline**: the recording-now bar looks like the bottom timeline's (its colour with a moving striped end); camera names slant up to the right so they read the right way up, with the recording dot at the top.
+- **Folders are named as you call the camera**: older cameras that record into a folder named after their id are renamed to their name when GAZE starts (instant, on the same drive), and a camera's folder in deep storage follows when you rename the camera.
+
 ## 1.1.7 — November 2026
 - **Recordings, vertical timeline**: the controls (Zoom, ◀ ▶, Merge cameras, Layout, Horizontal, Clip start / end …) are no longer hidden behind the timeline: they sit under the camera pictures, and the timeline runs down the whole right side.
 

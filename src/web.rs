@@ -3269,7 +3269,9 @@ async fn delete_recording(State(m): App, Path((id, name)): Path<(String, String)
     {
         return err(StatusCode::CONFLICT, crate::cases::locked_message(&case));
     }
-    match storage::delete_recording(&c.dir, &name) {
+    // (A recording that moved to deep storage is deleted from there.)
+    let from = if c.dir.join(&name).is_file() { c.dir.clone() } else { storage::archive_of(&c.dir).unwrap_or_else(|| c.dir.clone()) };
+    match storage::delete_recording(&from, &name) {
         Ok(()) => {
             tracing::info!("[{}] deleted recording {name}", c.cfg.name);
             StatusCode::NO_CONTENT.into_response()

@@ -1583,8 +1583,13 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .vlane { position: absolute; top: 0; bottom: 0; background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
 .vseg { position: absolute; left: 4px; right: 0; background: linear-gradient(90deg, #3f7f56, #2d5a3a); min-height: 2px; border-radius: 2px; }
 .vseg.clip { background: linear-gradient(90deg, #8b6fd6, #6a4fb8); }
-.vseg.live { background: repeating-linear-gradient(135deg, #ef4444 0 5px, #b91c1c 5px 10px); }
-.vseg.clip.live { background: repeating-linear-gradient(135deg, rgba(196,170,255,.95) 0 5px, rgba(84,60,150,.6) 5px 10px); }
+.vseg.live { overflow: hidden; }
+/* the recording made right now: its end is "still loading" (as on the bottom timeline) */
+.vseg.live::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: min(72px, 100%);
+  background: repeating-linear-gradient(45deg, rgba(120,230,160,.85) 0 4px, rgba(35,101,62,.35) 4px 8px); background-size: 11px 11px;
+  animation: tlp-load .8s linear infinite; border-radius: 0 0 2px 2px;
+  -webkit-mask: linear-gradient(180deg, transparent, #000); mask: linear-gradient(180deg, transparent, #000); }
+.vseg.clip.live::after { background: repeating-linear-gradient(45deg, rgba(196,170,255,.9) 0 4px, rgba(84,60,150,.4) 4px 8px); background-size: 11px 11px; }
 .vtlp { position: absolute; left: 0; width: 4px; top: 0; bottom: 0; }
 .vtlp i { position: absolute; left: 0; right: 0; }
 .vtlp i.s-ready { background: #38bdf8; } .vtlp i.s-loading { background: repeating-linear-gradient(135deg, rgba(56,189,248,.8) 0 4px, rgba(56,189,248,.2) 4px 8px); }
@@ -1679,3 +1684,12 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .wd-upd { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: rgba(59,130,246,.12); border: 1px solid rgba(59,130,246,.4); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .wd-acts { margin-top: 12px; gap: 8px; flex-wrap: wrap; }
 .wd-log { max-height: 320px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0; white-space: pre-wrap; }
+
+/* Footage that moved to deep storage: darker (no longer on the local disk) */
+.tl-row .seg.arch, .ctl-lane .seg.arch, .vseg.arch, .lg-bar.arch { filter: brightness(.5) saturate(.85); }
+/* Vertical timeline: camera names slanted up to the right, the recording dot at the top */
+.vheads { overflow: visible; }
+.vlab { height: 84px; bottom: 0; padding: 0 !important; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 0; background: none !important; overflow: visible; }
+.vlab .dot { order: 0; margin: 4px 0 0 7px; }
+.vlab span { order: 1; writing-mode: horizontal-tb; transform: rotate(-45deg); transform-origin: left bottom; position: absolute; left: 10px; bottom: 6px; max-height: none; max-width: 120px; font-size: 12px; white-space: nowrap; text-overflow: clip; overflow: visible; text-align: left; }
+.vlab:hover span { color: var(--accent); }

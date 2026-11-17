@@ -188,6 +188,16 @@ pub fn recordings(rt: &CameraRuntime) -> Vec<Recording> {
     recs
 }
 
+/// The local recordings and those that moved to deep storage, newest first:
+/// the list of recordings and the alerts that play from them find footage
+/// wherever it is now.
+pub fn recordings_all(rt: &CameraRuntime) -> Vec<Recording> {
+    let mut recs = recordings(rt);
+    recs.extend(storage::list_archived(&rt.dir));
+    recs.sort_by(|a, b| b.start.cmp(&a.start).then(b.name.cmp(&a.name)));
+    recs
+}
+
 /// The light sub-stream copy for the timeline (newest still growing).
 pub fn timeline_recordings(rt: &CameraRuntime) -> Vec<Recording> {
     let mut recs = storage::list(&storage::timeline_dir(&rt.dir));
@@ -211,7 +221,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
         // The camera's recordings: read only if needed (listing recordings,
         // or an alert without its own clip to play).
         let recs_cell: std::cell::OnceCell<Vec<Recording>> = std::cell::OnceCell::new();
-        let recs = || recs_cell.get_or_init(|| recordings(&rt));
+        let recs = || recs_cell.get_or_init(|| recordings_all(&rt));
         // Looking for someone only finds alerts.
         if q.who.is_none() && (q.types.is_empty() || q.types.contains("recording")) {
             for r in recs()
@@ -309,6 +319,9 @@ pub struct Segment {
     pub kind: &'static str,
     /// Which camera stream it is: "main" (full quality) or "sub".
     pub stream: &'static str,
+    /// It has moved to deep storage (not on the local disk any more).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -328,11 +341,17 @@ pub fn timeline(
     to: DateTime<Local>,
 ) -> Vec<CameraTimeline> {
     let mut out = Vec::new();
+    let cfg = mgr.config();
     for rt in mgr.cameras() {
         if !cameras.is_empty() && !cameras.contains(&rt.cfg.id) {
             continue;
         }
         let id = &rt.cfg.id;
+        // Footage that moved to deep storage: still on the timeline (marked),
+        // and found there when played.
+        let plan = cfg.cameras.iter().find(|c| c.id == *id).and_then(|c| cfg.archive_for(c));
+        storage::set_archive(&rt.dir, plan.as_ref().map(|p| p.dest.clone()));
+        let archived: Vec<Recording> = if plan.is_some() { storage::list_archived(&rt.dir).into_iter().filter(|r| r.end >= from && r.start <= to).collect() } else { Vec::new() };
         let in_view: Vec<Recording> = recordings(&rt).into_iter().filter(|r| r.end >= from && r.start <= to).collect();
         // (The newest is still being written: no header yet.)
         let names: Vec<String> = in_view.iter().skip(1).map(|r| r.name.clone()).collect();
@@ -351,8 +370,22 @@ pub fn timeline(
                 stream: stream_of(&r.name),
                 name: r.name,
                 kind: "recording",
+                archived: false,
             })
             .collect();
+        if let Some(p) = &plan {
+            let dest = p.dest.clone();
+            prefetch_heights_soon(&dest, archived.iter().map(|r| r.name.clone()).collect());
+            segments.extend(archived.into_iter().map(|r| Segment {
+                start: r.start,
+                end: r.end,
+                url: rec_url(id, &r.name),
+                stream: recording_stream_in(&rt, &dest, &r.name),
+                name: r.name,
+                kind: "recording",
+                archived: true,
+            }));
+        }
         segments.extend(
             timeline_recordings(&rt)
                 .into_iter()
@@ -364,6 +397,7 @@ pub fn timeline(
                     name: r.name,
                     kind: "sub",
                     stream: "sub",
+                    archived: false,
                 }),
         );
         let events = rt.events.between(from, to);
@@ -380,6 +414,7 @@ pub fn timeline(
                         name: clip.clone(),
                         kind: "clip",
                         stream: "main",
+                        archived: false,
                     });
                 }
             }
@@ -403,16 +438,19 @@ pub fn export_parts(
     to: DateTime<Local>,
 ) -> Vec<(PathBuf, f64, f64)> {
     let secs = |a: DateTime<Local>, b: DateTime<Local>| (b - a).num_milliseconds() as f64 / 1000.0;
-    let mut recs: Vec<Recording> = storage::list(&rt.dir)
+    // (Footage that moved to deep storage is part of an export too.)
+    let mut recs: Vec<(Recording, PathBuf)> = storage::list(&rt.dir)
         .into_iter()
-        .filter(|r| r.end > from && r.start < to)
+        .map(|r| (r, rt.dir.clone()))
+        .chain(storage::archive_of(&rt.dir).into_iter().flat_map(|d| storage::list(&d).into_iter().map(move |r| (r, d.clone()))))
+        .filter(|(r, _)| r.end > from && r.start < to)
         .collect();
-    recs.sort_by_key(|r| r.start);
+    recs.sort_by_key(|(r, _)| r.start);
     let mut parts: Vec<(PathBuf, f64, f64)> = recs
         .iter()
-        .map(|r| {
+        .map(|(r, d)| {
             (
-                rt.dir.join(&r.name),
+                d.join(&r.name),
                 secs(r.start, from).max(0.0),
                 secs(r.start, to.min(r.end)),
             )
@@ -473,10 +511,15 @@ pub fn unseen_count(mgr: &Manager) -> usize {
 /// (the recording mode may have changed since); a file still being written
 /// (no header yet) is of the stream recorded now.
 pub fn recording_stream(rt: &CameraRuntime, name: &str) -> &'static str {
+    recording_stream_in(rt, &rt.dir, name)
+}
+
+/// The same for a recording in another folder (deep storage).
+pub fn recording_stream_in(rt: &CameraRuntime, dir: &std::path::Path, name: &str) -> &'static str {
     let now_stream = if rt.cfg.record_mode.continuous_stream() == Some(true) { "sub" } else { "main" };
     let h = |r: &crate::relay::Relay| r.info().and_then(|i| i.height);
     let (main_h, sub_h) = (h(&rt.relay_main), h(&rt.relay_sub));
-    match mp4_height_cached(&rt.dir.join(name)) {
+    match mp4_height_cached(&dir.join(name)) {
         Some(fh) => match (main_h, sub_h) {
             (Some(m), Some(s)) if s < m => {
                 if fh * 2 <= s + m { "sub" } else { "main" }

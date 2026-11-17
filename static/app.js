@@ -852,6 +852,7 @@ function legendHtml(kind, data) {
   if (!segs.length || segs.some(x => sm(x) === 'sub')) bars.push(['<i class="lg-bar rec"></i>', 'Sub-stream']);
   if (segs.some(x => sm(x) === 'main')) bars.push(['<i class="lg-bar clip"></i>', segs.every(x => sm(x) !== 'main' || x.kind === 'clip') ? 'HD alert clips' : 'Main stream (HD)']);
   // Recording now: purple stripes when the HD main stream is what's shown.
+  if (segs.some(x => x.archived)) bars.push(['<i class="lg-bar rec arch"></i>', 'In deep storage (darker)']);
   const grow = segs.filter(isGrowing);
   const hdNow = kind === 'tl' ? tlQ() === 'main' : grow.length && grow.every(x => sm(x) === 'main');
   if (grow.length) bars.push([`<i class="lg-bar live${hdNow ? ' clip' : ''}"></i>`, 'Recording now']);
@@ -5018,7 +5019,7 @@ function drawTimeline() {
     for (const s of shown) {
       const live = s === lastRec && isGrowing(s);
       const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(s.end).getTime()));
-      if (b > 0 && a < 100 && b > a) pieces.push({a, b, cls: streamOf(s) === 'main' ? 'clip' : 'rec', live});
+      if (b > 0 && a < 100 && b > a) pieces.push({a, b, cls: (streamOf(s) === 'main' ? 'clip' : 'rec') + (s.archived ? ' arch' : ''), live});
     }
     lane += solidBars(pieces, 15000 / span * 100, 'div', 'seg');
     // The oldest footage being deleted to keep room free on the disk.
@@ -5590,7 +5591,7 @@ function drawVTimeline() {
       for (const sg of shown) {
         const live = sg === lastRec && isGrowing(sg);
         const a = Math.max(0, pct(new Date(sg.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(sg.end).getTime()));
-        if (b > a && a < 100) pcs.push({a, b, live, cls: streamOf(sg) === 'main' ? 'clip' : 'rec'});
+        if (b > a && a < 100) pcs.push({a, b, live, cls: (streamOf(sg) === 'main' ? 'clip' : 'rec') + (sg.archived ? ' arch' : '')});
       }
     }
     let evBars = '', prune = '';
@@ -5601,7 +5602,7 @@ function drawVTimeline() {
     }
     laneHtml += `<div class="vlane" data-cam="${esc(ln.camera)}" style="left:${58 + li * (LW + 4)}px;width:${LW}px"><div class="vtlp" data-cam="${esc(ln.camera)}"></div>${vBars(pcs, gap)}<div class="vbuf"></div>${evBars}${prune}</div>`;
     const c0 = ln.list[0], st = c0 && cam(c0.camera), recOn = !!(st && st.recorder && st.recorder.state === 'recording');
-    heads += `<button type="button" class="vlab" ${merged ? '' : `data-cam="${esc(ln.camera)}"`} style="left:${58 + li * (LW + 4)}px;width:${LW}px" title="${esc(ln.name)}${merged ? '' : ' — show just this camera'}"><i class="dot ${recOn ? 'on' : ''}"></i><span>${esc(ln.name)}</span></button>`;
+    heads += `<button type="button" class="vlab" ${merged ? '' : `data-cam="${esc(ln.camera)}"`} style="left:${58 + li * (LW + 4)}px;width:${LW}px" title="${esc(ln.name)}${merged ? '' : ' — show just this camera'}"><i class="dot ${recOn ? 'on' : ''}"></i><span>${esc(ln.name.length > 15 ? ln.name.slice(0, 14) + '…' : ln.name)}</span></button>`;
     for (const c of ln.list) for (const e of c.events) if (e.labels.length && e.thumb) { const y = pct(new Date(e.start).getTime()); if (y >= 0 && y <= 100) thumbs.push({y, cam: c.camera, e: {...e, _cam: c.camera}}); }
   });
   // Pictures of AI alerts down the right, stacked where they'd touch.

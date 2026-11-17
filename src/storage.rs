@@ -148,16 +148,50 @@ pub fn parse_start(name: &str) -> Option<DateTime<Local>> {
     Local.from_local_datetime(&naive).earliest()
 }
 
-/// Resolve a user-supplied file name to a path inside `dir`.
+/// Where each camera's older footage went (deep storage): its folder on the
+/// local disk → its folder in deep storage. Kept up to date by the timeline
+/// and the mover (see archive.rs).
+static ARCHIVES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, PathBuf>>> = std::sync::LazyLock::new(Default::default);
+
+pub fn set_archive(local: &Path, deep: Option<PathBuf>) {
+    let mut m = ARCHIVES.lock().unwrap();
+    match deep {
+        Some(d) => {
+            m.insert(local.to_path_buf(), d);
+        }
+        None => {
+            m.remove(local);
+        }
+    }
+}
+
+/// The deep storage folder of a camera's local folder, if it has one.
+pub fn archive_of(local: &Path) -> Option<PathBuf> {
+    ARCHIVES.lock().unwrap().get(local).cloned()
+}
+
+/// The recordings that moved to deep storage (newest first).
+pub fn list_archived(local: &Path) -> Vec<Recording> {
+    archive_of(local).map(|d| list(&d)).unwrap_or_default()
+}
+
+/// Resolve a user-supplied file name to a path inside `dir` — or, if it's
+/// not there (it moved to deep storage), inside the camera's deep storage.
 pub fn resolve(dir: &Path, name: &str) -> Result<PathBuf> {
     if !valid_component(name) {
         bail!("invalid file name");
     }
     let path = dir.join(name);
-    if !path.is_file() {
-        bail!("file not found");
+    if path.is_file() {
+        return Ok(path);
     }
-    Ok(path)
+    if let Some(a) = archive_of(dir) {
+        let p = a.join(name);
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    bail!("file not found")
 }
 
 /// Space use and recording rate of one camera.

@@ -590,6 +590,19 @@ impl Manager {
         *slot = cam.clone();
         self.commit(cfg.clone())?;
         info!("updated camera \"{}\"", cam.name);
+        // Renamed: its folder in deep storage follows (older footage stays found).
+        if folder_moves
+            && let Some(o) = &old_cam
+            && let (Some(from), Some(to)) = (old_cfg.archive_for(o), cfg.archive_for(&cam))
+            && from.dest != to.dest
+            && from.dest.exists()
+            && !to.dest.exists()
+        {
+            match std::fs::rename(&from.dest, &to.dest) {
+                Ok(()) => info!("deep storage folder renamed to {}", to.dest.display()),
+                Err(e) => tracing::warn!("couldn't rename the deep storage folder {}: {e}", from.dest.display()),
+            }
+        }
         // Display, live-view and PTZ options apply without interrupting recording.
         if let (Some(old_cam), Some(rt)) = (&old_cam, self.camera(id))
             && !cam.needs_restart(old_cam)
