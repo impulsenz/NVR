@@ -547,6 +547,15 @@ const MSE = window.ManagedMediaSource || window.MediaSource;
 const liveVideoOn = () => !!MSE && !dataSaver && store.get('live-video', true) !== false;
 Live.mse = new Set();
 Live.noMse = new Set();
+// Every live video connection on the page (to pause them with the tab).
+const liveVideos = new Set();
+let liveSleepT = null;
+document.addEventListener('visibilitychange', () => {
+  clearTimeout(liveSleepT);
+  // Hidden for 10 s (not a quick switch of tabs): connections let go.
+  if (document.hidden) liveSleepT = setTimeout(() => { for (const lv of liveVideos) lv.sleep(); }, 10000);
+  else for (const lv of liveVideos) lv.wake();
+});
 class LiveVideo {
   constructor(img, id, q) {
     this.img = img; this.id = id; this.q = q; this.key = Live.key(id, q); this.fails = 0; this.dead = false;
@@ -556,6 +565,20 @@ class LiveVideo {
     // camera's video may have been here a moment ago).
     if (img.parentElement) img.parentElement.classList.remove('mse');
     img.after(v);
+    liveVideos.add(this);
+    this.open();
+  }
+  // The tab is hidden: the video connection is let go (no video sent to a
+  // page nobody sees), and made again when the tab is shown.
+  sleep() {
+    if (this.dead || this.asleep) return;
+    this.asleep = true;
+    if (this.ws) { this.ws.onclose = null; this.ws.close(); }
+    this.stopPlaying();
+  }
+  wake() {
+    if (this.dead || !this.asleep) return;
+    this.asleep = false; this.fails = 0;
     this.open();
   }
   // Move to another picture of the same camera (a rebuilt tile): the video
@@ -570,7 +593,7 @@ class LiveVideo {
     } else if (s) s.classList.remove('mse');
   }
   open() {
-    if (this.dead) return;
+    if (this.dead || this.asleep) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = this.ws = new WebSocket(`${proto}//${location.host}${location.pathname.replace(/[^/]*$/, '')}live/${enc(this.id)}/video?q=${this.q}`);
     ws.binaryType = 'arraybuffer';
@@ -690,7 +713,7 @@ class LiveVideo {
     this.open();
   }
   giveUp() { Live.noMse.add(this.key); this.close(); }
-  close() { this.dead = true; if (this.ws) { this.ws.onclose = null; this.ws.close(); } this.stopPlaying(); this.video.remove(); }
+  close() { this.dead = true; liveVideos.delete(this); if (this.ws) { this.ws.onclose = null; this.ws.close(); } this.stopPlaying(); this.video.remove(); }
 }
 function concatBytes(...parts) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let o = 0;

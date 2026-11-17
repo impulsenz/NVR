@@ -1,0 +1,31 @@
+# Security checks: known vulnerabilities in the Rust dependencies
+# (RustSec advisory database, via cargo-audit).
+#
+# Runs when the dependencies change, every Monday, and by hand
+# ("Run workflow"). It only reads the repository.
+name: Security
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/security.yml
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Known vulnerabilities in dependencies
+        run: cargo audit
