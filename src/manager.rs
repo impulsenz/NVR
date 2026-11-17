@@ -64,6 +64,10 @@ pub struct CameraRuntime {
     /// Shared camera connections (the same one twice when there is no sub-stream).
     pub relay_main: Arc<Relay>,
     pub relay_sub: Arc<Relay>,
+    /// Live video for browsers (fragmented MP4), one per stream, shared by
+    /// every viewer; runs only while someone watches.
+    pub mux_main: Arc<crate::livemux::LiveMux>,
+    pub mux_sub: Arc<crate::livemux::LiveMux>,
     cancel: CancellationToken,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -83,6 +87,7 @@ impl CameraRuntime {
         // One connection per camera stream, shared by everything below.
         let relay_main = Relay::new(
             &cfg.name,
+            (&cfg.id, false),
             "main stream",
             &cfg.url,
             &cfg.rtsp_transport,
@@ -93,6 +98,7 @@ impl CameraRuntime {
         let relay_sub = if cfg.has_sub() {
             Relay::new(
                 &cfg.name,
+                (&cfg.id, true),
                 "sub-stream",
                 &cfg.live_url,
                 &cfg.rtsp_transport,
@@ -210,6 +216,12 @@ impl CameraRuntime {
             cancel.clone(),
         );
 
+        let mux_main = crate::livemux::LiveMux::new(relay_main.clone(), &env.ffmpeg_path);
+        let mux_sub = if Arc::ptr_eq(&relay_sub, &relay_main) {
+            mux_main.clone()
+        } else {
+            crate::livemux::LiveMux::new(relay_sub.clone(), &env.ffmpeg_path)
+        };
         Arc::new(Self {
             dir,
             recorder,
@@ -221,6 +233,8 @@ impl CameraRuntime {
             events,
             relay_main,
             relay_sub,
+            mux_main,
+            mux_sub,
             cancel,
             tasks: Mutex::new(tasks),
             cfg,
@@ -294,6 +308,7 @@ pub struct SettingsUpdate {
     pub cloud: Option<CloudConfig>,
     pub notify: Option<crate::config::NotifyConfig>,
     pub update: Option<crate::config::UpdateConfig>,
+    pub streaming: Option<crate::config::StreamingConfig>,
     pub mqtt: Option<crate::config::MqttConfig>,
     pub webhooks: Option<Vec<crate::config::Webhook>>,
     pub tts: Option<crate::config::TtsConfig>,
@@ -742,73 +757,6 @@ impl Manager {
         self.commit(cfg)
     }
 
-    /// Save the profiles. `rename` (old name, new name): cameras following
-    /// the old name follow the new one.
-    pub async fn update_profiles(
-        &self,
-        mut p: Vec<crate::config::Profile>,
-        rename: Option<(String, String)>,
-    ) -> Result<()> {
-        let _g = self.edit.lock().await;
-        for x in &mut p {
-            x.name = x.name.trim().to_string();
-            anyhow::ensure!(!x.name.is_empty(), "a profile needs a name");
-            // The mask belongs to a camera's view, not to a profile.
-            x.detect.mask.clear();
-        }
-        let mut cfg = self.config();
-        cfg.profiles = p.clone();
-        if let Some((old, new)) = &rename {
-            for cam in cfg.cameras.iter_mut() {
-                if cam.profile.eq_ignore_ascii_case(old.trim()) {
-                    cam.profile = new.trim().to_string();
-                }
-            }
-        }
-        // Cameras following a deleted profile keep their settings, unlinked.
-        let mut changed = Vec::new();
-        for cam in cfg.cameras.iter_mut() {
-            if cam.profile.is_empty() {
-                continue;
-            }
-            match p.iter().find(|x| x.name.eq_ignore_ascii_case(&cam.profile)) {
-                Some(prof) => {
-                    let before = cam.clone();
-                    prof.apply(cam);
-                    if *cam != before {
-                        changed.push(cam.clone());
-                    }
-                }
-                None => {
-                    cam.profile.clear();
-                    changed.push(cam.clone());
-                }
-            }
-        }
-        self.commit(cfg.clone())?;
-        drop(_g);
-        // Cameras following a changed profile pick up its settings (all at
-        // once).
-        let mut restart = Vec::new();
-        for cam in &changed {
-            info!(
-                "[{}] settings updated from profile \"{}\"",
-                cam.name, cam.profile
-            );
-            match self.camera(&cam.id) {
-                Some(rt) if !cam.needs_restart(&rt.cfg) => {
-                    // (As from the camera's own window: display and live
-                    // options apply without interrupting recording.)
-                    rt.live_sub.set_view(cam.view.clone());
-                    rt.live_main.set_view(cam.view.clone());
-                }
-                _ => restart.push(cam),
-            }
-        }
-        futures_util::future::join_all(restart.into_iter().map(|c| self.restart_camera(c))).await;
-        Ok(())
-    }
-
     /// Apply settings. Returns true if a program restart is needed.
     pub async fn update_settings(&self, up: SettingsUpdate) -> Result<bool> {
         let _g = self.edit.lock().await;
@@ -865,6 +813,13 @@ impl Manager {
         }
         if let Some(u) = up.update {
             cfg.update = u;
+        }
+        if let Some(mut st) = up.streaming {
+            if !["ffmpeg", "go2rtc"].contains(&st.engine.as_str()) {
+                anyhow::bail!("streaming engine must be ffmpeg or go2rtc");
+            }
+            st.go2rtc_path = st.go2rtc_path.trim().to_string();
+            cfg.streaming = st;
         }
         if let Some(mut n) = up.notify {
             // Empty secrets: keep the saved ones.

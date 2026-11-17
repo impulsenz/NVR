@@ -341,9 +341,10 @@ pub struct Config {
     pub cloud: CloudConfig,
     pub notify: NotifyConfig,
     pub update: UpdateConfig,
+    /// How cameras are connected to: the built-in FFmpeg pipeline, or
+    /// through go2rtc.
+    pub streaming: StreamingConfig,
     pub dashboard: DashboardConfig,
-    /// Saved recording / motion / AI settings to apply to cameras.
-    pub profiles: Vec<Profile>,
     /// Home / Away / Night: which cameras send phone notifications.
     pub modes: ModesConfig,
     /// MQTT (Home Assistant and other home automation).
@@ -613,6 +614,22 @@ pub struct UpdateConfig {
     /// GitHub repository to update from ("owner/name"); empty = the one
     /// this program was built from.
     pub repo: String,
+}
+
+/// Streaming engine (Settings → System): "ffmpeg" (built in, default) or
+/// "go2rtc" (go2rtc holds the camera connections; see go2rtc.rs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct StreamingConfig {
+    pub engine: String,
+    /// The go2rtc program; empty = GAZE's own (downloaded when needed).
+    pub go2rtc_path: String,
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self { engine: "ffmpeg".into(), go2rtc_path: String::new() }
+    }
 }
 
 /// Phone notifications through ntfy (https://ntfy.sh, or your own server).
@@ -903,6 +920,12 @@ pub struct DetectConfig {
     /// Motion set off by an animal that isn't in `objects` (a cat, a
     /// dog, a bird …) doesn't make an alert. Needs object detection on.
     pub ignore_animals: bool,
+    /// Ignore pets: motion set off only by a dog or a cat never makes an
+    /// alert (indoor pets, the back yard), whatever "What makes an alert"
+    /// says. A person (or anything else alerted on) seen with the pet still
+    /// makes one. Can't be on while alerting on, or following, dogs or cats.
+    #[serde(default)]
+    pub ignore_pets: bool,
     /// Objects the AI finds mostly inside the areas drawn to ignore are left
     /// out too (not only motion there), whatever started the look.
     pub ai_ignores_mask: bool,
@@ -952,6 +975,7 @@ impl Default for DetectConfig {
             ai_interval: 1.0,
             ignore_parked: true,
             ignore_animals: true,
+            ignore_pets: false,
             ai_ignores_mask: true,
             hd_check: "mark".into(),
             parked_seconds: 60,
@@ -1136,109 +1160,6 @@ impl Default for ZoneConfig {
     }
 }
 
-/// A named set of recording, motion and AI settings that can be applied to
-/// any camera (the camera's own detection mask is kept).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct Profile {
-    pub name: String,
-    pub record_mode: RecordMode,
-    pub schedule_enabled: bool,
-    pub schedule: Schedule,
-    pub record_audio: bool,
-    pub transcode: bool,
-    pub record_fps: u32,
-    pub segment_seconds: u64,
-    pub retention_days: u64,
-    pub max_storage_gb: f64,
-    pub detect: DetectConfig,
-    /// Sound detection (what to listen for, how sensitive). Missing in
-    /// profiles from before 0.6.79: the camera's own is kept.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sound: Option<SoundConfig>,
-    /// Speaker button on the live picture.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub live_sound: Option<bool>,
-    /// Doorbell chime before talking.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub talk_chime: Option<bool>,
-    /// Use what the camera itself detects (ONVIF events).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub onvif_events: Option<bool>,
-    /// Also the camera's plain motion detection.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub onvif_motion: Option<bool>,
-}
-
-impl Profile {
-    /// Put this profile's recording, motion and AI settings on a camera
-    /// (its motion mask and everything else stay).
-    pub fn apply(&self, cam: &mut CameraConfig) {
-        cam.record_mode = self.record_mode;
-        cam.schedule_enabled = self.schedule_enabled;
-        cam.schedule = self.schedule.clone();
-        cam.record_audio = self.record_audio;
-        cam.transcode = self.transcode;
-        cam.record_fps = self.record_fps;
-        cam.segment_seconds = self.segment_seconds;
-        cam.retention_days = self.retention_days;
-        cam.max_storage_gb = self.max_storage_gb;
-        // Areas drawn on this camera's own picture stay the camera's.
-        let mask = std::mem::take(&mut cam.detect.mask);
-        let (packages, area, spot) = (
-            cam.detect.packages,
-            std::mem::take(&mut cam.detect.package_area),
-            std::mem::take(&mut cam.detect.package_mask),
-        );
-        cam.detect = self.detect.clone();
-        cam.detect.mask = mask;
-        cam.detect.packages = packages;
-        cam.detect.package_area = area;
-        cam.detect.package_mask = spot;
-        if let Some(v) = &self.sound {
-            cam.sound = v.clone();
-        }
-        if let Some(v) = self.live_sound {
-            cam.live_sound = v;
-        }
-        if let Some(v) = self.talk_chime {
-            cam.talk_chime = v;
-        }
-        if let Some(v) = self.onvif_events {
-            cam.onvif_events = v;
-        }
-        if let Some(v) = self.onvif_motion {
-            cam.onvif_motion = v;
-        }
-        cam.profile = self.name.clone();
-    }
-}
-
-impl Default for Profile {
-    fn default() -> Self {
-        let c = CameraConfig::default();
-        Self {
-            name: String::new(),
-            record_mode: c.record_mode,
-            schedule_enabled: c.schedule_enabled,
-            schedule: c.schedule,
-            record_audio: c.record_audio,
-            transcode: c.transcode,
-            record_fps: c.record_fps,
-            segment_seconds: c.segment_seconds,
-            retention_days: c.retention_days,
-            max_storage_gb: c.max_storage_gb,
-            detect: c.detect,
-            // Not in older profiles: each camera keeps its own.
-            sound: None,
-            live_sound: None,
-            talk_chime: None,
-            onvif_events: None,
-            onvif_motion: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct CameraConfig {
@@ -1308,9 +1229,6 @@ pub struct CameraConfig {
     pub onvif_motion: bool,
     /// Turn the picture, degrees clockwise: 0, 90, 180 or 270.
     pub rotate: u16,
-    /// Name of the recording profile this camera follows ("" = none). When
-    /// the profile is changed, the camera's settings follow.
-    pub profile: String,
     /// Zones and lines on the picture.
     pub zones: Vec<ZoneConfig>,
     pub detect: DetectConfig,
@@ -1353,7 +1271,6 @@ impl Default for CameraConfig {
             onvif_events: false,
             onvif_motion: false,
             rotate: 0,
-            profile: String::new(),
             zones: Vec::new(),
             detect: DetectConfig::default(),
             osd: OsdConfig::default(),
@@ -1404,6 +1321,15 @@ impl CameraConfig {
             bail!("storage limit cannot be negative");
         }
         let d = &self.detect;
+        if d.ignore_pets {
+            let pet = |l: &Vec<String>| l.iter().any(|o| crate::ai::PETS.contains(&o.as_str()));
+            if pet(&d.objects) {
+                bail!("“Ignore pets” can't be on while this camera alerts on dogs or cats: untick dog and cat under “Alert on”, or turn “Ignore pets” off");
+            }
+            if self.ptz.follow && pet(&self.ptz.follow_objects) {
+                bail!("“Ignore pets” can't be on while this camera follows dogs or cats (pan / tilt / zoom tracking): stop following them, or turn “Ignore pets” off");
+            }
+        }
         if !(1..=255).contains(&d.min_contrast) {
             bail!("motion contrast must be 1 to 255");
         }
@@ -1631,10 +1557,6 @@ impl Config {
             changed |= v(&mut self.notify.objects);
             for w in &mut self.webhooks {
                 changed |= v(&mut w.objects);
-            }
-            for p in &mut self.profiles {
-                changed |= v(&mut p.detect.objects);
-                changed |= v(&mut p.detect.parked_objects);
             }
             for c in &mut self.cameras {
                 changed |= v(&mut c.detect.objects);
@@ -2217,5 +2139,24 @@ mod tests {
         assert_eq!(hw.resolved_encoder(), "h264_nvenc");
         hw.encoder = "libx264".into();
         assert_eq!(hw.resolved_encoder(), "libx264");
+    }
+
+    #[test]
+    fn ignore_pets_and_pet_alerts_exclude_each_other() {
+        let mut c = CameraConfig { id: "yard".into(), name: "Yard".into(), url: "rtsp://x".into(), ..Default::default() };
+        c.detect.ignore_pets = true;
+        c.detect.objects = vec!["person".into(), "vehicle".into()];
+        assert!(c.validate().is_ok());
+        c.detect.objects.push("dog".into());
+        assert!(c.validate().unwrap_err().to_string().contains("Ignore pets"));
+        c.detect.objects.pop();
+        c.ptz.follow = true;
+        c.ptz.follow_objects = vec!["cat".into()];
+        assert!(c.validate().is_err());
+        c.ptz.follow = false;
+        assert!(c.validate().is_ok());
+        // Old settings files (without the setting) load with it off.
+        let d: DetectConfig = toml::from_str("motion = true").unwrap();
+        assert!(!d.ignore_pets);
     }
 }

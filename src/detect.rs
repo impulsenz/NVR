@@ -896,6 +896,7 @@ impl Detector {
                 notified: 0,
                 suspicious: String::new(),
                 hd_checking: false,
+                hd_snap: None,
                 meaning: None,
             },
             last_activity: now,
@@ -948,7 +949,8 @@ impl Detector {
         // becomes an alert; motion with an animal that isn't watched for
         // never does (and is dropped when it ends, see finish()).
         let d = &self.cam.detect;
-        let wait_for_ai = d.ignore_animals
+        // (Ignore pets works the same way, for dogs and cats.)
+        let wait_for_ai = (d.ignore_animals || d.ignore_pets)
             && d.ai
             && self.ai.get().enabled()
             && (a.animal_seen || (a.ai_looks < 2 && a.began.elapsed() < Duration::from_secs(4)));
@@ -1018,8 +1020,9 @@ impl Detector {
             }
             a.ai_looks += 1;
             let animal = best.iter().any(|x| {
+                let l = x.label.as_str();
                 x.score >= d.min_confidence.min(0.4)
-                    && crate::ai::ANIMALS.contains(&x.label.as_str())
+                    && ((d.ignore_animals && crate::ai::ANIMALS.contains(&l)) || (d.ignore_pets && crate::ai::PETS.contains(&l)))
                     && !d.objects.contains(&x.label)
             });
             if animal && !a.animal_seen {
@@ -1191,20 +1194,44 @@ impl Detector {
         if !new_labels.is_empty() {
             info!(target: "event", "[{}] alert: {}", self.cam.name, new_labels.join(", "));
         }
+        // A person, first seen on the sub-stream, on a camera that keeps no
+        // full-quality video of this moment: one HD picture is kept for
+        // face recognition (identify.rs uses it instead of the small frame).
+        let hd_video_kept = self.cam.record_mode.continuous_stream() == Some(false) || self.cam.record_mode.event_clips();
+        let snap = (!hd_video_kept && a.event.hd_snap.is_none() && hd_checks.iter().any(|(l, _)| l == "person"))
+            .then(|| self.relay_main.clone())
+            .flatten()
+            .map(|r| (r, format!("{}-hdface.jpg", a.event.id), self.store.dir().to_path_buf()));
+        if let Some((_, name, _)) = &snap {
+            a.event.hd_snap = Some(name.clone());
+            changed = true;
+        }
+        let check = d.hd_check != "off" && !hd_checks.is_empty();
         // Something new: checked in a full-quality picture (see apply_hd).
-        if !hd_checks.is_empty()
-            && d.hd_check != "off"
+        if (check || snap.is_some())
             && let Some(relay) = self.relay_main.clone()
         {
-            a.event.hd_checking = true;
-            changed = true;
+            if check {
+                a.event.hd_checking = true;
+                changed = true;
+            }
             let (ai, tx, id, ffmpeg) = (self.ai.get(), hd_tx.clone(), a.event.id.clone(), self.env.ffmpeg_path.clone());
             let (min_conf, watched) = (d.min_confidence, d.objects.clone());
             let cam = self.cam.clone();
+            let hd_checks = if check { hd_checks } else { Vec::new() };
             tokio::spawn(async move {
                 let mut checks = Vec::new();
                 match hd_frame(&relay, &ffmpeg).await {
                     Ok(mut f) => {
+                        // (The face picture: as the camera sees it.)
+                        if let Some((_, name, dir)) = &snap {
+                            let path = dir.join(name);
+                            let pic = f.clone();
+                            let saved = tokio::task::spawn_blocking(move || pic.jpeg(92).and_then(|j| Ok(std::fs::write(&path, j)?))).await;
+                            if !matches!(saved, Ok(Ok(()))) {
+                                tracing::debug!("[{}] HD face picture not saved", cam.name);
+                            }
+                        }
                         // Privacy areas are black here too.
                         if !cam.privacy.is_empty() {
                             let mut px = (*f.rgb).clone();
@@ -1221,7 +1248,9 @@ impl Detector {
                         checks = hd_checks.into_iter().map(|(l, b)| (l, b, HdVerdict::Failed)).collect();
                     }
                 }
-                let _ = tx.send(HdResult { event: id, checks }).await;
+                if check {
+                    let _ = tx.send(HdResult { event: id, checks }).await;
+                }
             });
         }
         a.qualified = true;
@@ -1405,7 +1434,9 @@ impl Detector {
         let d = &self.cam.detect;
         // Motion that turned out to be a cat (or another animal that isn't
         // watched for), with nothing watched for seen: not kept as an alert.
-        if d.ignore_animals
+        // (A person or anything else alerted on, seen with it, keeps the
+        // alert: it then has labels.)
+        if (d.ignore_animals || d.ignore_pets)
             && a.animal_seen
             && a.event.labels.is_empty()
             && a.event.items.is_empty()

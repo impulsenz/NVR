@@ -80,15 +80,55 @@ pub async fn remotes(cfg: &CloudConfig) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Copy one file into a synced folder (whole file first, then renamed).
+/// Copy one file into a synced folder or NAS share: written under a
+/// temporary name (`.partial`), flushed to the disk, checked — same size
+/// and the same SHA-256 as the original, read back from the destination —
+/// and only then renamed to its real name. A copy that doesn't match is
+/// removed and the upload fails (it's tried again later); the original is
+/// never touched.
 fn copy_local(src: &Path, dest: &Path) -> Result<()> {
     if let Some(p) = dest.parent() {
         std::fs::create_dir_all(p)?;
     }
-    let tmp = dest.with_extension("part");
-    std::fs::copy(src, &tmp)?;
-    std::fs::rename(&tmp, dest)?;
-    Ok(())
+    let tmp = dest.with_extension(format!("{}.partial", dest.extension().and_then(|e| e.to_str()).unwrap_or("")));
+    let res = (|| -> Result<()> {
+        let want = sha256_file(src)?;
+        let size = std::fs::metadata(src)?.len();
+        {
+            let mut from = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(src)?);
+            let mut to = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&tmp)?);
+            std::io::copy(&mut from, &mut to)?;
+            use std::io::Write;
+            to.flush()?;
+            to.get_ref().sync_all()?;
+        }
+        let got_size = std::fs::metadata(&tmp)?.len();
+        anyhow::ensure!(got_size == size, "the copy is {got_size} bytes, the original {size}");
+        anyhow::ensure!(sha256_file(&tmp)? == want, "the copy doesn't match the original (checksum)");
+        std::fs::rename(&tmp, dest)?;
+        Ok(())
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
+}
+
+/// SHA-256 of a file, read a piece at a time.
+fn sha256_file(p: &Path) -> Result<[u8; 32]> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut f = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(p)?);
+    let mut h = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().into())
 }
 
 /// A NAS's shared folder that needs a login: connect to it (Windows), so
@@ -235,10 +275,20 @@ fn pending(
 pub async fn run(mgr: Arc<Manager>) {
     let mut tick = tokio::time::interval(Duration::from_secs(60));
     let mut last_error = String::new();
+    // After a failure (NAS off, network down): wait longer each time — 1, 2,
+    // 4 … up to 30 minutes — instead of trying every minute; back to normal
+    // after a copy works. Recording carries on locally meanwhile, and
+    // nothing is marked as copied until it really is.
+    let mut fails: u32 = 0;
+    let mut next_try = tokio::time::Instant::now();
     loop {
         tick.tick().await;
         let cfg = mgr.config();
         if !cfg.cloud.enabled {
+            fails = 0;
+            continue;
+        }
+        if tokio::time::Instant::now() < next_try {
             continue;
         }
         let remote = cfg.cloud.remote.trim().trim_end_matches('/').to_string();
@@ -295,6 +345,7 @@ pub async fn run(mgr: Arc<Manager>) {
                 };
                 match res {
                     Ok(()) => {
+                        fails = 0;
                         mark_uploaded(&dir, &rel);
                         if let Some(j) = &job {
                             j.done_one();
@@ -317,6 +368,12 @@ pub async fn run(mgr: Arc<Manager>) {
                             j.fail(&msg);
                         }
                         STATUS.lock().unwrap().last_error = Some(msg);
+                        fails += 1;
+                        let wait = Duration::from_secs((60u64 << (fails - 1).min(5)).min(1800));
+                        next_try = tokio::time::Instant::now() + wait;
+                        if fails > 1 {
+                            warn!("cloud backup: failed {fails} times in a row — next try in {} min", wait.as_secs() / 60);
+                        }
                         break;
                     }
                 }
@@ -367,6 +424,7 @@ mod tests {
             notified: 0,
             suspicious: String::new(),
             hd_checking: false,
+            hd_snap: None,
             meaning: None,
         };
         store.save_detected(ev(
@@ -407,5 +465,24 @@ mod tests {
             4
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn copies_are_checked_before_they_count() {
+        let dir = std::env::temp_dir().join(format!("gaze-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("a.mp4");
+        let data: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let dest = dir.join("nas").join("cam").join("a.mp4");
+        copy_local(&src, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), data);
+        assert!(!dest.with_extension("mp4.partial").exists());
+        assert_eq!(sha256_file(&src).unwrap(), sha256_file(&dest).unwrap());
+        // A missing original: nothing left behind.
+        assert!(copy_local(&dir.join("gone.mp4"), &dir.join("nas").join("gone.mp4")).is_err());
+        assert!(!dir.join("nas").join("gone.mp4").exists() && !dir.join("nas").join("gone.mp4.partial").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

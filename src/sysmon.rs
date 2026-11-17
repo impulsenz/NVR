@@ -32,6 +32,9 @@ pub struct Sample {
     pub gpu: Option<f32>,
     /// GPU memory in use, %.
     pub gpu_mem: Option<f32>,
+    /// Network traffic of the whole computer, bytes per second (in, out).
+    pub net_in: f32,
+    pub net_out: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -87,6 +90,9 @@ pub struct Point {
     pub gpu: Option<f32>,
     pub gpu_max: Option<f32>,
     pub gpu_mem: Option<f32>,
+    /// Network traffic, bytes per second (averages).
+    pub net_in: f32,
+    pub net_out: f32,
     /// No readings for this time (GAZE wasn't running, or the computer was off).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub gap: bool,
@@ -152,6 +158,8 @@ impl Monitor {
                     gpu: s.gpu,
                     gpu_max: s.gpu,
                     gpu_mem: s.gpu_mem,
+                    net_in: s.net_in,
+                    net_out: s.net_out,
                     gap: false,
                 })
                 .collect()
@@ -191,8 +199,26 @@ impl Monitor {
         #[cfg(not(windows))]
         let card_name: Option<String> = None;
         let mut minute: Vec<Sample> = Vec::new();
+        // Network traffic: what every network adapter (not the computer
+        // talking to itself) sent and received since the last reading.
+        // (None where the network counters can't be read: shown as 0.)
+        let mut nets = sysinfo::Networks::new_with_refreshed_list().ok();
+        let mut net_at = std::time::Instant::now();
         loop {
             tick.tick().await;
+            if let Some(n) = nets.as_mut() {
+                n.refresh(true);
+            }
+            let secs = net_at.elapsed().as_secs_f32().max(0.2);
+            net_at = std::time::Instant::now();
+            let (mut rx, mut tx) = (0u64, 0u64);
+            for (name, n) in nets.iter().flat_map(|n| n.iter()) {
+                if is_loopback(&name.to_string_lossy()) {
+                    continue;
+                }
+                rx += n.received();
+                tx += n.transmitted();
+            }
             sys.refresh_cpu_usage();
             sys.refresh_memory();
             sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -236,6 +262,8 @@ impl Monitor {
                 nvr_ram: (nvr_mem as f32 * 100.0 / total as f32).min(100.0),
                 gpu: last_gpu.as_ref().map(|g| g.util),
                 gpu_mem: last_gpu.as_ref().and_then(|g| g.mem),
+                net_in: rx as f32 / secs,
+                net_out: tx as f32 / secs,
             };
             crate::load::update(s.cpu, s.gpu);
             *self.current.lock().unwrap() = Current {
@@ -288,7 +316,7 @@ impl Monitor {
 
     fn append(&self, p: &Point) {
         let line = format!(
-            "{},{:.1},{:.1},{:.1},{:.1},{},{},{},{:.2}\n",
+            "{},{:.1},{:.1},{:.1},{:.1},{},{},{},{:.2},{:.0},{:.0}\n",
             p.t,
             p.cpu,
             p.cpu_max,
@@ -297,7 +325,9 @@ impl Monitor {
             opt(p.gpu),
             opt(p.gpu_max),
             opt(p.gpu_mem),
-            p.nvr_ram
+            p.nvr_ram,
+            p.net_in,
+            p.net_out
         );
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -313,7 +343,7 @@ impl Monitor {
                 .iter()
                 .map(|p| {
                     format!(
-                        "{},{:.1},{:.1},{:.1},{:.1},{},{},{},{:.2}\n",
+                        "{},{:.1},{:.1},{:.1},{:.1},{},{},{},{:.2},{:.0},{:.0}\n",
                         p.t,
                         p.cpu,
                         p.cpu_max,
@@ -322,13 +352,21 @@ impl Monitor {
                         opt(p.gpu),
                         opt(p.gpu_max),
                         opt(p.gpu_mem),
-                        p.nvr_ram
+                        p.nvr_ram,
+                        p.net_in,
+                        p.net_out
                     )
                 })
                 .collect();
             let _ = std::fs::write(&self.file, text);
         }
     }
+}
+
+/// The computer talking to itself (not network traffic).
+fn is_loopback(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n == "lo" || n.starts_with("lo0") || n.contains("loopback")
 }
 
 fn opt(v: Option<f32>) -> String {
@@ -357,6 +395,9 @@ fn load_history(file: &std::path::Path) -> VecDeque<Point> {
                 gpu: num(f[5]),
                 gpu_max: num(f[6]),
                 gpu_mem: num(f[7]),
+                // (Not in history from before 1.0.)
+                net_in: f.get(9).and_then(|x| num(x)).unwrap_or(0.0),
+                net_out: f.get(10).and_then(|x| num(x)).unwrap_or(0.0),
                 gap: false,
             })
         })
@@ -379,6 +420,8 @@ fn aggregate(s: &[Sample]) -> Point {
         gpu: (!gpus.is_empty()).then(|| gpus.iter().sum::<f32>() / gpus.len() as f32),
         gpu_max: gpus.iter().copied().reduce(f32::max),
         gpu_mem: (!mems.is_empty()).then(|| mems.iter().sum::<f32>() / mems.len() as f32),
+        net_in: avg(&|x| x.net_in),
+        net_out: avg(&|x| x.net_out),
         gap: false,
     }
 }
@@ -426,6 +469,8 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
                     gpu: zero,
                     gpu_max: zero,
                     gpu_mem: zero,
+                    net_in: 0.0,
+                    net_out: 0.0,
                     gap: true,
                 };
             }
@@ -443,6 +488,8 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
                     .or(has_gpu.then_some(0.0)),
                 gpu_max: c.iter().filter_map(|p| p.gpu_max).reduce(f32::max),
                 gpu_mem: c.iter().filter_map(|p| p.gpu_mem).reduce(f32::max),
+                net_in: c.iter().map(|p| p.net_in).sum::<f32>() / k,
+                net_out: c.iter().map(|p| p.net_out).sum::<f32>() / k,
                 gap: false,
             }
         })
@@ -845,6 +892,8 @@ The command completed successfully."#;
             gpu: None,
             gpu_max: None,
             gpu_mem: None,
+            net_in: 1000.0,
+            net_out: 500.0,
             gap: false,
         };
         // Data in the first and last 10 s of a 40 s window; nothing in between.
@@ -864,5 +913,18 @@ The command completed successfully."#;
     fn disk_space_works() {
         let (free, total) = disk_space(&std::env::temp_dir().join("does/not/exist")).unwrap();
         assert!(total > 0 && free <= total);
+    }
+
+    #[test]
+    fn history_from_before_network_readings_still_loads() {
+        let f = std::env::temp_dir().join(format!("gaze-hist-{}.csv", std::process::id()));
+        let now = chrono::Utc::now().timestamp();
+        std::fs::write(&f, format!("{},10.0,20.0,5.0,40.0,,,,1.50\n{},10.0,20.0,5.0,40.0,,,,1.50,2048,1024\n", now - 120, now - 60)).unwrap();
+        let h = load_history(&f);
+        let _ = std::fs::remove_file(&f);
+        assert_eq!(h.len(), 2);
+        assert_eq!((h[0].net_in, h[0].net_out), (0.0, 0.0));
+        assert_eq!((h[1].net_in, h[1].net_out), (2048.0, 1024.0));
+        assert!(is_loopback("lo") && is_loopback("Loopback Pseudo-Interface 1") && !is_loopback("eth0"));
     }
 }

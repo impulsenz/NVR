@@ -68,6 +68,8 @@ struct Shared {
 pub struct Relay {
     pub name: String,
     pub label: &'static str,
+    /// The camera's id and which of its streams (for go2rtc).
+    stream: (String, bool),
     url: String,
     transport: String,
     ffmpeg: String,
@@ -85,6 +87,7 @@ pub struct Relay {
 impl Relay {
     pub fn new(
         name: &str,
+        stream: (&str, bool),
         label: &'static str,
         url: &str,
         transport: &str,
@@ -96,6 +99,7 @@ impl Relay {
             rotate,
             name: name.into(),
             label,
+            stream: (stream.0.to_string(), stream.1),
             url: url.into(),
             transport: transport.into(),
             ffmpeg: ffmpeg.into(),
@@ -121,6 +125,12 @@ impl Relay {
         });
         tokio::spawn(r.clone().run());
         r
+    }
+
+    /// Where to connect now: through go2rtc when it's chosen and running,
+    /// the camera itself otherwise (asked again at every reconnect).
+    fn source(&self) -> String {
+        crate::go2rtc::source(&self.url, &self.stream.0, self.stream.1)
     }
 
     pub fn url(&self) -> &str {
@@ -217,7 +227,7 @@ impl Relay {
             }
             self.shared.lock().unwrap().status.retry_in = None;
             self.set_state(RelayState::Connecting, None);
-            info!("{tag}: connecting to {}", mask_url(&self.url));
+            info!("{tag}: connecting to {}", mask_url(&self.source()));
             let started = Instant::now();
             let (got_data, err) = self.clone().session().await;
             // Ending the connection ends every consumer; they restart and
@@ -265,6 +275,8 @@ impl Relay {
 
     /// One camera connection. Returns (received data, error if it failed).
     async fn session(self: Arc<Self>) -> (bool, Option<String>) {
+        // (Through go2rtc or straight to the camera: see source().)
+        let src = self.source();
         let mut cmd = crate::load::cmd(&self.ffmpeg);
         cmd.args([
             "-hide_banner",
@@ -275,7 +287,7 @@ impl Relay {
             "-fflags",
             "+genpts",
         ])
-        .args(ffmpeg::input_args(&self.url, &self.transport))
+        .args(ffmpeg::input_args(&src, &self.transport))
         .args([
             "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-ar",
             "16000",
@@ -341,6 +353,11 @@ impl Relay {
                     self.forward(&mut parser, data);
                 }
                 _ = idle_check.tick() => {
+                    // go2rtc started or stopped: reconnect the other way.
+                    if self.source() != src {
+                        info!("[{}] {}: streaming engine changed — reconnecting", self.name, self.label);
+                        break None;
+                    }
                     let mut s = self.shared.lock().unwrap();
                     s.subs.retain(|x| !x.is_closed());
                     if !s.subs.is_empty() {

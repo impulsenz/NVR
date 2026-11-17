@@ -29,6 +29,13 @@ pub struct JobInfo {
     /// Can be paused (Settings → Tasks).
     pub pausable: bool,
     pub error: String,
+    /// What was just made, to show it going by (time-lapse previews: the
+    /// page of pictures and how they're laid out).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
+    /// Files done so far in this run, newest last (what, which times).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub log: Vec<String>,
 }
 
 static JOBS: Mutex<Vec<JobInfo>> = Mutex::new(Vec::new());
@@ -68,11 +75,15 @@ pub struct Job {
 
 pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let title = title.into();
     let mut jobs = JOBS.lock().unwrap();
+    // The same work done again (time-lapse previews every few seconds):
+    // the new run takes the old finished one's place in the list.
+    jobs.retain(|j| !(j.finished.is_some() && j.kind == kind && j.title == title));
     jobs.push(JobInfo {
         id,
         kind,
-        title: title.into(),
+        title,
         detail: String::new(),
         done: 0,
         total: 0,
@@ -82,6 +93,8 @@ pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
         state: "running",
         pausable: PAUSABLE.contains(&kind),
         error: String::new(),
+        preview: None,
+        log: Vec::new(),
     });
     // Forget the oldest finished ones.
     let finished = jobs.iter().filter(|j| j.finished.is_some()).count();
@@ -114,6 +127,20 @@ impl Job {
             j.bytes = true;
             j.done = done;
             j.total = total;
+        });
+    }
+    /// Show what was just made (see JobInfo::preview).
+    pub fn preview(&self, p: serde_json::Value) {
+        self.with(|j| j.preview = Some(p));
+    }
+    /// One more thing finished (kept: the last 8).
+    pub fn logged(&self, what: impl Into<String>) {
+        let w = what.into();
+        self.with(|j| {
+            j.log.push(w);
+            if j.log.len() > 8 {
+                j.log.remove(0);
+            }
         });
     }
     pub fn step(&self, detail: impl Into<String>) {
