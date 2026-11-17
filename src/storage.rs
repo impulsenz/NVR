@@ -517,6 +517,31 @@ fn gb(x: f64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How long listing a camera's folder takes with a month of 5-minute
+    /// files (8,640): the measurement behind keeping folder listings rather
+    /// than adding a database index. `cargo test --release -- --ignored list_speed --nocapture`
+    #[test]
+    #[ignore]
+    fn list_speed() {
+        let d = std::env::temp_dir().join(format!("gaze-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let t0 = Local::now() - CDuration::days(30);
+        for i in 0..8640 {
+            let t = t0 + CDuration::minutes(5 * i);
+            std::fs::write(d.join(format!("rec_{}.mp4", t.format("%Y-%m-%d_%H-%M-%S"))), b"x").unwrap();
+        }
+        let mut times = Vec::new();
+        for _ in 0..5 {
+            let s = std::time::Instant::now();
+            let l = list_now(&d);
+            times.push(s.elapsed());
+            assert_eq!(l.len(), 8640);
+        }
+        println!("list of 8,640 recordings: {:?} (each run)", times);
+        let _ = std::fs::remove_dir_all(&d);
+    }
     use crate::config::CameraConfig;
 
     #[test]
@@ -657,4 +682,5 @@ pub async fn watch_roots(m: std::sync::Arc<crate::manager::Manager>) {
         }
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     }
+
 }

@@ -25,7 +25,9 @@ fn hd_source(
     // Continuous recording, if it's the full-quality stream (not stream 2).
     let hd = rt.cfg.record_mode.continuous_stream() == Some(false) || !rt.cfg.has_sub();
     if !hd {
-        return None;
+        // Otherwise the HD picture taken when the person was first seen
+        // (detection itself watches the sub-stream).
+        return e.hd_snap.as_ref().map(|f| rt.events.dir().join(f)).filter(|p| p.exists()).map(|p| (p, 0.0));
     }
     let recs = crate::library::recordings(rt);
     let r = recs.iter().find(|r| r.start <= t && t <= r.end)?;

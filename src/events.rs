@@ -75,6 +75,11 @@ pub struct Event {
     /// (notifications wait for it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hd_checking: bool,
+    /// A full-quality (HD) picture taken when a person was first seen, for
+    /// face recognition when no full-quality video of the alert is kept
+    /// (cameras recording only their sub-stream). File in the events folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hd_snap: Option<String>,
     /// What the alert picture shows, as CLIP numbers (description search).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meaning: Option<Meaning>,
@@ -431,7 +436,7 @@ impl EventStore {
             let before = ev.len();
             ev.retain(|e| {
                 if remove(e) {
-                    gone.extend([&e.thumb, &e.clip].into_iter().flatten().cloned());
+                    gone.extend([&e.thumb, &e.clip, &e.hd_snap].into_iter().flatten().cloned());
                     false
                 } else {
                     true
@@ -513,6 +518,7 @@ mod tests {
             notified: 0,
             suspicious: String::new(),
             hd_checking: false,
+            hd_snap: None,
             meaning: None,
         };
         s.save_detected(e.clone());

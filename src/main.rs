@@ -13,6 +13,7 @@ mod draw;
 mod events;
 mod ffmpeg;
 mod getffmpeg;
+mod go2rtc;
 mod finalize;
 mod fsbrowse;
 mod ftp;
@@ -460,6 +461,8 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(ptz_auto::run(mgr.clone()));
     tokio::spawn(rtmp::run(mgr.clone()));
     tokio::spawn(update::run(mgr.clone()));
+    // go2rtc, when chosen as the streaming engine (Settings → System).
+    tokio::spawn(go2rtc::run(mgr.clone()));
     tokio::spawn(infer::run(mgr.clone()));
     tokio::spawn(storage::watch_roots(mgr.clone()));
     if let Some(caps) = bench_later {

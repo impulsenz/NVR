@@ -341,6 +341,9 @@ pub struct Config {
     pub cloud: CloudConfig,
     pub notify: NotifyConfig,
     pub update: UpdateConfig,
+    /// How cameras are connected to: the built-in FFmpeg pipeline, or
+    /// through go2rtc.
+    pub streaming: StreamingConfig,
     pub dashboard: DashboardConfig,
     /// Home / Away / Night: which cameras send phone notifications.
     pub modes: ModesConfig,
@@ -611,6 +614,22 @@ pub struct UpdateConfig {
     /// GitHub repository to update from ("owner/name"); empty = the one
     /// this program was built from.
     pub repo: String,
+}
+
+/// Streaming engine (Settings → System): "ffmpeg" (built in, default) or
+/// "go2rtc" (go2rtc holds the camera connections; see go2rtc.rs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct StreamingConfig {
+    pub engine: String,
+    /// The go2rtc program; empty = GAZE's own (downloaded when needed).
+    pub go2rtc_path: String,
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self { engine: "ffmpeg".into(), go2rtc_path: String::new() }
+    }
 }
 
 /// Phone notifications through ntfy (https://ntfy.sh, or your own server).

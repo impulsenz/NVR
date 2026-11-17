@@ -437,6 +437,7 @@ async fn system(State(m): App) -> Response {
         "log_file": logs::buffer().file_path(),
         "listen": m.bound_listen,
         "https_port": cfg.server.https_port,
+        "go2rtc": crate::go2rtc::status(),
         "addresses": local_addresses(),
         "uptime_seconds": m.started.elapsed().as_secs(),
         "capabilities": caps,
@@ -1137,6 +1138,9 @@ struct ExportCfgQuery {
     /// learned about them (faceprints, corrections).
     #[serde(default = "yes")]
     people: bool,
+    /// What GAZE has learned along the way: which alerts have been viewed.
+    #[serde(default = "yes")]
+    learned: bool,
 }
 
 /// Backup format (manifest.json in the .zip). Version 1 (before 0.6.89)
@@ -1194,6 +1198,16 @@ async fn export_config(
                 z.write_all(&b)?;
             }
             parts.push("people");
+        }
+        if q.learned {
+            // (Whitelisted small files of the data folder.)
+            for f in ["alerts-seen.json"] {
+                if let Ok(b) = std::fs::read(m.data_dir.join(f)) {
+                    z.start_file(format!("data/{f}"), opt)?;
+                    z.write_all(&b)?;
+                }
+            }
+            parts.push("learned");
         }
         z.start_file("manifest.json", opt)?;
         z.write_all(
@@ -1292,6 +1306,14 @@ async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: Bytes)
         if let Some(k) = known {
             let got = m.known.import(&k, |id, p| read(&format!("known/{id}/{p}")))?;
             parts.push(format!("{got} people & vehicles"));
+        }
+        // Which alerts have been viewed (read again when GAZE restarts).
+        if let Some(b) = read("data/alerts-seen.json")
+            && serde_json::from_slice::<serde_json::Value>(&b).is_ok()
+        {
+            std::fs::write(m.data_dir.join("alerts-seen.json"), b)?;
+            restart = true;
+            parts.push("which alerts were viewed".to_string());
         }
         anyhow::Ok((n, restart, parts.join(", ")))
     }
@@ -3570,7 +3592,7 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
 }
 
 /// Background job: keep the time-lapse previews of the last 24 hours ready
-/// (checked every minute), and go back over all older footage every ten
+/// (checked every 15 seconds, files still being recorded included), and go back over all older footage every ten
 /// minutes to make any preview that's missing (GAZE was busy or off, a file
 /// couldn't be read at the time …), a batch at a time while the computer
 /// is quiet. A file that fails is tried again later (a few times).
@@ -3709,9 +3731,17 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                     }
                     let key = format!("{}/{}", c.cfg.id, name);
                     match ensure_sprite(&m, c, kind, name).await {
-                        Ok(_) => {
+                        Ok((_, info)) => {
                             failed.remove(&key);
                             built += 1;
+                            // The pictures just made go by in Tasks.
+                            j.preview(json!({
+                                "url": format!("media/{}/sprite/{kind}/{name}?v={}&page=0", c.cfg.id, info.version),
+                                "columns": info.columns, "count": info.count.min(info.per_page),
+                                "tile": [info.tile_width, info.tile_height], "camera": c.cfg.name,
+                                "from": start, "every": info.interval,
+                            }));
+                            j.logged(format!("{} — {}–{} ({} pictures)", c.cfg.name, start.format("%H:%M:%S"), end.format("%H:%M:%S"), info.count));
                         }
                         Err(e) => {
                             let n = failed.get(&key).map(|x| x.0).unwrap_or(0) + 1;
@@ -3722,18 +3752,29 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                         }
                     }
                     j.done_one();
+                    // Spread over time, camera after camera, so the work
+                    // never comes all at once (no CPU spikes).
+                    if part == 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    }
                 }
             }
             if failed.len() > 20_000 {
                 failed.clear();
             }
         }
-        if built > 0 {
+        // (Files still growing are redone every 15 s: only worth a line
+        // when a real batch was made.)
+        if built > 4 {
             tracing::info!("time-lapse previews ready ({built} file(s) prepared)");
+        } else if built > 0 {
+            tracing::debug!("time-lapse previews brought up to date ({built} file(s))");
         }
-        // Every minute, so new recordings get their previews right away.
+        // Every 15 s: the files being recorded keep their previews up to
+        // date as they grow (made from the pictures motion detection keeps,
+        // so it's light), instead of waiting for each file to finish.
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
             _ = PREBUILD_NOW.notified() => {}
         }
     }

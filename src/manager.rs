@@ -87,6 +87,7 @@ impl CameraRuntime {
         // One connection per camera stream, shared by everything below.
         let relay_main = Relay::new(
             &cfg.name,
+            (&cfg.id, false),
             "main stream",
             &cfg.url,
             &cfg.rtsp_transport,
@@ -97,6 +98,7 @@ impl CameraRuntime {
         let relay_sub = if cfg.has_sub() {
             Relay::new(
                 &cfg.name,
+                (&cfg.id, true),
                 "sub-stream",
                 &cfg.live_url,
                 &cfg.rtsp_transport,
@@ -306,6 +308,7 @@ pub struct SettingsUpdate {
     pub cloud: Option<CloudConfig>,
     pub notify: Option<crate::config::NotifyConfig>,
     pub update: Option<crate::config::UpdateConfig>,
+    pub streaming: Option<crate::config::StreamingConfig>,
     pub mqtt: Option<crate::config::MqttConfig>,
     pub webhooks: Option<Vec<crate::config::Webhook>>,
     pub tts: Option<crate::config::TtsConfig>,
@@ -810,6 +813,13 @@ impl Manager {
         }
         if let Some(u) = up.update {
             cfg.update = u;
+        }
+        if let Some(mut st) = up.streaming {
+            if !["ffmpeg", "go2rtc"].contains(&st.engine.as_str()) {
+                anyhow::bail!("streaming engine must be ffmpeg or go2rtc");
+            }
+            st.go2rtc_path = st.go2rtc_path.trim().to_string();
+            cfg.streaming = st;
         }
         if let Some(mut n) = up.notify {
             // Empty secrets: keep the saved ones.

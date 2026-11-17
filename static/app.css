@@ -1480,7 +1480,7 @@ body.has-hw-bar main { padding-bottom: 52px; }
 /* Full screen: the same readings in a drawer that slides up from the bottom. */
 .hw-drawer { position: absolute; left: 50%; right: auto; bottom: 0; transform: translate(-50%, 100%); z-index: 60; border: 1px solid var(--border);
   border-bottom: 0; border-radius: 12px 12px 0 0; padding: 10px 18px; background: rgba(18, 20, 26, .88); color: #e6e8ec;
-  backdrop-filter: blur(8px); box-shadow: 0 -6px 24px rgba(0,0,0,.35); transition: transform .22s ease; max-width: calc(100% - 16px); }
+  backdrop-filter: blur(8px); box-shadow: 0 -6px 24px rgba(0,0,0,.35); transition: transform .22s ease; width: max-content; max-width: calc(100% - 16px); }
 .hw-drawer.open { transform: translate(-50%, 0); }
 #live-grid:not(.wall) .hw-drawer { display: none; }
 
@@ -1508,3 +1508,19 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .ev-pick { width: min(520px, calc(100vw - 16px)); }
 .ev-pick-list { display: grid; gap: 4px; max-height: 50vh; overflow: auto; }
 .ev-pick-list .check { display: flex; align-items: center; gap: 6px; }
+
+/* Alert player: Download clip stands out next to Download full alert. */
+.alert-dlg .p-clip { background: var(--amber); border-color: var(--amber); color: #111; font-weight: 600; }
+
+/* An alert's picture: who was recognized, by name. */
+.rc .thumb .who-tag { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 2; max-width: 70%;
+  padding: 3px 10px; border-radius: 999px; background: rgba(16, 122, 64, .92); color: #fff; font-size: 13px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; }
+
+/* Tasks: how busy, the pictures being made, and the files done. */
+.job-use { display: flex; gap: 14px; margin-top: 4px; color: var(--muted); }
+.job-use .lv-ok { color: var(--green); } .job-use .lv-warn { color: var(--amber); } .job-use .lv-bad { color: var(--red); }
+.job-more { display: flex; gap: 12px; align-items: flex-start; margin-top: 6px; flex-wrap: wrap; }
+.job-pv { position: relative; width: 192px; min-height: 60px; border-radius: 6px; background-color: #000; background-repeat: no-repeat; border: 1px solid var(--border); }
+.job-pv-t { position: absolute; left: 4px; bottom: 4px; font: 600 11px/1.4 ui-monospace, Consolas, monospace; color: #fff; background: rgba(0,0,0,.6); padding: 0 4px; border-radius: 3px; }
+.job-log { margin: 0; padding-left: 18px; color: var(--muted); max-width: 520px; }
