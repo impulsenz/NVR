@@ -115,10 +115,9 @@ updates from your repository: the workflow builds in its name, and Settings →
 About → Updates shows "Updates from: github.com/you/NVR".
 
 **Switching an existing installation** to another repository (for example a
-copy you built from the original): Settings → About → Updates → **Update
-from**, enter `you/NVR` (or paste the GitHub address), then **Save**. Leave
-it empty to go back to the repository the program was built from. The same
-setting is in `nvr.toml`:
+copy you built from the original): set it in `nvr.toml` (there is no longer a
+field for it in Settings), then restart GAZE. Leave it empty to go back to
+the repository the program was built from:
 
 ```toml
 [update]
