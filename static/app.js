@@ -6441,14 +6441,14 @@ function drawGraph() {
   const L = 40, R = 10, T = 12, B = 26;  // margins
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const live = h.filter(p => !p.gap);
-  if (live.length < 2) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" fill="#8b93a3" text-anchor="middle" font-size="13">Collecting data… (a reading every few seconds)</text>`; $('sys-legend').innerHTML = ''; return; }
+  if (live.length < 2) { svg.innerHTML = `<text class="gg-note" x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="13">Collecting data… (a reading every few seconds)</text>`; $('sys-legend').innerHTML = ''; return; }
   // The whole range asked for (not just where there's data).
   const t1 = h[h.length - 1].t, t0 = t1 - sysSpan;
   const X = (t) => L + (t - t0) / Math.max(1, t1 - t0) * (W - L - R), Y = (v) => T + (1 - Math.min(100, Math.max(0, v)) / 100) * (H - T - B);
   let g = '<defs>' + SERIES.map(([k, , c]) => `<linearGradient id="gg-${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".38"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient>`).join('')
-    + '<pattern id="gg-gap" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="3" height="6" fill="rgba(255,255,255,.05)"/></pattern></defs>';
-  for (const v of [0, 25, 50, 75, 100]) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="rgba(255,255,255,${v ? .06 : .14})" ${v ? 'stroke-dasharray="3 4"' : ''}/><text x="${L - 8}" y="${Y(v) + 3.5}" fill="#8b93a3" font-size="10.5" text-anchor="end">${v}%</text>`;
-  for (const [t, lab] of graphTicks(t0, t1)) g += `<line x1="${X(t)}" x2="${X(t)}" y1="${T}" y2="${H - B}" stroke="rgba(255,255,255,.05)"/><text x="${X(t)}" y="${H - 8}" fill="#8b93a3" font-size="10.5" text-anchor="middle">${lab}</text>`;
+    + '<pattern id="gg-gap" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="gg-gap" width="3" height="6"/></pattern></defs>';
+  for (const v of [0, 25, 50, 75, 100]) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" class="${v ? 'gg-h' : 'gg-h0'}" ${v ? 'stroke-dasharray="3 4"' : ''}/><text x="${L - 8}" y="${Y(v) + 3.5}" fill="#8b93a3" font-size="10.5" text-anchor="end">${v}%</text>`;
+  for (const [t, lab] of graphTicks(t0, t1)) g += `<line x1="${X(t)}" x2="${X(t)}" y1="${T}" y2="${H - B}" class="gg-v"/><text x="${X(t)}" y="${H - 8}" fill="#8b93a3" font-size="10.5" text-anchor="middle">${lab}</text>`;
   // Runs of readings between gaps (no line drawn across a gap).
   const runs = []; let cur = [];
   for (const p of h) { if (p.gap) { if (cur.length) runs.push(cur); cur = []; } else cur.push(p); }
@@ -6473,8 +6473,8 @@ function drawGraph() {
   }
   // Now: the latest readings.
   const last = live[live.length - 1];
-  for (const [k, , c] of shown) if (last[k] != null) g += `<circle cx="${X(last.t)}" cy="${Y(last[k])}" r="3.5" fill="${c}" stroke="#0f1218" stroke-width="2"/>`;
-  g += `<g id="g-cursor" visibility="hidden"><line y1="${T}" y2="${H - B}" stroke="#fff" stroke-opacity=".35"/>${shown.map(([k, , c]) => `<circle data-k="${k}" r="4.5" fill="${c}" stroke="#fff" stroke-width="1.5"/>`).join('')}</g>`;
+  for (const [k, , c] of shown) if (last[k] != null) g += `<circle cx="${X(last.t)}" cy="${Y(last[k])}" r="3.5" fill="${c}" class="gg-dot" stroke-width="2"/>`;
+  g += `<g id="g-cursor" visibility="hidden"><line y1="${T}" y2="${H - B}" class="gg-cursor"/>${shown.map(([k, , c]) => `<circle data-k="${k}" r="4.5" fill="${c}" stroke="#fff" stroke-width="1.5"/>`).join('')}</g>`;
   svg.innerHTML = g;
   // Legend: now, the average and the peak over the range shown.
   const stat = (k, peak) => { const v = live.map(p => p[k]).filter(x => x != null); if (!v.length) return null;
@@ -8197,13 +8197,13 @@ async function browseArchive(id) {
 // GAZE Watchdog: its own small program (optional) that opens GAZE again when
 // it crashes or stops answering, and starts with Windows. Installed, set up
 // and updated here; it talks to GAZE through files (see watchdog_ctl.rs).
-const WD_STATE = {watching: ['ok', 'Watching GAZE'], starting: ['warn', 'Starting GAZE…'], waiting: ['warn', 'Starting GAZE in a moment'], stopped: ['off', 'GAZE was closed on purpose'], cooldown: ['bad', 'Waiting (too many restarts)'], paused: ['off', 'Watching is switched off'], updating: ['warn', 'Updating the watchdog…']};
+const WD_STATE = {watching: ['ok', 'Watching GAZE'], starting: ['warn', 'Starting GAZE…'], waiting: ['warn', 'Starting GAZE in a moment'], stopped: ['off', 'GAZE was closed on purpose (left closed)'], cooldown: ['bad', 'Waiting (too many restarts)'], paused: ['off', 'Watching is switched off'], updating: ['warn', 'Updating the watchdog…']};
 function wdAgo(ms) { return ms ? fmtAgo(new Date(ms)) : '–'; }
 function paintWd(w) {
   const top = $('wd-top'); if (!top) return;
   const st = w.status || {}, run = w.running;
   const [cls, label] = !w.installed ? ['off', 'Not installed'] : !run ? ['bad', 'The watchdog is not running'] : (WD_STATE[st.state] || ['ok', st.state]);
-  const startup = {login: 'when someone signs in', boot: 'when the computer starts', none: 'not set (it only runs until the computer restarts)'}[st.startup || 'none'];
+  const startup = {login: 'when someone signs in', service: 'as a Windows service (starts with the computer)', boot: 'when the computer starts', none: 'not set (it only runs until the computer restarts)'}[st.startup || 'none'];
   const upd = st.update_available ? `<div class="wd-upd">⬆ Watchdog ${esc(st.latest)} is available (this is ${esc(st.version)}) <button type="button" class="small primary" id="wd-update">Update the watchdog</button></div>` : '';
   top.innerHTML = `<div class="card wd-card"><div class="wd-head"><span class="wd-pill ${cls}"><i></i>${esc(label)}</span>
     <div class="muted" style="flex:1">${w.installed && run ? esc(st.message || '') : ''}</div>
@@ -8242,8 +8242,8 @@ async function renderWatchdog(body) {
   const c = w.settings, num = (k, min, max, unit, id) => `<div class="row"><input type="number" id="wd-${id}" min="${min}" max="${max}" value="${c[k]}" style="width:90px"><span class="muted">${unit}</span></div>`;
   const installCard = `<div class="card wd-install"><h2>GAZE Watchdog <span class="muted small">(optional)</span></h2>
     <p style="margin-top:0">A small separate program that <b>watches GAZE</b> and <b>opens it again</b> if it crashes or stops answering. It starts with Windows, so after the computer restarts it opens GAZE too. It's made for GAZE only.</p>
-    ${w.supported ? `<div class="radio-cards"><label><input type="radio" name="wd-mode" value="login" checked><b>When I sign in (recommended)</b><small>Starts when you sign in to Windows. No administrator rights needed. Works with GAZE as a normal program.</small></label>
-      <label><input type="radio" name="wd-mode" value="boot"><b>When the computer starts</b><small>Starts before anyone signs in. Needs administrator rights (run GAZE as administrator). Best with GAZE running as a Windows service.</small></label></div>
+    ${w.supported ? `<div class="radio-cards"><label><input type="radio" name="wd-mode" value="login" checked><b>When I sign in (recommended)</b><small>Starts when you sign in to Windows, with its own icon next to the clock. No administrator rights needed. Works with GAZE as a normal program.</small></label>
+      <label><input type="radio" name="wd-mode" value="service"><b>As its own Windows service</b><small>Starts with the computer, before anyone signs in, and Windows restarts the watchdog itself if it ever stops. Windows asks for administrator permission once. Its icon shows next to the clock when you sign in. Best with GAZE running as a Windows service too.</small></label></div>
       <div class="actions"><button class="primary" id="wd-install">⇩ Download and install the watchdog</button><span id="wd-msg" class="small"></span></div>
       <div class="hint">Downloads GAZE-Watchdog.exe from GAZE's releases (checked against its checksum) into GAZE's data folder.</div>` : '<div class="err">The watchdog is for Windows.</div>'}</div>`;
   body.innerHTML = `<div id="wd-top"></div>${w.installed ? '' : installCard}
@@ -8256,7 +8256,7 @@ async function renderWatchdog(body) {
       <label for="wd-url">Address checked</label><div><input type="text" id="wd-url" value="${esc(c.check_url)}" style="width:100%"><label class="check" style="margin-top:4px"><input type="checkbox" id="wd-autourl" ${c.auto_url ? 'checked' : ''}> Keep this in step with GAZE's own web address</label></div></div>
     <h3>Restarting</h3><div class="form">
       <label for="wd-delay">Wait before opening GAZE${tip('When GAZE has gone, the watchdog waits this long before opening it (GAZE restarting itself after an update needs a moment).')}</label>${num('restart_delay_s', 0, 600, 'seconds', 'delay')}
-      <span></span><div><label class="check"><input type="checkbox" id="wd-clean" ${c.restart_on_clean_exit ? 'checked' : ''}> Also open GAZE again after it was closed on purpose (Quit)</label><div class="hint">Off: if you quit GAZE yourself, the watchdog leaves it closed until you open it (or the computer restarts).</div></div>
+      <span></span><div><label class="check"><input type="checkbox" id="wd-clean" ${c.leave_closed_on_quit ? 'checked' : ''}> Leave GAZE closed when I quit it myself</label><div class="hint">Off (the default): whenever GAZE isn't running — crashed, hung, ended in Task Manager or closed with Quit — the watchdog opens it again. On: after Quit from GAZE's own menu it stays closed until you open it (or the computer restarts).</div></div>
       <label for="wd-max">Too many restarts${tip('If GAZE keeps failing, restarting it again and again helps nobody. After this many restarts in the time below, the watchdog waits before trying again.')}</label><div class="row"><input type="number" id="wd-max" min="1" max="100" value="${c.max_restarts}" style="width:70px"><span class="muted">restarts within</span><input type="number" id="wd-within" min="1" max="1440" value="${c.within_minutes}" style="width:80px"><span class="muted">minutes: wait</span><input type="number" id="wd-cool" min="1" max="1440" value="${c.cooldown_minutes}" style="width:80px"><span class="muted">minutes</span></div>
       <label for="wd-kill">Time to close${tip('A stalled GAZE is asked to close; after this long it is ended by force.')}</label>${num('kill_timeout_s', 1, 300, 'seconds before GAZE is ended by force', 'kill')}</div>
     <h3>How GAZE is opened</h3><div class="form">
@@ -8282,7 +8282,7 @@ async function renderWatchdog(body) {
       e.preventDefault();
       const n = (id) => Math.max(0, Math.round(+val(id)) || 0);
       const j = {check_interval_s: n('wd-interval'), timeout_s: n('wd-timeout'), failures_before_restart: n('wd-fails'), startup_grace_s: n('wd-grace'), check_url: val('wd-url').trim(), auto_url: chk('wd-autourl'),
-        restart_delay_s: n('wd-delay'), restart_on_clean_exit: chk('wd-clean'), max_restarts: n('wd-max'), within_minutes: n('wd-within'), cooldown_minutes: n('wd-cool'), kill_timeout_s: n('wd-kill'),
+        restart_delay_s: n('wd-delay'), leave_closed_on_quit: chk('wd-clean'), max_restarts: n('wd-max'), within_minutes: n('wd-within'), cooldown_minutes: n('wd-cool'), kill_timeout_s: n('wd-kill'),
         launch: val('wd-launch'), service_name: val('wd-svc').trim() || 'GAZE', gaze_exe: val('wd-exe').trim(), gaze_args: val('wd-args').split('\n').map(x => x.trim()).filter(Boolean), auto_update: chk('wd-auto'), update_check_hours: n('wd-uhours')};
       try { await api('api/watchdog/settings', {method: 'PUT', json: j}); $('wd-saved').innerHTML = '<span class="ok">✓ Saved — the watchdog picks it up within a few seconds</span>'; setTimeout(refreshWd, 1500); }
       catch (err) { $('wd-saved').innerHTML = `<span class="err">✗ ${esc(err.message)}</span>`; }

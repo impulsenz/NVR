@@ -1,5 +1,11 @@
 # What's new in GAZE
 
+## 1.1.9 — November 2026
+- **Watchdog reopens GAZE however it stopped**: crashed, hung, ended in Task Manager or closed with Quit. (Before, it left GAZE closed after Quit. That's now an opt-in setting: “Leave GAZE closed when I quit it myself”.)
+- **The watchdog is its own Windows service** (Settings → Watchdog → “As its own Windows service”): starts with the computer, before anyone signs in, and Windows restarts the watchdog itself if it ever stops. It updates itself as a service too.
+- **The watchdog has its own icon** next to the clock (the GAZE eye with a green tick): status at a glance; menu to open GAZE, restart it, pause watching, open the log.
+- **Day theme**: the timelines (Recordings and the camera view, horizontal and vertical), the server-load graph and the sign-in card are now light on the day theme (they were fixed dark); night theme unchanged.
+
 ## 1.1.8 — November 2026
 - **Footage in deep storage stays on the timeline**, drawn darker so you can see it's no longer on the local disk (the key says "In deep storage (darker)"). It plays straight from deep storage (read there, not copied back), shows in the Alerts / Recordings list, plays from alerts, can be exported, and deleting it deletes it from there.
 - **Vertical timeline**: the recording-now bar looks like the bottom timeline's (its colour with a moving striped end); camera names slant up to the right so they read the right way up, with the recording dot at the top.

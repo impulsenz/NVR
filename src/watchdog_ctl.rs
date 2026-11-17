@@ -19,7 +19,7 @@ const ASSET: &str = "GAZE-Watchdog.exe";
 /// The settings the watchdog understands (anything else is dropped).
 const KEYS: &[&str] = &[
     "enabled", "gaze_exe", "gaze_args", "launch", "service_name", "check_url", "auto_url", "check_interval_s", "timeout_s",
-    "failures_before_restart", "startup_grace_s", "restart_delay_s", "restart_on_clean_exit", "max_restarts", "within_minutes",
+    "failures_before_restart", "startup_grace_s", "restart_delay_s", "leave_closed_on_quit", "max_restarts", "within_minutes",
     "cooldown_minutes", "kill_timeout_s", "auto_update", "update_check_hours",
 ];
 
@@ -84,7 +84,7 @@ fn defaults(mgr: &Manager) -> Map<String, Value> {
     for (k, v) in [("check_interval_s", 10), ("timeout_s", 8), ("failures_before_restart", 3), ("startup_grace_s", 120), ("restart_delay_s", 10), ("max_restarts", 5), ("within_minutes", 15), ("cooldown_minutes", 10), ("kill_timeout_s", 20), ("update_check_hours", 12)] {
         m.insert(k.into(), json!(v));
     }
-    m.insert("restart_on_clean_exit".into(), json!(false));
+    m.insert("leave_closed_on_quit".into(), json!(false));
     m.insert("auto_update".into(), json!(false));
     m
 }
@@ -217,11 +217,15 @@ async fn download(data: &Path, repo: &str) -> Result<()> {
 
 /// Run the watchdog program with these arguments and read what it says.
 async fn run_exe(exe: &Path, args: &[&str]) -> Result<String> {
+    run_exe_for(exe, args, 60).await
+}
+
+async fn run_exe_for(exe: &Path, args: &[&str], secs: u64) -> Result<String> {
     let mut cmd = tokio::process::Command::new(exe);
     cmd.args(args).stdin(std::process::Stdio::null());
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000);
-    let out = tokio::time::timeout(Duration::from_secs(60), cmd.output()).await.context("the watchdog didn't answer")??;
+    let out = tokio::time::timeout(Duration::from_secs(secs), cmd.output()).await.context("the watchdog didn't answer")??;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if out.status.success() { Ok(text) } else { bail!("{}", if text.is_empty() { "it failed".to_string() } else { text }) }
 }
@@ -231,6 +235,14 @@ pub fn start(data: &Path) -> Result<()> {
     let exe = exe_path(data);
     if !exe.exists() {
         bail!("the watchdog isn't installed");
+    }
+    // Its own Windows service: started through Windows.
+    if status(data).is_some_and(|s| s["startup"] == "service") && cfg!(windows) {
+        let o = std::process::Command::new("sc").args(["start", "GazeWatchdog"]).output().context("couldn't start the service")?;
+        if !o.status.success() && o.status.code() != Some(1056) {
+            bail!("the watchdog service didn't start: {}", String::from_utf8_lossy(&o.stdout).trim());
+        }
+        return Ok(());
     }
     let abs = std::path::absolute(data).unwrap_or(data.to_path_buf());
     let mut cmd = std::process::Command::new(exe);
@@ -248,8 +260,8 @@ pub fn start(data: &Path) -> Result<()> {
 /// when someone signs in) or "boot" (starts with the computer; needs
 /// administrator rights).
 pub async fn install(mgr: &Manager, mode: &str) -> Result<String> {
-    if !["login", "boot"].contains(&mode) {
-        bail!("choose when the watchdog starts");
+    if !["login", "service"].contains(&mode) {
+        bail!("choose how the watchdog starts");
     }
     let data = std::path::absolute(&mgr.data_dir).unwrap_or(mgr.data_dir.clone());
     let repo = crate::update::repo(&mgr.config().update);
@@ -262,8 +274,11 @@ pub async fn install(mgr: &Manager, mode: &str) -> Result<String> {
     if !dir(&data).join("settings.toml").exists() {
         write_settings(&data, &defaults(mgr))?;
     }
-    let msg = run_exe(&exe_path(&data), &["--install", "--mode", mode, "--data", &data.to_string_lossy()]).await?;
-    start(&data)?;
+    // (A Windows service asks for administrator rights; give it time to be answered.)
+    let msg = run_exe_for(&exe_path(&data), &["--install", "--mode", mode, "--data", &data.to_string_lossy()], 180).await?;
+    if mode == "login" {
+        start(&data)?;
+    }
     tracing::info!("watchdog installed ({mode})");
     Ok(msg)
 }

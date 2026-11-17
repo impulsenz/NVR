@@ -17,13 +17,20 @@
 //   gaze-watchdog --status                       print what it is doing
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod win;
+
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TASK_NAME: &str = "GazeWatchdog";
+/// Set by the Windows service manager's stop: the watchdog finishes.
+static STOP: AtomicBool = AtomicBool::new(false);
+/// Running as the Windows service (an update then restarts the service).
+static IS_SERVICE: AtomicBool = AtomicBool::new(false);
 const ASSET: &str = "GAZE-Watchdog.exe";
 const DEFAULT_REPO: &str = match option_env!("GAZE_UPDATE_REPO") {
     Some(r) => r,
@@ -57,8 +64,9 @@ pub struct Settings {
     pub startup_grace_s: u64,
     /// Wait this long before starting a GAZE that has gone.
     pub restart_delay_s: u64,
-    /// Also start GAZE again after it was closed on purpose (Quit).
-    pub restart_on_clean_exit: bool,
+    /// Leave GAZE closed after it was closed on purpose (Quit). Off: GAZE
+    /// is opened again whenever it isn't running, however it stopped.
+    pub leave_closed_on_quit: bool,
     /// No more than this many restarts in `within_minutes` …
     pub max_restarts: u32,
     pub within_minutes: u64,
@@ -86,7 +94,7 @@ impl Default for Settings {
             failures_before_restart: 3,
             startup_grace_s: 120,
             restart_delay_s: 10,
-            restart_on_clean_exit: false,
+            leave_closed_on_quit: false,
             max_restarts: 5,
             within_minutes: 15,
             cooldown_minutes: 10,
@@ -130,6 +138,38 @@ fn load_settings(data: &Path) -> Settings {
         .and_then(|t| toml::from_str::<Settings>(&t).ok())
         .unwrap_or_default()
         .clamped()
+}
+
+fn write_settings(data: &Path, s: &Settings) {
+    let dir = dir_of(data);
+    let _ = std::fs::create_dir_all(&dir);
+    let tmp = dir.join("settings.toml.tmp");
+    if let Ok(t) = toml::to_string_pretty(s) {
+        if std::fs::write(&tmp, t).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join("settings.toml"));
+        }
+    }
+}
+
+/// Switch watching on or off (the icon's menu).
+fn toggle_enabled(data: &Path) {
+    let mut s = load_settings(data);
+    s.enabled = !s.enabled;
+    write_settings(data, &s);
+}
+
+/// Leave a command for the running watchdog.
+fn send_command(data: &Path, cmd: &str) {
+    let d = dir_of(data).join("commands");
+    let _ = std::fs::create_dir_all(&d);
+    let _ = std::fs::write(d.join(format!("{}-{cmd}", chrono::Local::now().format("%Y%m%d%H%M%S%3f"))), cmd);
+}
+
+/// GAZE's web address on this computer, from the address that's checked.
+fn gaze_url(data: &Path) -> String {
+    let u = load_settings(data).check_url;
+    let port = u.split("//").nth(1).and_then(|r| r.split('/').next()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse::<u16>().ok()).unwrap_or(8080);
+    format!("http://localhost:{port}/")
 }
 
 // ------------------------------------------------------------------ status
@@ -281,7 +321,7 @@ impl Monitor {
             return self.act(s, now, Action::Restart(format!("GAZE stopped answering ({} checks in a row)", self.fails)));
         }
         // Not running.
-        if quit_marker && !s.restart_on_clean_exit {
+        if quit_marker && s.leave_closed_on_quit {
             self.state = "stopped".into();
             self.message = "GAZE was closed on purpose (the watchdog leaves it closed)".into();
             self.gone_since = None;
@@ -449,46 +489,113 @@ pub async fn check(url: &str, timeout: Duration) -> Result<u64, String> {
 
 // -------------------------------------------------------------- start-up
 
-/// How the watchdog starts with Windows: "login", "boot" or "none".
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+/// How the watchdog starts with Windows: "service" (its own Windows
+/// service, with an icon when someone signs in), "login" (when someone
+/// signs in) or "none".
 fn startup_state() -> String {
     if !cfg!(windows) {
         return "none".into();
     }
-    let ok = |c: &mut std::process::Command| hide(c).output().map(|o| o.status.success()).unwrap_or(false);
-    if ok(std::process::Command::new("schtasks").args(["/Query", "/TN", TASK_NAME])) {
-        "boot".into()
-    } else if ok(std::process::Command::new("reg").args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", TASK_NAME])) {
-        "login".into()
-    } else {
-        "none".into()
+    if win::service_installed() {
+        return "service".into();
+    }
+    let out = hide(std::process::Command::new("reg").args(["query", RUN_KEY, "/v", TASK_NAME])).output();
+    match out {
+        Ok(o) if o.status.success() && String::from_utf8_lossy(&o.stdout).contains("--run") => "login".into(),
+        _ => "none".into(),
     }
 }
 
+fn set_run_key(value: Option<&str>) {
+    match value {
+        Some(v) => {
+            let _ = hide(std::process::Command::new("reg").args(["add", RUN_KEY, "/v", TASK_NAME, "/t", "REG_SZ", "/d", v, "/f"])).output();
+        }
+        None => {
+            let _ = hide(std::process::Command::new("reg").args(["delete", RUN_KEY, "/v", TASK_NAME, "/f"])).output();
+        }
+    }
+}
+
+fn spawn_detached(exe: &Path, args: &[&str]) {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0000_0008 | 0x0000_0200);
+    }
+    let _ = cmd.spawn();
+}
+
+/// Set up how the watchdog starts: "login" or "service" ("boot" is the
+/// same as "service").
 fn install_startup(mode: &str, data: &Path) -> Result<String, String> {
     if !cfg!(windows) {
         return Err("The watchdog's start-up is for Windows".into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let run = format!("\"{}\" --run --data \"{}\"", exe.display(), data.display());
-    uninstall_startup();
-    let out = match mode {
-        "boot" => hide(std::process::Command::new("schtasks").args(["/Create", "/TN", TASK_NAME, "/TR", &run, "/SC", "ONSTART", "/RU", "SYSTEM", "/RL", "HIGHEST", "/F"])).output(),
-        "login" => hide(std::process::Command::new("reg").args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", TASK_NAME, "/t", "REG_SZ", "/d", &run, "/f"])).output(),
-        _ => return Err("mode must be login or boot".into()),
+    let d = data.display().to_string();
+    match mode {
+        "login" => {
+            remove_service()?;
+            set_run_key(Some(&format!("\"{}\" --run --data \"{d}\"", exe.display())));
+            Ok("The watchdog starts when you sign in, with its own icon next to the clock".into())
+        }
+        "service" | "boot" => {
+            // A Windows service needs administrator rights: Windows asks once.
+            if win::is_admin() {
+                install_service(&exe, data)?;
+            } else {
+                match win::elevate_and_wait(&format!("--install-service --data \"{d}\"")) {
+                    None => return Err("Nothing was changed: Windows didn't give permission".into()),
+                    Some(0) => {}
+                    Some(_) => return Err("The Windows service couldn't be set up (see the watchdog log)".into()),
+                }
+            }
+            // Whoever signs in sees its icon.
+            set_run_key(Some(&format!("\"{}\" --tray --data \"{d}\"", exe.display())));
+            spawn_detached(&exe, &["--tray", "--data", &d]);
+            Ok("The watchdog is a Windows service: it starts with the computer, and Windows restarts it if it ever stops".into())
+        }
+        _ => Err("mode must be login or service".into()),
     }
-    .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(if mode == "boot" { "The watchdog starts when the computer starts".into() } else { "The watchdog starts when you sign in".into() })
+}
+
+/// (Administrator) create the service and start it.
+fn install_service(exe: &Path, data: &Path) -> Result<(), String> {
+    // A watchdog run by hand or at sign-in is closed first: one watches at a time.
+    send_command(data, "stop");
+    std::thread::sleep(Duration::from_secs(2));
+    let _ = hide(std::process::Command::new("schtasks").args(["/Delete", "/TN", TASK_NAME, "/F"])).output();
+    win::service_install(exe, data).map_err(|e| {
+        log(data, &format!("service: {e}"));
+        e
+    })
+}
+
+fn remove_service() -> Result<(), String> {
+    if !win::service_installed() {
+        return Ok(());
+    }
+    if win::is_admin() {
+        win::service_uninstall()
     } else {
-        let t = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        Err(if mode == "boot" { format!("Starting at boot needs administrator rights (run GAZE as administrator, or choose “when I sign in”): {}", t.trim()) } else { t.trim().to_string() })
+        match win::elevate_and_wait("--uninstall-service") {
+            Some(0) => Ok(()),
+            Some(_) => Err("The Windows service couldn't be removed".into()),
+            None => Err("Nothing was changed: Windows didn't give permission".into()),
+        }
     }
 }
 
 fn uninstall_startup() {
     if cfg!(windows) {
         let _ = hide(std::process::Command::new("schtasks").args(["/Delete", "/TN", TASK_NAME, "/F"])).output();
-        let _ = hide(std::process::Command::new("reg").args(["delete", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", TASK_NAME, "/f"])).output();
+        set_run_key(None);
+        let _ = remove_service();
     }
 }
 
@@ -557,6 +664,20 @@ async fn install_update(data: &Path) -> Result<String, String> {
         return Err(format!("couldn't put the new watchdog in place: {e}"));
     }
     log(data, &format!("updated to {latest}: starting the new version"));
+    if IS_SERVICE.load(Ordering::SeqCst) {
+        // The service ends now; a helper starts it again with the new program.
+        if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", &format!("ping -n 4 127.0.0.1 >nul & sc start {TASK_NAME}")]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                c.creation_flags(0x0000_0008 | 0x0800_0000);
+            }
+            let _ = c.spawn();
+        }
+        return Ok(format!("Updated to {latest}"));
+    }
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(["--run", "--data"]).arg(data).args(["--wait-pid", &std::process::id().to_string()]);
     #[cfg(windows)]
@@ -572,6 +693,10 @@ async fn install_update(data: &Path) -> Result<String, String> {
 
 /// Only one watchdog at a time.
 fn take_lock(data: &Path, wait_pid: Option<u32>) -> bool {
+    take_lock_named(data, wait_pid, "watchdog.lock")
+}
+
+fn take_lock_named(data: &Path, wait_pid: Option<u32>, file: &str) -> bool {
     use sysinfo::{Pid, ProcessesToUpdate};
     let dir = dir_of(data);
     let _ = std::fs::create_dir_all(&dir);
@@ -586,7 +711,7 @@ fn take_lock(data: &Path, wait_pid: Option<u32>) -> bool {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
-    let lock = dir.join("watchdog.lock");
+    let lock = dir.join(file);
     if let Some(pid) = std::fs::read_to_string(&lock).ok().and_then(|t| t.trim().parse::<u32>().ok()) {
         let mut sys = new_system();
         if let Some(sys) = sys.as_mut() { sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true); }
@@ -637,6 +762,14 @@ async fn run(data: PathBuf, wait_pid: Option<u32>) {
     let mut recheck_update = true;
     loop {
         tick.tick().await;
+        if STOP.load(Ordering::SeqCst) {
+            log(&data, "stopped by Windows");
+            let _ = std::fs::remove_file(dir_of(&data).join("watchdog.lock"));
+            st.state = "stopped".into();
+            st.updated = 0;
+            write_status(&data, &st);
+            return;
+        }
         // New settings from GAZE.
         let m = std::fs::metadata(dir_of(&data).join("settings.toml")).and_then(|m| m.modified()).ok();
         if m != settings_mtime {
@@ -818,8 +951,49 @@ fn main() {
         println!("The watchdog no longer starts with Windows");
     } else if args.iter().any(|a| a == "--status") {
         println!("{}", std::fs::read_to_string(dir_of(&data).join("status.json")).unwrap_or_else(|_| "{}".into()));
+    } else if args.iter().any(|a| a == "--install-service") {
+        // (Run as administrator by --install.)
+        let exe = std::env::current_exe().unwrap_or_default();
+        if let Err(e) = install_service(&exe, &data) {
+            println!("{e}");
+            std::process::exit(1);
+        }
+    } else if args.iter().any(|a| a == "--uninstall-service") {
+        if let Err(e) = win::service_uninstall() {
+            println!("{e}");
+            std::process::exit(1);
+        }
+    } else if args.iter().any(|a| a == "--service") {
+        // Started by the Windows service manager.
+        IS_SERVICE.store(true, Ordering::SeqCst);
+        let d = data.clone();
+        let ok = win::run_service(
+            move || {
+                let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime");
+                rt.block_on(run(d.clone(), None));
+            },
+            || STOP.store(true, Ordering::SeqCst),
+        );
+        if !ok {
+            println!("This is started by the Windows service manager. Use --run to run the watchdog by hand.");
+        }
+    } else if args.iter().any(|a| a == "--tray") {
+        // The icon only (the watchdog itself is the Windows service).
+        if take_lock_named(&data, None, "tray.lock") {
+            win::tray_run(win::TrayCfg { data, companion: true, command: send_command, toggle_pause: toggle_enabled, gaze_url });
+        }
     } else {
         let wait = arg_value(&args, "--wait-pid").and_then(|p| p.parse().ok());
+        // Run by hand or at sign-in: the watchdog has its own icon.
+        if cfg!(windows) && !args.iter().any(|a| a == "--no-tray") {
+            let d = data.clone();
+            std::thread::spawn(move || {
+                // (The tray's own lock: a second icon isn't shown.)
+                if take_lock_named(&d, None, "tray.lock") {
+                    win::tray_run(win::TrayCfg { data: d, companion: false, command: send_command, toggle_pause: toggle_enabled, gaze_url });
+                }
+            });
+        }
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime");
         rt.block_on(run(data, wait));
     }
@@ -862,20 +1036,22 @@ mod tests {
     }
 
     #[test]
-    fn a_gaze_that_is_gone_is_started_after_the_delay_unless_quit_on_purpose() {
+    fn a_gaze_that_is_gone_is_started_after_the_delay_also_when_quit_on_purpose() {
         let mut cfg = s();
         cfg.restart_delay_s = 10;
         let (mut m, t0) = (Monitor::default(), Instant::now());
         assert_eq!(m.look(&cfg, false, false, false, t0), Action::Nothing);
         assert_eq!(m.look(&cfg, false, false, false, t0 + Duration::from_secs(5)), Action::Nothing);
         assert!(matches!(m.look(&cfg, false, false, false, t0 + Duration::from_secs(11)), Action::Start(_)));
-        // Quit on purpose: left alone, unless the setting says otherwise.
+        // Closed on purpose (Quit): opened again like any other stop …
         let mut m = Monitor::default();
+        cfg.restart_delay_s = 0;
+        assert!(matches!(m.look(&cfg, false, false, true, t0 + Duration::from_secs(60)), Action::Start(_)));
+        // … unless it's asked to leave GAZE closed.
+        let mut m = Monitor::default();
+        cfg.leave_closed_on_quit = true;
         assert_eq!(m.look(&cfg, false, false, true, t0 + Duration::from_secs(60)), Action::Nothing);
         assert_eq!(m.state, "stopped");
-        cfg.restart_on_clean_exit = true;
-        cfg.restart_delay_s = 0;
-        assert!(matches!(m.look(&cfg, false, false, true, t0 + Duration::from_secs(61)), Action::Start(_)));
     }
 
     #[test]
@@ -908,6 +1084,24 @@ mod tests {
         assert_eq!(toml::from_str::<Settings>(&t).unwrap(), Settings::default());
         // A file with only some settings still works.
         assert!(toml::from_str::<Settings>("check_interval_s = 30").unwrap().enabled);
+    }
+
+    #[test]
+    fn the_icon_menu_switches_watching_and_finds_gaze() {
+        let d = std::env::temp_dir().join(format!("gaze-wd3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(load_settings(&d).enabled);
+        toggle_enabled(&d);
+        assert!(!load_settings(&d).enabled);
+        toggle_enabled(&d);
+        assert!(load_settings(&d).enabled);
+        let mut st = load_settings(&d);
+        st.check_url = "http://127.0.0.1:9123/api/auth/state".into();
+        write_settings(&d, &st);
+        assert_eq!(gaze_url(&d), "http://localhost:9123/");
+        send_command(&d, "restart-gaze");
+        assert_eq!(take_commands(&d), vec!["restart-gaze"]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
