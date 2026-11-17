@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 1.1.1 — November 2026
+- **go2rtc with TP-Link Tapo (and similar) cameras**: go2rtc no longer asks cameras for their two-way audio channel, which left some cameras (Tapo among them) with no picture ("could not find codec parameters"). GAZE talks through cameras itself as before.
+- **A camera that gets no picture through go2rtc connects straight to the camera** after two tries (for 10 minutes, then tries go2rtc again), so it keeps recording. What go2rtc said about it is written to Settings → Logs.
+
 ## 1.1.0 — November 2026
 - **Evidence Locker** (new Evidence page): keep alerts, clips and pictures in cases. Everything added is copied into the case and protected — it can't be deleted from Recordings, Alerts, Delete footage or by the automatic clean-up until it's unprotected in its case.
 - **Live view**: the opened camera fills its box edge to edge with its controls underneath; choose all cameras, a group or any cameras from one menu; full screen shows the same layout as the Live page; zoom into any picture with the mouse wheel; no more full-screen button on each picture.
