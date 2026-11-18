@@ -253,6 +253,47 @@ pub fn download_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
+/// SHA-256 of a file, read a piece at a time.
+pub fn sha256_raw(path: &std::path::Path) -> anyhow::Result<[u8; 32]> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut f = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?);
+    let mut h = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().into())
+}
+
+/// SHA-256 of a file, as lower-case hex.
+pub fn sha256_file(path: &std::path::Path) -> anyhow::Result<String> {
+    Ok(sha256_raw(path)?.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// SHA-256 of bytes already in memory, as lower-case hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Check a downloaded file against the checksum pinned in the program. A file
+/// that doesn't match is deleted (so it is never unpacked, loaded or run) and
+/// the error says so. Programs and libraries GAZE downloads and then runs must
+/// go through this (see docs/SECURITY-CHECKLIST.md).
+pub fn verify_sha256(path: &std::path::Path, what: &str, want: &str) -> anyhow::Result<()> {
+    let got = sha256_file(path)?;
+    if got != want {
+        let _ = std::fs::remove_file(path);
+        anyhow::bail!("the downloaded {what} is not the expected file (checksum {got}); it was deleted and will not be used");
+    }
+    Ok(())
+}
+
 /// Download a file, showing it as a task with progress.
 pub async fn download(
     what: &str,
@@ -296,6 +337,26 @@ pub async fn download(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pinned_download_is_checked_and_a_wrong_one_deleted() {
+        let dir = std::env::temp_dir().join(format!("nvr-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("x.bin");
+        std::fs::write(&f, b"abc").unwrap();
+        // SHA-256("abc"), the standard test vector.
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(sha256_file(&f).unwrap(), abc);
+        assert_eq!(sha256_hex(b"abc"), abc);
+        verify_sha256(&f, "test file", abc).unwrap();
+        assert!(f.exists());
+        let e = verify_sha256(&f, "test file", &"0".repeat(64)).unwrap_err().to_string();
+        assert!(e.contains("not the expected file") && e.contains(abc), "{e}");
+        assert!(!f.exists(), "a file that fails its checksum is deleted");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn jobs_finish_when_dropped() {
         let j = super::start("ai", "Testing");

@@ -132,6 +132,17 @@ fn asset() -> Option<&'static str> {
     }
 }
 
+/// SHA-256 of each release file of `VERSION` (from the files themselves; the
+/// version is fixed, so a changed file means something is wrong).
+fn pinned(asset: &str) -> Option<&'static str> {
+    match asset {
+        "go2rtc_win64.zip" => Some("3259a04c402cd22b39092119151140d91b7d9898591c8d94422c6f84eddf7380"),
+        "go2rtc_linux_amd64" => Some("aca941066c816cd69f4d689bf556f924057f5087449c2fdd7d5854d9aaec8ea9"),
+        "go2rtc_linux_arm64" => Some("d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867f38d2777a"),
+        _ => None,
+    }
+}
+
 /// Download go2rtc into GAZE's own folder.
 async fn fetch(data_dir: &Path) -> Result<PathBuf> {
     let Some(asset) = asset() else {
@@ -144,6 +155,10 @@ async fn fetch(data_dir: &Path) -> Result<PathBuf> {
     info!("go2rtc: downloading {url}");
     let bytes = crate::jobs::download_client()?.get(&url).send().await?.error_for_status()?.bytes().await?;
     anyhow::ensure!(bytes.len() > 1_000_000, "the go2rtc download is incomplete");
+    // Checked before anything is written, unpacked or run.
+    let want = pinned(asset).context("no checksum is known for this go2rtc file")?;
+    let got = crate::jobs::sha256_hex(&bytes);
+    anyhow::ensure!(got == want, "the downloaded go2rtc is not the expected file (checksum {got}); it was not used");
     let name = if cfg!(windows) { "go2rtc.exe" } else { "go2rtc" };
     let out = dir.join(name);
     if asset.ends_with(".zip") {
@@ -320,3 +335,21 @@ mod tests {
         HEALTHY.store(false, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    /// Every file GAZE can download has a pinned checksum (a new platform
+    /// added to `asset()` without one would otherwise fail only at run time).
+    #[test]
+    fn every_downloadable_go2rtc_file_is_pinned() {
+        for name in ["go2rtc_win64.zip", "go2rtc_linux_amd64", "go2rtc_linux_arm64"] {
+            let sum = pinned(name).unwrap_or_else(|| panic!("{name} has no checksum"));
+            assert_eq!(sum.len(), 64);
+            assert!(sum.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        assert!(pinned("go2rtc_other").is_none());
+    }
+}
+

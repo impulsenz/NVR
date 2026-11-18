@@ -6051,14 +6051,20 @@ fn session_cookie(token: &str, remember: bool, secure: bool) -> HeaderValue {
 }
 
 /// The address a request comes from (the real one behind a proxy on this
-/// computer, such as `tailscale serve`).
+/// computer, such as `tailscale serve`). Only a proxy on this computer is
+/// believed, and then the **last** address it wrote: a proxy that adds to
+/// `X-Forwarded-For` puts the address it saw at the end, while everything
+/// before it is whatever the visitor sent (so the first can be made up to
+/// dodge the sign-in lock-out).
 fn client_ip(addr: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> std::net::IpAddr {
     let ip = addr.ip();
     if ip.is_loopback()
         && let Some(f) = headers
-            .get("x-forwarded-for")
+            .get_all("x-forwarded-for")
+            .iter()
+            .next_back()
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
+            .and_then(|v| v.rsplit(',').next())
             .and_then(|v| v.trim().parse().ok())
     {
         return f;
@@ -6757,6 +6763,26 @@ mod tests {
         // No restriction listed: all cameras. Not signed in: decided elsewhere.
         assert!(camera_denied(&user(&[]), "garage").is_none());
         assert!(camera_denied(&None, "garage").is_none());
+    }
+
+    #[test]
+    fn only_a_proxy_on_this_computer_is_believed_and_its_last_address_counts() {
+        let from = |peer: &str, xff: &[&str]| {
+            let mut h = axum::http::HeaderMap::new();
+            for v in xff {
+                h.append("x-forwarded-for", HeaderValue::from_str(v).unwrap());
+            }
+            client_ip(format!("{peer}:5000").parse().unwrap(), &h).to_string()
+        };
+        // No proxy: the connection's own address; the header means nothing.
+        assert_eq!(from("203.0.113.9", &["6.6.6.6"]), "203.0.113.9");
+        // A proxy on this computer: the address it saw, even if the visitor
+        // sent others first (a proxy that adds puts its own at the end).
+        assert_eq!(from("127.0.0.1", &["198.51.100.4"]), "198.51.100.4");
+        assert_eq!(from("127.0.0.1", &["6.6.6.6, 7.7.7.7, 198.51.100.4"]), "198.51.100.4");
+        assert_eq!(from("127.0.0.1", &["6.6.6.6", "198.51.100.4"]), "198.51.100.4");
+        // Rubbish falls back to the connection's address.
+        assert_eq!(from("127.0.0.1", &["not-an-address"]), "127.0.0.1");
     }
 
     #[test]

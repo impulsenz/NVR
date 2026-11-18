@@ -9,6 +9,14 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// SHA-256 of the engine files of the pinned release (see `ENGINE`).
+fn engine_sha256(file: &str) -> &'static str {
+    match file {
+        "piper_windows_amd64.zip" => "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea",
+        _ => "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992",
+    }
+}
+
 const ENGINE: &str = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/";
 const VOICE_BASE: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/";
 
@@ -120,6 +128,9 @@ pub async fn download(id: &str) -> Result<()> {
             let (file, n) = if cfg!(windows) { ("piper_windows_amd64.zip", 10_000_000) } else { ("piper_linux_x86_64.tar.gz", 10_000_000) };
             let arc = dir().join(file);
             crate::jobs::download("the voice engine (Piper)", &format!("{ENGINE}{file}"), &arc, n).await?;
+            let want = engine_sha256(file);
+            let arc1 = arc.clone();
+            tokio::task::spawn_blocking(move || crate::jobs::verify_sha256(&arc1, "voice engine", want)).await??;
             let (a, d) = (arc.clone(), dir());
             tokio::task::spawn_blocking(move || unpack(&a, &d)).await??;
             let _ = std::fs::remove_file(&arc);

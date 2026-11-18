@@ -612,6 +612,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The hand-written HMAC against a published answer, and signatures that
+    /// are cut short, empty, off by one character, or made with another key.
+    #[test]
+    fn the_hmac_is_the_standard_one_and_bad_signatures_fail() {
+        // RFC 4231, test case 2.
+        assert_eq!(hmac(b"Jefe", "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+        let dir = std::env::temp_dir().join(format!("nvr-sn2-{}", std::process::id()));
+        let other = std::env::temp_dir().join(format!("nvr-sn3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let exp = Local::now().timestamp() + 3600;
+        let sig = hmac(&key(&dir), &format!("front|60|{exp}"));
+        assert!(snooze_ok(&dir, "front", 60, exp, &sig));
+        assert!(!snooze_ok(&dir, "front", 60, exp, &sig[..sig.len() - 1]));
+        assert!(!snooze_ok(&dir, "front", 60, exp, ""));
+        let mut flipped = sig.clone().into_bytes();
+        flipped[0] = if flipped[0] == b'a' { b'b' } else { b'a' };
+        assert!(!snooze_ok(&dir, "front", 60, exp, &String::from_utf8(flipped).unwrap()));
+        assert!(!snooze_ok(&other, "front", 60, exp, &sig)); // another installation's key
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
     #[test]
     fn night_hours_wrap_midnight() {
         let c = NotifyConfig::default();

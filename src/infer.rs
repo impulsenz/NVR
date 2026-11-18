@@ -27,6 +27,10 @@ pub type Plan = Arc<tract_onnx::prelude::TypedSimplePlan>;
 /// ONNX Runtime with DirectML, from NuGet (the last version with DirectML).
 const ORT_VERSION: &str = "1.24.4";
 const DML_VERSION: &str = "1.15.4";
+/// SHA-256 of the two NuGet packages (they match the SHA-512 NuGet itself
+/// publishes for these versions).
+const ORT_DML_SHA256: &str = "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681";
+const DML_SHA256: &str = "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9";
 /// ONNX Runtime for Linux, from PyPI wheels (only the native libraries are
 /// used; the wheel is a zip). Pinned: the address and the SHA-256.
 const LINUX_ORT_VERSION: &str = "1.24.1";
@@ -484,7 +488,7 @@ async fn wheel_files(data_dir: &Path, kind: &str, wheel: (&str, &str), what: &st
     crate::jobs::download(what, wheel.0, &whl, 10_000_000).await?;
     let (whl2, dir2, want) = (whl.clone(), dir.clone(), wheel.1.to_string());
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let got = sha256_file(&whl2)?;
+        let got = crate::jobs::sha256_file(&whl2)?;
         if got != want {
             let _ = std::fs::remove_file(&whl2);
             bail!("the downloaded {} runtime does not match its checksum (got {got}); it was discarded", "ONNX");
@@ -502,22 +506,6 @@ async fn wheel_files(data_dir: &Path, kind: &str, wheel: (&str, &str), what: &st
         bail!("{} is not in the downloaded runtime", lib.display());
     }
     Ok(lib)
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    let mut f = std::fs::File::open(path)?;
-    let mut h = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Every native library in `onnxruntime/capi/` of a wheel (not the Python
@@ -562,18 +550,20 @@ async fn directml_files(data_dir: &Path) -> Result<PathBuf> {
         return Ok(ort_dll);
     }
     std::fs::create_dir_all(&dir)?;
-    for (pkg, ver, inside, out) in [
+    for (pkg, ver, inside, out, sha) in [
         (
             "microsoft.ml.onnxruntime.directml",
             ORT_VERSION,
             "runtimes/win-x64/native/onnxruntime.dll",
             &ort_dll,
+            ORT_DML_SHA256,
         ),
         (
             "microsoft.ai.directml",
             DML_VERSION,
             "bin/x64-win/DirectML.dll",
             &dml_dll,
+            DML_SHA256,
         ),
     ] {
         if out.exists() {
@@ -582,6 +572,8 @@ async fn directml_files(data_dir: &Path) -> Result<PathBuf> {
         let url = format!("https://api.nuget.org/v3-flatcontainer/{pkg}/{ver}/{pkg}.{ver}.nupkg");
         let nupkg = dir.join(format!("{pkg}.nupkg"));
         crate::jobs::download("the GPU runtime for AI", &url, &nupkg, 1_000_000).await?;
+        let nupkg1 = nupkg.clone();
+        tokio::task::spawn_blocking(move || crate::jobs::verify_sha256(&nupkg1, "GPU runtime package", sha)).await??;
         let (nupkg2, inside, out2) = (nupkg.clone(), inside.to_string(), out.clone());
         tokio::task::spawn_blocking(move || extract(&nupkg2, &inside, &out2)).await??;
         let _ = std::fs::remove_file(&nupkg);

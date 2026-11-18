@@ -115,22 +115,7 @@ pub fn copy_local(src: &Path, dest: &Path) -> Result<()> {
     res
 }
 
-/// SHA-256 of a file, read a piece at a time.
-fn sha256_file(p: &Path) -> Result<[u8; 32]> {
-    use sha2::Digest;
-    use std::io::Read;
-    let mut f = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(p)?);
-    let mut h = sha2::Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(h.finalize().into())
-}
+use crate::jobs::sha256_raw as sha256_file;
 
 /// A NAS's shared folder that needs a login: connect to it (Windows), so
 /// copies there work, also when GAZE runs as a service.

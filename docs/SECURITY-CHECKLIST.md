@@ -48,3 +48,15 @@ the page. Findings and history: `AUDIT-2026-11.md` (section E).
 ## Open items
 
 See the S-entries in `TECH-DEBT.md`.
+
+## Added in 1.2.2
+
+- [ ] A program or library GAZE downloads and then runs or loads (go2rtc, Piper,
+      DirectML, the OpenVINO/CUDA runtimes) is checked against a SHA-256 pinned
+      in the code **before** it is unpacked (`jobs::verify_sha256`; a failing file
+      is deleted). Pins are for a fixed version; a floating "latest" URL can't be
+      pinned (ffmpeg: see TECH-DEBT X-1).
+- [ ] The client address used for the sign-in lock-out comes from `client_ip`: the
+      connection's own address, or, from a proxy on this computer, the **last**
+      `X-Forwarded-For` address. IPv6 is counted per /64 (`users::ip_bucket`).
+

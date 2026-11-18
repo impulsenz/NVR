@@ -1,6 +1,8 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Security**: downloaded programs and libraries are now checked against a pinned checksum before they are used — go2rtc, the Piper voice engine and the DirectML runtime (a file that doesn't match is deleted and not used). The sign-in lock-out can no longer be dodged by sending made-up `X-Forwarded-For` addresses through a reverse proxy on the same computer, or by changing address inside an IPv6 /64.
+- **Tests** for the recording repair after a power cut (real ffmpeg recordings cut at 60 places, and with zero-filled endings) and for the snooze-link signature (the hash is checked against the RFC 4231 answer).
 - **Linux download**: releases now also carry `GAZE-linux-x86_64` (with its checksum). GAZE doesn't update itself on Linux. A Linux check (tests, page smoke test, Docker image build and start) now runs on every change. The Windows release is unaffected (the Linux build is a separate job).
 
 ## 1.2.1 — November 2026

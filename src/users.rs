@@ -183,6 +183,19 @@ fn pct(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
+/// What counts as one visitor for the lock-out: an IPv4 address by itself,
+/// an IPv6 address by its /64 (one household or one rented machine owns a
+/// whole /64, so counting single addresses would give a guesser billions).
+fn ip_bucket(from: &str) -> String {
+    match from.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(a)) => {
+            let s = a.segments();
+            format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+        }
+        _ => from.to_string(),
+    }
+}
+
 /// Failed attempts allowed before a lock-out.
 const FREE_TRIES: u32 = 5;
 
@@ -642,7 +655,7 @@ impl Users {
     pub fn check(&self, username: &str, password: &str, from: &str) -> Result<String> {
         let keys = [
             format!("user:{}", username.trim().to_lowercase()),
-            format!("ip:{from}"),
+            format!("ip:{}", ip_bucket(from)),
         ];
         {
             let f = self.failures.locked();
@@ -881,6 +894,26 @@ mod tests {
         assert_eq!(u2.session_user(&t2).unwrap().username, "kid");
         u2.update("kid", None, None, Some("newpass1")).unwrap();
         assert!(u2.session_user(&t2).is_none(), "password change signs out");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_ipv6_guesser_cannot_dodge_the_lockout_by_changing_address() {
+        let dir = std::env::temp_dir().join(format!("nvr-users-v6-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let u = Users::open(&dir);
+        u.setup("admin", "right-pass").unwrap();
+        // Different names (so no name is locked), many addresses in one /64.
+        for i in 0..FREE_TRIES {
+            let from = format!("2001:db8:1:2:{:x}::{:x}", i + 1, i + 7);
+            assert!(u.check(&format!("n{i}"), "x", &from).unwrap_err().to_string().contains("wrong"));
+        }
+        let e = u.check("another", "x", "2001:db8:1:2:ffff::1").unwrap_err().to_string();
+        assert!(e.contains("wait"), "{e}");
+        // Another /64 is another visitor; an IPv4 address is itself.
+        assert!(u.check("another", "x", "2001:db8:1:3::1").unwrap_err().to_string().contains("wrong"));
+        assert_eq!(ip_bucket("198.51.100.4"), "198.51.100.4");
+        assert_eq!(ip_bucket("not-an-ip"), "not-an-ip");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

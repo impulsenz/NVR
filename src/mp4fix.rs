@@ -231,4 +231,108 @@ mod tests {
         assert_eq!(check(&p).unwrap(), Check::Unrecognized);
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// A real power cut: a recording made by ffmpeg the way the recorder makes
+    /// them (fragmented MP4, a piece every keyframe) is cut at many places
+    /// across its length, as if the power failed while it was being written.
+    /// After the repair every cut file must be a valid MP4 that decodes with
+    /// no errors, still holds every complete piece before the cut, and the
+    /// repair must be harmless to run again. Needs ffmpeg (skipped without).
+    #[test]
+    fn a_real_recording_cut_anywhere_is_repaired_to_a_clean_file() {
+        use std::process::{Command, Stdio};
+        let ff = |args: &[&str]| Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-y"]).args(args).stdin(Stdio::null()).output();
+        if ff(&["-version"]).map(|o| !o.status.success()).unwrap_or(true) {
+            eprintln!("skipped: ffmpeg isn't installed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("nvr-powercut-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let whole = dir.join("whole.mp4");
+        // 12 s of video, a keyframe every second (25 fps), so 12 pieces.
+        let made = ff(&["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-t", "12", "-c:v", "libx264", "-g", "25", "-keyint_min", "25", "-sc_threshold", "0", "-pix_fmt", "yuv420p",
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof", whole.to_str().unwrap()]).unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        assert_eq!(check(&whole).unwrap(), Check::Ok);
+        let bytes = std::fs::read(&whole).unwrap();
+        let frames = |p: &Path| -> Option<u64> {
+            let o = Command::new("ffprobe").args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", p.to_str().unwrap()]).output().ok()?;
+            String::from_utf8_lossy(&o.stdout).trim().parse().ok()
+        };
+        assert_eq!(frames(&whole), Some(300));
+        // Where each complete piece ends (the top-level boxes: ftyp, moov, then moof+mdat pairs).
+        let mut ends = Vec::new();
+        let (mut pos, mut moofs) = (0usize, 0);
+        while pos + 8 <= bytes.len() {
+            let size = u32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+            let kind = &bytes[pos + 4..pos + 8];
+            pos += size;
+            if kind == b"mdat" {
+                ends.push(pos);
+                moofs += 1;
+            }
+        }
+        assert_eq!(moofs, 12, "expected one piece per second");
+        // Cut at 60 places, from right after the header to inside the last piece.
+        let header_end = {
+            let mut p = 0usize;
+            loop {
+                let size = u32::from_be_bytes(bytes[p..p + 4].try_into().unwrap()) as usize;
+                if &bytes[p + 4..p + 8] == b"moof" {
+                    break p;
+                }
+                p += size;
+            }
+        };
+        let (mut checked, mut empty) = (0, 0);
+        for i in 0..60 {
+            let cut = header_end + 1 + (bytes.len() - header_end - 1) * i / 59;
+            let cut = cut.min(bytes.len());
+            let f = dir.join(format!("cut{i}.mp4"));
+            std::fs::write(&f, &bytes[..cut]).unwrap();
+            repair(&f);
+            // Still a recording, and complete up to the last whole piece.
+            assert_eq!(check(&f).unwrap(), Check::Ok, "cut at {cut} of {}", bytes.len());
+            let kept_pieces = ends.iter().filter(|e| **e <= cut).count();
+            let len_after = std::fs::metadata(&f).unwrap().len() as usize;
+            // (A file that wasn't cut at all is complete, with the index box ffmpeg
+            // writes when it closes a file normally, and is left exactly as it is.)
+            let expect_len = if cut == bytes.len() { cut } else if kept_pieces == 0 { header_end } else { ends[kept_pieces - 1] };
+            assert_eq!(len_after, expect_len, "cut at {cut}: kept the wrong amount");
+            // Repairing again changes nothing.
+            assert!(!repair(&f));
+            if kept_pieces == 0 {
+                // Cut before the first whole piece: nothing was recorded yet. What is
+                // left is the file header alone (no video to decode). See TECH-DEBT PC-1.
+                empty += 1;
+                continue;
+            }
+            // ffmpeg decodes all of it without a single error, with 25 frames per kept piece.
+            let dec = ff(&["-i", f.to_str().unwrap(), "-f", "null", "-"]).unwrap();
+            assert!(dec.status.success() && dec.stderr.is_empty(), "cut at {cut}: ffmpeg complained: {}", String::from_utf8_lossy(&dec.stderr));
+            assert_eq!(frames(&f), Some(25 * kept_pieces as u64), "cut at {cut}: frames lost");
+            checked += 1;
+        }
+        // The other way a power cut shows: the file was extended but the last data
+        // never reached the disk, leaving a run of zero bytes at the end.
+        for (i, zeros) in [1usize, 7, 8, 100, 4096, 65536].into_iter().enumerate() {
+            for (j, piece) in [2usize, 6, 11].into_iter().enumerate() {
+                let f = dir.join(format!("zero{i}-{j}.mp4"));
+                let mut data = bytes[..ends[piece - 1]].to_vec();
+                data.extend(std::iter::repeat_n(0u8, zeros));
+                std::fs::write(&f, &data).unwrap();
+                repair(&f);
+                assert_eq!(check(&f).unwrap(), Check::Ok, "{zeros} zero bytes after piece {piece}");
+                assert_eq!(std::fs::metadata(&f).unwrap().len() as usize, ends[piece - 1], "{zeros} zero bytes after piece {piece}: not cut back");
+                let dec = ff(&["-i", f.to_str().unwrap(), "-f", "null", "-"]).unwrap();
+                assert!(dec.status.success() && dec.stderr.is_empty(), "{zeros} zeros: {}", String::from_utf8_lossy(&dec.stderr));
+                assert_eq!(frames(&f), Some(25 * piece as u64));
+            }
+        }
+        // Most cuts fall after at least one whole piece (and keep every whole piece).
+        assert!(checked >= 55 && checked + empty == 60, "{checked} decoded, {empty} header-only");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
+
