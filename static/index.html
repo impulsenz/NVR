@@ -201,12 +201,13 @@
       </div>
       <button id="f-refresh" class="list-only" title="Load the list again">↻ <span class="rf-t">Refresh</span></button>
       <button id="f-tlx" class="tl-only" title="Download a sped-up video of a camera's day (or any time), made from its time-lapse pictures">🎞 <span class="rf-t">Time-lapse video</span></button>
-      <button id="f-syn" class="tl-only" title="One camera's whole day in a short video: everything that moved, shown together over the empty scene">🎬 <span class="rf-t">Day summary</span></button>
+      <button id="f-syn" class="list-only" title="Make a short video of a camera's day, showing the objects the AI recognised">🎬 <span class="rf-t">Daily summary</span></button>
     </div>
     <div class="chips" id="f-types" style="margin-bottom:12px"></div>
 
 
     <div id="rec-list">
+      <section id="rec-sums" class="sum-sec" hidden aria-label="Daily summaries (not alerts)"></section>
       <form class="row ds-bar" id="ds-bar" hidden><input type="search" id="ds-q" placeholder="🔎 Describe what you're looking for — e.g. a red car, someone carrying a box, a dog at night" autocomplete="off"><button class="primary" id="ds-go">Search</button><button type="button" id="ds-clear" hidden>✕ Clear</button><span class="muted small" id="ds-info"></span></form>
       <div class="row rec-grouping" style="margin-bottom:8px"><span class="muted" id="rec-count"></span><button type="button" class="small" id="rec-key-btn" title="What the badges and symbols on the alerts mean">ⓘ What these mean</button><span class="spacer"></span>
         <label class="muted small" style="margin:0" title="How many alerts side by side: fewer columns, bigger pictures">Columns <select id="rec-cols" class="small"><option value="">Auto</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></label>
@@ -325,6 +326,7 @@
         <a href="#settings/states" data-s="states">Learned states</a>
         <a href="#settings/faces" data-s="faces">Check faces</a>
         <a href="#settings/hardware" data-s="hardware">GPU acceleration</a>
+        <a href="#settings/summary" data-s="summary">Daily summary</a>
         <a href="#settings/notify" data-s="notify">Notifications</a>
         <a href="#settings/smarthome" data-s="smarthome">Smart home</a>
         <a href="#settings/voice" data-s="voice">Voice &amp; talking</a>

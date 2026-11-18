@@ -74,16 +74,19 @@ detect.rs handle_ai ──▶ tracks::observe (no-op unless switched on)
 * The detector's only involvement is one call after each AI look. A busy or
   broken tracker drops data; it never delays recording, detection or alerts.
 
-## Day summary (`synopsis.rs`)
+## Daily summary (`synopsis.rs`)
 
-On request only (`POST /api/cameras/{id}/synopsis?date=`), one at a time, in a thread at low priority (`nice` / below-normal class, waits while `load::cpu()` is high). Footage is the light timeline copy where it covers a recording, else the recordings and deep storage (`pick_sources`); ffmpeg decodes to raw 640×360 pictures.
+A camera's day or last N hours as a short video of **AI-recognised** objects. Asked for from the Alerts page (`POST /api/summaries/make`, one or all cameras, or `POST /api/cameras/{id}/synopsis?when=`) or by `synopsis::run` at the time set in `[summary]` (Settings → Daily summary; marker `nvr-data/summary-last`, up to 6 h catch-up like the digest). A summary is named by an **id**: a day (`2026-11-18`) or a window (`2026-11-19_0630_24h`), checked by `parse_id` so ids are always safe file names. Requests join `QUEUE`; one worker thread makes them one after another at low priority (`nice` / below-normal class; waits while `load::cpu()` is high).
 
-1. `backgrounds`: keyframes (one per ~4 min, at most 15 per hour kept) → per-pixel median per hour = the empty scene; the hour of middle brightness is the one shown.
-2. `Detector`: 320×180 sample, a slowly adapting copy of the scene (so stopped things fade in about a minute), brightness drift removed, changed cells joined into boxes. `Tracker` joins boxes over pictures into **tubes** (RGBA cut-outs, memory capped); still or very short tubes are dropped.
-3. `plan` / `schedule`: tubes in time order on a 16×9 footprint grid, each as early as it fits without overlap, then with some overlap, then faster (up to 4×).
-4. `render` → ffmpeg (libx264) → `nvr-data/synopsis/<camera>/<day>.mp4` + `.json` (objects with real times and per-picture boxes, for the click-through). Status is in memory (`JOBS`) with the JSON as the record of a finished one; files older than 30 days are removed when a new one is made.
+Footage is the light timeline copy where it covers a recording, else the recordings and deep storage (`pick_sources`); ffmpeg decodes to raw 640×360 pictures.
 
-Camera access is by `camera_in_path` like every `/api/cameras/{id}/…` route; operators may make summaries (CPU cost), viewers only watch. Recording, detection and alerts never read it.
+1. `backgrounds`: keyframes (one per ~90 s, at most 15 per hour kept) → per-pixel median per hour = the empty scene; the hour of middle brightness is the one shown.
+2. `Detector`: 320×180 sample, a slowly adapting copy of the scene (stopped things fade in about a minute), brightness drift removed, changed cells joined into boxes. `Tracker` joins boxes over pictures into **tubes** (RGBA cut-outs, memory capped).
+3. Recognition: while a tube is unnamed, about every 1.5 s the picture goes to `Ai::detect` (the same model the detector uses, called from the worker thread via the runtime handle, at most 20,000 looks). A tube takes the name of the wanted kind (`[summary].objects`, vehicles as "vehicle") found where it is; after 3 looks with none its pictures are dropped. Unnamed tubes never reach the video. So it does **not** depend on what alerts or clips exist.
+4. `plan` / `schedule`: tubes in time order on a 16×9 footprint grid, each as early as it fits without overlap, then with some overlap, then faster (up to 4×).
+5. `render` → ffmpeg (libx264) → `nvr-data/synopsis/<camera>/<id>.mp4` + `.json` (objects: name, real times, boxes twice a second for the click-through) + `.jpg` (busiest moment, the card picture). `tidy` removes files past `keep_days`.
+
+`GET /api/summaries` lists cards and what is queued or running (restricted accounts see only their cameras). Camera routes are under `camera_in_path`; operators may make summaries (CPU cost), viewers only watch. Recording, detection and alerts never read any of it.
 
 ## Storage tiers
 

@@ -60,9 +60,11 @@ See the S-entries in `TECH-DEBT.md`.
       connection's own address, or, from a proxy on this computer, the **last**
       `X-Forwarded-For` address. IPv6 is counted per /64 (`users::ip_bucket`).
 
-## Day summary
+## Daily summary
 
-- [ ] `/api/cameras/{id}/synopsis*` are under `camera_in_path` (restricted accounts can't reach another camera's); the output is `nvr-data/synopsis/<camera id>/<day>.mp4` with the camera id checked by `valid_folder` and the day parsed as a date (no user text in paths). Operators may start one (CPU only); nothing is deleted except summaries older than 30 days.
+- [ ] `/api/cameras/{id}/synopsis*` are under `camera_in_path`; `/api/summaries` (list) filters by `visible(&user)` and `/api/summaries/make` limits cameras with `allowed_cameras`, so a restricted account only sees and makes its own cameras' summaries.
+- [ ] Output is `nvr-data/synopsis/<camera id>/<id>.{mp4,json,jpg}`: the camera id is checked by `valid_folder` and the id only by `parse_id` (a day or `date_HHMM_Nh`), so no user text reaches a path.
+- [ ] Operators may make and delete summaries (CPU cost; derived data only); viewers only watch. Nothing is deleted except summary files (past `keep_days`, or by the user). Footage is only read.
 
 ## Floor plan and following people
 

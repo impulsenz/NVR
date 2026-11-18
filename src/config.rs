@@ -361,6 +361,8 @@ pub struct Config {
     pub remotes: Vec<RemoteServer>,
     /// The voice for "Say…" (text to speech through a camera's speaker).
     pub tts: TtsConfig,
+    /// The daily summary video (synopsis.rs): which objects, and when one is made for you.
+    pub summary: SummaryConfig,
     pub cameras: Vec<CameraConfig>,
 
 }
@@ -737,6 +739,43 @@ pub struct DigestConfig {
 impl Default for DigestConfig {
     fn default() -> Self {
         Self { enabled: false, time: "08:00".into(), when_quiet: true, picture: true }
+    }
+}
+
+/// The daily summary video (synopsis.rs): a camera's day (or the last hours)
+/// squeezed into a short video of the objects the AI recognised. Made on
+/// request from the Alerts page, and by itself at a set time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SummaryConfig {
+    /// Make summaries by itself, every day at `time`.
+    pub enabled: bool,
+    /// When ("HH:MM", this computer's time).
+    pub time: String,
+    /// How many hours before that time it covers (1 to 72).
+    pub hours: u32,
+    /// Cameras to make one for (empty = all).
+    pub cameras: Vec<String>,
+    /// What to show, by the AI's names ("vehicle" covers car, truck, bus and
+    /// motorbike). Whether or not it is alerted on or recorded.
+    pub objects: Vec<String>,
+    /// How long each video should be, in seconds (10 to 600).
+    pub seconds: u32,
+    /// Delete summaries older than this many days (1 to 365).
+    pub keep_days: u32,
+}
+
+impl Default for SummaryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            time: "06:30".into(),
+            hours: 24,
+            cameras: Vec::new(),
+            objects: ["person", "vehicle", "dog", "cat", "bird"].map(String::from).to_vec(),
+            seconds: 120,
+            keep_days: 30,
+        }
     }
 }
 

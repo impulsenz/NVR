@@ -308,6 +308,7 @@ pub struct SettingsUpdate {
     pub ai: Option<AiConfig>,
     pub cloud: Option<CloudConfig>,
     pub notify: Option<crate::config::NotifyConfig>,
+    pub summary: Option<crate::config::SummaryConfig>,
     pub update: Option<crate::config::UpdateConfig>,
     pub streaming: Option<crate::config::StreamingConfig>,
     pub mqtt: Option<crate::config::MqttConfig>,
@@ -890,6 +891,20 @@ impl Manager {
             }
             n.digest.time = n.digest.time.trim().to_string();
             cfg.notify = n;
+        }
+        if let Some(mut s) = up.summary {
+            if chrono::NaiveTime::parse_from_str(s.time.trim(), "%H:%M").is_err() {
+                anyhow::bail!("daily summary time: write it as HH:MM, e.g. 06:30");
+            }
+            s.time = s.time.trim().to_string();
+            s.hours = s.hours.clamp(1, 72);
+            s.seconds = s.seconds.clamp(10, 600);
+            s.keep_days = s.keep_days.clamp(1, 365);
+            crate::ai::canon_list(&mut s.objects);
+            if s.objects.is_empty() {
+                anyhow::bail!("daily summary: choose at least one kind of object to show");
+            }
+            cfg.summary = s;
         }
         if let Some(mut r) = up.remotes {
             for x in &mut r {

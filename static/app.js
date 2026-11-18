@@ -4426,6 +4426,7 @@ function recQuery() {
 }
 async function loadRecordings() {
   $('rec-count').textContent = 'Loading…';
+  loadSummaries();
   if (!(Date.now() - (loadRecordings.who || 0) < 60000)) { loadRecordings.who = Date.now(); fillWhoFilter(); }
   if (rec.who === '__new') return loadNewFaces();
   rec.loading = true;
@@ -4745,62 +4746,138 @@ $('f-tlx').onclick = () => {
   $('tx-go').onclick = () => { toast('Making the video — it downloads in a moment'); setTimeout(close, 300); };
 };
 
-// ---------- a camera's day squeezed into a short video (synopsis.rs) ----------
-// Everything that moved that day, laid over the empty scene and shifted in
-// time so it plays together, each with its real clock time. Click one to open
-// the real footage at that moment.
-function openDaySummary(camId0, day0) {
-  const cams = status.cameras.filter(c => !rec.cameras.size || rec.cameras.has(c.id));
+// ---------- daily summaries (synopsis.rs) ----------
+// A camera's day (or the last few hours) in a short video of the objects the AI
+// recognised, shown over the empty scene, each with its name and the time it was
+// really there. They show on the Alerts page as their own kind of card (they are
+// not alerts), are made on request for one camera or all, and by themselves at
+// a set time (Settings → Daily summary). Click an object to open the real footage.
+const sumNoun = (k, n) => k === 'person' ? (n === 1 ? 'person' : 'people') : (n === 1 ? k : k + 's');
+const sumCounts = (counts) => counts.length ? counts.map(([k, n]) => `${labelIcon(k)} ${n} ${sumNoun(k, n)}`).join(' · ') : 'Nothing recognised';
+const sumTime = (d) => new Date(d).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+function sumWhen(id, from, to) {
+  if (/^\d{4}-\d\d-\d\d$/.test(id)) {
+    const f0 = startOfDay(new Date(from)).getTime(), t0 = startOfDay(new Date()).getTime();
+    return f0 === t0 ? 'Today so far' : f0 === t0 - 86400000 ? 'Yesterday' : fmtDay(new Date(from));
+  }
+  const h = +(id.split('_')[2] || '24h').replace('h', '');
+  return `The ${h} hours to ${sumTime(to)}, ${fmtDay(new Date(to))}`;
+}
+const sumUrl = (cam, id, sfx = '') => `api/cameras/${enc(cam)}/synopsis${sfx}?when=${enc(id)}`;
+const sums = {data: null, timer: null};
+
+// The Alerts page: a clearly separate section above the alerts.
+async function loadSummaries() {
+  const box = $('rec-sums'); if (!box) return;
+  try { sums.data = await api('api/summaries'); } catch (e) { box.hidden = true; return; }
+  renderSummaries();
+  clearTimeout(sums.timer);
+  if (sums.data.active.some(a => a.state !== 'failed') && page === 'recordings' && rec.mode === 'list') sums.timer = setTimeout(loadSummaries, 3000);
+}
+function renderSummaries() {
+  const box = $('rec-sums'), d = sums.data; if (!box || !d) return;
+  box.hidden = false;
+  const live = d.active.map(a => `<article class="sum-card pending ${a.state === 'failed' ? 'bad' : ''}" data-cam="${esc(a.camera)}" data-id="${esc(a.id)}">
+      <div class="sum-body"><span class="sum-badge">DAILY SUMMARY</span><b>${esc(a.camera_name)}</b>
+      <span class="muted small">${a.state === 'running' ? `Making it… ${esc(a.phase || '')} ${a.pct || 0}%` : a.state === 'queued' ? `Waiting${a.ahead ? ` (${a.ahead} ahead)` : ''}` : esc(a.error === 'cancelled' ? 'Stopped' : (a.error || 'Could not be made'))}</span>
+      ${a.state === 'running' ? `<div class="syn-bar-t"><div style="width:${a.pct || 0}%"></div></div>` : ''}
+      <button type="button" class="small" data-x>${a.state === 'failed' ? 'Dismiss' : 'Stop'}</button></div></article>`).join('');
+  const cards = d.cards.map(c => `<article class="sum-card" data-cam="${esc(c.camera)}" data-id="${esc(c.id)}" tabindex="0" role="button" title="Watch this summary">
+      <div class="sum-pic"><img loading="lazy" alt="" src="${sumUrl(c.camera, c.id, '/poster')}&v=${enc(c.built_at)}"><span class="sum-badge">DAILY SUMMARY</span>${c.scheduled ? '<span class="sum-auto">made automatically</span>' : ''}<span class="sum-len">▶ ${fmtDur(c.seconds)}</span></div>
+      <div class="sum-body"><b>${esc(c.camera_name)}</b><span>${esc(sumWhen(c.id, c.from, c.to))}</span>
+      <span class="muted small">${esc(sumCounts(c.counts))}</span></div></article>`).join('');
+  box.innerHTML = `<div class="sum-head"><h3>🎬 Daily summaries</h3><span class="muted small">Videos GAZE makes from the footage, showing only objects the AI recognised. They are not alerts.</span><span class="spacer"></span>
+      <button type="button" class="small primary" id="sum-new">＋ Make summaries…</button></div>
+    ${live || cards ? `<div class="sum-cards">${live}${cards}</div>` : `<p class="muted small" style="margin:6px 0 0">None yet. Make one now, or set a time under Settings → Daily summary so a new one is waiting each morning.</p>`}`;
+  $('sum-new').onclick = () => openSummaries();
+  box.querySelectorAll('.sum-card:not(.pending)').forEach(c => { c.onclick = () => openSummaries({camera: c.dataset.cam, id: c.dataset.id}); c.onkeydown = (e) => { if (e.key === 'Enter') c.click(); }; });
+  box.querySelectorAll('.sum-card.pending [data-x]').forEach(b => b.onclick = async (e) => {
+    e.stopPropagation(); const c = b.closest('.sum-card');
+    try { await api(sumUrl(c.dataset.cam, c.dataset.id), {method: 'DELETE'}); } catch (x) { toast(x.message, true); }
+    loadSummaries();
+  });
+}
+
+// Open the real footage at the moment an object was there.
+function openFootageAt(camId, T) {
+  const d = new Date(T);
+  Object.assign(rec, {from: startOfDay(d), to: endOfDay(d), today: false, last24: false, todFrom: '', todTo: '', cameras: new Set([camId]), backView: null, prevCameras: null});
+  tl.key = null; tl.day = null; tl.hd = null; tl.jump = T - 3000;
+  if (page === 'recordings' && rec.mode === 'timeline') { renderFilters(); loadTimeline(); } else location.hash = '#recordings';
+}
+
+// Make summaries (one camera or all) and watch them.
+function openSummaries(sel) {
+  const cams = status.cameras;
   if (!cams.length) { toast('No camera to summarise', true); return; }
   const p2 = (n) => String(n).padStart(2, '0'), ymd = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-  const day = startOfDay(day0 || (tl.day ? new Date(tl.day) : new Date()));
+  const wid = (h) => { const n = new Date(); return `${ymd(n)}_${p2(n.getHours())}${p2(n.getMinutes())}_${h}h`; };
   const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg syn-dlg';
-  dlg.innerHTML = `<div class="head"><h2>🎬 Day summary${tip('A whole day of one camera in a short video. The empty scene stays still and everything that moved is shown over it, moved in time so people and cars from different hours appear together. Each has the time it was really there; click one to open the real footage at that moment. It takes a few minutes to make and is kept for 30 days.')}</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+  const shows = ((sums.data && sums.data.objects) || ['person', 'vehicle']).map(o => `${labelIcon(o)} ${esc(o)}`).join(', ');
+  dlg.innerHTML = `<div class="head"><h2>🎬 Daily summary${tip('A camera’s day, or the last few hours, in a short video. The empty scene stays still and every object the AI recognised is shown over it, moved in time so people and cars from different hours appear together, each with its name and the time it was really there. Click one to open the real footage. This is made from the footage again, so it also shows things that never raised an alert or were never recorded as one. It takes a few minutes per camera.')}</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
     <div class="body">
-      <div class="row syn-bar"><select id="sy-cam">${cams.map(c => `<option value="${esc(c.id)}" ${c.id === camId0 ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
-        <input type="date" id="sy-day" value="${ymd(day)}" max="${ymd(new Date())}">
-        <label class="muted small" style="margin:0">Length <select id="sy-len" class="small"><option value="60">1 min</option><option value="120" selected>2 min</option><option value="300">5 min</option></select></label>
-        <label class="muted small" style="margin:0">Detail${tip('How easily something counts as movement. More sensitive finds smaller and fainter things, and also more false ones (shadows, rain).')} <select id="sy-sens" class="small"><option value="45">Fewer objects</option><option value="28" selected>Normal</option><option value="16">More sensitive</option></select></label>
-        <button type="button" class="primary" id="sy-make">Make summary</button></div>
-      <div id="sy-out"></div></div>`;
+      <div class="row syn-bar"><select id="sy-cam"><option value="">All cameras</option>${cams.map(c => `<option value="${esc(c.id)}" ${sel && c.id === sel.camera ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+        <select id="sy-when"><option value="today">Today so far</option><option value="yesterday">Yesterday</option><option value="24">The last 24 hours</option><option value="12">The last 12 hours</option><option value="8">The last 8 hours</option><option value="date">A day…</option></select>
+        <input type="date" id="sy-day" value="${ymd(new Date())}" max="${ymd(new Date())}" hidden>
+        <button type="button" class="primary" id="sy-make">Make summaries</button></div>
+      <p class="muted small" style="margin:0 0 8px">Shows: ${shows}${isAdmin() ? ' · <a href="#settings/summary">change what to show, or set a daily time</a>' : ''}</p>
+      <div id="sy-act"></div><div id="sy-out"></div></div>`;
   document.body.appendChild(dlg); dlg.showModal();
-  let timer = null;
-  const close = () => { clearInterval(timer); dlg.close(); dlg.remove(); };
+  let timer = null, shown = sel ? key2(sel) : '';
+  function key2(x) { return x.camera + '|' + x.id; }
+  const close = () => { clearInterval(timer); dlg.close(); dlg.remove(); loadSummaries(); };
   dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
   dlg.addEventListener('close', () => clearInterval(timer));
-  const url = (sfx = '', extra = '') => `api/cameras/${enc(val('sy-cam'))}/synopsis${sfx}?date=${val('sy-day')}${extra}`;
-  const show = (st) => {
+  dlg.querySelectorAll('.head a, .body a[href^="#"]').forEach(a => a.addEventListener('click', () => { clearInterval(timer); dlg.close(); dlg.remove(); }));
+  const whenId = () => {
+    const w = val('sy-when'), n = new Date();
+    if (w === 'today') return ymd(n);
+    if (w === 'yesterday') return ymd(new Date(n.getTime() - 86400000));
+    if (w === 'date') return val('sy-day');
+    return wid(+w);
+  };
+  $('sy-when').onchange = () => { $('sy-day').hidden = val('sy-when') !== 'date'; };
+  // What is being made now.
+  const showActive = (d) => {
+    const el = $('sy-act'); if (!el) return;
+    el.innerHTML = d.active.map(a => `<div class="syn-prog"><b>${esc(a.camera_name)}</b> <span class="muted small">${esc(sumWhen(a.id, a.from || a.id, a.to || a.id))}</span>
+      ${a.state === 'running' ? `<div class="syn-bar-t"><div style="width:${a.pct || 0}%"></div></div><span class="muted small">${esc(a.phase || '')} · ${a.pct || 0}%</span>` : a.state === 'queued' ? `<span class="muted small">waiting${a.ahead ? ` (${a.ahead} ahead)` : ''}</span>` : `<span class="errc small">${esc(a.error === 'cancelled' ? 'stopped' : a.error)}</span>`}
+      <button type="button" class="small" data-c="${esc(a.camera)}" data-i="${esc(a.id)}">${a.state === 'failed' ? 'Dismiss' : 'Stop'}</button></div>`).join('');
+    el.querySelectorAll('[data-c]').forEach(b => b.onclick = async () => { try { await api(sumUrl(b.dataset.c, b.dataset.i), {method: 'DELETE'}); } catch (e) { toast(e.message, true); } poll(); });
+  };
+  // The finished ones for this choice, to watch.
+  const showList = (d) => {
+    const out = $('sy-out'); if (!out || out.querySelector('#sy-v')) return;
+    const mine = d.cards.filter(c => !val('sy-cam') || c.camera === val('sy-cam')).slice(0, 12);
+    out.innerHTML = mine.length ? `<div class="syn-list">${mine.map(c => `<button type="button" class="small" data-c="${esc(c.camera)}" data-i="${esc(c.id)}">${esc(c.camera_name)} · ${esc(sumWhen(c.id, c.from, c.to))}</button>`).join('')}</div>` : '<p class="muted">Nothing made yet for this choice. Press <b>Make summaries</b>; it takes a few minutes per camera.</p>';
+    out.querySelectorAll('[data-c]').forEach(b => b.onclick = () => watch({camera: b.dataset.c, id: b.dataset.i}));
+  };
+  const poll = async () => {
+    let d; try { d = await api('api/summaries'); } catch (e) { return; }
+    sums.data = d; showActive(d); showList(d);
+    if (!d.active.some(a => a.state !== 'failed')) clearInterval(timer), timer = null;
+  };
+  const look = () => { clearInterval(timer); poll(); timer = setInterval(poll, 2500); };
+  async function watch(x) {
+    shown = key2(x);
+    let st; try { st = await api(sumUrl(x.camera, x.id)); } catch (e) { toast(e.message, true); return; }
     const out = $('sy-out'); if (!out) return;
-    const mk = $('sy-make');
-    if (st.state === 'running') {
-      mk.disabled = true; mk.textContent = 'Working…';
-      out.innerHTML = `<div class="syn-prog"><div class="syn-bar-t"><div style="width:${st.pct || 0}%"></div></div><span class="muted small">${esc(st.phase || 'Starting')} · ${st.pct || 0}%</span> <button type="button" class="small" id="sy-stop">Stop</button></div>
-        <p class="muted small">You can close this window; the summary carries on and will be here when you open this again.</p>`;
-      $('sy-stop').onclick = async () => { try { await api(url(), {method: 'DELETE'}); } catch (e) { toast(e.message, true); } };
-      return;
-    }
-    mk.disabled = false; mk.textContent = st.state === 'done' ? 'Make it again' : 'Make summary';
-    if (st.state === 'failed') { out.innerHTML = st.error === 'cancelled' ? '<p class="muted">Stopped.</p>' : `<p class="errc">${esc(st.error || 'It could not be made')}</p>`; return; }
-    if (st.state !== 'done') { out.innerHTML = '<p class="muted">Not made yet for this day. It takes a few minutes; GAZE works on it quietly in the background.</p>'; return; }
-    const m = st.meta, t = (iso) => new Date(iso).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-    out.innerHTML = `<div class="syn-vid"><video id="sy-v" controls playsinline loop src="${url('/video')}&v=${encodeURIComponent(m.built_at)}"></video><div id="sy-ov"></div></div>
-      <p class="muted small" style="margin:6px 0">${m.objects.length} ${m.objects.length === 1 ? 'object' : 'objects'} from ${fmtDur(m.footage_seconds)} of footage, in ${fmtDur(m.seconds)}${m.speed > 1 ? ` (played ${m.speed}× faster)` : ''}. Click an object to open the real footage.
-        <a href="${url('/video')}&download=1" download>⇩ Download</a></p>
+    if (st.state !== 'done') { out.innerHTML = '<p class="muted">Not ready yet.</p>'; return; }
+    const m = st.meta;
+    out.innerHTML = `<div class="syn-title"><b>${esc(m.camera_name)}</b> · ${esc(sumWhen(m.id, m.from, m.to))} <button type="button" class="small" id="sy-back">← All summaries</button></div>
+      <div class="syn-vid"><video id="sy-v" controls playsinline loop src="${sumUrl(m.camera, m.id, '/video')}&v=${enc(m.built_at)}"></video><div id="sy-ov"></div></div>
+      <p class="muted small" style="margin:6px 0">${esc(sumCounts(m.counts))} from ${fmtDur(m.footage_seconds)} of footage, in ${fmtDur(m.seconds)}${m.speed > 1 ? ` (played ${m.speed}× faster)` : ''}. Click an object to open the real footage.
+        <a href="${sumUrl(m.camera, m.id, '/video')}&download=1" download>⇩ Download</a> · <a href="#" id="sy-del">Delete this summary</a></p>
       ${(m.notes || []).map(n => `<p class="warnc small" style="margin:2px 0">${esc(n)}</p>`).join('')}
-      <div class="syn-list">${m.objects.map(o => `<button type="button" class="small" data-t="${esc(o.at)}" data-o="${o.id}">${esc(t(o.at))}</button>`).join('') || '<span class="muted">Nothing moved that day.</span>'}</div>`;
+      <div class="syn-list">${m.objects.map(o => `<button type="button" class="small" data-t="${esc(o.at)}" title="${esc(o.label)} (${Math.round(o.score * 100)}%), real time">${labelIcon(o.label)} ${esc(sumTime(o.at))}</button>`).join('') || '<span class="muted">Nothing the AI recognised moved in that time.</span>'}</div>`;
     const v = $('sy-v'), ov = $('sy-ov');
-    const open = (iso) => {
-      const T = new Date(iso).getTime(), d = new Date(T);
-      close();
-      Object.assign(rec, {from: startOfDay(d), to: endOfDay(d), today: false, last24: false});
-      rec.todFrom = ''; rec.todTo = '';
-      tlShowEvent(m.camera, T);
-    };
+    const open = (iso) => { close(); openFootageAt(m.camera, new Date(iso).getTime()); };
     out.querySelectorAll('.syn-list [data-t]').forEach(b => b.onclick = () => open(b.dataset.t));
-    // Boxes over the playing video: the object under the pointer lights up and a click opens it.
+    $('sy-back').onclick = () => { shown = ''; out.innerHTML = ''; showList(sums.data || {cards: [], active: []}); };
+    $('sy-del').onclick = async (e) => { e.preventDefault(); if (!confirm('Delete this summary video? (The footage is not touched.)')) return; try { await api(sumUrl(m.camera, m.id), {method: 'DELETE'}); } catch (x) { toast(x.message, true); return; } out.innerHTML = ''; look(); };
+    // The object under the pointer opens its footage when clicked.
     const objAt = (x, y) => {
-      const f = Math.floor((v.currentTime || 0) * m.fps);
-      let best = null;
+      const f = Math.floor((v.currentTime || 0) * m.fps); let best = null;
       for (const o of m.objects) {
         if (f < o.out_start || f > o.out_end) continue;
         let b = null; for (const q of o.boxes) { if (q[0] <= f) b = q; else break; }
@@ -4811,19 +4888,20 @@ function openDaySummary(camId0, day0) {
     const pos = (e) => { const r = v.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * m.w, (e.clientY - r.top) / r.height * m.h]; };
     ov.onmousemove = (e) => { ov.style.cursor = objAt(...pos(e)) ? 'pointer' : 'default'; };
     ov.onclick = (e) => { const o = objAt(...pos(e)); if (o) open(o.at); else if (v.paused) v.play(); else v.pause(); };
-  };
-  const poll = async () => {
-    try { const st = await api(url()); show(st); if (st.state !== 'running') clearInterval(timer); } catch (e) { clearInterval(timer); }
-  };
-  const look = () => { clearInterval(timer); poll().then(() => { if (!$('sy-out')) return; }); timer = setInterval(poll, 2000); };
-  ['sy-cam', 'sy-day'].forEach(i => $(i).onchange = look);
+  }
+  $('sy-cam').onchange = () => { $('sy-out').innerHTML = ''; shown = ''; if (sums.data) showList(sums.data); };
   $('sy-make').onclick = async () => {
-    try { show(await api(url('', `&seconds=${val('sy-len')}&sensitivity=${val('sy-sens')}&force=true`), {method: 'POST'})); look(); }
-    catch (e) { toast(e.message, true); }
+    const cam = val('sy-cam');
+    try {
+      const r = await api('api/summaries/make', {method: 'POST', json: {cameras: cam ? [cam] : [], when: whenId()}});
+      toast(r.queued ? `Making ${r.queued} summar${r.queued === 1 ? 'y' : 'ies'}…` : r.existing ? 'Those are already made' : 'Nothing to make', !r.queued && !r.existing);
+      if (r.failed && r.failed.length) toast(r.failed[0], true);
+    } catch (e) { toast(e.message, true); }
+    look();
   };
-  look();
+  api('api/summaries').then(d => { sums.data = d; showActive(d); if (sel) watch(sel); else showList(d); look(); }).catch(() => {});
 }
-$('f-syn').onclick = () => openDaySummary();
+$('f-syn').onclick = () => openSummaries();
 
 // ---------- sharing an alert ----------
 // The system share sheet (Messenger, WhatsApp, Facebook, email… whatever is
@@ -7356,7 +7434,7 @@ let lgDeb; $('lg-q').oninput = () => { clearTimeout(lgDeb); lgDeb = setTimeout(r
 // ======================================================================
 // Settings
 // ======================================================================
-const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'states', 'faces', 'notify', 'smarthome', 'voice', 'tasks', 'hardware', 'cloud', 'watchdog', 'backup', 'users', 'system', 'logs', 'info'];
+const SECTIONS = ['cameras', 'storage', 'display', 'ai', 'known', 'states', 'faces', 'summary', 'notify', 'smarthome', 'voice', 'tasks', 'hardware', 'cloud', 'watchdog', 'backup', 'users', 'system', 'logs', 'info'];
 let section = 'cameras';
 const camPreviewUnbind = [];
 
@@ -7365,7 +7443,7 @@ async function loadSettings() { [settings, cameraCfgs] = await Promise.all([api(
 // ---------- searching the settings ----------
 // Every setting's name (from each settings page and the camera window's
 // tabs): [section, name, camera tab].
-const SETTINGS_INDEX = [["cameras", "Cameras"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Deep storage"], ["storage", "Keep on the local disk for"], ["storage", "Keep in deep storage for"], ["storage", "Each camera"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "Graphics API"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["watchdog", "Watchdog"], ["watchdog", "Restart GAZE if it crashes or stalls"], ["watchdog", "Start with Windows"], ["watchdog", "Checks every"], ["watchdog", "Restart after"], ["watchdog", "Too many restarts"], ["watchdog", "Watchdog updates"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Users, with their camera access and layouts"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["states", "Learned states"], ["states", "What to watch"], ["states", "Its states"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Daily digest"], ["notify", "Send a daily digest"], ["notify", "Send at"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Download voices"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Sounds for"], ["voice", "Warnings"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["voice", "Speak warnings between the wails (in the voice above)"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "Streaming engine"], ["system", "System"], ["system", "trust its own certificate"], ["system", "Other GAZE servers: bring in their cameras"], ["info", "About"], ["info", "Updates"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Where alerts happened", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "0) ? 'checked' : ''}> Roam between the ticked presets,", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
+const SETTINGS_INDEX = [["summary", "Daily summary"], ["summary", "Daily summary: what to show and when"], ["cameras", "Cameras"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Deep storage"], ["storage", "Keep on the local disk for"], ["storage", "Keep in deep storage for"], ["storage", "Each camera"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "Graphics API"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["watchdog", "Watchdog"], ["watchdog", "Restart GAZE if it crashes or stalls"], ["watchdog", "Start with Windows"], ["watchdog", "Checks every"], ["watchdog", "Restart after"], ["watchdog", "Too many restarts"], ["watchdog", "Watchdog updates"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Users, with their camera access and layouts"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["states", "Learned states"], ["states", "What to watch"], ["states", "Its states"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Daily digest"], ["notify", "Send a daily digest"], ["notify", "Send at"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Download voices"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Sounds for"], ["voice", "Warnings"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["voice", "Speak warnings between the wails (in the voice above)"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "Streaming engine"], ["system", "System"], ["system", "trust its own certificate"], ["system", "Other GAZE servers: bring in their cameras"], ["info", "About"], ["info", "Updates"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Where alerts happened", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "0) ? 'checked' : ''}> Roam between the ticked presets,", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
 const CAM_TABS = {general: 'General', recording: 'Recording', detection: 'Motion', ai: 'AI', audio: 'Audio', osd: 'On-screen display', ptz: 'Pan / tilt / zoom', device: 'ONVIF', zones: 'Zones'};
 function sectionName(sec) { const a = document.querySelector(`#side a[data-s="${sec}"]`); return a ? a.textContent.trim() : sec; }
 // Find a setting's row on the page (or in the camera window) and show it.
@@ -7443,7 +7521,7 @@ function drawSettings() {
   // The log view is kept, and lent to the Logs section while it's open.
   const lb = $('logs-box'); if (lb.parentElement !== $('page-logs')) $('page-logs').appendChild(lb);
   ({cameras: renderCameras, storage: renderStorage, display: renderDisplay, ai: renderAi, hardware: renderHardware,
-    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, states: renderStates, faces: renderFaces, notify: renderNotify, smarthome: renderSmartHome, voice: renderVoice, tasks: renderTasks, system: renderSystemSettings, watchdog: renderWatchdog, info: renderInfo,
+    cloud: renderCloud, backup: renderBackup, users: renderUsers, known: renderKnown, states: renderStates, faces: renderFaces, summary: renderSummarySettings, notify: renderNotify, smarthome: renderSmartHome, voice: renderVoice, tasks: renderTasks, system: renderSystemSettings, watchdog: renderWatchdog, info: renderInfo,
     logs: (b) => { b.innerHTML = ''; b.appendChild($('logs-box')); showLogs(); }})[section](body);
 }
 function settingsTick() {
@@ -10110,6 +10188,44 @@ async function renderKnown(body) {
       renderKnown(body);
     };
   });
+}
+
+// ---------- Settings → Daily summary ----------
+// What the daily summary video shows (kinds the AI recognises, whether or not
+// they are alerted on or recorded) and when one is made by itself.
+async function renderSummarySettings(body) {
+  if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
+  const sm = settings.summary || {enabled: false, time: '06:30', hours: 24, cameras: [], objects: ['person', 'vehicle', 'dog', 'cat', 'bird'], seconds: 120, keep_days: 30};
+  const main = (sysinfo && sysinfo.ai_objects) || ['person', 'vehicle'], more = ((sysinfo && sysinfo.ai_more) || []).filter(o => !main.includes(o));
+  const picked = new Set(canonKinds(sm.objects)), ALL = [...new Set([...main, ...more, ...picked])];
+  const common = ['person', 'vehicle', 'bicycle', 'dog', 'cat', 'bird', 'horse', 'cow', 'sheep', 'bear', 'backpack', 'suitcase', 'umbrella'].filter(o => ALL.includes(o));
+  const rest = ALL.filter(o => !common.includes(o));
+  const chip = (o) => `<label class="check"><input type="checkbox" class="sm-obj" value="${esc(o)}" ${picked.has(o) ? 'checked' : ''}> ${labelIcon(o)} ${esc(o)}</label>`;
+  const cams = status.cameras, sel = new Set(sm.cameras.length ? sm.cameras : cams.map(c => c.id));
+  body.innerHTML = `<div class="card"><h2>Daily summary${tip('A short video of a camera’s day with only the objects the AI recognised, shown together over the empty scene. They appear on the Alerts page as “Daily summary” cards, clearly separate from alerts.')}</h2>
+      <p class="muted" style="margin-top:0">A short video of each camera’s day (or the last few hours) showing <b>only what the AI recognised</b>, with its name and the time it was there; click an object to open the real footage. Make them from the <b>Alerts</b> page whenever you like, or have one waiting every day.</p>
+      <h3 style="margin:14px 0 6px">What to show</h3>
+      <p class="muted small" style="margin:0 0 6px">Chosen kinds are shown <b>even if they never raised an alert or were never recorded as one</b>: the AI looks at the footage again for the summary. “vehicle” covers cars, trucks, buses and motorbikes.</p>
+      <div class="checks">${common.map(chip).join('')}</div>
+      <details style="margin-top:8px"><summary class="muted small">More kinds the AI knows (${rest.length})</summary><div class="checks" style="margin-top:6px">${rest.map(chip).join('')}</div></details></div>
+    <div class="card"><h2>Make one by itself</h2>
+      <div class="form">
+        <span></span><div><label class="check"><input type="checkbox" id="sm-on" ${sm.enabled ? 'checked' : ''}> Make a summary every day</label></div>
+        <label for="sm-time">At</label><div class="row"><input type="time" id="sm-time" value="${esc(sm.time)}" style="width:130px"><span class="muted small">every day (if GAZE was off then, it is made when it starts, up to 6 hours late). E.g. 06:30 to have it when you wake up, or 17:30 for when you get home.</span></div>
+        <label for="sm-hours">Covering${tip('How far back from that time the video goes. 24 hours at 06:30 covers yesterday morning to this morning; 9 hours at 17:30 covers your day away from home.')}</label><div class="row"><input type="number" id="sm-hours" min="1" max="72" value="${sm.hours}" style="width:90px"><span class="muted">hours before that time</span></div>
+        <label>Cameras</label><div class="checks">${cams.map(c => `<label class="check"><input type="checkbox" class="sm-cam" value="${esc(c.id)}" ${sel.has(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('') || '<span class="muted">No cameras</span>'}</div>
+        <label for="sm-secs">Video length${tip('About how long each video is. A busy day is shown faster, or with people overlapping a little, to fit.')}</label><div class="row"><input type="number" id="sm-secs" min="10" max="600" value="${sm.seconds}" style="width:90px"><span class="muted">seconds</span></div>
+        <label for="sm-keep">Keep for${tip('Summaries are small videos made from your footage. Older ones are deleted. The footage itself is not touched.')}</label><div class="row"><input type="number" id="sm-keep" min="1" max="365" value="${sm.keep_days}" style="width:90px"><span class="muted">days</span></div>
+      </div>
+      <p class="muted small">Needs object recognition (Settings → Object recognition) switched on. Summaries are made one after another when the computer is not busy; recording is never slowed.</p></div>
+    <div class="card"><div class="actions" style="margin:0"><button type="button" class="primary" id="sm-save">Save</button><a class="btn" href="#alerts">Open the Alerts page to make summaries now</a></div></div>`;
+  $('sm-save').onclick = async () => {
+    const objs = [...body.querySelectorAll('.sm-obj:checked')].map(c => c.value);
+    if (!objs.length) return toast('Choose at least one kind of object to show', true);
+    const cs = [...body.querySelectorAll('.sm-cam')], pk = cs.filter(c => c.checked).map(c => c.value);
+    if (!pk.length) return toast('Choose at least one camera', true);
+    await saveSettings({summary: {enabled: chk('sm-on'), time: val('sm-time') || '06:30', hours: Math.max(1, Math.round(num('sm-hours')) || 24), cameras: pk.length === cs.length ? [] : pk, objects: objs, seconds: Math.max(10, Math.round(num('sm-secs')) || 120), keep_days: Math.max(1, Math.round(num('sm-keep')) || 30)}}, 'Daily summary saved');
+  };
 }
 
 // ---------- Settings → Notifications ----------

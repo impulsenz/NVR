@@ -467,6 +467,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(states::run(mgr.clone()));
     tokio::spawn(smart::run(mgr.clone()));
     tokio::spawn(digest::run(mgr.clone()));
+    tokio::spawn(synopsis::run(mgr.clone()));
     tokio::spawn(tracks::run(mgr.clone()));
     tokio::spawn(hooks::run(mgr.clone()));
     tokio::spawn(onvif_events::run(mgr.clone()));

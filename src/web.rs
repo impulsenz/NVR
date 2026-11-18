@@ -120,8 +120,11 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
         .route("/api/cameras/{id}/heatmap", get(camera_heatmap))
-        .route("/api/cameras/{id}/synopsis", get(synopsis_get).post(synopsis_start).delete(synopsis_cancel))
+        .route("/api/cameras/{id}/synopsis", get(synopsis_get).post(synopsis_start).delete(synopsis_delete))
         .route("/api/cameras/{id}/synopsis/video", get(synopsis_video))
+        .route("/api/cameras/{id}/synopsis/poster", get(synopsis_poster))
+        .route("/api/summaries", get(summaries_list))
+        .route("/api/summaries/make", post(summaries_make))
         .route("/api/plan", get(plan_get).put(plan_put))
         .route("/api/plan/image", get(plan_image).post(plan_image_set).delete(plan_image_delete).layer(axum::extract::DefaultBodyLimit::max(crate::plan::MAX_IMAGE_BYTES + 1024)))
         .route("/api/plan/journeys", get(plan_journeys))
@@ -868,62 +871,105 @@ async fn camera_heatmap(State(m): App, user: Option<axum::Extension<CurrentUser>
     Json(crate::heatmap::build(&events, from, now, kind)).into_response()
 }
 
-// ---------- day summary (synopsis.rs) ----------
+// ---------- daily summary (synopsis.rs) ----------
 
 #[derive(Deserialize)]
 struct SynopsisQuery {
-    /// YYYY-MM-DD (default: today).
-    date: Option<String>,
+    /// Which summary: a day ("2026-11-18") or hours up to a time ("2026-11-19_0630_24h");
+    /// default today. (`date` is the same thing.)
+    #[serde(alias = "date")]
+    when: Option<String>,
     /// Make it again even if one exists.
     #[serde(default)]
     force: bool,
-    /// Wanted length in seconds (10 to 600, default 120).
-    seconds: Option<u32>,
-    /// How different a pixel must be to count as movement (8 to 120, default 28).
-    sensitivity: Option<i32>,
 }
 
-fn synopsis_day(q: &SynopsisQuery) -> Result<chrono::NaiveDate, Response> {
-    match &q.date {
-        None => Ok(Local::now().date_naive()),
-        Some(d) => chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|_| err(StatusCode::BAD_REQUEST, "date: YYYY-MM-DD")),
-    }
+fn summary_id(q: &SynopsisQuery) -> String {
+    q.when.clone().unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string())
 }
 
 async fn synopsis_get(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>) -> Response {
     let _ = camera!(m, id);
-    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
-    Json(crate::synopsis::status(&m, &id, day)).into_response()
+    Json(crate::synopsis::status(&m, &id, &summary_id(&q))).into_response()
 }
 
 async fn synopsis_start(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>) -> Response {
     let _ = camera!(m, id);
-    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
-    let d = crate::synopsis::Params::default();
-    let p = crate::synopsis::Params { threshold: q.sensitivity.unwrap_or(d.threshold).clamp(8, 120), target_secs: q.seconds.unwrap_or(d.target_secs).clamp(10, 600), ..d };
-    match crate::synopsis::start(&m, &id, day, p, q.force) {
-        Ok(()) => Json(crate::synopsis::status(&m, &id, day)).into_response(),
+    let when = summary_id(&q);
+    match crate::synopsis::enqueue(&m, &tokio::runtime::Handle::current(), &id, &when, q.force, false) {
+        Ok(_) => Json(crate::synopsis::status(&m, &id, &when)).into_response(),
         Err(e) => err(StatusCode::CONFLICT, format!("{e:#}")),
     }
 }
 
-async fn synopsis_cancel(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>) -> Response {
+/// Stop one that is queued or being made; or, when it is finished, delete it
+/// (its video, picture and details: never footage).
+async fn synopsis_delete(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>) -> Response {
     let _ = camera!(m, id);
-    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
-    crate::synopsis::cancel(&id, day);
+    let when = summary_id(&q);
+    if !crate::synopsis::cancel(&id, &when) {
+        crate::synopsis::remove(&m, &id, &when);
+    }
     Json(json!({ "ok": true })).into_response()
 }
 
 async fn synopsis_video(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>, req: Request) -> Response {
     let _ = camera!(m, id);
-    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
-    match crate::synopsis::video_path(&m, &id, day) {
-        Some(p) => {
-            let name = format!("{}-summary-{day}.mp4", id);
-            serve_file(p, req, Some(name), false).await
-        }
-        None => err(StatusCode::NOT_FOUND, "no summary for that day yet"),
+    let when = summary_id(&q);
+    match crate::synopsis::file_for(&m, &id, &when, "mp4") {
+        Some(p) => serve_file(p, req, Some(format!("{id}-summary-{when}.mp4")), false).await,
+        None => err(StatusCode::NOT_FOUND, "no summary for that yet"),
     }
+}
+
+async fn synopsis_poster(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>, req: Request) -> Response {
+    let _ = camera!(m, id);
+    match crate::synopsis::file_for(&m, &id, &summary_id(&q), "jpg") {
+        Some(p) => serve_file(p, req, None, false).await,
+        None => err(StatusCode::NOT_FOUND, "no picture for that summary"),
+    }
+}
+
+/// The finished summaries (cards for the Alerts page) and what is being made.
+async fn summaries_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let vis = visible(&user);
+    let (cards, active) = crate::synopsis::list(&m, vis.as_deref(), 60);
+    let cfg = m.config();
+    Json(json!({ "cards": cards, "active": active, "objects": cfg.summary.objects, "schedule": { "enabled": cfg.summary.enabled, "time": cfg.summary.time, "hours": cfg.summary.hours } })).into_response()
+}
+
+#[derive(Deserialize)]
+struct MakeSummaries {
+    /// Cameras (empty = every camera the account can see).
+    #[serde(default)]
+    cameras: Vec<String>,
+    /// A day or window id (see `synopsis::parse_id`); default today so far.
+    when: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+/// Ask for summaries for several cameras at once (they are made one after another).
+async fn summaries_make(State(m): App, user: Option<axum::Extension<CurrentUser>>, Json(r): Json<MakeSummaries>) -> Response {
+    let vis = visible(&user);
+    let mut cams = allowed_cameras(r.cameras, vis);
+    if cams.is_empty() {
+        cams = m.cameras().iter().map(|c| c.cfg.id.clone()).collect();
+    }
+    let when = r.when.unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
+    let handle = tokio::runtime::Handle::current();
+    let (mut queued, mut existing, mut failed) = (0, 0, Vec::new());
+    for c in &cams {
+        match crate::synopsis::enqueue(&m, &handle, c, &when, r.force, false) {
+            Ok(crate::synopsis::Enqueued::Queued) => queued += 1,
+            Ok(crate::synopsis::Enqueued::Exists) => existing += 1,
+            Err(e) => failed.push(format!("{c}: {e:#}")),
+        }
+    }
+    if queued + existing == 0 && !failed.is_empty() {
+        return err(StatusCode::CONFLICT, failed.join("; "));
+    }
+    Json(json!({ "queued": queued, "existing": existing, "failed": failed })).into_response()
 }
 
 // ---------- drive health (smart.rs) ----------
@@ -6390,6 +6436,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
             || path == "/api/mode"
             || path.ends_with("/snooze")
             || path.ends_with("/synopsis")
+            || path == "/api/summaries/make"
             || path.ends_with("/pause")
             || path.ends_with("/resume"))
 }
@@ -6863,6 +6910,9 @@ mod tests {
         assert!(allowed(Admin, &post, p) && allowed(Operator, &post, p));
         assert!(!allowed(Viewer, &post, p));
         assert!(allowed(Viewer, &get, p) && allowed(Viewer, &get, "/api/cameras/front/synopsis/video"));
+        // Making several at once (all cameras) is the same: operators yes, viewers no.
+        assert!(allowed(Operator, &post, "/api/summaries/make") && !allowed(Viewer, &post, "/api/summaries/make"));
+        assert!(allowed(Viewer, &get, "/api/summaries"));
         // Another camera route is not opened by this.
         assert!(!allowed(Operator, &post, "/api/cameras/front/something"));
     }
