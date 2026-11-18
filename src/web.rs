@@ -120,6 +120,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         )
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
+        .route("/api/smart", get(smart_get))
+        .route("/api/smart/scan", post(smart_scan))
         .route("/api/states", get(states_list).post(states_create))
         .route("/api/states/{id}", put(states_update).delete(states_delete))
         .route("/api/states/{id}/examples", post(states_add_example))
@@ -726,6 +728,16 @@ async fn known_create(State(m): App, Json(r): Json<KnownReq>) -> Response {
         Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
         Err(e) => bad(e),
     }
+}
+
+// ---------- drive health (smart.rs) ----------
+
+async fn smart_get() -> Response {
+    Json(crate::smart::overview()).into_response()
+}
+
+async fn smart_scan() -> Response {
+    Json(crate::smart::refresh().await).into_response()
 }
 
 // ---------- learned states (states.rs) ----------
@@ -6113,6 +6125,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         "/api/safe-mode",
         "/api/webhooks",
         "/api/overview",
+        "/api/smart",
     ];
     if admin_only.iter().any(|p| path.starts_with(p))
         || path == "/api/cameras"
