@@ -60,3 +60,17 @@ See the S-entries in `TECH-DEBT.md`.
       connection's own address, or, from a proxy on this computer, the **last**
       `X-Forwarded-For` address. IPv6 is counted per /64 (`users::ip_bucket`).
 
+## Floor plan and following people
+
+- [ ] It is **off by default** and says what it keeps: positions and times of
+      walks (never pictures) for `keep_days`; *Delete all walks* removes them.
+- [ ] Restricted accounts: `/api/plan` returns only their cameras and the links
+      between them (`restrict_plan`), `/api/plan/journeys` only walks on their
+      cameras, `/api/plan/live` only their cameras. Writing (plan, picture, delete
+      walks) is admin only (non-GET falls to `allowed()`).
+- [ ] The picture upload accepts only a JPEG, at most 12 MB and 8000 px on a side,
+      checked by decoding its header, and is stored under a fixed name (never a
+      name from the request). The page re-encodes pictures, which drops hidden
+      data such as location.
+- [ ] No map imagery is fetched by GAZE (no outbound request to a map service).
+

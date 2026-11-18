@@ -19,7 +19,7 @@ const PORT = process.env.GAZE_PORT || '18181';
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS;
 const PASS = 'smoke-test-password-1';
-const PAGES = ['live', 'alerts', 'recordings', 'evidence', 'system', 'settings'];
+const PAGES = ['live', 'alerts', 'recordings', 'plan', 'evidence', 'system', 'settings'];
 // Keep in step with SECTIONS in static/app.js (the test reads it from there).
 const sections = () => {
   const js = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'app.js'), 'utf8');
@@ -27,7 +27,7 @@ const sections = () => {
   return m[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
 };
 // Requests that legitimately fail on an empty install (no cameras, no internet).
-const EXPECTED = [/\/api\/watchdog/, /favicon/, /\/api\/update/, /\/api\/smart/, /\/overview\.jpg/ /* no cameras: no overview picture */];
+const EXPECTED = [/\/api\/plan\/image/, /\/api\/watchdog/, /favicon/, /\/api\/update/, /\/api\/smart/, /\/overview\.jpg/ /* no cameras: no overview picture */];
 
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gaze-smoke-'));

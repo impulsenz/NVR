@@ -47,6 +47,31 @@ Runs `smartctl --scan -j`, then `smartctl -a -j` per drive (the program is optio
 
 Both only read stored alerts. `heatmap::build` adds the boxes stored with each alert (fractions of the picture) into a 64×36 grid for `GET /api/cameras/{id}/heatmap?days=&kind=`; the page draws it under the ignore-area painting using theme colour tokens. `digest::compose` (pure) turns the last 24 hours of alerts plus current problems (offline cameras, `health::drive_low`, `smart::overview`) into a message; `digest::run` sends it once a day through `notify::send` (a marker file `nvr-data/digest-last` prevents a second send the same day; a missed time is caught up for 6 hours). Recording and detection never read either.
 
+## Floor plan and following people (`plan.rs`, `tracks.rs`, `geo.rs`)
+
+```
+detect.rs handle_ai ──▶ tracks::observe (no-op unless switched on)
+      │                    └▶ Tracker per camera: looks → walks (nearest match, radius, gap)
+      │                         clothing-colour Sig per walk (imgutil crop; weak clue)
+      ▼                              │ closed walks
+(recording and alerts unchanged)     ▼ DONE queue ──▶ tracks::run ──▶ Store: nvr-data/tracks/<day>.jsonl
+                                                                        │ (picture coordinates only)
+ GET /api/plan/journeys ◀── tracks::link(walks, plan) ◀── read ◀────────┘
+      │      homography per camera (geo.rs, 4 calibration spots) → plan coordinates, metres (px_per_m)
+      ▼      join score = weighted timing + distance/speed + colour; one-to-one, best first
+ page: map (SVG over plan.jpg), journeys, playback, live dots (GET /api/plan/live)
+```
+
+* Walks are stored in **picture** coordinates; journeys and plan paths are
+  computed when read, so re-calibrating a camera fixes old walks too.
+* `plan.json` holds the picture's size, scale, cameras (position, facing, field
+  of view, calibration), neighbour links and the `Tuning` settings (validated
+  on save; off by default). `plan.jpg` is the picture, re-encoded to JPEG by the
+  page. Restricted accounts get only their cameras and the links between them
+  (`restrict_plan`), and only walks on their cameras.
+* The detector's only involvement is one call after each AI look. A busy or
+  broken tracker drops data; it never delays recording, detection or alerts.
+
 ## Storage tiers
 
 ```

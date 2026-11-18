@@ -1036,9 +1036,351 @@ function updateOverlay(surface, c, q) {
 }
 
 // ======================================================================
+// Plan page: cameras on a picture of the property, and the walks followed
+// across them (plan.rs, tracks.rs).
+// ======================================================================
+const PLAN_W = 1000;   // the map is drawn 1000 units wide; its height follows the picture
+const planUI = {plan: null, jr: null, hours: 24, sel: null, edit: false, cam: null, tool: null, scalePts: [], live: [], timer: null, t: 0, playing: null, drag: null, all: false};
+const planH = () => PLAN_W * (planUI.plan.image_h || 1) / (planUI.plan.image_w || 1);
+const planXY = (p) => [p[0] * PLAN_W, p[1] * planH()];
+const camName = (id) => { const c = ((status && status.cameras) || []).find(x => x.id === id); return c ? c.name : id; };
+
+const TUNING_FIELDS = [
+  ['min_score', 'Minimum confidence', 0.05, 1, 0.05, 'Only follow detections the AI is at least this sure about. Lower finds more people, and more false ones (a coat on a chair).'],
+  ['match_radius', 'Match radius', 0.02, 1, 0.01, 'How far, as a fraction of the picture’s width, someone may move between two looks and still be the same person. Raise it if one walk keeps breaking into pieces; lower it if two people get mixed up.'],
+  ['track_gap_seconds', 'Walk gap (seconds)', 0.5, 60, 0.5, 'A walk ends when its person has not been seen for this long. Raise it if people disappear behind things and come back.'],
+  ['min_track_seconds', 'Shortest walk (seconds)', 0, 60, 0.5, 'Walks shorter than this are ignored: a shadow, a flicker, someone just stepping into view.'],
+  ['smoothing', 'Path smoothing', 0, 1, 0.05, '0 follows every detected position exactly (jittery); 1 draws a very smooth path that cuts corners.'],
+  ['max_gap_seconds', 'Longest gap between cameras (seconds)', 1, 600, 1, 'The longest time someone may be out of sight between leaving one camera and appearing on the next and still be counted as the same walk. Longer for a big property.'],
+  ['overlap_seconds', 'Camera overlap (seconds)', 0, 60, 0.5, 'Cameras whose views overlap: the next may pick someone up this long before the last one lost them.'],
+  ['max_speed_mps', 'Fastest speed (metres per second)', 0.3, 15, 0.1, 'The fastest believable movement between two cameras. 1.4 is a walk, 3 a jog, 6 a run. Needs the plan’s scale and calibrated cameras; it stops two different people far apart being joined.'],
+  ['slack_m', 'Extra distance (metres)', 0, 100, 0.5, 'Allowed on top of speed × time, because calibration is never perfect. Raise it if real walks are refused.'],
+  ['min_link_score', 'Minimum join score', 0, 1, 0.05, 'How well two walks must fit together to count as one person. Lower joins more (and more wrongly); higher is stricter and leaves more walks on their own.'],
+  ['time_weight', 'Timing counts', 0, 10, 0.1, 'How much “the next camera saw them soon after” counts when joining walks.'],
+  ['distance_weight', 'Distance counts', 0, 10, 0.1, 'How much “they appear close to where they were lost” counts (needs calibration and scale).'],
+  ['colour_weight', 'Clothing colour counts', 0, 10, 0.1, 'How much similar clothing colour counts. It is a weak clue (lighting differs between cameras): useful when two people are out at once, misleading at night or in infrared. 0 switches it off.'],
+  ['keep_days', 'Keep walks for (days)', 1, 365, 1, 'Older walks are deleted automatically.'],
+];
+
+function stopPlanPoll() { clearInterval(planUI.timer); planUI.timer = null; clearInterval(planUI.playing); planUI.playing = null; }
+
+async function showPlan() {
+  const root = $('plan-root');
+  if (!planUI.plan) root.innerHTML = '<div class="card muted">Loading the plan…</div>';
+  try {
+    planUI.plan = await api('api/plan');
+    planUI.jr = await api(`api/plan/journeys?hours=${planUI.hours}`);
+  } catch (e) { root.innerHTML = `<div class="card errc">${esc(e.message)}</div>`; return; }
+  renderPlan();
+  stopPlanPoll();
+  planUI.timer = setInterval(async () => {
+    if (page !== 'plan') return stopPlanPoll();
+    try { planUI.live = (await api('api/plan/live')).people || []; drawPlanLive(); } catch (e) {}
+  }, 1500);
+}
+
+function renderPlan() {
+  const root = $('plan-root'), p = planUI.plan, admin = isAdmin();
+  if (!p.has_image) {
+    root.innerHTML = `<div class="card"><h2>Floor plan</h2>
+      <p class="muted" style="margin-top:0">Put your cameras on a picture of your home or property, and GAZE can follow a person as they walk from one camera to the next, draw their path on the map, and tell you how many people came, how long they stayed and how fast they moved.</p>
+      <ol class="steps"><li><b>Add a picture</b>: a floor plan, a sketch, or an aerial / satellite view of your property. GAZE never downloads maps itself: use your own picture, and check the terms of wherever it comes from (screenshots of some map services are not allowed to be kept or shared).</li>
+        <li><b>Set the scale</b> by clicking two points and saying how many metres apart they are.</li>
+        <li><b>Place each camera</b> and turn it to face the right way.</li>
+        <li><b>Calibrate</b> each camera by clicking four spots on the ground in its picture and on the map. This is what turns “a person at this pixel” into “a person at this spot”.</li>
+        <li>Switch on <b>Follow people</b> (it is off until you do) and fine-tune it.</li></ol>
+      ${admin ? `<div class="actions"><label class="btn primary" style="cursor:pointer">Choose a picture…<input type="file" id="pl-file" accept="image/*" hidden></label></div>` : '<p class="muted">Ask an administrator to set up the plan.</p>'}</div>`;
+    if (admin) $('pl-file').onchange = planUpload;
+    return;
+  }
+  const hoursSel = [[1, 'Last hour'], [6, 'Last 6 hours'], [24, 'Last 24 hours'], [72, 'Last 3 days'], [168, 'Last 7 days']].map(([h, t]) => `<option value="${h}" ${planUI.hours === h ? 'selected' : ''}>${t}</option>`).join('');
+  root.innerHTML = `<div class="plan-bar">
+      <h2 style="margin:0">Floor plan</h2>
+      <span class="chip ${planUI.jr.following ? 'on' : ''}" id="pl-chip">${planUI.jr.following ? 'Following people' : 'Not following people'}</span>
+      <span class="muted small" id="pl-now"></span>
+      <span style="flex:1"></span>
+      <select id="pl-hours" class="small">${hoursSel}</select>
+      <label class="check small"><input type="checkbox" id="pl-all" ${planUI.all ? 'checked' : ''}> Show all paths</label>
+      ${admin ? `<button type="button" class="small ${planUI.edit ? 'primary' : ''}" id="pl-edit">${planUI.edit ? '✓ Done editing' : '✎ Edit plan'}</button>` : ''}</div>
+    <div class="plan-grid">
+      <div class="plan-stage" id="pl-stage"><img id="pl-img" src="api/plan/image?t=${encodeURIComponent(p.updated || '')}" alt="Floor plan"><svg id="pl-svg" viewBox="0 0 ${PLAN_W} ${planH().toFixed(1)}" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="plan-hint" id="pl-hint" hidden></div></div>
+      <div class="plan-side" id="pl-side"></div></div>`;
+  $('pl-hours').onchange = async () => { planUI.hours = +val('pl-hours'); planUI.sel = null; await showPlan(); };
+  $('pl-all').onchange = () => { planUI.all = chk('pl-all'); drawPlanSvg(); };
+  if (admin) $('pl-edit').onclick = () => { planUI.edit = !planUI.edit; planUI.tool = null; planUI.scalePts = []; renderPlan(); };
+  drawPlanSvg(); renderPlanSide();
+}
+
+// ----- drawing the map -----
+function planUnitsPerM() { const p = planUI.plan; return p.px_per_m > 0 ? p.px_per_m * PLAN_W / p.image_w : PLAN_W / 40; }
+
+function cone(c) {
+  const [cx, cy] = planXY([c.x, c.y]), R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6), a = c.rotation_deg, f = Math.min(c.fov_deg, 359);
+  const at = (deg) => [cx + R * Math.sin(deg * Math.PI / 180), cy - R * Math.cos(deg * Math.PI / 180)];
+  const [x1, y1] = at(a - f / 2), [x2, y2] = at(a + f / 2);
+  return f >= 359 ? `M ${cx - R} ${cy} a ${R} ${R} 0 1 0 ${2 * R} 0 a ${R} ${R} 0 1 0 ${-2 * R} 0` : `M ${cx} ${cy} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${R.toFixed(1)} ${R.toFixed(1)} 0 ${f > 180 ? 1 : 0} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z`;
+}
+
+function journeyPolys(j) {
+  // Pieces of a path on the map: the walks on calibrated cameras, and dotted hops between cameras.
+  const p = planUI.plan, solid = [], dotted = [];
+  let prev = null;
+  for (const s of j.segments) {
+    const cam = p.cameras.find(c => c.id === s.cam);
+    const pts = s.path.length ? s.path : (cam ? [[cam.x, cam.y]] : []);
+    if (!pts.length) continue;
+    if (prev) dotted.push([prev, pts[0]]);
+    if (s.path.length > 1) solid.push(s.path);
+    prev = pts[pts.length - 1];
+  }
+  return {solid, dotted};
+}
+
+function drawPlanSvg() {
+  const p = planUI.plan, svg = $('pl-svg'); if (!svg) return;
+  const pl = (pts) => pts.map(q => planXY(q).map(v => v.toFixed(1)).join(',')).join(' ');
+  let h = '';
+  // Neighbour links
+  for (const l of p.links) { const a = p.cameras.find(c => c.id === l.a), b = p.cameras.find(c => c.id === l.b); if (a && b) h += `<line class="pl-link" x1="${a.x * PLAN_W}" y1="${a.y * planH()}" x2="${b.x * PLAN_W}" y2="${b.y * planH()}"/>`; }
+  // Cones, then cameras
+  for (const c of p.cameras) h += `<path class="pl-cone ${planUI.cam === c.id ? 'sel' : ''}" d="${cone(c)}"/>`;
+  // Paths
+  const jrs = (planUI.jr && planUI.jr.journeys) || [];
+  if (planUI.all) for (const j of jrs) if (j.id !== planUI.sel) { const {solid} = journeyPolys(j); for (const s of solid) h += `<polyline class="pl-path faint" points="${pl(s)}"/>`; }
+  const sel = jrs.find(j => j.id === planUI.sel);
+  if (sel) {
+    const {solid, dotted} = journeyPolys(sel);
+    for (const d of dotted) h += `<polyline class="pl-path hop" points="${pl(d)}"/>`;
+    for (const s of solid) h += `<polyline class="pl-path" points="${pl(s)}"/>`;
+    const first = solid[0] && solid[0][0], last = solid.length && solid[solid.length - 1][solid[solid.length - 1].length - 1];
+    if (first) h += `<circle class="pl-start" r="7" cx="${planXY(first)[0]}" cy="${planXY(first)[1]}"/>`;
+    if (last) h += `<circle class="pl-end" r="7" cx="${planXY(last)[0]}" cy="${planXY(last)[1]}"/>`;
+    h += `<circle class="pl-dot" id="pl-play" r="9" cx="-50" cy="-50"/>`;
+  }
+  for (const c of p.cameras) {
+    const [x, y] = planXY([c.x, c.y]), calibrated = !!c.calib;
+    h += `<g class="pl-cam ${planUI.cam === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><circle r="13" cx="${x}" cy="${y}"/><text x="${x}" y="${y + 4.5}" text-anchor="middle" class="pl-ico">📹</text>
+      <text x="${x}" y="${y > planH() * 0.9 ? y - 22 : y + 30}" text-anchor="middle" class="pl-label">${esc(camName(c.id))}${calibrated ? '' : ' ·'}</text></g>`;
+    if (planUI.edit && planUI.cam === c.id) { const R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6) * 0.8, a = c.rotation_deg * Math.PI / 180; h += `<circle class="pl-handle" r="9" cx="${x + R * Math.sin(a)}" cy="${y - R * Math.cos(a)}"/>`; }
+  }
+  for (let i = 0; i < planUI.scalePts.length; i++) { const [x, y] = planXY(planUI.scalePts[i]); h += `<circle class="pl-scale" r="6" cx="${x}" cy="${y}"/>`; }
+  if (planUI.scalePts.length === 2) { const [a, b] = planUI.scalePts.map(planXY); h += `<line class="pl-scale-line" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`; }
+  h += '<g id="pl-live"></g>';
+  svg.innerHTML = h;
+  svg.onpointerdown = planPointerDown; svg.onpointermove = planPointerMove; svg.onpointerup = svg.onpointercancel = () => { if (planUI.drag) { planUI.drag = null; planSave(); } };
+  drawPlanLive();
+}
+
+function drawPlanLive() {
+  const g = $('pl-live'), p = planUI.plan; if (!g) return;
+  let h = '';
+  for (const q of planUI.live) {
+    const cam = p.cameras.find(c => c.id === q.cam);
+    const at = q.plan || (cam ? [cam.x, cam.y] : null); if (!at) continue;
+    const [x, y] = planXY(at);
+    h += `<circle class="pl-live ${q.plan ? '' : 'rough'}" r="10" cx="${x}" cy="${y}"><title>${esc(q.label)} · ${esc(camName(q.cam))}</title></circle>`;
+  }
+  g.innerHTML = h;
+  const n = $('pl-now'); if (n) n.textContent = planUI.live.length ? `${planUI.live.length} ${planUI.live.length === 1 ? 'person' : 'people'} on camera now` : '';
+}
+
+function planPt(e) {
+  const svg = $('pl-svg'), m = svg.getScreenCTM(); if (!m) return null;
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  const q = pt.matrixTransform(m.inverse());
+  return [Math.min(1, Math.max(0, q.x / PLAN_W)), Math.min(1, Math.max(0, q.y / planH()))];
+}
+
+function planPointerDown(e) {
+  if (!planUI.edit) { const g = e.target.closest('.pl-cam'); if (g) { planUI.cam = g.dataset.id; drawPlanSvg(); } return; }
+  const at = planPt(e); if (!at) return;
+  if (planUI.tool === 'scale') {
+    planUI.scalePts.push(at);
+    if (planUI.scalePts.length === 2) {
+      drawPlanSvg();
+      const [a, b] = planUI.scalePts, p = planUI.plan;
+      const px = Math.hypot((a[0] - b[0]) * p.image_w, (a[1] - b[1]) * p.image_h);
+      const m = parseFloat(prompt('How many metres is it between the two points you clicked?', ''));
+      planUI.scalePts = []; planUI.tool = null;
+      if (m > 0) { p.px_per_m = px / m; planSave('Scale set'); } else drawPlanSvg();
+      renderPlanSide(); return;
+    }
+    drawPlanSvg(); return;
+  }
+  if (e.target.classList.contains('pl-handle')) { planUI.drag = {kind: 'rotate'}; e.target.setPointerCapture?.(e.pointerId); return; }
+  const g = e.target.closest('.pl-cam');
+  if (g) { planUI.cam = g.dataset.id; planUI.drag = {kind: 'move'}; drawPlanSvg(); renderPlanSide(); }
+}
+
+function planPointerMove(e) {
+  const d = planUI.drag; if (!d) return;
+  const c = planUI.plan.cameras.find(x => x.id === planUI.cam), at = planPt(e); if (!c || !at) return;
+  if (d.kind === 'move') { c.x = at[0]; c.y = at[1]; }
+  else { const [x, y] = planXY([c.x, c.y]), [px, py] = planXY(at); c.rotation_deg = Math.round(((Math.atan2(px - x, -(py - y)) * 180 / Math.PI) + 360) % 360); }
+  drawPlanSvg();
+}
+
+async function planSave(msg) {
+  const p = planUI.plan;
+  try { await api('api/plan', {method: 'PUT', json: {px_per_m: p.px_per_m, cameras: p.cameras, links: p.links, tuning: p.tuning}}); if (msg) toast(msg); }
+  catch (e) { toast(e.message, true); await showPlan(); }
+}
+
+async function planUpload(ev) {
+  const f = ev.target.files[0]; if (!f) return;
+  try {
+    // Re-encoded as a JPEG at a sensible size: any format works, and hidden
+    // data in the file (such as a location) is dropped.
+    const bmp = await createImageBitmap(f), k = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+    const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(bmp, 0, 0, cv.width, cv.height);
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.88));
+    const res = await fetch('api/plan/image', {method: 'POST', body: blob, headers: {'Content-Type': 'image/jpeg'}});
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload failed');
+    toast('Picture added'); planUI.edit = true; await showPlan();
+  } catch (e) { toast(e.message || 'Could not read that picture', true); }
+}
+
+// ----- the side panel -----
+function renderPlanSide() {
+  const side = $('pl-side'); if (!side) return;
+  side.innerHTML = planUI.edit ? planEditPanel() : planViewPanel();
+  planBindSide();
+}
+
+function planViewPanel() {
+  const jr = planUI.jr, st = jr.stats, p = planUI.plan;
+  const hist = st.by_hour, mx = Math.max(1, ...hist);
+  const cams = st.cameras.map(c => `<tr><td>${esc(camName(c.cam))}</td><td>${c.walks}</td><td>${fmtDur(c.avg_seconds)}</td></tr>`).join('');
+  const when = (t) => fmtDate(t, planUI.hours > 24 ? 'D MMM HH:mm' : 'HH:mm:ss');
+  const list = jr.journeys.slice().reverse().map(j => `<button type="button" class="pl-j ${planUI.sel === j.id ? 'on' : ''}" data-id="${esc(j.id)}"><span><b>${esc(when(j.start))}</b> · ${fmtDur(j.seconds)}${j.metres ? ' · ' + j.metres.toFixed(0) + ' m' : ''}${j.speed_mps ? ' · ' + (j.speed_mps * 3.6).toFixed(1) + ' km/h' : ''}</span><span class="muted small">${j.cameras.map(camName).map(esc).join(' → ')}${j.segments.length > 1 ? ` · ${Math.round(j.confidence * 100)}% sure` : ''}</span></button>`).join('');
+  const sel = jr.journeys.find(j => j.id === planUI.sel);
+  const play = sel ? `<div class="pl-play"><button type="button" class="small" id="pl-playbtn">▶ Play</button><input type="range" id="pl-slider" min="0" max="${Math.round(sel.seconds * 10)}" value="0" style="flex:1"><span class="muted small" id="pl-clock">0 s</span></div>` : '';
+  return `<div class="card"><h2>${planUI.hours >= 24 ? 'Activity' : 'Recent activity'}</h2>
+      ${!jr.following && !st.people ? `<p class="muted" style="margin-top:0">Following people is off, so nothing is being recorded here. ${isAdmin() ? 'Turn it on under ✎ Edit plan.' : 'An administrator can turn it on.'}</p>` : ''}
+      <div class="pl-stats"><div><b>${st.people}</b><span class="muted small">${st.people === 1 ? 'person' : 'people'}</span></div><div><b>${st.people ? fmtDur(st.avg_seconds) : '–'}</b><span class="muted small">average visit</span></div><div><b>${st.avg_speed_mps ? (st.avg_speed_mps * 3.6).toFixed(1) : '–'}</b><span class="muted small">km/h walking</span></div></div>
+      <div class="pl-hist" title="Journeys started in each hour of the day">${hist.map((n, h) => `<i style="height:${Math.round(4 + 36 * n / mx)}px" title="${h}:00 · ${n}"></i>`).join('')}</div>
+      ${cams ? `<table class="pl-tab"><thead><tr><th>Camera</th><th>Walks</th><th>Avg time</th></tr></thead><tbody>${cams}</tbody></table>` : ''}</div>
+    <div class="card"><h2>Journeys${tip('One line per person followed. Click one to draw it on the map and play it back. Where two cameras were joined, the percentage says how sure GAZE is that it was the same person; a dotted line means a hop between cameras. Paths need calibrated cameras and a scale; without them you still get which cameras, but no path or speed.')}</h2>
+      ${list ? `<div class="pl-list">${list}</div>` : `<p class="muted" style="margin:0">No journeys in this period.</p>`}${play}</div>
+    ${p.cameras.some(c => !c.calib) ? `<div class="hint">Cameras marked “·” aren’t calibrated, so people on them are shown at the camera, without a path.</div>` : ''}`;
+}
+
+function planEditPanel() {
+  const p = planUI.plan, t = p.tuning, cams = (status && status.cameras) || [];
+  const on = new Set(p.cameras.map(c => c.id));
+  const c = p.cameras.find(x => x.id === planUI.cam);
+  const camBox = c ? `<div class="card"><h2>${esc(camName(c.id))}</h2><div class="form">
+      <label for="pc-rot">Facing${tip('Which way the camera looks, in degrees clockwise from the top of the plan. You can also drag the round handle on the map.')}</label><div class="row"><input type="range" id="pc-rot" min="0" max="359" value="${Math.round(c.rotation_deg)}" style="flex:1"><span class="muted small" id="pc-rot-v">${Math.round(c.rotation_deg)}°</span></div>
+      <label for="pc-fov">Field of view</label><div class="row"><input type="range" id="pc-fov" min="10" max="360" value="${Math.round(c.fov_deg)}" style="flex:1"><span class="muted small" id="pc-fov-v">${Math.round(c.fov_deg)}°</span></div>
+      <label for="pc-rng">Range (metres)</label><div class="row"><input type="range" id="pc-rng" min="2" max="100" value="${Math.round(c.range_m)}" style="flex:1"><span class="muted small" id="pc-rng-v">${Math.round(c.range_m)} m</span></div>
+      <label>Neighbours${tip('Cameras whose views meet this one: someone leaving one may appear on the other. When any neighbours are drawn, walks are only joined between neighbours (unless you allow all pairs in the settings below). Give the usual walking time if you know it.')}</label>
+      <div>${p.cameras.filter(o => o.id !== c.id).map(o => { const l = p.links.find(x => (x.a === c.id && x.b === o.id) || (x.a === o.id && x.b === c.id)); return `<div class="row"><label class="check" style="min-width:140px"><input type="checkbox" class="pc-nb" data-id="${esc(o.id)}" ${l ? 'checked' : ''}> ${esc(camName(o.id))}</label><input type="number" class="pc-tt small" data-id="${esc(o.id)}" min="0" max="3600" step="1" placeholder="walk time (s)" value="${l && l.travel_seconds != null ? l.travel_seconds : ''}" style="width:130px" ${l ? '' : 'disabled'}></div>`; }).join('') || '<span class="muted small">Place another camera to link it.</span>'}</div></div>
+      <div class="actions"><button type="button" class="primary small" id="pc-cal" ${p.px_per_m > 0 ? '' : 'disabled title="Set the scale first"'}>${c.calib ? '✓ Calibrated — redo' : 'Calibrate…'}</button>${c.calib ? '<button type="button" class="small" id="pc-uncal">Clear</button>' : ''}<button type="button" class="small danger" id="pc-del">Remove from plan</button></div></div>` : '';
+  return `<div class="card"><h2>Plan</h2>
+      <div class="actions" style="margin-top:0"><label class="btn small" style="cursor:pointer">Change picture…<input type="file" id="pl-file" accept="image/*" hidden></label><button type="button" class="small danger" id="pl-rmimg">Remove picture</button></div>
+      <p class="row" style="margin:10px 0 0"><button type="button" class="small ${planUI.tool === 'scale' ? 'primary' : ''}" id="pl-scale">${planUI.tool === 'scale' ? 'Click two points on the map…' : 'Set the scale'}</button><span class="muted small">${p.px_per_m > 0 ? `${(p.image_w / p.px_per_m).toFixed(0)} m wide` : 'not set — needed for distances and speeds'}</span></p></div>
+    <div class="card"><h2>Cameras</h2><div class="pl-cams">${cams.map(k => `<div class="row"><span style="flex:1">${esc(k.name)}</span>${on.has(k.id) ? `<button type="button" class="small ${planUI.cam === k.id ? 'primary' : ''}" data-sel="${esc(k.id)}">Select</button>` : `<button type="button" class="small" data-add="${esc(k.id)}">＋ Place</button>`}</div>`).join('')}</div></div>
+    ${camBox}
+    <div class="card"><h2>Following people${tip('Off until you switch it on. While on, GAZE keeps where each person walked (positions and times, never pictures) for the number of days set, and can draw their paths here. It uses the AI’s person detections, so object recognition must be on.')}</h2>
+      <div class="form"><span></span><div><label class="check"><input type="checkbox" id="tu-on" ${t.enabled ? 'checked' : ''}> Follow people</label></div>
+      <label for="tu-labels">Follow${tip('What to follow, by the AI’s names: person, dog, cat, vehicle …')}</label><div><input type="text" id="tu-labels" value="${esc(t.labels.join(', '))}"></div>
+      ${TUNING_FIELDS.map(([k, name, lo, hi, step, text]) => `<label for="tu-${k}">${name}${tip(text)}</label><div><input type="number" id="tu-${k}" min="${lo}" max="${hi}" step="${step}" value="${Math.round(t[k] * 1000) / 1000}" style="width:110px"></div>`).join('')}
+      <span></span><div><label class="check"><input type="checkbox" id="tu-all" ${t.link_all_pairs ? 'checked' : ''}> Join walks between any two cameras${tip('Normally, when neighbours are drawn, walks are only joined between neighbouring cameras. Tick this to allow any pair (the distance and speed limits still apply).')}</label></div></div>
+      <div class="actions"><button type="button" class="primary" id="tu-save">Save settings</button><button type="button" id="tu-reset">Back to defaults</button><button type="button" class="danger" id="tu-wipe" style="margin-left:auto">Delete all walks</button></div></div>`;
+}
+
+function planBindSide() {
+  const side = $('pl-side'), p = planUI.plan;
+  side.querySelectorAll('.pl-j').forEach(b => b.onclick = () => { planUI.sel = planUI.sel === b.dataset.id ? null : b.dataset.id; drawPlanSvg(); renderPlanSide(); });
+  const play = $('pl-slider');
+  if (play) {
+    const j = planUI.jr.journeys.find(x => x.id === planUI.sel);
+    const place = () => { const t = j.start + (+play.value / 10) * 1000, at = planAt(j, t), dot = $('pl-play'); $('pl-clock').textContent = Math.round(+play.value / 10) + ' s'; if (dot && at) { const [x, y] = planXY(at); dot.setAttribute('cx', x); dot.setAttribute('cy', y); } };
+    play.oninput = place; place();
+    $('pl-playbtn').onclick = () => { if (planUI.playing) { clearInterval(planUI.playing); planUI.playing = null; $('pl-playbtn').textContent = '▶ Play'; return; } $('pl-playbtn').textContent = '❚❚ Pause'; if (+play.value >= +play.max) play.value = 0; planUI.playing = setInterval(() => { play.value = Math.min(+play.max, +play.value + 5); place(); if (+play.value >= +play.max) { clearInterval(planUI.playing); planUI.playing = null; const b = $('pl-playbtn'); if (b) b.textContent = '▶ Play'; } }, 100); };
+  }
+  if (!planUI.edit) return;
+  const f = $('pl-file'); if (f) f.onchange = planUpload;
+  $('pl-rmimg').onclick = async () => { if (!confirm('Remove the plan picture? Calibrations and the scale go with it.')) return; try { await api('api/plan/image', {method: 'DELETE'}); await showPlan(); } catch (e) { toast(e.message, true); } };
+  $('pl-scale').onclick = () => { planUI.tool = planUI.tool === 'scale' ? null : 'scale'; planUI.scalePts = []; const h = $('pl-hint'); h.hidden = planUI.tool !== 'scale'; h.textContent = 'Click two points whose distance you know (a wall, a fence, a driveway).'; renderPlanSide(); drawPlanSvg(); };
+  side.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => { const id = b.dataset.add; p.cameras.push({id, x: 0.5, y: 0.5, rotation_deg: 0, fov_deg: 90, range_m: 15}); planUI.cam = id; await planSave(); renderPlanSide(); drawPlanSvg(); });
+  side.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => { planUI.cam = b.dataset.sel; renderPlanSide(); drawPlanSvg(); });
+  const c = p.cameras.find(x => x.id === planUI.cam);
+  if (c) {
+    for (const [id, key, unit] of [['pc-rot', 'rotation_deg', '°'], ['pc-fov', 'fov_deg', '°'], ['pc-rng', 'range_m', ' m']]) { const el = $(id); el.oninput = () => { c[key] = +el.value; $(id + '-v').textContent = el.value + unit; drawPlanSvg(); }; el.onchange = () => planSave(); }
+    const syncLinks = () => { p.links = p.links.filter(l => l.a !== c.id && l.b !== c.id); side.querySelectorAll('.pc-nb').forEach(n => { if (!n.checked) return; const tt = side.querySelector(`.pc-tt[data-id="${CSS.escape(n.dataset.id)}"]`).value; p.links.push({a: c.id, b: n.dataset.id, travel_seconds: tt === '' ? null : +tt}); }); };
+    side.querySelectorAll('.pc-nb').forEach(n => n.onchange = () => { side.querySelector(`.pc-tt[data-id="${CSS.escape(n.dataset.id)}"]`).disabled = !n.checked; syncLinks(); drawPlanSvg(); planSave(); });
+    side.querySelectorAll('.pc-tt').forEach(n => n.onchange = () => { syncLinks(); planSave(); });
+    $('pc-cal').onclick = () => planCalibrate(c);
+    const un = $('pc-uncal'); if (un) un.onclick = async () => { delete c.calib; await planSave('Calibration cleared'); renderPlanSide(); drawPlanSvg(); };
+    $('pc-del').onclick = async () => { p.cameras = p.cameras.filter(x => x.id !== c.id); p.links = p.links.filter(l => l.a !== c.id && l.b !== c.id); planUI.cam = null; await planSave(); renderPlanSide(); drawPlanSvg(); };
+  }
+  const gather = () => {
+    const t = {...p.tuning, enabled: chk('tu-on'), link_all_pairs: chk('tu-all'), labels: val('tu-labels').split(',').map(x => x.trim()).filter(Boolean)};
+    for (const [k] of TUNING_FIELDS) t[k] = +val('tu-' + k);
+    return t;
+  };
+  $('tu-save').onclick = async () => { p.tuning = gather(); await planSave('Settings saved'); await showPlan(); };
+  $('tu-reset').onclick = async () => { if (!confirm('Put every following setting back to its default? (Follow people stays as it is.)')) return; const on = p.tuning.enabled; p.tuning = {enabled: on, labels: ['person'], min_score: 0.5, match_radius: 0.2, track_gap_seconds: 4, min_track_seconds: 1, smoothing: 0.4, max_gap_seconds: 30, overlap_seconds: 3, max_speed_mps: 3, slack_m: 3, min_link_score: 0.5, time_weight: 1, distance_weight: 1, colour_weight: 0.5, link_all_pairs: false, keep_days: 14}; await planSave('Defaults restored'); renderPlanSide(); };
+  $('tu-wipe').onclick = async () => { if (!confirm('Delete every stored walk? The plan and settings stay.')) return; try { const r = await api('api/plan/tracks', {method: 'DELETE'}); toast(`Deleted (${r.deleted_days} day file${r.deleted_days === 1 ? '' : 's'})`); await showPlan(); } catch (e) { toast(e.message, true); } };
+}
+
+// Where a journey is at time t (ms), for the playback dot.
+function planAt(j, t) {
+  const p = planUI.plan; let prevEnd = null;
+  for (const s of j.segments) {
+    const cam = p.cameras.find(c => c.id === s.cam), home = cam ? [cam.x, cam.y] : null;
+    if (t < s.start) return prevEnd && home ? [prevEnd[0] + (home[0] - prevEnd[0]) * Math.min(1, (t - prevEnd.t) / Math.max(1, s.start - prevEnd.t)), prevEnd[1] + (home[1] - prevEnd[1]) * Math.min(1, (t - prevEnd.t) / Math.max(1, s.start - prevEnd.t))] : (s.path[0] || home);
+    if (t <= s.end) {
+      if (!s.path.length) return home;
+      let i = s.times.findIndex(x => x >= t); if (i <= 0) return s.path[Math.max(0, i)] || s.path[0];
+      const f = (t - s.times[i - 1]) / Math.max(1, s.times[i] - s.times[i - 1]);
+      return [s.path[i - 1][0] + (s.path[i][0] - s.path[i - 1][0]) * f, s.path[i - 1][1] + (s.path[i][1] - s.path[i - 1][1]) * f];
+    }
+    const last = s.path.length ? s.path[s.path.length - 1] : home;
+    prevEnd = last ? Object.assign([last[0], last[1]], {t: s.end}) : null;
+  }
+  return prevEnd;
+}
+
+// ----- calibrating a camera: four spots on the ground, on its picture and on the map -----
+function planCalibrate(c) {
+  const p = planUI.plan, pic = [], map = [];
+  const dlg = document.createElement('div'); dlg.className = 'pl-modal';
+  dlg.innerHTML = `<div class="pl-modal-box"><h2 style="margin-top:0">Calibrate ${esc(camName(c.id))}</h2>
+    <p class="muted" id="cal-step"></p>
+    <div class="cal-panes"><div><div class="muted small">Camera picture</div><div class="cal-pane" id="cal-pic"><img id="cal-pic-img" src="snapshot/${encodeURIComponent(c.id)}?t=${Date.now()}" alt=""><div class="cal-none muted" id="cal-pic-none" hidden>No picture from this camera right now. Check it is online, then try again.</div><svg viewBox="0 0 1 1" preserveAspectRatio="none" id="cal-pic-svg"></svg></div></div>
+      <div><div class="muted small">Plan</div><div class="cal-pane" id="cal-map"><img src="api/plan/image" alt=""><svg viewBox="0 0 1 1" preserveAspectRatio="none" id="cal-map-svg"></svg></div></div></div>
+    <p class="hint">Choose four spots on the <b>ground</b> (not up in the air): corners of a paving stone, a path edge, a fence post at its base. Spread them out, not all in a line. Click each one on the camera picture, then the same spot on the plan.</p>
+    <div class="actions"><button type="button" class="primary" id="cal-save" disabled>Save calibration</button><button type="button" id="cal-reset">Start again</button><button type="button" id="cal-cancel" style="margin-left:auto">Cancel</button></div></div>`;
+  document.body.appendChild(dlg);
+  const draw = () => {
+    const dots = (pts, svg) => { $(svg).innerHTML = pts.map((q, i) => `<circle cx="${q[0]}" cy="${q[1]}" r="0.018" class="cal-dot"/><text x="${q[0] + 0.025}" y="${q[1] - 0.02}" class="cal-num" font-size="0.05">${i + 1}</text>`).join(''); };
+    dots(pic, 'cal-pic-svg'); dots(map, 'cal-map-svg');
+    const n = pic.length, done = map.length === 4;
+    $('cal-step').textContent = done ? 'All four spots are set. Check the numbers match, then save.' : `Spot ${Math.min(4, (pic.length === map.length ? pic.length : map.length) + 1)} of 4: click it on the ${pic.length === map.length ? 'camera picture' : 'plan'}.`;
+    $('cal-save').disabled = !done;
+  };
+  const click = (which) => (e) => {
+    const r = e.currentTarget.getBoundingClientRect(), q = [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+    if (which === 'pic' && pic.length === map.length && pic.length < 4) pic.push(q);
+    else if (which === 'map' && map.length < pic.length) map.push(q);
+    draw();
+  };
+  $('cal-pic-img').onerror = () => { $('cal-pic-img').hidden = true; $('cal-pic-none').hidden = false; };
+  $('cal-pic').onclick = click('pic'); $('cal-map').onclick = click('map');
+  $('cal-reset').onclick = () => { pic.length = map.length = 0; draw(); };
+  $('cal-cancel').onclick = () => dlg.remove();
+  $('cal-save').onclick = async () => { c.calib = {picture: pic, plan: map}; dlg.remove(); await planSave('Calibration saved'); renderPlanSide(); drawPlanSvg(); };
+  draw();
+}
+
+// ======================================================================
 // Routing & status
 // ======================================================================
-const PAGES = ['live', 'recordings', 'evidence', 'system', 'settings'];
+const PAGES = ['live', 'recordings', 'plan', 'evidence', 'system', 'settings'];
 // A notification link: #alerts?open=<camera>~<alert id> opens that alert.
 let openAlertId = null, lastNavPage = null;
 function route() {
@@ -1058,6 +1400,7 @@ function route() {
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
+  if (page !== 'plan') { stopPlanPoll(); planUI.edit = false; planUI.tool = null; planUI.scalePts = []; }
   if (page !== 'live' || sub) dropGrid();
   if (page !== 'live' && typeof soundCam !== 'undefined' && soundCam) stopSound();
   if (page !== 'recordings') pauseAllPlayback();
@@ -1071,6 +1414,7 @@ function route() {
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
   else if (page === 'system') showSystem();
+  else if (page === 'plan') showPlan();
   else if (page === 'evidence') showEvidence();
   else showSettings(sub || 'cameras');
   updateSubscriptions();

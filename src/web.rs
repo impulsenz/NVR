@@ -741,8 +741,13 @@ async fn known_create(State(m): App, Json(r): Json<KnownReq>) -> Response {
 
 /// The plan as an account may see it: only its cameras, and the links between them.
 fn plan_for(m: &Manager, user: &Option<axum::Extension<CurrentUser>>) -> crate::plan::Plan {
-    let mut p = m.plan.get();
-    if let Some(v) = visible(user) {
+    restrict_plan(m.plan.get(), visible(user))
+}
+
+/// Only the cameras in `allowed` (None = all), and the links between them: a
+/// limited account must not learn that, or where, other cameras exist.
+fn restrict_plan(mut p: crate::plan::Plan, allowed: Option<Vec<String>>) -> crate::plan::Plan {
+    if let Some(v) = allowed {
         p.cameras.retain(|c| v.contains(&c.id));
         p.links.retain(|l| v.contains(&l.a) && v.contains(&l.b));
     }
@@ -6925,6 +6930,23 @@ mod tests {
         assert_eq!(from("127.0.0.1", &["6.6.6.6", "198.51.100.4"]), "198.51.100.4");
         // Rubbish falls back to the connection's address.
         assert_eq!(from("127.0.0.1", &["not-an-address"]), "127.0.0.1");
+    }
+
+    #[test]
+    fn a_limited_account_sees_only_its_cameras_on_the_plan() {
+        use crate::plan::{Link, Plan, PlanCamera};
+        let cam = |id: &str| PlanCamera { id: id.into(), x: 0.5, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: None };
+        let link = |a: &str, b: &str| Link { a: a.into(), b: b.into(), travel_seconds: None };
+        let plan = Plan { cameras: vec![cam("front"), cam("back"), cam("gate")], links: vec![link("front", "back"), link("back", "gate")], ..Default::default() };
+        let all = restrict_plan(plan.clone(), None);
+        assert_eq!((all.cameras.len(), all.links.len()), (3, 2));
+        let two = restrict_plan(plan.clone(), Some(vec!["front".into(), "back".into()]));
+        assert_eq!(two.cameras.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["front", "back"]);
+        assert_eq!(two.links.len(), 1, "a link to a camera they can't see is dropped");
+        let one = restrict_plan(plan.clone(), Some(vec!["gate".into()]));
+        assert_eq!((one.cameras.len(), one.links.len()), (1, 0));
+        // The settings travel with it (they hold no camera data); the picture is shared.
+        assert_eq!(one.tuning, plan.tuning);
     }
 
     #[test]
