@@ -6,7 +6,7 @@ the entry when it is fixed.** Source of the first entries: `AUDIT-2026-11.md`
 
 | ID | Rank | Debt | Where | Next step | Blocked by |
 |---|---|---|---|---|---|
-| H-1 | H | Camera authorisation is a convention: middleware + 35 handler checks. A test (`parameterised_routes_are_covered_or_reviewed`) now fails when a route with a parameter is neither covered by `camera_in_path` nor on a reviewed list | `web.rs` `check_access`, `camera_in_path`, `visible` | One extractor `camera_for(user, id)` replacing the handler checks | — |
+| H-1 | M | Camera authorisation: the by-id check now lives in one function (`camera_denied`, unit-tested) and a test (`parameterised_routes_are_covered_or_reviewed`) fails for a new unreviewed route with a parameter. Still by hand: about 20 handlers that *filter lists* by `visible(&user)` (alerts, recordings, status …) and the 3 "no restricted account at all" checks | `web.rs` `camera_denied`, `visible` | A list-filter helper; a test that calls each camera route as a restricted account | — |
 | H-4 | H | No CSP/HSTS/Permissions-Policy; inline `onclick` and heavy `innerHTML` | `web.rs` `harden`, `static/index.html`, `app.js` | Report-Only CSP; move inline handlers to listeners | approval (can break the page) |
 | H-5 | M | 38 timers; five poll the server | `app.js` | One status channel over the existing WebSocket; JSON compression limited by content type (never streams) | — |
 | M-1 | M | `app.css`: 84 selectors defined more than once (`tools/audit/css_duplicates.py`) | `app.css` | One block per component with tokens; screenshots of both themes | — |

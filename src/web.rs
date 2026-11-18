@@ -678,8 +678,8 @@ async fn alerts_unseen(
     user: Option<axum::Extension<CurrentUser>>,
     Json(r): Json<SeenReq>,
 ) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &r.camera) {
+        return denied;
     }
     let Some(c) = m.camera(&r.camera) else {
         return err(StatusCode::NOT_FOUND, "camera not found");
@@ -766,8 +766,8 @@ fn state_for(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, id: &str)
     let Some(s) = m.states.get(id) else {
         return Err(err(StatusCode::NOT_FOUND, "no such state"));
     };
-    if visible(user).is_some_and(|v| !v.contains(&s.camera)) {
-        return Err(err(StatusCode::FORBIDDEN, "your account can't see this camera"));
+    if let Some(denied) = camera_denied(user, &s.camera) {
+        return Err(denied);
     }
     Ok(s)
 }
@@ -961,8 +961,8 @@ async fn known_learn(
     Path(id): Path<String>,
     Json(r): Json<LearnReq>,
 ) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &r.camera) {
+        return denied;
     }
     let res = (|| {
         let k = if id == "none" {
@@ -2526,8 +2526,8 @@ struct WarmReq {
 /// Read a camera's footage between two times from the disk or NAS into
 /// memory (in the background), so going back to it is quick.
 async fn warm_footage(State(m): App, user: Option<axum::Extension<CurrentUser>>, Json(q): Json<WarmReq>) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&q.camera)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &q.camera) {
+        return denied;
     }
     let c = camera!(m, q.camera);
     let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
@@ -2677,8 +2677,8 @@ async fn remote_footage(State(m): App, req: Request, next: Next) -> Response {
     };
     let Some(imp) = crate::remote::find(&cfg, &id) else { return next.run(req).await };
     let user = req.extensions().get::<CurrentUser>().cloned().map(axum::Extension);
-    if visible(&user).is_some_and(|v| !v.contains(&id)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
     }
     let rid = library::enc(&imp.remote_id);
     let there = if by_query {
@@ -2804,8 +2804,8 @@ async fn hls_playlist(
     Path((id, stream)): Path<(String, String)>,
     Query(q): Query<HlsQuery>,
 ) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&id)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
     }
     let c = camera!(m, id);
     let stream = stream.trim_end_matches(".m3u8").to_string();
@@ -2853,8 +2853,8 @@ async fn hls_file_playlist(
     user: Option<axum::Extension<CurrentUser>>,
     Path((id, kind, name)): Path<(String, String, String)>,
 ) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&id)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
     }
     let c = camera!(m, id);
     let name = name.trim_end_matches(".m3u8").to_string();
@@ -2897,8 +2897,8 @@ async fn export_clip(
 ) -> Response {
     // The camera is in the query here, not the path: check it's one this
     // account may see.
-    if visible(&user).is_some_and(|v| !v.contains(&q.camera)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &q.camera) {
+        return denied;
     }
     let c = camera!(m, q.camera);
     let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
@@ -3042,8 +3042,8 @@ async fn archive_test(State(m): App, Json(r): Json<ArchiveTest>) -> Response {
 
 /// The recordings in deep storage for a camera (newest first, up to 500).
 async fn archive_list(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&id)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
     }
     let cfg = m.config();
     let Some(plan) = cfg.cameras.iter().find(|c| c.id == id).and_then(|c| cfg.archive_for(c)) else {
@@ -3055,8 +3055,8 @@ async fn archive_list(State(m): App, user: Option<axum::Extension<CurrentUser>>,
 
 /// A recording in deep storage: played or downloaded straight from there.
 async fn archive_file(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&id)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
     }
     let cfg = m.config();
     let Some(plan) = cfg.cameras.iter().find(|c| c.id == id).and_then(|c| cfg.archive_for(c)) else {
@@ -3205,8 +3205,8 @@ async fn cases_add_item(
     Json(r): Json<CaseItemReq>,
 ) -> Response {
     use crate::cases::Kind;
-    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &r.camera) {
+        return denied;
     }
     let Some(dir) = crate::cases::case_dir(&id) else {
         return err(StatusCode::NOT_FOUND, "no such case");
@@ -3744,8 +3744,8 @@ async fn timelapse_export(
     user: Option<axum::Extension<CurrentUser>>,
     Query(q): Query<TimelapseQuery>,
 ) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&q.camera)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &q.camera) {
+        return denied;
     }
     let c = camera!(m, q.camera);
     let (from, to) = (q.from.with_timezone(&Local), q.to.with_timezone(&Local));
@@ -4636,8 +4636,8 @@ async fn sprites_ready(
     user: Option<axum::Extension<CurrentUser>>,
     Json(r): Json<ReadyReq>,
 ) -> Response {
-    if visible(&user).is_some_and(|v| !v.contains(&r.camera)) {
-        return err(StatusCode::FORBIDDEN, "your account can't see this camera");
+    if let Some(denied) = camera_denied(&user, &r.camera) {
+        return denied;
     }
     if !crate::picturelog::enabled() {
         return Json(json!({})).into_response();
@@ -6304,6 +6304,17 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
 }
 
 /// Cameras the signed-in user may see (None = all).
+/// The one place that decides whether an account may use a camera by id:
+/// `Some(403 response)` when a restricted account can't see it, `None` when
+/// it may (no restriction, or the camera is in its list). Handlers that take
+/// a camera call this first (see docs/SECURITY-CHECKLIST.md).
+fn camera_denied(user: &Option<axum::Extension<CurrentUser>>, camera: &str) -> Option<Response> {
+    if visible(user).is_some_and(|v| !v.iter().any(|c| c == camera)) {
+        return Some(err(StatusCode::FORBIDDEN, "your account can't see this camera"));
+    }
+    None
+}
+
 fn visible(user: &Option<axum::Extension<CurrentUser>>) -> Option<Vec<String>> {
     user.as_ref()
         .map(|u| u.0.0.cameras.clone())
@@ -6724,6 +6735,28 @@ mod tests {
         // Reading is fine; tools without a browser send no Origin.
         assert!(!foreign_origin(&req("GET", Some("http://evil.example"), "192.168.1.5:8080")));
         assert!(!foreign_origin(&req("POST", None, "192.168.1.5:8080")));
+    }
+
+    /// The one camera-access rule: an account limited to some cameras is
+    /// refused (403) on any other; an unrestricted account and no account
+    /// (open paths) are not stopped here.
+    #[test]
+    fn a_restricted_account_is_refused_on_other_cameras() {
+        let user = |cams: &[&str]| -> Option<axum::Extension<CurrentUser>> {
+            let u: crate::users::User = serde_json::from_value(json!({"username": "v", "role": "viewer", "cameras": cams})).unwrap();
+            Some(axum::Extension(CurrentUser(Arc::new(u))))
+        };
+        let restricted = user(&["front"]);
+        assert!(camera_denied(&restricted, "front").is_none());
+        let denied = camera_denied(&restricted, "garage").expect("other camera refused");
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        // A prefix or a longer name is not the same camera.
+        assert!(camera_denied(&restricted, "fron").is_some());
+        assert!(camera_denied(&restricted, "front2").is_some());
+        assert!(camera_denied(&restricted, "").is_some());
+        // No restriction listed: all cameras. Not signed in: decided elsewhere.
+        assert!(camera_denied(&user(&[]), "garage").is_none());
+        assert!(camera_denied(&None, "garage").is_none());
     }
 
     #[test]

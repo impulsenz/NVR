@@ -1,6 +1,7 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Sturdier camera access checks** (no visible change): the rule that keeps a camera-limited account off other cameras now lives in one tested function instead of twelve copies.
 - **Drive health** (Settings → System): reads every drive's own health report (SMART) through `smartctl` (smartmontools, installed separately) and shows model, size, temperature, age and health. It checks every few hours, and with *Warn me when something's wrong* on, notifies you (phone and/or email) when a drive starts to fail — reallocated or unreadable sectors, a failed SMART status, an NVMe critical warning or nearly-used-up life, overheating — so you can copy the footage off in time. If smartctl isn't installed, or isn't allowed to read the drives (it usually needs administrator / root rights), the page says so. Recording never depends on it.
 
 ## 1.2.0 — November 2026
