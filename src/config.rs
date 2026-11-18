@@ -716,6 +716,28 @@ pub struct NotifyConfig {
     pub health: bool,
     /// Also send every notification by email (works with or without ntfy).
     pub email: EmailConfig,
+    /// One summary of the day, sent each morning.
+    pub digest: DigestConfig,
+}
+
+/// The daily digest (digest.rs): what happened in the last 24 hours, and what
+/// needs attention, in one message through the notification channels.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DigestConfig {
+    pub enabled: bool,
+    /// When to send it ("HH:MM").
+    pub time: String,
+    /// Also send on a day with no alerts (so silence means "quiet", not "broken").
+    pub when_quiet: bool,
+    /// Attach the most important alert picture.
+    pub picture: bool,
+}
+
+impl Default for DigestConfig {
+    fn default() -> Self {
+        Self { enabled: false, time: "08:00".into(), when_quiet: true, picture: true }
+    }
 }
 
 impl NotifyConfig {
@@ -791,6 +813,7 @@ impl Default for NotifyConfig {
             link: String::new(),
             health: true,
             email: EmailConfig::default(),
+            digest: DigestConfig::default(),
         }
     }
 }

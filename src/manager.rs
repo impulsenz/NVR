@@ -879,6 +879,10 @@ impl Manager {
                 anyhow::bail!("email security must be starttls, tls or none");
             }
             n.email.host = n.email.host.trim().to_string();
+            if chrono::NaiveTime::parse_from_str(n.digest.time.trim(), "%H:%M").is_err() {
+                anyhow::bail!("daily digest time: write it as HH:MM, e.g. 08:00");
+            }
+            n.digest.time = n.digest.time.trim().to_string();
             cfg.notify = n;
         }
         if let Some(mut r) = up.remotes {

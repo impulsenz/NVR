@@ -31,6 +31,13 @@ fn mins(d: Duration) -> String {
     if m < 60 { format!("{m} min") } else { format!("{} h {} min", m / 60, m % 60) }
 }
 
+/// A recordings drive with less free space than is to be kept free (or under
+/// 2 GB, but never asking for more than a tenth of the drive).
+pub fn drive_low(min_free_gb: f64, l: &crate::manager::Location) -> bool {
+    let keep = (min_free_gb * 1e9) as u64;
+    l.total_bytes > 0 && l.free_bytes < keep.max(2_000_000_000).min(l.total_bytes / 10).max(500_000_000)
+}
+
 pub async fn run(mgr: Arc<Manager>) {
     let mut offline: HashMap<String, Watch> = HashMap::new();
     let mut not_rec: HashMap<String, Watch> = HashMap::new();
@@ -127,10 +134,7 @@ pub async fn run(mgr: Arc<Manager>) {
             .locations
             .iter()
             .filter(|l| l.total_bytes > 0)
-            .filter(|l| {
-                let keep = (cfg.storage.min_free_gb * 1e9) as u64;
-                l.free_bytes < keep.max(2_000_000_000).min(l.total_bytes / 10).max(500_000_000)
-            })
+            .filter(|l| drive_low(cfg.storage.min_free_gb, l))
             .collect();
         if !low.is_empty() && disk_told.is_none_or(|t| now - t >= DISK_EVERY) {
             disk_told = Some(now);

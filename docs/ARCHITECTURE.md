@@ -43,6 +43,10 @@ A state ("garage door": open / closed) is a camera, an optional area, and labell
 
 Runs `smartctl --scan -j`, then `smartctl -a -j` per drive (the program is optional and external; nothing is linked). `parse` turns one drive's JSON into `Drive` (health `ok` / `warning` / `failing` / `unknown`); `run` rescans every 6 h and tells `notify::send` once per new problem. Shown in Settings → System; `/api/smart` is admin only. Read-only: recording and storage never consult it.
 
+## Heatmap and daily digest (`heatmap.rs`, `digest.rs`)
+
+Both only read stored alerts. `heatmap::build` adds the boxes stored with each alert (fractions of the picture) into a 64×36 grid for `GET /api/cameras/{id}/heatmap?days=&kind=`; the page draws it under the ignore-area painting using theme colour tokens. `digest::compose` (pure) turns the last 24 hours of alerts plus current problems (offline cameras, `health::drive_low`, `smart::overview`) into a message; `digest::run` sends it once a day through `notify::send` (a marker file `nvr-data/digest-last` prevents a second send the same day; a missed time is caught up for 6 hours). Recording and detection never read either.
+
 ## Storage tiers
 
 ```

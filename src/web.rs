@@ -120,6 +120,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         )
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
+        .route("/api/cameras/{id}/heatmap", get(camera_heatmap))
         .route("/api/smart", get(smart_get))
         .route("/api/smart/scan", post(smart_scan))
         .route("/api/states", get(states_list).post(states_create))
@@ -199,6 +200,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/update/install", post(update_install))
         .route("/api/notify/test", post(notify_test))
         .route("/api/notify/status", get(notify_status))
+        .route("/api/notify/digest-test", post(notify_digest_test))
         .route("/api/maintenance/previews", post(rebuild_previews))
         .route("/api/maintenance/reidentify", post(reidentify))
         .route("/api/maintenance/delete-footage", post(delete_all_footage))
@@ -728,6 +730,31 @@ async fn known_create(State(m): App, Json(r): Json<KnownReq>) -> Response {
         Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
         Err(e) => bad(e),
     }
+}
+
+// ---------- where alerts happened (heatmap.rs) ----------
+
+#[derive(Deserialize)]
+struct HeatQuery {
+    days: Option<u32>,
+    #[serde(default)]
+    kind: String,
+}
+
+/// A camera's detections added up over the last `days` (1 to 90, default 7).
+async fn camera_heatmap(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Query(q): Query<HeatQuery>) -> Response {
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
+    }
+    let c = camera!(m, id);
+    let Some(kind) = crate::heatmap::Kind::parse(&q.kind) else {
+        return err(StatusCode::BAD_REQUEST, "kind: all, people, vehicles or animals");
+    };
+    let days = q.days.unwrap_or(7).clamp(1, 90) as i64;
+    let now = Local::now();
+    let from = now - chrono::Duration::days(days);
+    let events = c.events.between(from, now);
+    Json(crate::heatmap::build(&events, from, now, kind)).into_response()
 }
 
 // ---------- drive health (smart.rs) ----------
@@ -4323,6 +4350,14 @@ async fn notify_test(State(m): App, Json(mut n): Json<crate::config::NotifyConfi
     };
     match crate::notify::send(&n, msg).await {
         Ok(()) => Json(json!({"ok": true, "message": "Sent — check your phone"})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+/// Send the daily digest now (for the last 24 hours), with the saved settings.
+async fn notify_digest_test(State(m): App) -> Response {
+    match crate::digest::send(&m, Local::now()).await {
+        Ok(n) => Json(json!({"ok": true, "message": format!("Sent: {} in the last 24 hours", if n == 1 { "1 alert".to_string() } else { format!("{n} alerts") })})).into_response(),
         Err(e) => bad(e),
     }
 }
