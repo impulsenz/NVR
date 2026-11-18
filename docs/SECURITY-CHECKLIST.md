@@ -55,7 +55,7 @@ See the S-entries in `TECH-DEBT.md`.
       DirectML, the OpenVINO/CUDA runtimes) is checked against a SHA-256 pinned
       in the code **before** it is unpacked (`jobs::verify_sha256`; a failing file
       is deleted). Pins are for a fixed version; a floating "latest" URL can't be
-      pinned (ffmpeg: see TECH-DEBT X-1).
+      pinned (ffmpeg: checked against the list BtbN publishes next to it, see TECH-DEBT X-1).
 - [ ] The client address used for the sign-in lock-out comes from `client_ip`: the
       connection's own address, or, from a proxy on this computer, the **last**
       `X-Forwarded-For` address. IPv6 is counted per /64 (`users::ip_bucket`).

@@ -17,6 +17,9 @@ pub enum Check {
     Ok,
     /// Incomplete data after `good_len` bytes.
     Truncated { good_len: u64 },
+    /// A header and no video at all (the power failed, or ffmpeg died, before
+    /// the first piece was written): nothing to play and nothing to lose.
+    Empty,
     /// Not an MP4 we can repair (or nothing usable).
     Unrecognized,
 }
@@ -30,6 +33,8 @@ pub fn check(path: &Path) -> std::io::Result<Check> {
     // waiting for its mdat).
     let mut good = 0u64;
     let mut seen_moov = false;
+    // Video data (an `mdat`) is among what is kept.
+    let mut media = false;
     let mut header = [0u8; 16];
     while pos < len {
         if len - pos < 8 {
@@ -64,11 +69,18 @@ pub fn check(path: &Path) -> std::io::Result<Check> {
             }
             // A fragment header is only useful together with its data.
             b"moof" => {}
+            b"mdat" => {
+                media = true;
+                good = pos;
+            }
             _ => good = pos,
         }
     }
     if !seen_moov {
         return Ok(Check::Unrecognized);
+    }
+    if !media {
+        return Ok(Check::Empty);
     }
     Ok(if good == len {
         Check::Ok
@@ -100,6 +112,19 @@ pub fn repair(path: &Path) -> bool {
                 }
             }
         }
+        // Nothing was ever recorded in it: it would only show as a recording
+        // that can't be played. (Called only for files whose writer has
+        // stopped: at start-up, and after a recorder's ffmpeg has ended.)
+        Ok(Check::Empty) => match std::fs::remove_file(path) {
+            Ok(()) => {
+                info!("removed {} (it held no video, only the file header)", path.display());
+                true
+            }
+            Err(e) => {
+                warn!("could not remove empty {}: {e}", path.display());
+                false
+            }
+        },
         _ => false,
     }
 }
@@ -226,10 +251,40 @@ mod tests {
         assert_eq!(std::fs::metadata(&p).unwrap().len(), good_len);
         assert_eq!(check(&p).unwrap(), Check::Ok);
         assert!(!repair(&p));
-        // Not an MP4 / only a header: left alone.
+        // Not an MP4: left alone.
         std::fs::write(&p, b"hello world, not a video").unwrap();
         assert_eq!(check(&p).unwrap(), Check::Unrecognized);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_with_no_video_is_removed_but_one_with_any_video_is_kept() {
+        let dir = std::env::temp_dir().join(format!("nvr-mp4-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = [bx(b"ftyp", 16), bx(b"moov", 100)].concat();
+        // The header alone; the header and a piece's index with no data; the
+        // header and junk: all hold no video.
+        for (name, data) in [("a.mp4", header.clone()), ("b.mp4", [header.clone(), bx(b"moof", 50)].concat()), ("c.mp4", [header.clone(), vec![0u8; 40]].concat()),
+                             ("d.mp4", [header.clone(), bx(b"moof", 50), bx(b"mdat", 1000)[..300].to_vec()].concat())] {
+            let p = dir.join(name);
+            std::fs::write(&p, data).unwrap();
+            assert_eq!(check(&p).unwrap(), Check::Empty, "{name}");
+            assert!(repair(&p), "{name}");
+            assert!(!p.exists(), "{name} should have been removed");
+        }
+        // One whole piece of video: kept (and the cut-off piece after it trimmed).
+        let p = dir.join("e.mp4");
+        let kept = [header.clone(), bx(b"moof", 50), bx(b"mdat", 1000)].concat();
+        std::fs::write(&p, [kept.clone(), bx(b"moof", 50), bx(b"mdat", 1000)[..10].to_vec()].concat()).unwrap();
+        assert!(repair(&p));
+        assert_eq!(std::fs::read(&p).unwrap(), kept);
+        // A normal (not fragmented) MP4 with its data first and its index last: untouched.
+        let q = dir.join("f.mp4");
+        std::fs::write(&q, [bx(b"ftyp", 16), bx(b"mdat", 500), bx(b"moov", 100)].concat()).unwrap();
+        assert_eq!(check(&q).unwrap(), Check::Ok);
+        assert!(!repair(&q) && q.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A real power cut: a recording made by ffmpeg the way the recorder makes
@@ -291,23 +346,24 @@ mod tests {
             let cut = cut.min(bytes.len());
             let f = dir.join(format!("cut{i}.mp4"));
             std::fs::write(&f, &bytes[..cut]).unwrap();
-            repair(&f);
-            // Still a recording, and complete up to the last whole piece.
-            assert_eq!(check(&f).unwrap(), Check::Ok, "cut at {cut} of {}", bytes.len());
             let kept_pieces = ends.iter().filter(|e| **e <= cut).count();
-            let len_after = std::fs::metadata(&f).unwrap().len() as usize;
-            // (A file that wasn't cut at all is complete, with the index box ffmpeg
-            // writes when it closes a file normally, and is left exactly as it is.)
-            let expect_len = if cut == bytes.len() { cut } else if kept_pieces == 0 { header_end } else { ends[kept_pieces - 1] };
-            assert_eq!(len_after, expect_len, "cut at {cut}: kept the wrong amount");
-            // Repairing again changes nothing.
-            assert!(!repair(&f));
+            repair(&f);
             if kept_pieces == 0 {
-                // Cut before the first whole piece: nothing was recorded yet. What is
-                // left is the file header alone (no video to decode). See TECH-DEBT PC-1.
+                // Cut before the first whole piece: nothing was recorded yet, so
+                // the file holds no video and is removed.
+                assert!(!f.exists(), "cut at {cut}: a file with no video should have been removed");
                 empty += 1;
                 continue;
             }
+            // Still a recording, and complete up to the last whole piece.
+            assert_eq!(check(&f).unwrap(), Check::Ok, "cut at {cut} of {}", bytes.len());
+            let len_after = std::fs::metadata(&f).unwrap().len() as usize;
+            // (A file that wasn't cut at all is complete, with the index box ffmpeg
+            // writes when it closes a file normally, and is left exactly as it is.)
+            let expect_len = if cut == bytes.len() { cut } else { ends[kept_pieces - 1] };
+            assert_eq!(len_after, expect_len, "cut at {cut}: kept the wrong amount");
+            // Repairing again changes nothing.
+            assert!(!repair(&f));
             // ffmpeg decodes all of it without a single error, with 25 frames per kept piece.
             let dec = ff(&["-i", f.to_str().unwrap(), "-f", "null", "-"]).unwrap();
             assert!(dec.status.success() && dec.stderr.is_empty(), "cut at {cut}: ffmpeg complained: {}", String::from_utf8_lossy(&dec.stderr));

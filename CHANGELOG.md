@@ -1,6 +1,8 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Recordings cut short by a power cut or crash**: a file that holds no video at all (only its header, because the power failed within the first second of a new file) is now removed during the repair instead of staying in the list as a recording that can't be played. Files with any video are repaired as before. (Checked with real recordings cut at 60 places and with zero-filled endings.)
+- **ffmpeg download (Windows)** is checked against the checksum list its builder publishes with it; a damaged or cut-off download is deleted and not used. If the list can't be read, ffmpeg is used anyway so recording is never held up.
 - **Security**: downloaded programs and libraries are now checked against a pinned checksum before they are used — go2rtc, the Piper voice engine and the DirectML runtime (a file that doesn't match is deleted and not used). The sign-in lock-out can no longer be dodged by sending made-up `X-Forwarded-For` addresses through a reverse proxy on the same computer, or by changing address inside an IPv6 /64.
 - **Tests** for the recording repair after a power cut (real ffmpeg recordings cut at 60 places, and with zero-filled endings) and for the snooze-link signature (the hash is checked against the RFC 4231 answer).
 - **Linux download**: releases now also carry `GAZE-linux-x86_64` (with its checksum). GAZE doesn't update itself on Linux. A Linux check (tests, page smoke test, Docker image build and start) now runs on every change. The Windows release is unaffected (the Linux build is a separate job).

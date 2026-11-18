@@ -11,6 +11,35 @@ use std::sync::Arc;
 #[cfg_attr(not(windows), allow(dead_code))]
 const BUILD: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
 
+/// The list of checksums BtbN publishes with each build (next to the zip).
+#[cfg_attr(not(windows), allow(dead_code))]
+const CHECKSUMS: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256";
+
+/// What a build's published checksum list says about a file.
+#[derive(Debug, PartialEq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum Listed {
+    Matches,
+    Differs,
+    /// The list has no entry for the file.
+    Absent,
+}
+
+/// Compare a file's checksum with a list in `sha256sum` format
+/// ("<hash>  <file name>" per line).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn in_listing(listing: &str, file: &str, got: &str) -> Listed {
+    for line in listing.lines() {
+        let mut p = line.split_whitespace();
+        if let (Some(sum), Some(name)) = (p.next(), p.next())
+            && name.trim_start_matches('*') == file
+        {
+            return if sum.eq_ignore_ascii_case(got) { Listed::Matches } else { Listed::Differs };
+        }
+    }
+    Listed::Absent
+}
+
 /// ffmpeg is missing (and, on Windows, being fetched).
 pub static MISSING: AtomicBool = AtomicBool::new(false);
 
@@ -47,6 +76,7 @@ pub async fn fetch(data_dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     let zip = dir.join("ffmpeg-download.zip");
     crate::jobs::download("ffmpeg (needed to record and play video)", BUILD, &zip, 20_000_000).await?;
+    verify_download(&zip).await?;
     let (z2, d2) = (zip.clone(), dir.clone());
     tokio::task::spawn_blocking(move || -> Result<()> {
         let mut a = zip::ZipArchive::new(std::fs::File::open(&z2)?).context("reading the ffmpeg download")?;
@@ -71,6 +101,43 @@ pub async fn fetch(data_dir: &Path) -> Result<PathBuf> {
     Ok(dir.join("ffmpeg.exe"))
 }
 
+/// Check the download against the checksum list the builder publishes with it.
+/// This catches a damaged or cut-off download (and a file swapped without the
+/// list); it can't catch a build that was replaced together with its list,
+/// because the URL is "latest" and so can't be pinned in the program (see
+/// docs/TECH-DEBT.md X-1). A list that can't be read is no reason to leave
+/// the computer without ffmpeg: it's logged and the download is used.
+#[cfg_attr(not(windows), allow(dead_code))]
+async fn verify_download(zip: &Path) -> Result<()> {
+    let file = BUILD.rsplit('/').next().unwrap_or_default().to_string();
+    let z = zip.to_path_buf();
+    let got = tokio::task::spawn_blocking(move || crate::jobs::sha256_file(&z)).await??;
+    // Twice if needed: the builder may have published a new build between our two requests.
+    for attempt in 0..2 {
+        let listing = match crate::jobs::download_client()?.get(CHECKSUMS).send().await.and_then(|r| r.error_for_status()) {
+            Ok(r) => r.text().await.unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!("ffmpeg: couldn't read the published checksums ({e}); using the download unchecked");
+                return Ok(());
+            }
+        };
+        match in_listing(&listing, &file, &got) {
+            Listed::Matches => {
+                tracing::info!("ffmpeg: the download matches the published checksum");
+                return Ok(());
+            }
+            Listed::Absent => {
+                tracing::warn!("ffmpeg: the published checksums don't list {file}; using the download unchecked");
+                return Ok(());
+            }
+            Listed::Differs if attempt == 0 => tokio::time::sleep(std::time::Duration::from_secs(20)).await,
+            Listed::Differs => {}
+        }
+    }
+    let _ = std::fs::remove_file(zip);
+    anyhow::bail!("the downloaded ffmpeg does not match its published checksum (it was damaged or changed); it was deleted and not used")
+}
+
 /// Started when ffmpeg is missing: fetch it, use it, restart.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub async fn fetch_and_use(m: Arc<crate::manager::Manager>) {
@@ -90,3 +157,23 @@ pub async fn fetch_and_use(m: Arc<crate::manager::Manager>) {
         Err(e) => tracing::error!("couldn't download ffmpeg: {e:#} — install it from ffmpeg.org and set its path in Settings → System"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_published_list_is_read_exactly() {
+        let list = "aaaa  ffmpeg-master-latest-linux64-gpl.tar.xz\nBBBB *ffmpeg-master-latest-win64-gpl.zip\n";
+        let f = "ffmpeg-master-latest-win64-gpl.zip";
+        assert_eq!(in_listing(list, f, "bbbb"), Listed::Matches); // case-insensitive, `*` binary marker
+        assert_eq!(in_listing(list, f, "cccc"), Listed::Differs);
+        assert_eq!(in_listing(list, "other.zip", "bbbb"), Listed::Absent);
+        assert_eq!(in_listing("", f, "bbbb"), Listed::Absent);
+        // A name that only ends the same is not the file.
+        assert_eq!(in_listing("bbbb  x-ffmpeg-master-latest-win64-gpl.zip\n", f, "bbbb"), Listed::Absent);
+        // The address and the file name we look for belong together.
+        assert!(BUILD.ends_with(f));
+    }
+}
+
