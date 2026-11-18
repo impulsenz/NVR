@@ -1,12 +1,18 @@
-//! Where the AI models run: on the graphics card (ONNX Runtime with
-//! DirectML, which works with any DirectX 12 GPU on Windows: NVIDIA, AMD,
-//! Intel), or on the processor (tract, built in).
+//! Where the AI models run: on an accelerator through ONNX Runtime, or on the
+//! processor (tract, built in).
 //!
-//! The GPU is used unless the settings say "CPU" (Settings → Object
-//! recognition → Run AI on). The GPU runtime (Microsoft's ONNX Runtime with
-//! DirectML, about 25 MB) is downloaded the first time from NuGet. Models
-//! that can't run on the GPU (no DirectX 12 GPU, runtime missing, a model
-//! the GPU can't handle) run on the processor, and the reason is shown.
+//! Accelerators (`Accel`): **DirectML** on Windows (any DirectX 12 GPU),
+//! **CUDA** on Linux with an NVIDIA card (needs the CUDA 12 and cuDNN 9
+//! libraries installed on the computer), **OpenVINO** on Linux (Intel
+//! graphics, NPU, or just the Intel/AMD processor, which it runs faster than
+//! tract). Each needs its own ONNX Runtime build, downloaded the first time
+//! (DirectML from NuGet; the other two from PyPI wheels pinned by SHA-256).
+//! One runtime per process: switching accelerator takes a restart.
+//!
+//! The accelerator is used unless the settings say "CPU" (Settings → Object
+//! recognition → Run AI on). Models that can't run on it (runtime missing,
+//! no suitable hardware, a model it can't handle) run on the processor, and
+//! the reason is shown.
 
 use crate::sync::MutexExt;
 use anyhow::{Context, Result, anyhow, bail};
@@ -21,11 +27,98 @@ pub type Plan = Arc<tract_onnx::prelude::TypedSimplePlan>;
 /// ONNX Runtime with DirectML, from NuGet (the last version with DirectML).
 const ORT_VERSION: &str = "1.24.4";
 const DML_VERSION: &str = "1.15.4";
+/// ONNX Runtime for Linux, from PyPI wheels (only the native libraries are
+/// used; the wheel is a zip). Pinned: the address and the SHA-256.
+const LINUX_ORT_VERSION: &str = "1.24.1";
+const OPENVINO_WHEEL: (&str, &str) = (
+    "https://files.pythonhosted.org/packages/50/cf/17ba72de2df0fcba349937d2788f154397bbc2d1a2d67772a97e26f6bc5f/onnxruntime_openvino-1.24.1-cp312-cp312-manylinux_2_28_x86_64.whl",
+    "d617fac2f59a6ab5ea59a788c3e1592240a129642519aaeaa774761dfe35150e",
+);
+const CUDA_WHEEL: (&str, &str) = (
+    "https://files.pythonhosted.org/packages/db/a8/fb1a36a052321a839cc9973f6cfd630709412a24afff2d7315feb3efc4b8/onnxruntime_gpu-1.24.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+    "710bf83751e6761584ad071102af3cbffd4b42bb77b2e3caacfb54ffbaa0666b",
+);
+
+/// The ways to run a model faster than the processor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Accel {
+    DirectMl,
+    Cuda,
+    OpenVino,
+}
+
+impl Accel {
+    pub fn name(self) -> &'static str {
+        match self {
+            Accel::DirectMl => "directml",
+            Accel::Cuda => "cuda",
+            Accel::OpenVino => "openvino",
+        }
+    }
+    fn label(self) -> String {
+        match self {
+            Accel::DirectMl => "GPU (DirectML)".into(),
+            Accel::Cuda => "NVIDIA GPU (CUDA)".into(),
+            Accel::OpenVino => format!("OpenVINO ({})", openvino_device()),
+        }
+    }
+}
+
+/// What this computer can offer in the settings (besides "auto").
+pub fn choices() -> Vec<&'static str> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        vec![Accel::DirectMl.name()]
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        vec![Accel::Cuda.name(), Accel::OpenVino.name()]
+    } else {
+        vec![]
+    }
+}
+
+/// Is a CUDA 12 + cuDNN 9 installation findable on this computer?
+fn cuda_libraries_present() -> bool {
+    let mut dirs: Vec<PathBuf> = std::env::var("LD_LIBRARY_PATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    for d in ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/usr/local/cuda/lib64", "/usr/local/cuda/targets/x86_64-linux/lib", "/lib/x86_64-linux-gnu"] {
+        dirs.push(PathBuf::from(d));
+    }
+    let has = |name: &str| dirs.iter().any(|d| d.join(name).exists());
+    Path::new("/proc/driver/nvidia/version").exists() && has("libcudnn.so.9") && has("libcublas.so.12")
+}
+
+/// Which accelerator a setting means on this computer. `auto`: DirectML on
+/// Windows; on Linux CUDA when an NVIDIA card with its libraries is there,
+/// otherwise OpenVINO.
+pub fn resolve(setting: &str) -> Result<Accel> {
+    let linux64 = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+    let win64 = cfg!(all(windows, target_arch = "x86_64"));
+    match setting {
+        "directml" if win64 => Ok(Accel::DirectMl),
+        "directml" => bail!("DirectML is only available on Windows"),
+        "cuda" if linux64 => Ok(Accel::Cuda),
+        "cuda" => bail!("CUDA support is only set up for Linux (64-bit)"),
+        "openvino" if linux64 => Ok(Accel::OpenVino),
+        "openvino" => bail!("OpenVINO support is only set up for Linux (64-bit)"),
+        _ if win64 => Ok(Accel::DirectMl),
+        _ if linux64 => Ok(if cuda_libraries_present() { Accel::Cuda } else { Accel::OpenVino }),
+        _ => bail!("GPU AI is only set up for Windows and 64-bit Linux"),
+    }
+}
 
 /// Run AI on the GPU (unless the settings say CPU).
 static USE_GPU: AtomicBool = AtomicBool::new(true);
-/// The GPU runtime, once loaded.
+/// The GPU runtime, once loaded, and which accelerator it is for.
 static RUNTIME: OnceLock<ort::environment::Environment> = OnceLock::new();
+static LOADED: OnceLock<Accel> = OnceLock::new();
+/// What the settings ask for: accelerator ("auto", "directml", "cuda",
+/// "openvino") and the OpenVINO device ("AUTO:GPU,CPU", "GPU", "CPU", "NPU").
+static WANT: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
+/// Where models are cached (OpenVINO compiles a model for the device once).
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Why the GPU runtime couldn't be loaded (tried again later).
 static RUNTIME_ERR: Mutex<Option<String>> = Mutex::new(None);
 /// The GPU runtime is wanted (at start-up, or the settings were changed to GPU).
@@ -55,6 +148,23 @@ pub fn set_use_gpu(on: bool) {
     USE_GPU.store(on, Ordering::Relaxed);
 }
 
+/// Which accelerator and OpenVINO device the settings ask for.
+pub fn set_accelerator(accel: &str, openvino_device: &str) {
+    *WANT.locked() = (accel.to_string(), openvino_device.to_string());
+}
+
+fn wanted() -> Result<Accel> {
+    let a = WANT.locked().0.clone();
+    resolve(&a)
+}
+
+/// The OpenVINO device in use ("AUTO:GPU,CPU": the graphics if there is
+/// one, else the processor).
+fn openvino_device() -> String {
+    let d = WANT.locked().1.trim().to_string();
+    if d.is_empty() { "AUTO:GPU,CPU".into() } else { d }
+}
+
 pub fn use_gpu() -> bool {
     USE_GPU.load(Ordering::Relaxed)
 }
@@ -67,12 +177,19 @@ pub fn status() -> String {
     if let Some(s) = STATUS.locked().clone() {
         return s;
     }
-    if RUNTIME.get().is_some() {
-        return "GPU (DirectML)".into();
+    if let Some(loaded) = LOADED.get() {
+        // A different accelerator was chosen after this one loaded: it
+        // can't be swapped in a running process.
+        if let Ok(w) = wanted()
+            && w != *loaded
+        {
+            return format!("{} — restart GAZE to use {}", loaded.label(), w.label());
+        }
+        return loaded.label();
     }
     match RUNTIME_ERR.locked().clone() {
-        Some(e) => format!("CPU — the GPU can't be used: {e}"),
-        None => "CPU until the GPU runtime is ready (downloading it the first time)".into(),
+        Some(e) => format!("CPU — the accelerator can't be used: {e}"),
+        None => "CPU until the AI runtime is ready (downloading it the first time)".into(),
     }
 }
 
@@ -207,8 +324,9 @@ pub fn load(path: &Path, what: &str, cpu: impl FnOnce() -> Result<Plan>) -> Resu
                 return Ok(Net::Gpu(Mutex::new(s)));
             }
             Err(e) => {
-                warn!("AI: {what} can't run on the GPU ({e:#}); using the processor");
-                note(format!("GPU (DirectML), but {what} runs on the CPU: {e:#}"));
+                let label = LOADED.get().map(|a| a.label()).unwrap_or_default();
+                warn!("AI: {what} can't run on the {label} ({e:#}); using the processor");
+                note(format!("{label}, but {what} runs on the CPU: {e:#}"));
                 record(
                     what,
                     false,
@@ -260,35 +378,55 @@ pub fn placed() -> Vec<Placed> {
 
 fn gpu_session(env: &ort::environment::Environment, path: &Path) -> Result<ort::session::Session> {
     use ort::session::{Session, builder::GraphOptimizationLevel};
+    let accel = *LOADED.get().ok_or_else(|| anyhow!("the AI runtime isn't loaded"))?;
+    fn e<T: std::fmt::Display>(x: T) -> anyhow::Error {
+        anyhow!("{x}")
+    }
     let builder = Session::builder(env)?
         .with_optimization_level(GraphOptimizationLevel::Level3)
-        .map_err(|e| anyhow!("{e}"))?;
-    // Testing on a computer without DirectML: GAZE_ORT_CPU=1 runs the same
-    // path on ONNX Runtime's processor backend.
+        .map_err(e)?;
+    // Testing on a computer without the hardware: GAZE_ORT_CPU=1 runs the
+    // same path on ONNX Runtime's processor backend.
     let mut builder = if std::env::var_os("GAZE_ORT_CPU").is_some() {
         builder
     } else {
-        // DirectML needs these two off.
-        builder
-            .with_memory_pattern(false)
-            .map_err(|e| anyhow!("{e}"))?
-            .with_parallel_execution(false)
-            .map_err(|e| anyhow!("{e}"))?
-            .with_execution_providers([ort::ep::DirectML::default().build().error_on_failure()])
-            .map_err(|e| anyhow!("{e}"))?
+        match accel {
+            // DirectML needs these two off.
+            Accel::DirectMl => builder
+                .with_memory_pattern(false)
+                .map_err(e)?
+                .with_parallel_execution(false)
+                .map_err(e)?
+                .with_execution_providers([ort::ep::DirectML::default().build().error_on_failure()])
+                .map_err(e)?,
+            Accel::Cuda => builder
+                .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
+                .map_err(e)?,
+            Accel::OpenVino => {
+                let mut ep = ort::ep::OpenVINO::default().with_device_type(openvino_device());
+                if let Some(d) = DATA_DIR.get() {
+                    let cache = d.join("runtime").join("openvino-cache");
+                    let _ = std::fs::create_dir_all(&cache);
+                    ep = ep.with_cache_dir(cache.display().to_string());
+                }
+                builder.with_execution_providers([ep.build().error_on_failure()]).map_err(e)?
+            }
+        }
     };
     Ok(builder.commit_from_file(path)?)
 }
 
-/// Make the GPU runtime ready (download it the first time). Returns whether
+/// Make the AI runtime ready (download it the first time). Returns whether
 /// it's usable; models loaded before this ran on the processor.
 pub async fn prepare(data_dir: &Path) -> bool {
     let _one = PREPARING.lock().await;
     if RUNTIME.get().is_some() {
         return true;
     }
+    let _ = DATA_DIR.set(data_dir.to_path_buf());
     let res = async {
-        let lib = runtime_files(data_dir).await?;
+        let accel = wanted()?;
+        let lib = runtime_files(data_dir, accel).await?;
         let lib2 = lib.clone();
         let env = tokio::task::spawn_blocking(move || -> Result<ort::environment::Environment> {
             #[cfg(windows)]
@@ -299,32 +437,121 @@ pub async fn prepare(data_dir: &Path) -> bool {
                 .build()?)
         })
         .await??;
-        anyhow::Ok(env)
+        anyhow::Ok((env, accel))
     }
     .await;
     match res {
-        Ok(env) => {
-            info!("AI: GPU runtime ready (ONNX Runtime {ORT_VERSION} with DirectML)");
+        Ok((env, accel)) => {
+            info!("AI: runtime ready (ONNX Runtime with {})", accel.label());
             *RUNTIME_ERR.locked() = None;
             *STATUS.locked() = None;
+            let _ = LOADED.set(accel);
             let _ = RUNTIME.set(env);
             true
         }
         Err(e) => {
-            warn!("AI: the GPU can't be used ({e:#}); AI runs on the processor");
+            warn!("AI: the accelerator can't be used ({e:#}); AI runs on the processor");
             *RUNTIME_ERR.locked() = Some(format!("{e:#}"));
             false
         }
     }
 }
 
-/// The runtime library (downloaded and unpacked the first time).
-async fn runtime_files(data_dir: &Path) -> Result<PathBuf> {
+/// The runtime library for an accelerator (downloaded and unpacked the first time).
+async fn runtime_files(data_dir: &Path, accel: Accel) -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("GAZE_ORT_DYLIB") {
         return Ok(PathBuf::from(p)); // testing: a runtime library given by hand
     }
+    match accel {
+        Accel::DirectMl => directml_files(data_dir).await,
+        Accel::OpenVino => wheel_files(data_dir, "openvino", OPENVINO_WHEEL, "AI runtime (OpenVINO)").await,
+        Accel::Cuda => wheel_files(data_dir, "cuda", CUDA_WHEEL, "AI runtime (CUDA)").await,
+    }
+}
+
+/// ONNX Runtime from a PyPI wheel: downloaded, checked against the pinned
+/// SHA-256, and its native libraries unpacked next to each other (the
+/// runtime finds its provider libraries beside itself).
+async fn wheel_files(data_dir: &Path, kind: &str, wheel: (&str, &str), what: &str) -> Result<PathBuf> {
+    let dir = data_dir.join("runtime").join(format!("onnxruntime-{kind}-{LINUX_ORT_VERSION}"));
+    let lib = dir.join(format!("libonnxruntime.so.{LINUX_ORT_VERSION}"));
+    let done = dir.join(".complete");
+    if lib.exists() && done.exists() {
+        return Ok(lib);
+    }
+    std::fs::create_dir_all(&dir)?;
+    let whl = dir.join("runtime.whl");
+    crate::jobs::download(what, wheel.0, &whl, 10_000_000).await?;
+    let (whl2, dir2, want) = (whl.clone(), dir.clone(), wheel.1.to_string());
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let got = sha256_file(&whl2)?;
+        if got != want {
+            let _ = std::fs::remove_file(&whl2);
+            bail!("the downloaded {} runtime does not match its checksum (got {got}); it was discarded", "ONNX");
+        }
+        let n = unpack_native_libs(&whl2, &dir2)?;
+        if n == 0 {
+            bail!("no libraries found in the downloaded runtime");
+        }
+        std::fs::write(dir2.join(".complete"), b"ok")?;
+        Ok(())
+    })
+    .await??;
+    let _ = std::fs::remove_file(&whl);
+    if !lib.exists() {
+        bail!("{} is not in the downloaded runtime", lib.display());
+    }
+    Ok(lib)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Every native library in `onnxruntime/capi/` of a wheel (not the Python
+/// binding), written flat into `out`. Returns how many.
+fn unpack_native_libs(wheel: &Path, out: &Path) -> Result<usize> {
+    let mut z = zip::ZipArchive::new(std::fs::File::open(wheel)?).context("reading the downloaded runtime")?;
+    let mut n = 0;
+    for i in 0..z.len() {
+        let mut f = z.by_index(i)?;
+        let name = f.name().map(|n| n.to_string()).unwrap_or_default();
+        let Some(file) = name.strip_prefix("onnxruntime/capi/") else { continue };
+        if file.contains('/') || file.contains("pybind11") || !(file.ends_with(".so") || file.contains(".so.")) {
+            continue;
+        }
+        let dest = out.join(file);
+        let tmp = dest.with_extension("part");
+        let mut w = std::fs::File::create(&tmp)?;
+        std::io::copy(&mut f, &mut w)?;
+        drop(w);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+        }
+        std::fs::rename(&tmp, &dest)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// ONNX Runtime with DirectML (Windows), from two NuGet packages.
+async fn directml_files(data_dir: &Path) -> Result<PathBuf> {
     if !cfg!(all(windows, target_arch = "x86_64")) {
-        bail!("GPU AI is only set up for Windows (64-bit)");
+        bail!("DirectML is only available on Windows (64-bit)");
     }
     let dir = data_dir
         .join("runtime")
@@ -445,17 +672,25 @@ mod tests {
     }
 
     /// The ONNX Runtime path gives the same answers as tract. Needs
-    /// GAZE_ORT_DYLIB (an ONNX Runtime library) and NVR_TEST_MODELS (a folder
+    /// GAZE_ORT_DYLIB (an ONNX Runtime library) or GAZE_TEST_ACCEL, and NVR_TEST_MODELS (a folder
     /// with yolox_tiny.onnx and the downloaded GAZE models); on a computer
     /// without DirectML also GAZE_ORT_CPU=1.
     #[tokio::test]
     async fn onnx_runtime_matches_tract() {
-        let (Some(_), Ok(dir)) = (
-            std::env::var_os("GAZE_ORT_DYLIB"),
+        // GAZE_TEST_ACCEL=openvino|cuda (with GAZE_TEST_OV_DEVICE, default CPU)
+        // downloads that runtime as GAZE would and tests it, instead of a
+        // library given by GAZE_ORT_DYLIB.
+        let accel = std::env::var("GAZE_TEST_ACCEL").ok();
+        let (true, Ok(dir)) = (
+            accel.is_some() || std::env::var_os("GAZE_ORT_DYLIB").is_some(),
             std::env::var("NVR_TEST_MODELS"),
         ) else {
             return;
         };
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        if let Some(a) = &accel {
+            set_accelerator(a, &std::env::var("GAZE_TEST_OV_DEVICE").unwrap_or_else(|_| "CPU".into()));
+        }
         let dir = PathBuf::from(dir);
         assert!(prepare(&dir).await, "runtime: {}", status());
         let pic: Vec<f32> = (0..3 * 416 * 416)

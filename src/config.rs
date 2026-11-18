@@ -28,6 +28,11 @@ pub const ENCODERS: &[&str] = &[
     "h264_mf",
 ];
 pub const AI_PROVIDERS: &[&str] = &["none", "builtin"];
+/// Accelerators for the AI ("auto": DirectML on Windows; on Linux CUDA when
+/// an NVIDIA card with its libraries is there, else OpenVINO) and the
+/// OpenVINO devices (see infer.rs).
+pub const AI_ACCELERATORS: &[&str] = &["auto", "directml", "cuda", "openvino"];
+pub const OPENVINO_DEVICES: &[&str] = &["AUTO:GPU,CPU", "GPU", "CPU", "NPU"];
 pub const BUILTIN_MODELS: &[&str] = &["yolox_nano", "yolox_tiny", "yolox_s", "yolox_m", "yolox_l"];
 /// Motion mask grid size: one cell per pixel motion detection looks at
 /// (a 640×360 picture shrunk 4×).
@@ -618,6 +623,12 @@ pub struct AiConfig {
     pub night_boost: bool,
     /// Where the AI runs: "gpu" (the graphics card, via DirectML) or "cpu".
     pub device: String,
+    /// Which accelerator "gpu" means: "auto", "directml" (Windows), "cuda" or
+    /// "openvino" (Linux). Changing it takes a restart.
+    pub accelerator: String,
+    /// With OpenVINO: "AUTO:GPU,CPU" (the graphics if there is one, else the
+    /// processor), "GPU", "CPU" or "NPU".
+    pub openvino_device: String,
     /// Look for faces in alerts and name known people.
     pub faces: bool,
     /// Read number plates of vehicles in alerts.
@@ -637,6 +648,8 @@ impl Default for AiConfig {
             verify_model: String::new(),
             night_boost: true,
             device: "gpu".into(),
+            accelerator: "auto".into(),
+            openvino_device: "AUTO:GPU,CPU".into(),
             faces: true,
             plates: true,
             search: false,
@@ -1678,6 +1691,15 @@ impl Config {
             self.ai.provider = "builtin".into();
             changed = true;
         }
+        // 1.2: accelerator settings (older files have none, or a typo).
+        if !AI_ACCELERATORS.contains(&self.ai.accelerator.as_str()) {
+            self.ai.accelerator = "auto".into();
+            changed = true;
+        }
+        if !OPENVINO_DEVICES.contains(&self.ai.openvino_device.as_str()) {
+            self.ai.openvino_device = "AUTO:GPU,CPU".into();
+            changed = true;
+        }
         // 0.6.70: car, truck, bus and motorcycle are one "vehicle".
         {
             let v = crate::ai::canon_list;
@@ -1819,6 +1841,12 @@ impl Config {
         let ai = &self.ai;
         if !AI_PROVIDERS.contains(&ai.provider.as_str()) {
             bail!("unknown AI provider \"{}\"", ai.provider);
+        }
+        if !AI_ACCELERATORS.contains(&ai.accelerator.as_str()) {
+            bail!("unknown accelerator \"{}\"", ai.accelerator);
+        }
+        if !OPENVINO_DEVICES.contains(&ai.openvino_device.as_str()) {
+            bail!("unknown OpenVINO device \"{}\"", ai.openvino_device);
         }
         if !ai.verify_model.is_empty() && !BUILTIN_MODELS.contains(&ai.verify_model.as_str()) {
             bail!(

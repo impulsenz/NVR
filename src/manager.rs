@@ -420,6 +420,7 @@ impl Manager {
 
     pub fn new(cfg_path: PathBuf, data_dir: PathBuf, config: Config) -> Arc<Self> {
         crate::infer::set_use_gpu(config.ai.device != "cpu");
+        crate::infer::set_accelerator(&config.ai.accelerator, &config.ai.openvino_device);
         crate::picturelog::configure(&config.storage);
         crate::load::set_balance(config.hardware.balance);
         crate::users::set_sign_in_policy(config.server.remember_days, config.server.idle_minutes);
@@ -1009,8 +1010,9 @@ impl Manager {
         if cfg.ai != old.ai {
             self.ai.replace(cfg.ai.clone(), &self.data_dir);
         }
-        if cfg.ai.device != old.ai.device {
+        if cfg.ai.device != old.ai.device || cfg.ai.accelerator != old.ai.accelerator || cfg.ai.openvino_device != old.ai.openvino_device {
             crate::infer::set_use_gpu(cfg.ai.device != "cpu");
+            crate::infer::set_accelerator(&cfg.ai.accelerator, &cfg.ai.openvino_device);
             self.reload_models();
             if cfg.ai.device != "cpu" {
                 crate::infer::GPU_WANTED.notify_one();

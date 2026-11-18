@@ -444,6 +444,7 @@ async fn status(
         "ai": m.ai.get().status(),
         // Where the AI models run (GPU or processor, and why).
         "ai_device": crate::infer::status(),
+        "ai_accelerators": crate::infer::choices(),
         // A newer GAZE (for the notice at the top; admins only use it).
         "update": {"available": upd.available, "latest": upd.latest, "state": upd.state,
             "done": upd.done, "total": upd.total, "error": upd.error, "published": upd.published},
