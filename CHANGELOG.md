@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.4.0 — November 2026
 - **Floor plan: pick your property from a satellite map.** *Pick from a satellite map…* (Plan page) opens a map in the page: search an address (or type coordinates), zoom with the mouse wheel or buttons, drag, rotate, and take a snapshot as the plan picture. The scale (metres per pixel) is set from the map automatically. The imagery is loaded by your browser from a provider you choose (Esri, OpenStreetMap, or your own tile address); GAZE itself still downloads no maps. The address search sends the text typed to OpenStreetMap's Nominatim. The snapshot keeps the provider's credit line. **Not tested against the real providers yet** (only a local stand-in).
 - **Floor plan: walls.** Draw walls (and fences); each camera's drawn view now stops at them, and a gap is a door. Straight-line and corner-snap help; Ctrl+Z, erase, Esc to finish. Walls are saved in the plan (cleared if the picture changes shape). They only affect the drawn views, not what is tracked.
 - **Floor plan: zoom and pan.** Mouse wheel zooms at the pointer; drag to pan; buttons and pinch on touch screens; fit to window.
