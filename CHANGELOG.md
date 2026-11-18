@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Linux download**: releases now also carry `GAZE-linux-x86_64` (with its checksum). GAZE doesn't update itself on Linux. A Linux check (tests, page smoke test, Docker image build and start) now runs on every change. The Windows release is unaffected (the Linux build is a separate job).
+
 ## 1.2.1 — November 2026
 - **Page smoke test** for developers (`tools/e2e/smoke.js`): opens every page and settings section in both themes and fails on script errors. No change to GAZE itself.
 - **Linux packaging**: a systemd unit (`packaging/gaze.service`), a Dockerfile (`packaging/Dockerfile`) and a guide (`docs/LINUX.md`). The Docker image has not been built yet and there's no Linux download in the releases yet.

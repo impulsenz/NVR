@@ -4,11 +4,10 @@ GAZE builds and runs on 64-bit Linux. The Windows extras (tray icon, Windows
 service, watchdog, self-update) don't apply; use systemd (or Docker) to keep
 it running and your package manager for ffmpeg.
 
-**Status:** the program was run on Linux for this guide (started with
-`--dir`, web interface up, files created in that folder). The systemd unit
-was checked with `systemd-analyze verify`. The **Dockerfile has not been
-built** (no Docker daemon was available) and the unit has not been run under
-its own `gaze` user: report anything that needs fixing.
+**Status:** CI (`.github/workflows/linux.yml`) runs the tests, the page smoke
+test, builds the Docker image and starts it, on every change. The systemd
+unit was checked with `systemd-analyze verify` but has not been run under its
+own `gaze` user: report anything that needs fixing.
 
 ## What you need
 
@@ -22,8 +21,9 @@ its own `gaze` user: report anything that needs fixing.
 cargo build --release          # target/release/nvr
 ```
 
-There is no Linux download in the GitHub releases yet (the release workflow
-builds Windows only).
+Or, from the next release on, download `GAZE-linux-x86_64` (and its
+`.sha256`) from the GitHub releases page. GAZE does not update itself on
+Linux: replace the file, or pull a new image.
 
 ## Run as a service (systemd)
 
