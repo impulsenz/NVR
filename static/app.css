@@ -1816,3 +1816,16 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .map-note { position: absolute; left: 10px; top: 10px; padding: 3px 10px; border-radius: 8px; background: var(--panel); font-size: 12px; pointer-events: none; }
 .map-note:empty { display: none; }
 .map-grid { position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(to right, rgba(255,255,255,.22) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,.22) 1px, transparent 1px); background-size: 80px 80px; background-position: center; mix-blend-mode: overlay; }
+
+/* Day summary (synopsis) dialog */
+dialog.syn-dlg { width: min(860px, 96vw); }
+.syn-bar { flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.syn-bar select, .syn-bar input { width: auto; }
+.syn-vid { position: relative; max-width: calc(52vh * 16 / 9); margin: 0 auto; background: var(--tl-thumb-bg); border-radius: 8px; overflow: hidden; }
+.syn-vid video { display: block; width: 100%; aspect-ratio: 16 / 9; }
+/* Clickable layer over the picture, leaving the player's own controls free. */
+#sy-ov { position: absolute; inset: 0 0 48px 0; }
+.syn-prog { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.syn-bar-t { flex: 1 1 200px; height: 8px; border-radius: 4px; background: var(--panel3); overflow: hidden; }
+.syn-bar-t > div { height: 100%; background: var(--accent); transition: width .4s; }
+.syn-list { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -99,6 +99,19 @@ const EXPECTED = [/\/live\/[^/]+\/(frame\.jpg|stream\.mjpeg)/, /\/snapshot\// /*
     if (covered) problems.push(`${where}: ${covered}`);
     visited++;
   }
+  // The Day summary dialog opens and says nothing has been made yet.
+  for (const theme of ['dark', 'light']) {
+    await page.emulateMedia({ colorScheme: theme });
+    where = `${theme} day summary dialog`;
+    await page.goto(`${BASE}/?syn=${theme}#recordings`);
+    await page.waitForTimeout(1200);
+    await page.locator('#f-syn').click();
+    await page.waitForSelector('dialog.syn-dlg[open]', { timeout: 5000 }).catch(() => problems.push(`${where}: the dialog did not open`));
+    await page.waitForTimeout(500);
+    const txt = await page.locator('dialog.syn-dlg').innerText().catch(() => '');
+    if (!/Not made yet/.test(txt)) problems.push(`${where}: expected "Not made yet", got: ${txt.slice(0, 120)}`);
+    visited++;
+  }
   await browser.close();
   stop();
   fs.rmSync(dir, { recursive: true, force: true });

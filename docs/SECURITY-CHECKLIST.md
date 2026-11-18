@@ -60,6 +60,10 @@ See the S-entries in `TECH-DEBT.md`.
       connection's own address, or, from a proxy on this computer, the **last**
       `X-Forwarded-For` address. IPv6 is counted per /64 (`users::ip_bucket`).
 
+## Day summary
+
+- [ ] `/api/cameras/{id}/synopsis*` are under `camera_in_path` (restricted accounts can't reach another camera's); the output is `nvr-data/synopsis/<camera id>/<day>.mp4` with the camera id checked by `valid_folder` and the day parsed as a date (no user text in paths). Operators may start one (CPU only); nothing is deleted except summaries older than 30 days.
+
 ## Floor plan and following people
 
 - [ ] GAZE's server fetches no map imagery: the *browser* loads tiles from the chosen provider (the address you type in the search box goes to Nominatim; custom tile URLs must be http(s) and are used only by the page).

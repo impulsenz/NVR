@@ -63,6 +63,7 @@ mod stationary;
 mod smart;
 mod states;
 mod storage;
+mod synopsis;
 mod sync;
 mod sysmon;
 mod talk;

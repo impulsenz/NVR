@@ -4745,6 +4745,86 @@ $('f-tlx').onclick = () => {
   $('tx-go').onclick = () => { toast('Making the video — it downloads in a moment'); setTimeout(close, 300); };
 };
 
+// ---------- a camera's day squeezed into a short video (synopsis.rs) ----------
+// Everything that moved that day, laid over the empty scene and shifted in
+// time so it plays together, each with its real clock time. Click one to open
+// the real footage at that moment.
+function openDaySummary(camId0, day0) {
+  const cams = status.cameras.filter(c => !rec.cameras.size || rec.cameras.has(c.id));
+  if (!cams.length) { toast('No camera to summarise', true); return; }
+  const p2 = (n) => String(n).padStart(2, '0'), ymd = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  const day = startOfDay(day0 || (tl.day ? new Date(tl.day) : new Date()));
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg syn-dlg';
+  dlg.innerHTML = `<div class="head"><h2>🎬 Day summary${tip('A whole day of one camera in a short video. The empty scene stays still and everything that moved is shown over it, moved in time so people and cars from different hours appear together. Each has the time it was really there; click one to open the real footage at that moment. It takes a few minutes to make and is kept for 30 days.')}</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+    <div class="body">
+      <div class="row syn-bar"><select id="sy-cam">${cams.map(c => `<option value="${esc(c.id)}" ${c.id === camId0 ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+        <input type="date" id="sy-day" value="${ymd(day)}" max="${ymd(new Date())}">
+        <label class="muted small" style="margin:0">Length <select id="sy-len" class="small"><option value="60">1 min</option><option value="120" selected>2 min</option><option value="300">5 min</option></select></label>
+        <label class="muted small" style="margin:0">Detail${tip('How easily something counts as movement. More sensitive finds smaller and fainter things, and also more false ones (shadows, rain).')} <select id="sy-sens" class="small"><option value="45">Fewer objects</option><option value="28" selected>Normal</option><option value="16">More sensitive</option></select></label>
+        <button type="button" class="primary" id="sy-make">Make summary</button></div>
+      <div id="sy-out"></div></div>`;
+  document.body.appendChild(dlg); dlg.showModal();
+  let timer = null;
+  const close = () => { clearInterval(timer); dlg.close(); dlg.remove(); };
+  dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+  dlg.addEventListener('close', () => clearInterval(timer));
+  const url = (sfx = '', extra = '') => `api/cameras/${enc(val('sy-cam'))}/synopsis${sfx}?date=${val('sy-day')}${extra}`;
+  const show = (st) => {
+    const out = $('sy-out'); if (!out) return;
+    const mk = $('sy-make');
+    if (st.state === 'running') {
+      mk.disabled = true; mk.textContent = 'Working…';
+      out.innerHTML = `<div class="syn-prog"><div class="syn-bar-t"><div style="width:${st.pct || 0}%"></div></div><span class="muted small">${esc(st.phase || 'Starting')} · ${st.pct || 0}%</span> <button type="button" class="small" id="sy-stop">Stop</button></div>
+        <p class="muted small">You can close this window; the summary carries on and will be here when you open this again.</p>`;
+      $('sy-stop').onclick = async () => { try { await api(url(), {method: 'DELETE'}); } catch (e) { toast(e.message, true); } };
+      return;
+    }
+    mk.disabled = false; mk.textContent = st.state === 'done' ? 'Make it again' : 'Make summary';
+    if (st.state === 'failed') { out.innerHTML = st.error === 'cancelled' ? '<p class="muted">Stopped.</p>' : `<p class="errc">${esc(st.error || 'It could not be made')}</p>`; return; }
+    if (st.state !== 'done') { out.innerHTML = '<p class="muted">Not made yet for this day. It takes a few minutes; GAZE works on it quietly in the background.</p>'; return; }
+    const m = st.meta, t = (iso) => new Date(iso).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+    out.innerHTML = `<div class="syn-vid"><video id="sy-v" controls playsinline loop src="${url('/video')}&v=${encodeURIComponent(m.built_at)}"></video><div id="sy-ov"></div></div>
+      <p class="muted small" style="margin:6px 0">${m.objects.length} ${m.objects.length === 1 ? 'object' : 'objects'} from ${fmtDur(m.footage_seconds)} of footage, in ${fmtDur(m.seconds)}${m.speed > 1 ? ` (played ${m.speed}× faster)` : ''}. Click an object to open the real footage.
+        <a href="${url('/video')}&download=1" download>⇩ Download</a></p>
+      ${(m.notes || []).map(n => `<p class="warnc small" style="margin:2px 0">${esc(n)}</p>`).join('')}
+      <div class="syn-list">${m.objects.map(o => `<button type="button" class="small" data-t="${esc(o.at)}" data-o="${o.id}">${esc(t(o.at))}</button>`).join('') || '<span class="muted">Nothing moved that day.</span>'}</div>`;
+    const v = $('sy-v'), ov = $('sy-ov');
+    const open = (iso) => {
+      const T = new Date(iso).getTime(), d = new Date(T);
+      close();
+      Object.assign(rec, {from: startOfDay(d), to: endOfDay(d), today: false, last24: false});
+      rec.todFrom = ''; rec.todTo = '';
+      tlShowEvent(m.camera, T);
+    };
+    out.querySelectorAll('.syn-list [data-t]').forEach(b => b.onclick = () => open(b.dataset.t));
+    // Boxes over the playing video: the object under the pointer lights up and a click opens it.
+    const objAt = (x, y) => {
+      const f = Math.floor((v.currentTime || 0) * m.fps);
+      let best = null;
+      for (const o of m.objects) {
+        if (f < o.out_start || f > o.out_end) continue;
+        let b = null; for (const q of o.boxes) { if (q[0] <= f) b = q; else break; }
+        if (b && x >= b[1] && x <= b[1] + b[3] && y >= b[2] && y <= b[2] + b[4]) best = o;
+      }
+      return best;
+    };
+    const pos = (e) => { const r = v.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * m.w, (e.clientY - r.top) / r.height * m.h]; };
+    ov.onmousemove = (e) => { ov.style.cursor = objAt(...pos(e)) ? 'pointer' : 'default'; };
+    ov.onclick = (e) => { const o = objAt(...pos(e)); if (o) open(o.at); else if (v.paused) v.play(); else v.pause(); };
+  };
+  const poll = async () => {
+    try { const st = await api(url()); show(st); if (st.state !== 'running') clearInterval(timer); } catch (e) { clearInterval(timer); }
+  };
+  const look = () => { clearInterval(timer); poll().then(() => { if (!$('sy-out')) return; }); timer = setInterval(poll, 2000); };
+  ['sy-cam', 'sy-day'].forEach(i => $(i).onchange = look);
+  $('sy-make').onclick = async () => {
+    try { show(await api(url('', `&seconds=${val('sy-len')}&sensitivity=${val('sy-sens')}&force=true`), {method: 'POST'})); look(); }
+    catch (e) { toast(e.message, true); }
+  };
+  look();
+}
+$('f-syn').onclick = () => openDaySummary();
+
 // ---------- sharing an alert ----------
 // The system share sheet (Messenger, WhatsApp, Facebook, email… whatever is
 // on the phone or computer) when the browser offers it with files — it

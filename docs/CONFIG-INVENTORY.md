@@ -56,5 +56,6 @@ another. Defaults were not re-evaluated one by one (not done).
 | Modes | `ModesConfig` | `notify.rs`, `manager.rs::privacy_watch` |
 | Notifications (ntfy + email), MQTT, webhooks, voice, siren | `NotifyConfig` (`.email`: `EmailConfig`, `.digest`: `DigestConfig`), `MqttConfig`, `Webhook`, `TtsConfig` | `notify.rs` (`send`: both channels), `mail.rs`, `digest.rs`, `mqtt.rs`, `hooks.rs`, `tts.rs`, `siren.rs` |
 | Learned states (not in `nvr.toml`: their own data file `states.json`) | `states::State` | `states.rs`, `web.rs` (`/api/states`), `mqtt.rs` |
+| Day summary (no setting: length and sensitivity are asked per request; result in `nvr-data/synopsis/`) | `synopsis::Params` | `synopsis.rs`, `web.rs` (`/api/cameras/{id}/synopsis*`) |
 | Floor plan and following people (not in `nvr.toml`: `plan.json`, `plan.jpg`, `tracks/`) | `plan::Plan`, `plan::Tuning` (14 settings + labels, off by default) | `plan.rs`, `tracks.rs`, `geo.rs`, `web.rs` (`/api/plan*`) |
 | Watchdog | `settings.toml` | `watchdog/main.rs`; written by `watchdog_ctl.rs` |

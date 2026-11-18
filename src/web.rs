@@ -120,6 +120,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
         .route("/api/cameras/{id}/heatmap", get(camera_heatmap))
+        .route("/api/cameras/{id}/synopsis", get(synopsis_get).post(synopsis_start).delete(synopsis_cancel))
+        .route("/api/cameras/{id}/synopsis/video", get(synopsis_video))
         .route("/api/plan", get(plan_get).put(plan_put))
         .route("/api/plan/image", get(plan_image).post(plan_image_set).delete(plan_image_delete).layer(axum::extract::DefaultBodyLimit::max(crate::plan::MAX_IMAGE_BYTES + 1024)))
         .route("/api/plan/journeys", get(plan_journeys))
@@ -864,6 +866,64 @@ async fn camera_heatmap(State(m): App, user: Option<axum::Extension<CurrentUser>
     let from = now - chrono::Duration::days(days);
     let events = c.events.between(from, now);
     Json(crate::heatmap::build(&events, from, now, kind)).into_response()
+}
+
+// ---------- day summary (synopsis.rs) ----------
+
+#[derive(Deserialize)]
+struct SynopsisQuery {
+    /// YYYY-MM-DD (default: today).
+    date: Option<String>,
+    /// Make it again even if one exists.
+    #[serde(default)]
+    force: bool,
+    /// Wanted length in seconds (10 to 600, default 120).
+    seconds: Option<u32>,
+    /// How different a pixel must be to count as movement (8 to 120, default 28).
+    sensitivity: Option<i32>,
+}
+
+fn synopsis_day(q: &SynopsisQuery) -> Result<chrono::NaiveDate, Response> {
+    match &q.date {
+        None => Ok(Local::now().date_naive()),
+        Some(d) => chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|_| err(StatusCode::BAD_REQUEST, "date: YYYY-MM-DD")),
+    }
+}
+
+async fn synopsis_get(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>) -> Response {
+    let _ = camera!(m, id);
+    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
+    Json(crate::synopsis::status(&m, &id, day)).into_response()
+}
+
+async fn synopsis_start(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>) -> Response {
+    let _ = camera!(m, id);
+    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
+    let d = crate::synopsis::Params::default();
+    let p = crate::synopsis::Params { threshold: q.sensitivity.unwrap_or(d.threshold).clamp(8, 120), target_secs: q.seconds.unwrap_or(d.target_secs).clamp(10, 600), ..d };
+    match crate::synopsis::start(&m, &id, day, p, q.force) {
+        Ok(()) => Json(crate::synopsis::status(&m, &id, day)).into_response(),
+        Err(e) => err(StatusCode::CONFLICT, format!("{e:#}")),
+    }
+}
+
+async fn synopsis_cancel(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>) -> Response {
+    let _ = camera!(m, id);
+    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
+    crate::synopsis::cancel(&id, day);
+    Json(json!({ "ok": true })).into_response()
+}
+
+async fn synopsis_video(State(m): App, Path(id): Path<String>, Query(q): Query<SynopsisQuery>, req: Request) -> Response {
+    let _ = camera!(m, id);
+    let day = match synopsis_day(&q) { Ok(d) => d, Err(r) => return r };
+    match crate::synopsis::video_path(&m, &id, day) {
+        Some(p) => {
+            let name = format!("{}-summary-{day}.mp4", id);
+            serve_file(p, req, Some(name), false).await
+        }
+        None => err(StatusCode::NOT_FOUND, "no summary for that day yet"),
+    }
 }
 
 // ---------- drive health (smart.rs) ----------
@@ -6329,6 +6389,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         && (path.contains("/ptz/")
             || path == "/api/mode"
             || path.ends_with("/snooze")
+            || path.ends_with("/synopsis")
             || path.ends_with("/pause")
             || path.ends_with("/resume"))
 }
@@ -6794,6 +6855,18 @@ mod tests {
     /// camera check (`camera_in_path`) or has been reviewed by a person and is
     /// listed here. A new parameterised route fails this test until someone
     /// decides which it is (see docs/SECURITY-CHECKLIST.md): that is the point.
+    #[test]
+    fn operators_may_make_a_day_summary_but_viewers_only_watch_it() {
+        use crate::users::Role::*;
+        let (post, get) = (axum::http::Method::POST, axum::http::Method::GET);
+        let p = "/api/cameras/front/synopsis";
+        assert!(allowed(Admin, &post, p) && allowed(Operator, &post, p));
+        assert!(!allowed(Viewer, &post, p));
+        assert!(allowed(Viewer, &get, p) && allowed(Viewer, &get, "/api/cameras/front/synopsis/video"));
+        // Another camera route is not opened by this.
+        assert!(!allowed(Operator, &post, "/api/cameras/front/something"));
+    }
+
     #[test]
     fn parameterised_routes_are_covered_or_reviewed() {
         // Reviewed: the handler checks `visible(&user)` itself, or the route
