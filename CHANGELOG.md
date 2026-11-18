@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.3.1 — November 2026
 - **Recordings: the date picker and the camera picker are no longer drawn under the players.** The filter column on the Recordings page sat on a layer below the video tiles and the timeline, so the calendar was cut off on its right side (and partly hidden behind the camera names in the vertical timeline). This was present in earlier versions too. A check for it is now part of the page smoke test.
 
 ## 1.3.0 — November 2026
