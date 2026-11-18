@@ -12,7 +12,7 @@ the entry when it is fixed.** Source of the first entries: `AUDIT-2026-11.md`
 | M-1 | M | `app.css`: 84 selectors defined more than once (`tools/audit/css_duplicates.py`) | `app.css` | One block per component with tokens; screenshots of both themes | — |
 | M-2 | M | `web.rs` 6,500 lines, `app.js` 9,800 lines | — | Split `web.rs` by feature; page modules | H-1 first |
 | M-3 | L | `EventStore::between` scans all events. **Measured (100 k events, release): 1.6 ms per day query, `all()` 47 ms, open 270 ms** — fast enough; an SQLite index is not justified. Watch callers of `all()` on hot paths | `events.rs` | `cargo test --release bench_between -- --ignored --nocapture` after any change | — |
-| L-1 | L | No page tests | `static/` | Component/e2e tests (Playwright is already used in `tools/bench`) | — |
+| L-1 | L | Page tests: only a smoke test exists (`tools/e2e/smoke.js`: every page and settings section, both themes, no errors; not in CI, runs with no cameras). No behaviour tests, no screenshot comparison | `static/`, `tools/e2e/` | Add it to `quality.yml`; screenshot baselines per look; tests with simulated cameras (`tools/bench`) | — |
 | L-2 | L | chrono unmaintained notice (RUSTSEC-2026-0543) | everywhere | Watch; plan `jiff`/`time` migration | — |
 | L-3 | L | `fullscreen_corners` is misnamed (only the first is used); `fullscreen_tiles` unused | `config.rs`, `app.js` | Migration + removal in a version that raises the minimum upgrade | approval (changes saved files) |
 | L-4 | L | Legacy migration fields `ZoneConfig.watch_items`, `DetectConfig.package_area` | `config.rs` | Remove with L-3 | L-3 |
