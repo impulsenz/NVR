@@ -2680,7 +2680,7 @@ async fn warm_footage(State(m): App, user: Option<axum::Extension<CurrentUser>>,
             .into_iter()
             .flat_map(|x| x.segments)
             .filter(|s| s.kind != "clip" && s.stream == stream)
-            .map(|s| if s.kind == "sub" { storage::timeline_dir(&c.dir).join(&s.name) } else { c.dir.join(&s.name) })
+            .map(|s| segment_path(&c.dir, &s))
             .collect();
         // Nearest the playhead first.
         files.reverse();
@@ -2934,6 +2934,20 @@ struct HlsQuery {
     part: Option<f64>,
 }
 
+/// Where a timeline segment's file is: in the camera's folder, in its
+/// timeline-copy folder, or, once it has moved there, in deep storage. (The
+/// continuous player used to look only in the camera's own folder, so footage
+/// in deep storage gave an empty playlist and never played.)
+fn segment_path(camera_dir: &std::path::Path, s: &library::Segment) -> PathBuf {
+    let dir = if s.kind == "sub" { storage::timeline_dir(camera_dir) } else { camera_dir.to_path_buf() };
+    if s.archived
+        && let Some(deep) = storage::archive_of(&dir)
+    {
+        return deep.join(&s.name);
+    }
+    dir.join(&s.name)
+}
+
 /// A camera's recordings of one stream ("sub" or "main", path ends in
 /// `.m3u8`) between two times, as one continuous HLS playlist (see hls.rs).
 /// HD alert clips aren't in it (they're played as files).
@@ -2963,11 +2977,7 @@ async fn hls_playlist(
         segs.sort_by_key(|s| s.start);
         let mut files = Vec::new();
         for s in segs {
-            let path = if s.kind == "sub" {
-                storage::timeline_dir(&c.dir).join(&s.name)
-            } else {
-                c.dir.join(&s.name)
-            };
+            let path = segment_path(&c.dir, &s);
             files.push(crate::hls::PlaylistFile { path, url: s.url, start: s.start });
         }
         crate::vstore::set_next(&files.iter().map(|f| f.path.clone()).collect::<Vec<_>>());
@@ -6930,6 +6940,23 @@ mod tests {
         assert_eq!(from("127.0.0.1", &["6.6.6.6", "198.51.100.4"]), "198.51.100.4");
         // Rubbish falls back to the connection's address.
         assert_eq!(from("127.0.0.1", &["not-an-address"]), "127.0.0.1");
+    }
+
+    #[test]
+    fn a_segment_in_deep_storage_is_read_from_there() {
+        let seg = |kind: &'static str, archived: bool| library::Segment { start: Local::now(), end: Local::now(), url: "media/c/rec/a.mp4".into(), name: "a.mp4".into(), kind, stream: "main", archived };
+        let local = std::path::PathBuf::from("/data/recordings/Front");
+        let deep = std::path::PathBuf::from("/nas/cameras/Front");
+        storage::set_archive(&local, Some(deep.clone()));
+        // Footage still on the local disk, and a timeline copy: where they always were.
+        assert_eq!(segment_path(&local, &seg("recording", false)), local.join("a.mp4"));
+        assert_eq!(segment_path(&local, &seg("sub", false)), storage::timeline_dir(&local).join("a.mp4"));
+        // Footage that moved: the deep folder (this was the bug: the local folder was used).
+        assert_eq!(segment_path(&local, &seg("recording", true)), deep.join("a.mp4"));
+        // A camera with no deep folder registered: nothing to redirect to.
+        let other = std::path::PathBuf::from("/data/recordings/Other");
+        assert_eq!(segment_path(&other, &seg("recording", true)), other.join("a.mp4"));
+        storage::set_archive(&local, None);
     }
 
     #[test]

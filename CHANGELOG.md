@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings: footage in deep storage now plays when you scrub through time.** The player that follows the timeline built its playlist only from files in the camera's own folder, so anything that had moved to deep storage gave an empty playlist: the players stayed black and nothing loaded (the footage was listed, and opening one recording at a time worked). It now finds the files in deep storage. This went back to long before 1.3.
+
 ## 1.3.1 — November 2026
 - **Recordings: the date picker and the camera picker are no longer drawn under the players.** The filter column on the Recordings page sat on a layer below the video tiles and the timeline, so the calendar was cut off on its right side (and partly hidden behind the camera names in the vertical timeline). This was present in earlier versions too. A check for it is now part of the page smoke test.
 
