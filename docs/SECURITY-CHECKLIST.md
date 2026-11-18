@@ -62,6 +62,8 @@ See the S-entries in `TECH-DEBT.md`.
 
 ## Floor plan and following people
 
+- [ ] GAZE's server fetches no map imagery: the *browser* loads tiles from the chosen provider (the address you type in the search box goes to Nominatim; custom tile URLs must be http(s) and are used only by the page).
+
 - [ ] It is **off by default** and says what it keeps: positions and times of
       walks (never pictures) for `keep_days`; *Delete all walks* removes them.
 - [ ] Restricted accounts: `/api/plan` returns only their cameras and the links

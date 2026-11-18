@@ -155,6 +155,19 @@ fn default_range() -> f64 {
     15.0
 }
 
+/// A wall drawn on the plan (fractions of the plan): a camera's drawn view
+/// stops at it, because a camera can't see through a wall.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Wall {
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+}
+
+/// Most walls a plan may hold.
+pub const MAX_WALLS: usize = 1500;
+
 /// Two cameras whose views meet: someone leaving one may appear on the other.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Link {
@@ -176,6 +189,8 @@ pub struct Plan {
     pub px_per_m: f64,
     pub cameras: Vec<PlanCamera>,
     pub links: Vec<Link>,
+    /// Walls: what a camera's drawn view can't pass.
+    pub walls: Vec<Wall>,
     pub tuning: Tuning,
     pub updated: Option<DateTime<Local>>,
 }
@@ -238,6 +253,17 @@ impl Plan {
         }
         if self.links.len() > 256 {
             bail!("too many links");
+        }
+        if self.walls.len() > MAX_WALLS {
+            bail!("at most {MAX_WALLS} walls");
+        }
+        for w in &self.walls {
+            if ![w.x1, w.y1, w.x2, w.y2].iter().all(|v| unit(*v)) {
+                bail!("walls must be drawn inside the plan");
+            }
+            if (w.x1 - w.x2).abs() < 1e-6 && (w.y1 - w.y2).abs() < 1e-6 {
+                bail!("a wall needs two different ends");
+            }
         }
         for l in &mut self.links {
             if l.a == l.b || !seen.contains(&l.a) || !seen.contains(&l.b) {
@@ -328,6 +354,8 @@ impl PlanStore {
         cur.image_h = h;
         if reshaped {
             cur.px_per_m = 0.0;
+            // Calibrations and walls are tied to what the picture shows.
+            cur.walls.clear();
             for c in &mut cur.cameras {
                 c.calib = None;
             }
@@ -345,6 +373,7 @@ impl PlanStore {
         cur.image_w = 0;
         cur.image_h = 0;
         cur.px_per_m = 0.0;
+        cur.walls.clear();
         for c in &mut cur.cameras {
             c.calib = None;
         }
@@ -452,4 +481,36 @@ mod tests {
         assert!(!p.has_image && p.image_w == 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn walls_are_checked_kept_and_cleared_with_the_picture() {
+        let dir = std::env::temp_dir().join(format!("nvr-plan-walls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = PlanStore::open(&dir);
+        let w = |a: f64, b: f64, c: f64, d: f64| Wall { x1: a, y1: b, x2: c, y2: d };
+        s.set_image(&jpeg(400, 300)).unwrap();
+        let p = s.update(Plan { walls: vec![w(0.1, 0.1, 0.9, 0.1), w(0.9, 0.1, 0.9, 0.8)], ..Default::default() }).unwrap();
+        assert_eq!(p.walls.len(), 2);
+        assert_eq!(PlanStore::open(&dir).get().walls.len(), 2, "kept across a restart");
+        for (what, bad) in [
+            ("outside the plan", vec![w(0.1, 0.1, 1.5, 0.1)]),
+            ("no length", vec![w(0.3, 0.3, 0.3, 0.3)]),
+            ("not a number", vec![w(f64::NAN, 0.1, 0.5, 0.5)]),
+            ("too many", (0..MAX_WALLS + 1).map(|i| w(0.1, 0.1, 0.2, 0.1 + (i % 50) as f64 * 0.01)).collect()),
+        ] {
+            assert!(s.update(Plan { walls: bad, ..Default::default() }).is_err(), "{what} should be refused");
+        }
+        assert_eq!(s.get().walls.len(), 2, "a refused change leaves the walls alone");
+        // The same shape keeps them; another shape (new picture) clears them, as it clears calibrations.
+        assert_eq!(s.set_image(&jpeg(400, 300)).unwrap().walls.len(), 2);
+        assert!(s.set_image(&jpeg(300, 400)).unwrap().walls.is_empty());
+        s.update(Plan { walls: vec![w(0.1, 0.1, 0.9, 0.1)], ..Default::default() }).unwrap();
+        assert!(s.remove_image().unwrap().walls.is_empty());
+        // Older plan files have no walls.
+        let p: Plan = serde_json::from_str(r#"{"cameras":[]}"#).unwrap();
+        assert!(p.walls.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
+

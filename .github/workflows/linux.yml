@@ -54,6 +54,8 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Smoke test
         run: node tools/e2e/smoke.js
+      - name: Floor plan page test
+        run: node tools/e2e/plan.js
 
   docker:
     # The image builds and the program in it starts and answers.

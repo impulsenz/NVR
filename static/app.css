@@ -1734,32 +1734,54 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .pl-badge.on { color: var(--green); border-color: var(--green); }
 .plan-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
 @media (max-width: 900px) { .plan-grid { grid-template-columns: 1fr; } }
-.plan-stage { position: relative; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.plan-stage img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
-.plan-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
-.plan-hint { position: absolute; left: 10px; bottom: 10px; right: 10px; padding: 6px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); font-size: 13px; }
-.plan-side .card { margin-bottom: 12px; }
-.plan-side .form { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-.plan-side .form > label { padding-top: 8px; }
-.plan-side input[type=number], .plan-side input[type=text] { max-width: 100%; box-sizing: border-box; }
-.pl-cone { fill: var(--accent2); stroke: var(--accent); stroke-width: 1; opacity: .8; }
-.pl-cone.sel { fill: var(--accent); fill-opacity: .25; stroke-width: 2; }
-.pl-link { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 3 5; opacity: .7; }
-.pl-cam circle { fill: var(--panel); stroke: var(--accent); stroke-width: 2; cursor: pointer; }
+.plan-stage { position: relative; width: 100%; margin: 0 auto; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; touch-action: none; cursor: grab; user-select: none; }
+.plan-stage.panning { cursor: grabbing; }
+.plan-stage[data-tool="wall"], .plan-stage[data-tool="scale"] { cursor: crosshair; }
+.plan-stage[data-tool="erase"] { cursor: not-allowed; }
+.pl-pan { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+.pl-pan img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; -webkit-user-drag: none; pointer-events: none; }
+.pl-pan svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pl-zoom { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 4px; z-index: 2; }
+.pl-zoom button { width: 32px; height: 32px; padding: 0; justify-content: center; font-size: 16px; background: var(--panel); }
+.plan-hint { position: absolute; left: 10px; bottom: 10px; right: 56px; padding: 6px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); font-size: 13px; z-index: 2; pointer-events: none; }
+/* The side column scrolls on its own, so a long editor never makes the page tall. */
+.plan-side { position: sticky; top: 64px; max-height: calc(100vh - 80px); overflow-y: auto; padding-right: 2px; }
+@media (max-width: 900px) { .plan-side { position: static; max-height: none; overflow: visible; } }
+.plan-side .card { margin-bottom: 10px; padding: 12px; }
+.plan-side .card h2 { margin-bottom: 8px; }
+.pl-tabs { display: flex; gap: 2px; margin-bottom: 10px; position: sticky; top: 0; z-index: 3; background: var(--bg); padding-bottom: 4px; }
+.pl-tabs button { flex: 1; justify-content: center; padding: 6px 4px; border-radius: 8px 8px 0 0; border-color: transparent; background: transparent; color: var(--muted); }
+.pl-tabs button.on { color: var(--text); background: var(--panel); border-color: var(--border); border-bottom-color: var(--accent); }
+.pl-fields { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 6px 10px; align-items: center; }
+.pl-fields > label { font-size: 13px; color: var(--muted); padding: 0; }
+.pl-fields input[type=number], .pl-fields input[type=text] { width: 100%; box-sizing: border-box; padding: 4px 6px; }
+.pl-fields .row { grid-column: 1 / -1; }
+.pl-fields > label[for^="pc-"] { grid-column: 1 / -1; margin-bottom: -4px; }
+.pl-fields > #tu-labels, .pl-fields > input[type=text] { grid-column: 1 / -1; }
+.pl-det > summary { cursor: pointer; font-weight: 600; margin-bottom: 6px; }
+.pl-det[open] > summary { margin-bottom: 10px; }
+.pl-cone { fill: var(--accent2); stroke: var(--accent); stroke-width: calc(1 * var(--u, 1)); opacity: .8; }
+.pl-cone.sel { fill: var(--accent); fill-opacity: .25; stroke-width: calc(2 * var(--u, 1)); }
+.pl-wall { stroke: var(--text); stroke-width: calc(4 * var(--u, 1)); stroke-linecap: round; }
+.pl-wall.prev { stroke: var(--amber); stroke-dasharray: 6 5; opacity: .9; }
+.pl-wend { fill: var(--panel); stroke: var(--text); stroke-width: calc(1.5 * var(--u, 1)); }
+.pl-wend.on { fill: var(--amber); }
+.pl-link { stroke: var(--muted); stroke-width: calc(1.5 * var(--u, 1)); stroke-dasharray: 3 5; opacity: .7; }
+.pl-cam circle { fill: var(--panel); stroke: var(--accent); stroke-width: calc(2 * var(--u, 1)); cursor: pointer; }
 .pl-cam.sel circle { fill: var(--accent); }
-.pl-ico { font-size: 13px; pointer-events: none; }
-.pl-label { font-size: 15px; fill: var(--text); paint-order: stroke; stroke: var(--panel); stroke-width: 4px; pointer-events: none; }
-.pl-path { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
-.pl-path.faint { stroke: var(--muted); stroke-width: 2.5; opacity: .5; }
-.pl-path.hop { stroke-width: 3; stroke-dasharray: 2 9; opacity: .9; }
-.pl-start { fill: var(--green); stroke: var(--panel); stroke-width: 2; }
-.pl-end { fill: var(--red); stroke: var(--panel); stroke-width: 2; }
-.pl-dot { fill: var(--amber); stroke: var(--panel); stroke-width: 3; }
-.pl-live { fill: var(--amber); stroke: var(--panel); stroke-width: 3; }
-.pl-live.rough { fill: none; stroke: var(--amber); stroke-width: 3; stroke-dasharray: 4 3; }
-.pl-handle { fill: var(--amber); stroke: var(--panel); stroke-width: 2; cursor: grab; }
+.pl-ico { pointer-events: none; }
+.pl-label { fill: var(--text); paint-order: stroke; stroke: var(--panel); stroke-width: calc(4 * var(--u, 1)); pointer-events: none; }
+.pl-path { fill: none; stroke: var(--accent); stroke-width: calc(5 * var(--u, 1)); stroke-linecap: round; stroke-linejoin: round; }
+.pl-path.faint { stroke: var(--muted); stroke-width: calc(2.5 * var(--u, 1)); opacity: .5; }
+.pl-path.hop { stroke-width: calc(3 * var(--u, 1)); stroke-dasharray: 2 9; opacity: .9; }
+.pl-start { fill: var(--green); stroke: var(--panel); stroke-width: calc(2 * var(--u, 1)); }
+.pl-end { fill: var(--red); stroke: var(--panel); stroke-width: calc(2 * var(--u, 1)); }
+.pl-dot { fill: var(--amber); stroke: var(--panel); stroke-width: calc(3 * var(--u, 1)); }
+.pl-live { fill: var(--amber); stroke: var(--panel); stroke-width: calc(3 * var(--u, 1)); }
+.pl-live.rough { fill: none; stroke: var(--amber); stroke-dasharray: 4 3; }
+.pl-handle { fill: var(--amber); stroke: var(--panel); stroke-width: calc(2 * var(--u, 1)); cursor: grab; }
 .pl-scale { fill: var(--red); }
-.pl-scale-line { stroke: var(--red); stroke-width: 2; }
+.pl-scale-line { stroke: var(--red); stroke-width: calc(2 * var(--u, 1)); }
 .pl-stats { display: flex; gap: 14px; margin-bottom: 8px; }
 .pl-stats div { display: flex; flex-direction: column; }
 .pl-stats b { font-size: 20px; }
@@ -1781,4 +1803,16 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .cal-pane svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .cal-dot { fill: var(--red); stroke: var(--panel); stroke-width: .004; }
 .cal-num { fill: var(--amber); font-weight: 700; paint-order: stroke; stroke: var(--panel); stroke-width: .008; }
-
+.map-box { max-width: 1180px; }
+.map-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.map-results { display: flex; flex-direction: column; gap: 2px; margin: -2px 0 8px; max-height: 160px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+.map-results button { text-align: left; border-color: transparent; background: transparent; justify-content: flex-start; font-size: 13px; }
+.map-results button:hover { background: var(--accent2); }
+.map-view { position: relative; height: min(62vh, 560px); background: #1b1f27; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.map-view canvas { display: block; touch-action: none; cursor: grab; }
+.map-view canvas.panning { cursor: grabbing; }
+.map-tools { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 4px; z-index: 2; }
+.map-tools button { width: 32px; height: 32px; padding: 0; justify-content: center; font-size: 16px; background: var(--panel); }
+.map-note { position: absolute; left: 10px; top: 10px; padding: 3px 10px; border-radius: 8px; background: var(--panel); font-size: 12px; pointer-events: none; }
+.map-note:empty { display: none; }
+.map-grid { position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(to right, rgba(255,255,255,.22) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,.22) 1px, transparent 1px); background-size: 80px 80px; background-position: center; mix-blend-mode: overlay; }

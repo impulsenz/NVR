@@ -1036,34 +1036,79 @@ function updateOverlay(surface, c, q) {
 }
 
 // ======================================================================
-// Plan page: cameras on a picture of the property, and the walks followed
-// across them (plan.rs, tracks.rs).
+// Plan page: cameras on a picture of the property, walls, and the walks
+// followed across them (plan.rs, tracks.rs).
 // ======================================================================
 const PLAN_W = 1000;   // the map is drawn 1000 units wide; its height follows the picture
-const planUI = {plan: null, jr: null, hours: 24, sel: null, edit: false, cam: null, tool: null, scalePts: [], live: [], timer: null, t: 0, playing: null, drag: null, all: false};
+const planUI = {plan: null, jr: null, hours: 24, sel: null, edit: false, tab: 'plan', cam: null, tool: null, scalePts: [], wallFrom: null, ortho: true, live: [], timer: null, playing: null, drag: null, all: false,
+  k: 1, tx: 0, ty: 0, ptrs: new Map(), pan: null, pinch: null, raf: 0, space: false};
 const planH = () => PLAN_W * (planUI.plan.image_h || 1) / (planUI.plan.image_w || 1);
-const planXY = (p) => [p[0] * PLAN_W, p[1] * planH()];
 const camName = (id) => { const c = ((status && status.cameras) || []).find(x => x.id === id); return c ? c.name : id; };
 
 const TUNING_FIELDS = [
-  ['min_score', 'Minimum confidence', 0.05, 1, 0.05, 'Only follow detections the AI is at least this sure about. Lower finds more people, and more false ones (a coat on a chair).'],
-  ['match_radius', 'Match radius', 0.02, 1, 0.01, 'How far, as a fraction of the picture’s width, someone may move between two looks and still be the same person. Raise it if one walk keeps breaking into pieces; lower it if two people get mixed up.'],
-  ['track_gap_seconds', 'Walk gap (seconds)', 0.5, 60, 0.5, 'A walk ends when its person has not been seen for this long. Raise it if people disappear behind things and come back.'],
-  ['min_track_seconds', 'Shortest walk (seconds)', 0, 60, 0.5, 'Walks shorter than this are ignored: a shadow, a flicker, someone just stepping into view.'],
-  ['smoothing', 'Path smoothing', 0, 1, 0.05, '0 follows every detected position exactly (jittery); 1 draws a very smooth path that cuts corners.'],
-  ['max_gap_seconds', 'Longest gap between cameras (seconds)', 1, 600, 1, 'The longest time someone may be out of sight between leaving one camera and appearing on the next and still be counted as the same walk. Longer for a big property.'],
-  ['overlap_seconds', 'Camera overlap (seconds)', 0, 60, 0.5, 'Cameras whose views overlap: the next may pick someone up this long before the last one lost them.'],
-  ['max_speed_mps', 'Fastest speed (metres per second)', 0.3, 15, 0.1, 'The fastest believable movement between two cameras. 1.4 is a walk, 3 a jog, 6 a run. Needs the plan’s scale and calibrated cameras; it stops two different people far apart being joined.'],
-  ['slack_m', 'Extra distance (metres)', 0, 100, 0.5, 'Allowed on top of speed × time, because calibration is never perfect. Raise it if real walks are refused.'],
-  ['min_link_score', 'Minimum join score', 0, 1, 0.05, 'How well two walks must fit together to count as one person. Lower joins more (and more wrongly); higher is stricter and leaves more walks on their own.'],
-  ['time_weight', 'Timing counts', 0, 10, 0.1, 'How much “the next camera saw them soon after” counts when joining walks.'],
-  ['distance_weight', 'Distance counts', 0, 10, 0.1, 'How much “they appear close to where they were lost” counts (needs calibration and scale).'],
-  ['colour_weight', 'Clothing colour counts', 0, 10, 0.1, 'How much similar clothing colour counts. It is a weak clue (lighting differs between cameras): useful when two people are out at once, misleading at night or in infrared. 0 switches it off.'],
-  ['keep_days', 'Keep walks for (days)', 1, 365, 1, 'Older walks are deleted automatically.'],
+  ['Detecting', 'min_score', 'Minimum confidence', 0.05, 1, 0.05, 'Only follow detections the AI is at least this sure about. Lower finds more people, and more false ones (a coat on a chair).'],
+  ['Detecting', 'match_radius', 'Match radius', 0.02, 1, 0.01, 'How far, as a fraction of the picture’s width, someone may move between two looks and still be the same person. Raise it if one walk keeps breaking into pieces; lower it if two people get mixed up.'],
+  ['Detecting', 'track_gap_seconds', 'Walk gap (seconds)', 0.5, 60, 0.5, 'A walk ends when its person has not been seen for this long. Raise it if people disappear behind things and come back.'],
+  ['Detecting', 'min_track_seconds', 'Shortest walk (seconds)', 0, 60, 0.5, 'Walks shorter than this are ignored: a shadow, a flicker, someone just stepping into view.'],
+  ['Detecting', 'smoothing', 'Path smoothing', 0, 1, 0.05, '0 follows every detected position exactly (jittery); 1 draws a very smooth path that cuts corners.'],
+  ['Joining cameras', 'max_gap_seconds', 'Longest gap between cameras (s)', 1, 600, 1, 'The longest time someone may be out of sight between leaving one camera and appearing on the next and still be counted as the same walk. Longer for a big property.'],
+  ['Joining cameras', 'overlap_seconds', 'Camera overlap (s)', 0, 60, 0.5, 'Cameras whose views overlap: the next may pick someone up this long before the last one lost them.'],
+  ['Joining cameras', 'max_speed_mps', 'Fastest speed (m/s)', 0.3, 15, 0.1, 'The fastest believable movement between two cameras. 1.4 is a walk, 3 a jog, 6 a run. Needs the plan’s scale and calibrated cameras; it stops two different people far apart being joined.'],
+  ['Joining cameras', 'slack_m', 'Extra distance (m)', 0, 100, 0.5, 'Allowed on top of speed × time, because calibration is never perfect. Raise it if real walks are refused.'],
+  ['Joining cameras', 'min_link_score', 'Minimum join score', 0, 1, 0.05, 'How well two walks must fit together to count as one person. Lower joins more (and more wrongly); higher is stricter and leaves more walks on their own.'],
+  ['Joining cameras', 'time_weight', 'Timing counts', 0, 10, 0.1, 'How much “the next camera saw them soon after” counts when joining walks.'],
+  ['Joining cameras', 'distance_weight', 'Distance counts', 0, 10, 0.1, 'How much “they appear close to where they were lost” counts (needs calibration and scale).'],
+  ['Joining cameras', 'colour_weight', 'Clothing colour counts', 0, 10, 0.1, 'How much similar clothing colour counts. It is a weak clue (lighting differs between cameras): useful when two people are out at once, misleading at night or in infrared. 0 switches it off.'],
+  ['Keeping', 'keep_days', 'Keep walks for (days)', 1, 365, 1, 'Older walks are deleted automatically.'],
 ];
 
 function stopPlanPoll() { clearInterval(planUI.timer); planUI.timer = null; clearInterval(planUI.playing); planUI.playing = null; }
 
+// ----- what a camera can see: its cone, stopped by walls -----
+// Casts rays across the field of view and stops each at the nearest wall (or at
+// the camera's range). Walls are [x1, y1, x2, y2] in the same units as the
+// camera. A wall the camera is mounted on (closer than `eps`) is ignored, as
+// cameras hang on walls. Returns the outline points (not including the camera).
+function planSight(cx, cy, R, aDeg, fov, walls, eps) {
+  eps = eps == null ? 1.5 : eps;
+  const full = fov >= 359;
+  const start = full ? 0 : aDeg - fov / 2, span = full ? 360 : fov;
+  const rel = new Set([0, span]);
+  for (let a = 0; a <= span; a += 2) rel.add(+a.toFixed(4));
+  for (const [x1, y1, x2, y2] of walls) {
+    for (const [px, py] of [[x1, y1], [x2, y2]]) {
+      if (Math.hypot(px - cx, py - cy) > R * 1.02) continue;
+      const th = Math.atan2(px - cx, -(py - cy)) * 180 / Math.PI;      // degrees clockwise from up
+      const r = (((th - start) % 360) + 360) % 360;
+      for (const d of [-0.03, 0, 0.03]) { const q = r + d; if (q >= 0 && q <= span) rel.add(+q.toFixed(4)); }
+    }
+  }
+  const out = [];
+  for (const r of [...rel].sort((a, b) => a - b)) {
+    const th = (start + r) * Math.PI / 180, dx = Math.sin(th), dy = -Math.cos(th);
+    let t = R;
+    for (const [x1, y1, x2, y2] of walls) {
+      const sx = x2 - x1, sy = y2 - y1, den = dx * sy - dy * sx;
+      if (Math.abs(den) < 1e-12) continue;
+      const qx = x1 - cx, qy = y1 - cy, tt = (qx * sy - qy * sx) / den, u = (qx * dy - qy * dx) / den;
+      if (u >= -1e-9 && u <= 1 + 1e-9 && tt > eps && tt < t) t = tt;
+    }
+    out.push([cx + dx * t, cy + dy * t]);
+  }
+  return out;
+}
+
+const planUnitsPerM = () => { const p = planUI.plan; return p.px_per_m > 0 ? p.px_per_m * PLAN_W / p.image_w : PLAN_W / 40; };
+const planWallsUnits = () => (planUI.plan.walls || []).map(w => [w.x1 * PLAN_W, w.y1 * planH(), w.x2 * PLAN_W, w.y2 * planH()]);
+
+function coneD(c, walls) {
+  const cx = c.x * PLAN_W, cy = c.y * planH(), R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6);
+  const pts = planSight(cx, cy, R, c.rotation_deg, Math.min(c.fov_deg, 360), walls);
+  const f = (q) => q[0].toFixed(1) + ' ' + q[1].toFixed(1);
+  return c.fov_deg >= 359 ? 'M ' + pts.map(f).join(' L ') + ' Z' : `M ${cx.toFixed(1)} ${cy.toFixed(1)} L ` + pts.map(f).join(' L ') + ' Z';
+}
+
+// ----- showing the page -----
 async function showPlan() {
   const root = $('plan-root');
   if (!planUI.plan) root.innerHTML = '<div class="card muted">Loading the plan…</div>';
@@ -1084,16 +1129,16 @@ function renderPlan() {
   if (!p.has_image) {
     root.innerHTML = `<div class="card"><h2>Floor plan</h2>
       <p class="muted" style="margin-top:0">Put your cameras on a picture of your home or property, and GAZE can follow a person as they walk from one camera to the next, draw their path on the map, and tell you how many people came, how long they stayed and how fast they moved.</p>
-      <ol class="steps"><li><b>Add a picture</b>: a floor plan, a sketch, or an aerial / satellite view of your property. GAZE never downloads maps itself: use your own picture, and check the terms of wherever it comes from (screenshots of some map services are not allowed to be kept or shared).</li>
-        <li><b>Set the scale</b> by clicking two points and saying how many metres apart they are.</li>
-        <li><b>Place each camera</b> and turn it to face the right way.</li>
-        <li><b>Calibrate</b> each camera by clicking four spots on the ground in its picture and on the map. This is what turns “a person at this pixel” into “a person at this spot”.</li>
+      <ol class="steps"><li><b>Add a picture</b>: pick your property on a <b>satellite map</b> right here, or use a floor plan, a sketch or any picture of your own.</li>
+        <li><b>Set the scale</b> (a map picture sets it for you), <b>draw walls</b> so a camera’s view stops where a wall does, and <b>place each camera</b> facing the right way.</li>
+        <li><b>Calibrate</b> each camera by clicking four spots on the ground in its picture and on the map. This turns “a person at this pixel” into “a person at this spot”.</li>
         <li>Switch on <b>Follow people</b> (it is off until you do) and fine-tune it.</li></ol>
-      ${admin ? `<div class="actions"><label class="btn primary" style="cursor:pointer">Choose a picture…<input type="file" id="pl-file" accept="image/*" hidden></label></div>` : '<p class="muted">Ask an administrator to set up the plan.</p>'}</div>`;
-    if (admin) $('pl-file').onchange = planUpload;
+      ${admin ? `<div class="actions"><button type="button" class="btn primary" id="pl-sat">🛰 Pick from a satellite map…</button><label class="btn" style="cursor:pointer">Choose a picture…<input type="file" id="pl-file" accept="image/*" hidden></label></div>` : '<p class="muted">Ask an administrator to set up the plan.</p>'}</div>`;
+    if (admin) { $('pl-file').onchange = planUpload; $('pl-sat').onclick = planMapPicker; }
     return;
   }
   const hoursSel = [[1, 'Last hour'], [6, 'Last 6 hours'], [24, 'Last 24 hours'], [72, 'Last 3 days'], [168, 'Last 7 days']].map(([h, t]) => `<option value="${h}" ${planUI.hours === h ? 'selected' : ''}>${t}</option>`).join('');
+  const ratio = p.image_w / p.image_h;
   root.innerHTML = `<div class="plan-bar">
       <h2 style="margin:0">Floor plan</h2>
       <span class="pl-badge ${planUI.jr.following ? 'on' : ''}" id="pl-chip">${planUI.jr.following ? 'Following people' : 'Not following people'}</span>
@@ -1103,25 +1148,181 @@ function renderPlan() {
       <label class="check small"><input type="checkbox" id="pl-all" ${planUI.all ? 'checked' : ''}> Show all paths</label>
       ${admin ? `<button type="button" class="small ${planUI.edit ? 'primary' : ''}" id="pl-edit">${planUI.edit ? '✓ Done editing' : '✎ Edit plan'}</button>` : ''}</div>
     <div class="plan-grid">
-      <div class="plan-stage" id="pl-stage"><img id="pl-img" src="api/plan/image?t=${encodeURIComponent(p.updated || '')}" alt="Floor plan"><svg id="pl-svg" viewBox="0 0 ${PLAN_W} ${planH().toFixed(1)}" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="plan-stage" id="pl-stage" style="aspect-ratio:${p.image_w} / ${p.image_h}; max-width: calc((100vh - 150px) * ${ratio.toFixed(4)})">
+        <div class="pl-pan" id="pl-pan"><img id="pl-img" src="api/plan/image?t=${encodeURIComponent(p.updated || '')}" alt="Floor plan" draggable="false"><svg id="pl-svg" viewBox="0 0 ${PLAN_W} ${planH().toFixed(1)}" preserveAspectRatio="none"></svg></div>
+        <div class="pl-zoom"><button type="button" id="pl-zin" title="Zoom in (or use the mouse wheel)">＋</button><button type="button" id="pl-zout" title="Zoom out">−</button><button type="button" id="pl-zfit" title="Show it all">⤢</button></div>
         <div class="plan-hint" id="pl-hint" hidden></div></div>
       <div class="plan-side" id="pl-side"></div></div>`;
   $('pl-hours').onchange = async () => { planUI.hours = +val('pl-hours'); planUI.sel = null; await showPlan(); };
   $('pl-all').onchange = () => { planUI.all = chk('pl-all'); drawPlanSvg(); };
-  if (admin) $('pl-edit').onclick = () => { planUI.edit = !planUI.edit; planUI.tool = null; planUI.scalePts = []; renderPlan(); };
-  drawPlanSvg(); renderPlanSide();
+  if (admin) $('pl-edit').onclick = () => { planUI.edit = !planUI.edit; planUI.tool = null; planUI.scalePts = []; planUI.wallFrom = null; renderPlan(); };
+  planStageBind();
+  planApplyView();
+  renderPlanSide(); planHint();
 }
+
+// ----- zoom and pan (mouse wheel, drag, pinch, buttons) -----
+function planStageBind() {
+  const st = $('pl-stage');
+  st.onwheel = (e) => { e.preventDefault(); planZoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0018))); };
+  st.onpointerdown = planDown; st.onpointermove = planMove; st.onpointerup = st.onpointercancel = planUp;
+  st.ondblclick = () => { if (planUI.tool === 'wall') planWallEnd(); };
+  st.oncontextmenu = (e) => { if (planUI.edit && planUI.tool) { e.preventDefault(); if (planUI.tool === 'wall') planWallEnd(); } };
+  $('pl-zin').onclick = () => { const r = st.getBoundingClientRect(); planZoomAt(r.left + r.width / 2, r.top + r.height / 2, 1.5); };
+  $('pl-zout').onclick = () => { const r = st.getBoundingClientRect(); planZoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.5); };
+  $('pl-zfit').onclick = () => { planUI.k = 1; planUI.tx = planUI.ty = 0; planApplyView(); };
+}
+
+function planClampView() {
+  const st = $('pl-stage'); if (!st) return;
+  const w = st.clientWidth, h = st.clientHeight;
+  planUI.k = Math.min(20, Math.max(1, planUI.k));
+  planUI.tx = Math.min(0, Math.max(w * (1 - planUI.k), planUI.tx));
+  planUI.ty = Math.min(0, Math.max(h * (1 - planUI.k), planUI.ty));
+}
+
+function planApplyView() {
+  planClampView();
+  const pan = $('pl-pan'); if (!pan) return;
+  pan.style.transform = `translate(${planUI.tx}px, ${planUI.ty}px) scale(${planUI.k})`;
+  // Markers and lines keep their size on screen: redraw at the new scale.
+  if (!planUI.raf) planUI.raf = requestAnimationFrame(() => { planUI.raf = 0; drawPlanSvg(); });
+}
+
+function planZoomAt(clientX, clientY, factor) {
+  const st = $('pl-stage'); if (!st) return;
+  const r = st.getBoundingClientRect(), px = clientX - r.left, py = clientY - r.top, k0 = planUI.k;
+  const k1 = Math.min(20, Math.max(1, k0 * factor));
+  planUI.tx = px - (px - planUI.tx) * (k1 / k0);
+  planUI.ty = py - (py - planUI.ty) * (k1 / k0);
+  planUI.k = k1;
+  planApplyView();
+}
+
+function planDown(e) {
+  const st = $('pl-stage'); planUI.ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  st.setPointerCapture?.(e.pointerId);
+  if (planUI.ptrs.size === 2) { const [a, b] = [...planUI.ptrs.values()]; planUI.pinch = {d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1}; planUI.pan = null; planUI.drag = null; return; }
+  const onCam = e.target.closest && e.target.closest('.pl-cam'), onHandle = e.target.classList && e.target.classList.contains('pl-handle');
+  const toolOn = planUI.edit && planUI.tool, panBtn = e.button === 1 || e.button === 2 || planUI.space;
+  if (!panBtn && planUI.edit && planUI.tool) return planToolDown(e);
+  if (!panBtn && !planUI.edit && onCam) { planUI.cam = onCam.dataset.id; drawPlanSvg(); return; }
+  if (!panBtn && planUI.edit && onHandle) { planUI.drag = {kind: 'rotate'}; return; }
+  if (!panBtn && planUI.edit && onCam) { planUI.cam = onCam.dataset.id; planUI.drag = {kind: 'move'}; drawPlanSvg(); renderPlanSide(); return; }
+  planUI.pan = {x: e.clientX, y: e.clientY, tx: planUI.tx, ty: planUI.ty};
+  st.classList.add('panning');
+}
+
+function planMove(e) {
+  if (planUI.ptrs.has(e.pointerId)) planUI.ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  if (planUI.pinch && planUI.ptrs.size === 2) {
+    const [a, b] = [...planUI.ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]) || 1;
+    planZoomAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, d / planUI.pinch.d); planUI.pinch.d = d; return;
+  }
+  if (planUI.pan) { planUI.tx = planUI.pan.tx + (e.clientX - planUI.pan.x); planUI.ty = planUI.pan.ty + (e.clientY - planUI.pan.y); planApplyView(); return; }
+  const d = planUI.drag;
+  if (d) {
+    const c = planUI.plan.cameras.find(x => x.id === planUI.cam), at = planPt(e); if (!c || !at) return;
+    if (d.kind === 'move') { c.x = at[0]; c.y = at[1]; }
+    else { const [x, y] = [c.x * PLAN_W, c.y * planH()], [px, py] = [at[0] * PLAN_W, at[1] * planH()]; c.rotation_deg = Math.round(((Math.atan2(px - x, -(py - y)) * 180 / Math.PI) + 360) % 360); }
+    drawPlanSvg(); return;
+  }
+  if (planUI.edit && planUI.tool === 'wall' && planUI.wallFrom) planWallPreview(e);
+}
+
+function planUp(e) {
+  planUI.ptrs.delete(e.pointerId);
+  if (planUI.ptrs.size < 2) planUI.pinch = null;
+  $('pl-stage') && $('pl-stage').classList.remove('panning');
+  planUI.pan = null;
+  if (planUI.drag) { planUI.drag = null; planSave(); renderPlanSide(); }
+}
+
+// Client point -> plan fractions (0..1), through the zoom.
+function planPt(e) {
+  const svg = $('pl-svg'), m = svg.getScreenCTM(); if (!m) return null;
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  const q = pt.matrixTransform(m.inverse());
+  return [Math.min(1, Math.max(0, q.x / PLAN_W)), Math.min(1, Math.max(0, q.y / planH()))];
+}
+
+// ----- tools: scale, walls, erase -----
+function planHint() {
+  const h = $('pl-hint'); if (!h) return;
+  const t = planUI.edit && planUI.tool;
+  h.hidden = !t;
+  h.textContent = t === 'scale' ? 'Click two points whose distance you know (a wall, a fence, a driveway).' :
+    t === 'wall' ? (planUI.wallFrom ? 'Click to place the next corner. Double-click, right-click or Esc to finish this wall.' : 'Click where a wall starts. (Hold Shift to switch straight lines on or off. Drag with the right button or hold Space to move the map.)') :
+    t === 'erase' ? 'Click a wall to remove it.' : '';
+  const st = $('pl-stage'); if (st) st.dataset.tool = t || '';
+}
+
+function planToolDown(e) {
+  const at = planPt(e); if (!at) return;
+  const tool = planUI.tool, p = planUI.plan;
+  if (tool === 'scale') {
+    planUI.scalePts.push(at);
+    drawPlanSvg();
+    if (planUI.scalePts.length === 2) {
+      const [a, b] = planUI.scalePts, px = Math.hypot((a[0] - b[0]) * p.image_w, (a[1] - b[1]) * p.image_h);
+      const m = parseFloat(prompt('How many metres is it between the two points you clicked?', ''));
+      planUI.scalePts = []; planUI.tool = null;
+      if (m > 0) { p.px_per_m = px / m; planSave('Scale set'); }
+      planHint(); renderPlanSide(); drawPlanSvg();
+    }
+    return;
+  }
+  if (tool === 'wall') {
+    const to = planSnap(at, planUI.wallFrom, e.shiftKey);
+    if (!planUI.wallFrom) { planUI.wallFrom = to; planHint(); drawPlanSvg(); return; }
+    if (Math.hypot((to[0] - planUI.wallFrom[0]) * PLAN_W, (to[1] - planUI.wallFrom[1]) * planH()) < 3) return;   // a double-click's second press
+    (p.walls = p.walls || []).push({x1: planUI.wallFrom[0], y1: planUI.wallFrom[1], x2: to[0], y2: to[1]});
+    planUI.wallFrom = to; planSave(); drawPlanSvg(); renderPlanSide(); return;
+  }
+  if (tool === 'erase') {
+    const u = 12 / planUI.k, [x, y] = [at[0] * PLAN_W, at[1] * planH()];
+    let best = -1, bd = u;
+    (p.walls || []).forEach((w, i) => { const d = planSegDist(x, y, w.x1 * PLAN_W, w.y1 * planH(), w.x2 * PLAN_W, w.y2 * planH()); if (d < bd) { bd = d; best = i; } });
+    if (best >= 0) { p.walls.splice(best, 1); planSave(); drawPlanSvg(); renderPlanSide(); }
+  }
+}
+
+function planSegDist(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / l2)) : 0;
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+// Snap a point to a nearby wall end, and (straight lines) to a horizontal or vertical run from the last point.
+function planSnap(at, from, shift) {
+  const walls = planUI.plan.walls || [], u = 10 / planUI.k;
+  let best = null, bd = u;
+  for (const w of walls) for (const [x, y] of [[w.x1, w.y1], [w.x2, w.y2]]) { const d = Math.hypot((x - at[0]) * PLAN_W, (y - at[1]) * planH()); if (d < bd) { bd = d; best = [x, y]; } }
+  if (best) return best;
+  if (from && (planUI.ortho !== !!shift)) {
+    const dx = Math.abs(at[0] - from[0]) * PLAN_W, dy = Math.abs(at[1] - from[1]) * planH();
+    return dx >= dy ? [at[0], from[1]] : [from[0], at[1]];
+  }
+  return at;
+}
+
+function planWallPreview(e) {
+  const at = planPt(e), from = planUI.wallFrom, el = $('pl-preview'); if (!at || !from || !el) return;
+  const to = planSnap(at, from, e.shiftKey);
+  el.setAttribute('x2', to[0] * PLAN_W); el.setAttribute('y2', to[1] * planH());
+}
+
+function planWallEnd() { planUI.wallFrom = null; planHint(); drawPlanSvg(); }
+
+document.addEventListener('keydown', (e) => {
+  if (page !== 'plan' || !planUI.edit) return;
+  if (e.key === 'Escape' && planUI.tool) { if (planUI.wallFrom) planWallEnd(); else { planUI.tool = null; planUI.scalePts = []; planHint(); renderPlanSide(); drawPlanSvg(); } }
+  if (e.key === ' ' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { planUI.space = true; if (planUI.tool) e.preventDefault(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && planUI.plan.walls && planUI.plan.walls.length && planUI.tab === 'walls') { e.preventDefault(); planUI.plan.walls.pop(); planSave(); drawPlanSvg(); renderPlanSide(); }
+});
+document.addEventListener('keyup', (e) => { if (e.key === ' ') planUI.space = false; });
 
 // ----- drawing the map -----
-function planUnitsPerM() { const p = planUI.plan; return p.px_per_m > 0 ? p.px_per_m * PLAN_W / p.image_w : PLAN_W / 40; }
-
-function cone(c) {
-  const [cx, cy] = planXY([c.x, c.y]), R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6), a = c.rotation_deg, f = Math.min(c.fov_deg, 359);
-  const at = (deg) => [cx + R * Math.sin(deg * Math.PI / 180), cy - R * Math.cos(deg * Math.PI / 180)];
-  const [x1, y1] = at(a - f / 2), [x2, y2] = at(a + f / 2);
-  return f >= 359 ? `M ${cx - R} ${cy} a ${R} ${R} 0 1 0 ${2 * R} 0 a ${R} ${R} 0 1 0 ${-2 * R} 0` : `M ${cx} ${cy} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${R.toFixed(1)} ${R.toFixed(1)} 0 ${f > 180 ? 1 : 0} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z`;
-}
-
 function journeyPolys(j) {
   // Pieces of a path on the map: the walks on calibrated cameras, and dotted hops between cameras.
   const p = planUI.plan, solid = [], dotted = [];
@@ -1139,13 +1340,14 @@ function journeyPolys(j) {
 
 function drawPlanSvg() {
   const p = planUI.plan, svg = $('pl-svg'); if (!svg) return;
-  const pl = (pts) => pts.map(q => planXY(q).map(v => v.toFixed(1)).join(',')).join(' ');
+  const u = 1 / planUI.k, XY = (q) => [q[0] * PLAN_W, q[1] * planH()];
+  const pl = (pts) => pts.map(q => XY(q).map(v => v.toFixed(1)).join(',')).join(' ');
+  const walls = planWallsUnits();
+  svg.style.setProperty('--u', u);
   let h = '';
-  // Neighbour links
   for (const l of p.links) { const a = p.cameras.find(c => c.id === l.a), b = p.cameras.find(c => c.id === l.b); if (a && b) h += `<line class="pl-link" x1="${a.x * PLAN_W}" y1="${a.y * planH()}" x2="${b.x * PLAN_W}" y2="${b.y * planH()}"/>`; }
-  // Cones, then cameras
-  for (const c of p.cameras) h += `<path class="pl-cone ${planUI.cam === c.id ? 'sel' : ''}" d="${cone(c)}"/>`;
-  // Paths
+  for (const c of p.cameras) h += `<path class="pl-cone ${planUI.cam === c.id ? 'sel' : ''}" d="${coneD(c, walls)}"/>`;
+  for (const w of walls) h += `<line class="pl-wall" x1="${w[0].toFixed(1)}" y1="${w[1].toFixed(1)}" x2="${w[2].toFixed(1)}" y2="${w[3].toFixed(1)}"/>`;
   const jrs = (planUI.jr && planUI.jr.journeys) || [];
   if (planUI.all) for (const j of jrs) if (j.id !== planUI.sel) { const {solid} = journeyPolys(j); for (const s of solid) h += `<polyline class="pl-path faint" points="${pl(s)}"/>`; }
   const sel = jrs.find(j => j.id === planUI.sel);
@@ -1154,92 +1356,69 @@ function drawPlanSvg() {
     for (const d of dotted) h += `<polyline class="pl-path hop" points="${pl(d)}"/>`;
     for (const s of solid) h += `<polyline class="pl-path" points="${pl(s)}"/>`;
     const first = solid[0] && solid[0][0], last = solid.length && solid[solid.length - 1][solid[solid.length - 1].length - 1];
-    if (first) h += `<circle class="pl-start" r="7" cx="${planXY(first)[0]}" cy="${planXY(first)[1]}"/>`;
-    if (last) h += `<circle class="pl-end" r="7" cx="${planXY(last)[0]}" cy="${planXY(last)[1]}"/>`;
-    h += `<circle class="pl-dot" id="pl-play" r="9" cx="-50" cy="-50"/>`;
+    if (first) h += `<circle class="pl-start" r="${7 * u}" cx="${XY(first)[0]}" cy="${XY(first)[1]}"/>`;
+    if (last) h += `<circle class="pl-end" r="${7 * u}" cx="${XY(last)[0]}" cy="${XY(last)[1]}"/>`;
+    h += `<circle class="pl-dot" id="pl-play" r="${9 * u}" cx="-50" cy="-50"/>`;
   }
+  if (planUI.edit && planUI.tool === 'wall') for (const w of walls) for (const [x, y] of [[w[0], w[1]], [w[2], w[3]]]) h += `<circle class="pl-wend" r="${3.5 * u}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}"/>`;
   for (const c of p.cameras) {
-    const [x, y] = planXY([c.x, c.y]), calibrated = !!c.calib;
-    h += `<g class="pl-cam ${planUI.cam === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><circle r="13" cx="${x}" cy="${y}"/><text x="${x}" y="${y + 4.5}" text-anchor="middle" class="pl-ico">📹</text>
-      <text x="${x}" y="${y > planH() * 0.9 ? y - 22 : y + 30}" text-anchor="middle" class="pl-label">${esc(camName(c.id))}${calibrated ? '' : ' ·'}</text></g>`;
-    if (planUI.edit && planUI.cam === c.id) { const R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6) * 0.8, a = c.rotation_deg * Math.PI / 180; h += `<circle class="pl-handle" r="9" cx="${x + R * Math.sin(a)}" cy="${y - R * Math.cos(a)}"/>`; }
+    const [x, y] = XY([c.x, c.y]), calibrated = !!c.calib, lab = y > planH() * 0.9 ? y - 22 * u : y + 30 * u;
+    h += `<g class="pl-cam ${planUI.cam === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><circle r="${13 * u}" cx="${x}" cy="${y}"/><text x="${x}" y="${y + 4.5 * u}" text-anchor="middle" class="pl-ico" style="font-size:${13 * u}px">📹</text>
+      <text x="${x}" y="${lab}" text-anchor="middle" class="pl-label" style="font-size:${15 * u}px">${esc(camName(c.id))}${calibrated ? '' : ' ·'}</text></g>`;
+    if (planUI.edit && planUI.cam === c.id) { const R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6) * 0.8, a = c.rotation_deg * Math.PI / 180; h += `<circle class="pl-handle" r="${9 * u}" cx="${x + R * Math.sin(a)}" cy="${y - R * Math.cos(a)}"/>`; }
   }
-  for (let i = 0; i < planUI.scalePts.length; i++) { const [x, y] = planXY(planUI.scalePts[i]); h += `<circle class="pl-scale" r="6" cx="${x}" cy="${y}"/>`; }
-  if (planUI.scalePts.length === 2) { const [a, b] = planUI.scalePts.map(planXY); h += `<line class="pl-scale-line" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`; }
+  for (const q of planUI.scalePts) { const [x, y] = XY(q); h += `<circle class="pl-scale" r="${6 * u}" cx="${x}" cy="${y}"/>`; }
+  if (planUI.scalePts.length === 2) { const [a, b] = planUI.scalePts.map(XY); h += `<line class="pl-scale-line" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`; }
+  if (planUI.wallFrom) { const [x, y] = XY(planUI.wallFrom); h += `<line class="pl-wall prev" id="pl-preview" x1="${x}" y1="${y}" x2="${x}" y2="${y}"/><circle class="pl-wend on" r="${5 * u}" cx="${x}" cy="${y}"/>`; }
   h += '<g id="pl-live"></g>';
   svg.innerHTML = h;
-  svg.onpointerdown = planPointerDown; svg.onpointermove = planPointerMove; svg.onpointerup = svg.onpointercancel = () => { if (planUI.drag) { planUI.drag = null; planSave(); } };
   drawPlanLive();
 }
 
 function drawPlanLive() {
   const g = $('pl-live'), p = planUI.plan; if (!g) return;
+  const u = 1 / planUI.k;
   let h = '';
   for (const q of planUI.live) {
     const cam = p.cameras.find(c => c.id === q.cam);
     const at = q.plan || (cam ? [cam.x, cam.y] : null); if (!at) continue;
-    const [x, y] = planXY(at);
-    h += `<circle class="pl-live ${q.plan ? '' : 'rough'}" r="10" cx="${x}" cy="${y}"><title>${esc(q.label)} · ${esc(camName(q.cam))}</title></circle>`;
+    h += `<circle class="pl-live ${q.plan ? '' : 'rough'}" r="${10 * u}" cx="${at[0] * PLAN_W}" cy="${at[1] * planH()}"><title>${esc(q.label)} · ${esc(camName(q.cam))}</title></circle>`;
   }
   g.innerHTML = h;
   const n = $('pl-now'); if (n) n.textContent = planUI.live.length ? `${planUI.live.length} ${planUI.live.length === 1 ? 'person' : 'people'} on camera now` : '';
 }
 
-function planPt(e) {
-  const svg = $('pl-svg'), m = svg.getScreenCTM(); if (!m) return null;
-  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
-  const q = pt.matrixTransform(m.inverse());
-  return [Math.min(1, Math.max(0, q.x / PLAN_W)), Math.min(1, Math.max(0, q.y / planH()))];
-}
-
-function planPointerDown(e) {
-  if (!planUI.edit) { const g = e.target.closest('.pl-cam'); if (g) { planUI.cam = g.dataset.id; drawPlanSvg(); } return; }
-  const at = planPt(e); if (!at) return;
-  if (planUI.tool === 'scale') {
-    planUI.scalePts.push(at);
-    if (planUI.scalePts.length === 2) {
-      drawPlanSvg();
-      const [a, b] = planUI.scalePts, p = planUI.plan;
-      const px = Math.hypot((a[0] - b[0]) * p.image_w, (a[1] - b[1]) * p.image_h);
-      const m = parseFloat(prompt('How many metres is it between the two points you clicked?', ''));
-      planUI.scalePts = []; planUI.tool = null;
-      if (m > 0) { p.px_per_m = px / m; planSave('Scale set'); } else drawPlanSvg();
-      renderPlanSide(); return;
-    }
-    drawPlanSvg(); return;
-  }
-  if (e.target.classList.contains('pl-handle')) { planUI.drag = {kind: 'rotate'}; e.target.setPointerCapture?.(e.pointerId); return; }
-  const g = e.target.closest('.pl-cam');
-  if (g) { planUI.cam = g.dataset.id; planUI.drag = {kind: 'move'}; drawPlanSvg(); renderPlanSide(); }
-}
-
-function planPointerMove(e) {
-  const d = planUI.drag; if (!d) return;
-  const c = planUI.plan.cameras.find(x => x.id === planUI.cam), at = planPt(e); if (!c || !at) return;
-  if (d.kind === 'move') { c.x = at[0]; c.y = at[1]; }
-  else { const [x, y] = planXY([c.x, c.y]), [px, py] = planXY(at); c.rotation_deg = Math.round(((Math.atan2(px - x, -(py - y)) * 180 / Math.PI) + 360) % 360); }
-  drawPlanSvg();
-}
-
 async function planSave(msg) {
   const p = planUI.plan;
-  try { await api('api/plan', {method: 'PUT', json: {px_per_m: p.px_per_m, cameras: p.cameras, links: p.links, tuning: p.tuning}}); if (msg) toast(msg); }
+  try { await api('api/plan', {method: 'PUT', json: {px_per_m: p.px_per_m, cameras: p.cameras, links: p.links, walls: p.walls || [], tuning: p.tuning}}); if (msg) toast(msg); }
   catch (e) { toast(e.message, true); await showPlan(); }
+}
+
+// ----- picture: from a file, or from the satellite map -----
+async function planUploadBlob(blob) {
+  const res = await fetch('api/plan/image', {method: 'POST', body: blob, headers: {'Content-Type': 'image/jpeg'}});
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload failed');
 }
 
 async function planUpload(ev) {
   const f = ev.target.files[0]; if (!f) return;
+  if (!(await planReplaceOk())) return;
   try {
     // Re-encoded as a JPEG at a sensible size: any format works, and hidden
     // data in the file (such as a location) is dropped.
     const bmp = await createImageBitmap(f), k = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
     const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
     const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(bmp, 0, 0, cv.width, cv.height);
-    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.88));
-    const res = await fetch('api/plan/image', {method: 'POST', body: blob, headers: {'Content-Type': 'image/jpeg'}});
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload failed');
-    toast('Picture added'); planUI.edit = true; await showPlan();
+    await planUploadBlob(await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.88)));
+    toast('Picture added'); planUI.edit = true; planUI.tab = 'plan'; await showPlan();
   } catch (e) { toast(e.message || 'Could not read that picture', true); }
+}
+
+// A new picture of another shape clears the walls and calibrations (they belong to the old picture).
+async function planReplaceOk() {
+  const p = planUI.plan;
+  if (!p || !p.has_image || !(p.walls.length || p.cameras.some(c => c.calib) || p.px_per_m > 0)) return true;
+  return confirm('This replaces the current picture. If the new one is a different shape, the walls, the scale and the cameras’ calibrations are cleared (camera positions stay). Continue?');
 }
 
 // ----- the side panel -----
@@ -1258,7 +1437,7 @@ function planViewPanel() {
   const sel = jr.journeys.find(j => j.id === planUI.sel);
   const play = sel ? `<div class="pl-play"><button type="button" class="small" id="pl-playbtn">▶ Play</button><input type="range" id="pl-slider" min="0" max="${Math.round(sel.seconds * 10)}" value="0" style="flex:1"><span class="muted small" id="pl-clock">0 s</span></div>` : '';
   return `<div class="card"><h2>${planUI.hours >= 24 ? 'Activity' : 'Recent activity'}</h2>
-      ${!jr.following && !st.people ? `<p class="muted" style="margin-top:0">Following people is off, so nothing is being recorded here. ${isAdmin() ? 'Turn it on under ✎ Edit plan.' : 'An administrator can turn it on.'}</p>` : ''}
+      ${!jr.following && !st.people ? `<p class="muted" style="margin-top:0">Following people is off, so nothing is being recorded here. ${isAdmin() ? 'Turn it on under ✎ Edit plan → People.' : 'An administrator can turn it on.'}</p>` : ''}
       <div class="pl-stats"><div><b>${st.people}</b><span class="muted small">${st.people === 1 ? 'person' : 'people'}</span></div><div><b>${st.people ? fmtDur(st.avg_seconds) : '–'}</b><span class="muted small">average visit</span></div><div><b>${st.avg_speed_mps ? (st.avg_speed_mps * 3.6).toFixed(1) : '–'}</b><span class="muted small">km/h walking</span></div></div>
       <div class="pl-hist" title="Journeys started in each hour of the day">${hist.map((n, h) => `<i style="height:${Math.round(4 + 36 * n / mx)}px" title="${h}:00 · ${n}"></i>`).join('')}</div>
       ${cams ? `<table class="pl-tab"><thead><tr><th>Camera</th><th>Walks</th><th>Avg time</th></tr></thead><tbody>${cams}</tbody></table>` : ''}</div>
@@ -1267,28 +1446,55 @@ function planViewPanel() {
     ${p.cameras.some(c => !c.calib) ? `<div class="hint">Cameras marked “·” aren’t calibrated, so people on them are shown at the camera, without a path.</div>` : ''}`;
 }
 
+const PLAN_TABS = [['plan', 'Plan'], ['cams', 'Cameras'], ['walls', 'Walls'], ['people', 'People']];
+
 function planEditPanel() {
-  const p = planUI.plan, t = p.tuning, cams = (status && status.cameras) || [];
+  const p = planUI.plan;
+  const tabs = `<div class="pl-tabs" role="tablist">${PLAN_TABS.map(([k, t]) => `<button type="button" role="tab" class="${planUI.tab === k ? 'on' : ''}" data-tab="${k}">${t}${k === 'walls' && p.walls.length ? ` <span class="muted small">${p.walls.length}</span>` : ''}</button>`).join('')}</div>`;
+  return tabs + `<div class="pl-tabbody">${({plan: planTabPlan, cams: planTabCams, walls: planTabWalls, people: planTabPeople})[planUI.tab]()}</div>`;
+}
+
+function planTabPlan() {
+  const p = planUI.plan;
+  return `<div class="card"><h2>Picture</h2>
+      <div class="actions" style="margin:0 0 8px"><button type="button" class="small primary" id="pl-sat">🛰 Satellite map…</button><label class="btn small" style="cursor:pointer">From a file…<input type="file" id="pl-file" accept="image/*" hidden></label><button type="button" class="small danger" id="pl-rmimg">Remove</button></div>
+      <p class="muted small" style="margin:0">${p.image_w} × ${p.image_h} px. A map picture sets the scale for you; with a file, set it yourself.</p></div>
+    <div class="card"><h2>Scale${tip('The plan needs to know how big it is to measure distances and speeds. A satellite-map picture sets this by itself. Otherwise click two points whose real distance you know.')}</h2>
+      <div class="row"><button type="button" class="small ${planUI.tool === 'scale' ? 'primary' : ''}" id="pl-scale">${planUI.tool === 'scale' ? 'Click two points…' : 'Set the scale'}</button><span class="muted small">${p.px_per_m > 0 ? `the plan is ${(p.image_w / p.px_per_m).toFixed(0)} m wide` : 'not set — needed for distances and speeds'}</span></div></div>
+    <div class="card"><h2>Moving around</h2><p class="muted small" style="margin:0">Mouse wheel zooms, dragging moves the map. With a tool active, drag with the right button or hold Space to move.</p></div>`;
+}
+
+function planTabCams() {
+  const p = planUI.plan, cams = (status && status.cameras) || [];
   const on = new Set(p.cameras.map(c => c.id));
   const c = p.cameras.find(x => x.id === planUI.cam);
-  const camBox = c ? `<div class="card"><h2>${esc(camName(c.id))}</h2><div class="form">
+  const camBox = c ? `<div class="card"><h2>${esc(camName(c.id))}</h2><div class="pl-fields">
       <label for="pc-rot">Facing${tip('Which way the camera looks, in degrees clockwise from the top of the plan. You can also drag the round handle on the map.')}</label><div class="row"><input type="range" id="pc-rot" min="0" max="359" value="${Math.round(c.rotation_deg)}" style="flex:1"><span class="muted small" id="pc-rot-v">${Math.round(c.rotation_deg)}°</span></div>
-      <label for="pc-fov">Field of view</label><div class="row"><input type="range" id="pc-fov" min="10" max="360" value="${Math.round(c.fov_deg)}" style="flex:1"><span class="muted small" id="pc-fov-v">${Math.round(c.fov_deg)}°</span></div>
-      <label for="pc-rng">Range (metres)</label><div class="row"><input type="range" id="pc-rng" min="2" max="100" value="${Math.round(c.range_m)}" style="flex:1"><span class="muted small" id="pc-rng-v">${Math.round(c.range_m)} m</span></div>
-      <label>Neighbours${tip('Cameras whose views meet this one: someone leaving one may appear on the other. When any neighbours are drawn, walks are only joined between neighbours (unless you allow all pairs in the settings below). Give the usual walking time if you know it.')}</label>
-      <div>${p.cameras.filter(o => o.id !== c.id).map(o => { const l = p.links.find(x => (x.a === c.id && x.b === o.id) || (x.a === o.id && x.b === c.id)); return `<div class="row"><label class="check" style="min-width:140px"><input type="checkbox" class="pc-nb" data-id="${esc(o.id)}" ${l ? 'checked' : ''}> ${esc(camName(o.id))}</label><input type="number" class="pc-tt small" data-id="${esc(o.id)}" min="0" max="3600" step="1" placeholder="walk time (s)" value="${l && l.travel_seconds != null ? l.travel_seconds : ''}" style="width:130px" ${l ? '' : 'disabled'}></div>`; }).join('') || '<span class="muted small">Place another camera to link it.</span>'}</div></div>
+      <label for="pc-fov">View width</label><div class="row"><input type="range" id="pc-fov" min="10" max="360" value="${Math.round(c.fov_deg)}" style="flex:1"><span class="muted small" id="pc-fov-v">${Math.round(c.fov_deg)}°</span></div>
+      <label for="pc-rng">Range</label><div class="row"><input type="range" id="pc-rng" min="2" max="100" value="${Math.round(c.range_m)}" style="flex:1"><span class="muted small" id="pc-rng-v">${Math.round(c.range_m)} m</span></div></div>
+      <details class="pl-det"><summary>Neighbours${tip('Cameras whose views meet this one: someone leaving one may appear on the other. When any neighbours are drawn, walks are only joined between neighbours (unless you allow all pairs under People). Give the usual walking time if you know it.')}</summary>
+      ${p.cameras.filter(o => o.id !== c.id).map(o => { const l = p.links.find(x => (x.a === c.id && x.b === o.id) || (x.a === o.id && x.b === c.id)); return `<div class="row"><label class="check" style="min-width:130px"><input type="checkbox" class="pc-nb" data-id="${esc(o.id)}" ${l ? 'checked' : ''}> ${esc(camName(o.id))}</label><input type="number" class="pc-tt small" data-id="${esc(o.id)}" min="0" max="3600" step="1" placeholder="walk time (s)" value="${l && l.travel_seconds != null ? l.travel_seconds : ''}" style="width:120px" ${l ? '' : 'disabled'}></div>`; }).join('') || '<span class="muted small">Place another camera to link it.</span>'}</details>
       <div class="actions"><button type="button" class="primary small" id="pc-cal" ${p.px_per_m > 0 ? '' : 'disabled title="Set the scale first"'}>${c.calib ? '✓ Calibrated — redo' : 'Calibrate…'}</button>${c.calib ? '<button type="button" class="small" id="pc-uncal">Clear</button>' : ''}<button type="button" class="small danger" id="pc-del">Remove from plan</button></div></div>` : '';
-  return `<div class="card"><h2>Plan</h2>
-      <div class="actions" style="margin-top:0"><label class="btn small" style="cursor:pointer">Change picture…<input type="file" id="pl-file" accept="image/*" hidden></label><button type="button" class="small danger" id="pl-rmimg">Remove picture</button></div>
-      <p class="row" style="margin:10px 0 0"><button type="button" class="small ${planUI.tool === 'scale' ? 'primary' : ''}" id="pl-scale">${planUI.tool === 'scale' ? 'Click two points on the map…' : 'Set the scale'}</button><span class="muted small">${p.px_per_m > 0 ? `${(p.image_w / p.px_per_m).toFixed(0)} m wide` : 'not set — needed for distances and speeds'}</span></p></div>
-    <div class="card"><h2>Cameras</h2><div class="pl-cams">${cams.map(k => `<div class="row"><span style="flex:1">${esc(k.name)}</span>${on.has(k.id) ? `<button type="button" class="small ${planUI.cam === k.id ? 'primary' : ''}" data-sel="${esc(k.id)}">Select</button>` : `<button type="button" class="small" data-add="${esc(k.id)}">＋ Place</button>`}</div>`).join('')}</div></div>
-    ${camBox}
-    <div class="card"><h2>Following people${tip('Off until you switch it on. While on, GAZE keeps where each person walked (positions and times, never pictures) for the number of days set, and can draw their paths here. It uses the AI’s person detections, so object recognition must be on.')}</h2>
-      <div class="form"><span></span><div><label class="check"><input type="checkbox" id="tu-on" ${t.enabled ? 'checked' : ''}> Follow people</label></div>
-      <label for="tu-labels">Follow${tip('What to follow, by the AI’s names: person, dog, cat, vehicle …')}</label><div><input type="text" id="tu-labels" value="${esc(t.labels.join(', '))}"></div>
-      ${TUNING_FIELDS.map(([k, name, lo, hi, step, text]) => `<label for="tu-${k}">${name}${tip(text)}</label><div><input type="number" id="tu-${k}" min="${lo}" max="${hi}" step="${step}" value="${Math.round(t[k] * 1000) / 1000}" style="width:110px"></div>`).join('')}
-      <span></span><div><label class="check"><input type="checkbox" id="tu-all" ${t.link_all_pairs ? 'checked' : ''}> Join walks between any two cameras${tip('Normally, when neighbours are drawn, walks are only joined between neighbouring cameras. Tick this to allow any pair (the distance and speed limits still apply).')}</label></div></div>
-      <div class="actions"><button type="button" class="primary" id="tu-save">Save settings</button><button type="button" id="tu-reset">Back to defaults</button><button type="button" class="danger" id="tu-wipe" style="margin-left:auto">Delete all walks</button></div></div>`;
+  return `<div class="card"><h2>Cameras</h2><div class="pl-cams">${cams.map(k => `<div class="row"><span style="flex:1">${esc(k.name)}</span>${on.has(k.id) ? `<button type="button" class="small ${planUI.cam === k.id ? 'primary' : ''}" data-sel="${esc(k.id)}">Select</button>` : `<button type="button" class="small" data-add="${esc(k.id)}">＋ Place</button>`}</div>`).join('')}</div></div>${camBox}`;
+}
+
+function planTabWalls() {
+  const p = planUI.plan;
+  return `<div class="card"><h2>Walls${tip('A camera cannot see through a wall. Draw the walls of your home (and fences) and each camera’s drawn view stops at them. A gap between two walls is a door or opening: the view passes through it. A camera mounted on a wall is not blocked by that wall.')}</h2>
+      <div class="actions" style="margin:0 0 8px"><button type="button" class="small ${planUI.tool === 'wall' ? 'primary' : ''}" id="wl-draw">✏ Draw walls</button><button type="button" class="small ${planUI.tool === 'erase' ? 'primary' : ''}" id="wl-erase">⌫ Erase</button><button type="button" class="small" id="wl-undo" ${p.walls.length ? '' : 'disabled'}>↶ Undo</button><button type="button" class="small danger" id="wl-clear" ${p.walls.length ? '' : 'disabled'}>Clear all</button></div>
+      <label class="check small"><input type="checkbox" id="wl-ortho" ${planUI.ortho ? 'checked' : ''}> Straight lines (hold Shift to switch)</label>
+      <p class="muted small" style="margin:8px 0 0">${p.walls.length} wall${p.walls.length === 1 ? '' : 's'}. Click to start, click each corner, then double-click, right-click or press Esc to finish. Corners snap to each other.</p></div>`;
+}
+
+function planTabPeople() {
+  const p = planUI.plan, t = p.tuning;
+  const groups = [...new Set(TUNING_FIELDS.map(f => f[0]))];
+  return `<div class="card"><h2>Following people${tip('Off until you switch it on. While on, GAZE keeps where each person walked (positions and times, never pictures) for the number of days set, and can draw their paths here. It uses the AI’s person detections, so object recognition must be on.')}</h2>
+      <label class="check"><input type="checkbox" id="tu-on" ${t.enabled ? 'checked' : ''}> Follow people</label>
+      <div class="pl-fields" style="margin-top:8px"><label for="tu-labels">Follow${tip('What to follow, by the AI’s names: person, dog, cat, vehicle …')}</label><input type="text" id="tu-labels" value="${esc(t.labels.join(', '))}"></div></div>
+    ${groups.map((g, i) => `<details class="pl-det card" ${i === 0 ? 'open' : ''}><summary>${esc(g)}</summary><div class="pl-fields">${TUNING_FIELDS.filter(f => f[0] === g).map(([, k, name, lo, hi, step, text]) => `<label for="tu-${k}">${name}${tip(text)}</label><input type="number" id="tu-${k}" min="${lo}" max="${hi}" step="${step}" value="${Math.round(t[k] * 1000) / 1000}">`).join('')}
+      ${g === 'Joining cameras' ? `<label class="check" style="grid-column:1/-1"><input type="checkbox" id="tu-all" ${t.link_all_pairs ? 'checked' : ''}> Join walks between any two cameras${tip('Normally, when neighbours are drawn, walks are only joined between neighbouring cameras. Tick this to allow any pair (the distance and speed limits still apply).')}</label>` : ''}</div></details>`).join('')}
+    <div class="actions"><button type="button" class="primary" id="tu-save">Save settings</button><button type="button" id="tu-reset">Defaults</button><button type="button" class="danger" id="tu-wipe" style="margin-left:auto">Delete all walks</button></div>`;
 }
 
 function planBindSide() {
@@ -1297,18 +1503,24 @@ function planBindSide() {
   const play = $('pl-slider');
   if (play) {
     const j = planUI.jr.journeys.find(x => x.id === planUI.sel);
-    const place = () => { const t = j.start + (+play.value / 10) * 1000, at = planAt(j, t), dot = $('pl-play'); $('pl-clock').textContent = Math.round(+play.value / 10) + ' s'; if (dot && at) { const [x, y] = planXY(at); dot.setAttribute('cx', x); dot.setAttribute('cy', y); } };
+    const place = () => { const t = j.start + (+play.value / 10) * 1000, at = planAt(j, t), dot = $('pl-play'); $('pl-clock').textContent = Math.round(+play.value / 10) + ' s'; if (dot && at) { dot.setAttribute('cx', at[0] * PLAN_W); dot.setAttribute('cy', at[1] * planH()); } };
     play.oninput = place; place();
     $('pl-playbtn').onclick = () => { if (planUI.playing) { clearInterval(planUI.playing); planUI.playing = null; $('pl-playbtn').textContent = '▶ Play'; return; } $('pl-playbtn').textContent = '❚❚ Pause'; if (+play.value >= +play.max) play.value = 0; planUI.playing = setInterval(() => { play.value = Math.min(+play.max, +play.value + 5); place(); if (+play.value >= +play.max) { clearInterval(planUI.playing); planUI.playing = null; const b = $('pl-playbtn'); if (b) b.textContent = '▶ Play'; } }, 100); };
   }
   if (!planUI.edit) return;
+  side.querySelectorAll('.pl-tabs [data-tab]').forEach(b => b.onclick = () => { planUI.tab = b.dataset.tab; planUI.tool = null; planUI.wallFrom = null; planUI.scalePts = []; planHint(); renderPlanSide(); drawPlanSvg(); });
+  const tool = (id, name) => { const b = $(id); if (b) b.onclick = () => { planUI.tool = planUI.tool === name ? null : name; planUI.wallFrom = null; planUI.scalePts = []; planHint(); renderPlanSide(); drawPlanSvg(); }; };
+  tool('pl-scale', 'scale'); tool('wl-draw', 'wall'); tool('wl-erase', 'erase');
   const f = $('pl-file'); if (f) f.onchange = planUpload;
-  $('pl-rmimg').onclick = async () => { if (!confirm('Remove the plan picture? Calibrations and the scale go with it.')) return; try { await api('api/plan/image', {method: 'DELETE'}); await showPlan(); } catch (e) { toast(e.message, true); } };
-  $('pl-scale').onclick = () => { planUI.tool = planUI.tool === 'scale' ? null : 'scale'; planUI.scalePts = []; const h = $('pl-hint'); h.hidden = planUI.tool !== 'scale'; h.textContent = 'Click two points whose distance you know (a wall, a fence, a driveway).'; renderPlanSide(); drawPlanSvg(); };
+  const sat = $('pl-sat'); if (sat) sat.onclick = planMapPicker;
+  const rm = $('pl-rmimg'); if (rm) rm.onclick = async () => { if (!confirm('Remove the plan picture? The walls, the scale and calibrations go with it.')) return; try { await api('api/plan/image', {method: 'DELETE'}); await showPlan(); } catch (e) { toast(e.message, true); } };
+  const undo = $('wl-undo'); if (undo) undo.onclick = () => { p.walls.pop(); planSave(); drawPlanSvg(); renderPlanSide(); };
+  const clr = $('wl-clear'); if (clr) clr.onclick = () => { if (!confirm(`Remove all ${p.walls.length} walls?`)) return; p.walls = []; planSave(); drawPlanSvg(); renderPlanSide(); };
+  const ortho = $('wl-ortho'); if (ortho) ortho.onchange = () => { planUI.ortho = ortho.checked; };
   side.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => { const id = b.dataset.add; p.cameras.push({id, x: 0.5, y: 0.5, rotation_deg: 0, fov_deg: 90, range_m: 15}); planUI.cam = id; await planSave(); renderPlanSide(); drawPlanSvg(); });
   side.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => { planUI.cam = b.dataset.sel; renderPlanSide(); drawPlanSvg(); });
   const c = p.cameras.find(x => x.id === planUI.cam);
-  if (c) {
+  if (c && planUI.tab === 'cams') {
     for (const [id, key, unit] of [['pc-rot', 'rotation_deg', '°'], ['pc-fov', 'fov_deg', '°'], ['pc-rng', 'range_m', ' m']]) { const el = $(id); el.oninput = () => { c[key] = +el.value; $(id + '-v').textContent = el.value + unit; drawPlanSvg(); }; el.onchange = () => planSave(); }
     const syncLinks = () => { p.links = p.links.filter(l => l.a !== c.id && l.b !== c.id); side.querySelectorAll('.pc-nb').forEach(n => { if (!n.checked) return; const tt = side.querySelector(`.pc-tt[data-id="${CSS.escape(n.dataset.id)}"]`).value; p.links.push({a: c.id, b: n.dataset.id, travel_seconds: tt === '' ? null : +tt}); }); };
     side.querySelectorAll('.pc-nb').forEach(n => n.onchange = () => { side.querySelector(`.pc-tt[data-id="${CSS.escape(n.dataset.id)}"]`).disabled = !n.checked; syncLinks(); drawPlanSvg(); planSave(); });
@@ -1317,14 +1529,16 @@ function planBindSide() {
     const un = $('pc-uncal'); if (un) un.onclick = async () => { delete c.calib; await planSave('Calibration cleared'); renderPlanSide(); drawPlanSvg(); };
     $('pc-del').onclick = async () => { p.cameras = p.cameras.filter(x => x.id !== c.id); p.links = p.links.filter(l => l.a !== c.id && l.b !== c.id); planUI.cam = null; await planSave(); renderPlanSide(); drawPlanSvg(); };
   }
-  const gather = () => {
-    const t = {...p.tuning, enabled: chk('tu-on'), link_all_pairs: chk('tu-all'), labels: val('tu-labels').split(',').map(x => x.trim()).filter(Boolean)};
-    for (const [k] of TUNING_FIELDS) t[k] = +val('tu-' + k);
-    return t;
-  };
-  $('tu-save').onclick = async () => { p.tuning = gather(); await planSave('Settings saved'); await showPlan(); };
-  $('tu-reset').onclick = async () => { if (!confirm('Put every following setting back to its default? (Follow people stays as it is.)')) return; const on = p.tuning.enabled; p.tuning = {enabled: on, labels: ['person'], min_score: 0.5, match_radius: 0.2, track_gap_seconds: 4, min_track_seconds: 1, smoothing: 0.4, max_gap_seconds: 30, overlap_seconds: 3, max_speed_mps: 3, slack_m: 3, min_link_score: 0.5, time_weight: 1, distance_weight: 1, colour_weight: 0.5, link_all_pairs: false, keep_days: 14}; await planSave('Defaults restored'); renderPlanSide(); };
-  $('tu-wipe').onclick = async () => { if (!confirm('Delete every stored walk? The plan and settings stay.')) return; try { const r = await api('api/plan/tracks', {method: 'DELETE'}); toast(`Deleted (${r.deleted_days} day file${r.deleted_days === 1 ? '' : 's'})`); await showPlan(); } catch (e) { toast(e.message, true); } };
+  if (planUI.tab === 'people') {
+    const gather = () => {
+      const t = {...p.tuning, enabled: chk('tu-on'), link_all_pairs: chk('tu-all'), labels: val('tu-labels').split(',').map(x => x.trim()).filter(Boolean)};
+      for (const [, k] of TUNING_FIELDS) t[k] = +val('tu-' + k);
+      return t;
+    };
+    $('tu-save').onclick = async () => { p.tuning = gather(); await planSave('Settings saved'); await showPlan(); };
+    $('tu-reset').onclick = async () => { if (!confirm('Put every following setting back to its default? (Follow people stays as it is.)')) return; const on = p.tuning.enabled; p.tuning = {enabled: on, labels: ['person'], min_score: 0.5, match_radius: 0.2, track_gap_seconds: 4, min_track_seconds: 1, smoothing: 0.4, max_gap_seconds: 30, overlap_seconds: 3, max_speed_mps: 3, slack_m: 3, min_link_score: 0.5, time_weight: 1, distance_weight: 1, colour_weight: 0.5, link_all_pairs: false, keep_days: 14}; await planSave('Defaults restored'); renderPlanSide(); };
+    $('tu-wipe').onclick = async () => { if (!confirm('Delete every stored walk? The plan and settings stay.')) return; try { const r = await api('api/plan/tracks', {method: 'DELETE'}); toast(`Deleted (${r.deleted_days} day file${r.deleted_days === 1 ? '' : 's'})`); await showPlan(); } catch (e) { toast(e.message, true); } };
+  }
 }
 
 // Where a journey is at time t (ms), for the playback dot.
@@ -1359,7 +1573,7 @@ function planCalibrate(c) {
   const draw = () => {
     const dots = (pts, svg) => { $(svg).innerHTML = pts.map((q, i) => `<circle cx="${q[0]}" cy="${q[1]}" r="0.018" class="cal-dot"/><text x="${q[0] + 0.025}" y="${q[1] - 0.02}" class="cal-num" font-size="0.05">${i + 1}</text>`).join(''); };
     dots(pic, 'cal-pic-svg'); dots(map, 'cal-map-svg');
-    const n = pic.length, done = map.length === 4;
+    const done = map.length === 4;
     $('cal-step').textContent = done ? 'All four spots are set. Check the numbers match, then save.' : `Spot ${Math.min(4, (pic.length === map.length ? pic.length : map.length) + 1)} of 4: click it on the ${pic.length === map.length ? 'camera picture' : 'plan'}.`;
     $('cal-save').disabled = !done;
   };
@@ -1375,6 +1589,164 @@ function planCalibrate(c) {
   $('cal-cancel').onclick = () => dlg.remove();
   $('cal-save').onclick = async () => { c.calib = {picture: pic, plan: map}; dlg.remove(); await planSave('Calibration saved'); renderPlanSide(); drawPlanSvg(); };
   draw();
+}
+
+// ======================================================================
+// Picking the plan's picture from a map (satellite view)
+// ======================================================================
+// A small map of our own (no library): tiles are loaded by *your browser*
+// directly from the imagery provider you choose, under that provider's
+// terms; GAZE's server never fetches imagery. Pan, zoom (mouse wheel) and
+// rotate until your property is lined up, then "Use this view" takes the
+// snapshot, adds the provider's credit, and sets the plan's scale from the
+// map's zoom.
+const MAP_SOURCES = {
+  esri: {name: 'Satellite — Esri World Imagery', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', max: 19, credit: 'Imagery © Esri, Maxar, Earthstar Geographics and the GIS User Community'},
+  osm: {name: 'Street map — OpenStreetMap', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', max: 19, credit: '© OpenStreetMap contributors'},
+  custom: {name: 'My own tile server…', url: '', max: 20, credit: 'Imagery: your source'},
+};
+const mapTiles = new Map();
+const mapProject = (lat, lng, z) => { const s = 256 * 2 ** z, sin = Math.sin(lat * Math.PI / 180); return [(lng + 180) / 360 * s, (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * s]; };
+const mapUnproject = (x, y, z) => { const s = 256 * 2 ** z, n = Math.PI - 2 * Math.PI * y / s; return [180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))), x / s * 360 - 180]; };
+// Metres on the ground that one pixel of the map covers at this zoom and latitude.
+const mapMetresPerPx = (lat, z) => 156543.03392804097 * Math.cos(lat * Math.PI / 180) / 2 ** z;
+
+function mapTile(src, z, x, y, onDone) {
+  const key = src.url + '|' + z + '/' + x + '/' + y;
+  let t = mapTiles.get(key);
+  if (t) return t;
+  t = {img: new Image(), ok: false, bad: false};
+  t.img.crossOrigin = 'anonymous';
+  if (!/^https?:\/\//i.test(src.url)) { t.bad = true; mapTiles.set(key, t); return t; }
+  t.img.onload = () => { t.ok = true; onDone && onDone(); };
+  t.img.onerror = () => { t.bad = true; onDone && onDone(); };
+  t.img.src = src.url.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+  mapTiles.set(key, t);
+  if (mapTiles.size > 700) { let n = 0; for (const k of mapTiles.keys()) { mapTiles.delete(k); if (++n > 250) break; } }
+  return t;
+}
+
+// Draw the map into a canvas of W×H pixels. `f` = canvas pixels per CSS pixel
+// (1 on screen, more for the snapshot). Returns how many tiles are still loading.
+function mapRender(ctx, W, H, f, st, src, onDone) {
+  const zt = Math.max(0, Math.min(src.max, Math.round(st.z + Math.log2(f))));
+  const k = f * 2 ** (st.z - zt);                       // canvas pixels per tile pixel
+  const [cx, cy] = mapProject(st.lat, st.lng, zt), rot = st.rot * Math.PI / 180, cos = Math.cos(rot), sin = Math.sin(rot);
+  ctx.save();
+  ctx.fillStyle = '#1b1f27'; ctx.fillRect(0, 0, W, H);
+  ctx.translate(W / 2, H / 2); ctx.rotate(rot); ctx.scale(k, k); ctx.translate(-cx, -cy);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [sx, sy] of [[-W / 2, -H / 2], [W / 2, -H / 2], [W / 2, H / 2], [-W / 2, H / 2]]) {
+    const ux = cx + (sx * cos + sy * sin) / k, uy = cy + (-sx * sin + sy * cos) / k;
+    x0 = Math.min(x0, ux); x1 = Math.max(x1, ux); y0 = Math.min(y0, uy); y1 = Math.max(y1, uy);
+  }
+  const n = 2 ** zt; let missing = 0;
+  for (let ty = Math.floor(y0 / 256); ty <= Math.floor(y1 / 256); ty++) {
+    if (ty < 0 || ty >= n) continue;
+    for (let tx = Math.floor(x0 / 256); tx <= Math.floor(x1 / 256); tx++) {
+      const t = mapTile(src, zt, ((tx % n) + n) % n, ty, onDone);
+      if (t.ok) ctx.drawImage(t.img, tx * 256, ty * 256, 256.7, 256.7); else if (!t.bad) missing++;
+    }
+  }
+  ctx.restore();
+  return missing;
+}
+
+function planMapPicker() {
+  const saved = store.get('plan-map', null) || {};
+  const ms = {lat: saved.lat ?? -41.2865, lng: saved.lng ?? 174.7762, z: saved.z ?? 17, rot: saved.rot ?? 0};
+  let srcKey = MAP_SOURCES[saved.src] ? saved.src : 'esri';
+  const custom = {url: saved.customUrl || '', credit: saved.customCredit || MAP_SOURCES.custom.credit};
+  const source = () => srcKey === 'custom' ? {...MAP_SOURCES.custom, url: custom.url, credit: custom.credit} : MAP_SOURCES[srcKey];
+  const dlg = document.createElement('div'); dlg.className = 'pl-modal';
+  dlg.innerHTML = `<div class="pl-modal-box map-box"><h2 style="margin-top:0">Pick your property on a map</h2>
+    <div class="map-bar"><input type="search" id="mp-q" placeholder="Search an address or place, or type latitude, longitude" style="flex:1;min-width:200px"><button type="button" class="small" id="mp-go">Search</button><button type="button" class="small" id="mp-here" title="Use this device’s location">◎ My location</button></div>
+    <div id="mp-results" class="map-results" hidden></div>
+    <div class="map-bar"><select id="mp-src" class="small">${Object.entries(MAP_SOURCES).map(([k, s]) => `<option value="${k}" ${k === srcKey ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      <span id="mp-custom" ${srcKey === 'custom' ? '' : 'hidden'} class="row" style="flex:1"><input type="text" id="mp-url" placeholder="https://…/{z}/{x}/{y}.png" value="${esc(custom.url)}" style="flex:2"><input type="text" id="mp-credit" placeholder="Credit line" value="${esc(custom.credit)}" style="flex:1"></span></div>
+    <div class="map-view" id="mp-view"><canvas id="mp-cv"></canvas><div class="map-tools"><button type="button" id="mp-zin" title="Zoom in (mouse wheel)">＋</button><button type="button" id="mp-zout" title="Zoom out">−</button><button type="button" id="mp-rl" title="Rotate left">⟲</button><button type="button" id="mp-rr" title="Rotate right">⟳</button><button type="button" id="mp-n" title="North up">N</button></div><div class="map-note" id="mp-note"></div><div class="map-grid" aria-hidden="true"></div></div>
+    <div class="map-bar"><label class="muted small">Rotate <input type="range" id="mp-rot" min="0" max="359" value="${Math.round(ms.rot)}" style="width:160px"></label><span class="muted small" id="mp-info"></span></div>
+    <p class="hint">Drag to move, mouse wheel to zoom, and rotate until the walls of your home line up with the edges (the grid helps). Zoom in until your property fills the view. Map pictures are loaded by your browser straight from the provider under <b>their</b> terms (the snapshot carries their credit); use it for your own property and check the terms before sharing. Searching sends what you type to OpenStreetMap’s search service.</p>
+    <div class="actions"><button type="button" class="primary" id="mp-use">Use this view as the plan</button><button type="button" id="mp-cancel" style="margin-left:auto">Cancel</button></div></div>`;
+  document.body.appendChild(dlg);
+  const cv = $('mp-cv'), view = $('mp-view');
+  let W = 0, H = 0, dpr = 1, drawing = 0;
+  const size = () => { W = Math.round(view.clientWidth); H = Math.round(view.clientHeight); dpr = Math.min(2, window.devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px'; };
+  const persist = () => store.set('plan-map', {...ms, src: srcKey, customUrl: custom.url, customCredit: custom.credit});
+  const redraw = () => {
+    if (drawing) return; drawing = requestAnimationFrame(() => {
+      drawing = 0; if (!dlg.isConnected) return;
+      const src = source(), left = src.url ? mapRender(cv.getContext('2d'), cv.width, cv.height, dpr, ms, src, redraw) : 0;
+      $('mp-note').textContent = !src.url ? 'Enter your tile address above.' : left ? 'Loading map…' : '';
+      const mw = W * mapMetresPerPx(ms.lat, ms.z);
+      $('mp-info').textContent = `${ms.lat.toFixed(5)}, ${ms.lng.toFixed(5)} · view is ${mw >= 1000 ? (mw / 1000).toFixed(2) + ' km' : Math.round(mw) + ' m'} wide`;
+    });
+  };
+  const clampZ = (z) => Math.max(2, Math.min(source().max + 1, z));
+  const toWorld = (dx, dy) => { const r = ms.rot * Math.PI / 180; return [dx * Math.cos(r) + dy * Math.sin(r), -dx * Math.sin(r) + dy * Math.cos(r)]; };
+  const zoomAt = (ox, oy, dz) => {
+    const z2 = clampZ(ms.z + dz); if (z2 === ms.z) return;
+    const [cx, cy] = mapProject(ms.lat, ms.lng, ms.z), [wx, wy] = toWorld(ox, oy), s = 2 ** (z2 - ms.z);
+    [ms.lat, ms.lng] = mapUnproject((cx + wx) * s - wx, (cy + wy) * s - wy, z2); ms.z = z2; redraw(); persist();
+  };
+  cv.onwheel = (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(); zoomAt(e.clientX - r.left - W / 2, e.clientY - r.top - H / 2, -e.deltaY * 0.0022); };
+  let drag = null;
+  cv.onpointerdown = (e) => { cv.setPointerCapture(e.pointerId); drag = {x: e.clientX, y: e.clientY}; cv.classList.add('panning'); };
+  cv.onpointermove = (e) => { if (!drag) return; const [wx, wy] = toWorld(e.clientX - drag.x, e.clientY - drag.y), [cx, cy] = mapProject(ms.lat, ms.lng, ms.z); [ms.lat, ms.lng] = mapUnproject(cx - wx, cy - wy, ms.z); drag = {x: e.clientX, y: e.clientY}; redraw(); };
+  cv.onpointerup = cv.onpointercancel = () => { drag = null; cv.classList.remove('panning'); persist(); };
+  const rot = (d) => { ms.rot = ((ms.rot + d) % 360 + 360) % 360; $('mp-rot').value = Math.round(ms.rot); redraw(); persist(); };
+  $('mp-zin').onclick = () => zoomAt(0, 0, 1); $('mp-zout').onclick = () => zoomAt(0, 0, -1);
+  $('mp-rl').onclick = () => rot(-15); $('mp-rr').onclick = () => rot(15); $('mp-n').onclick = () => { ms.rot = 0; $('mp-rot').value = 0; redraw(); persist(); };
+  $('mp-rot').oninput = () => { ms.rot = +$('mp-rot').value; redraw(); };
+  $('mp-rot').onchange = persist;
+  $('mp-src').onchange = () => { srcKey = val('mp-src'); $('mp-custom').hidden = srcKey !== 'custom'; ms.z = clampZ(ms.z); redraw(); persist(); };
+  $('mp-url').oninput = () => { custom.url = val('mp-url').trim(); redraw(); persist(); };
+  $('mp-credit').oninput = () => { custom.credit = val('mp-credit'); persist(); };
+  const jump = (lat, lng, z) => { ms.lat = lat; ms.lng = lng; ms.z = clampZ(z || 18); $('mp-results').hidden = true; redraw(); persist(); };
+  const search = async () => {
+    const q = val('mp-q').trim(); if (!q) return;
+    const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (m && Math.abs(+m[1]) <= 85 && Math.abs(+m[2]) <= 180) return jump(+m[1], +m[2], 18);
+    const box = $('mp-results'); box.hidden = false; box.textContent = 'Searching…';
+    try {
+      const res = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=' + encodeURIComponent(q), {headers: {'Accept': 'application/json'}});
+      const list = await res.json();
+      box.innerHTML = list.length ? list.map((r, i) => `<button type="button" data-i="${i}">${esc(r.display_name)}</button>`).join('') : '<span class="muted">Nothing found. Try a street and town, or type latitude, longitude.</span>';
+      box.querySelectorAll('button').forEach(b => b.onclick = () => { const r = list[+b.dataset.i]; jump(+r.lat, +r.lon, 18); });
+    } catch (e) { box.innerHTML = '<span class="errc">Search isn’t reachable from here. Type latitude, longitude instead, or drag the map.</span>'; }
+  };
+  $('mp-go').onclick = search; $('mp-q').onkeydown = (e) => { if (e.key === 'Enter') search(); };
+  $('mp-here').onclick = () => { if (!navigator.geolocation) return toast('This browser can’t tell where you are', true); navigator.geolocation.getCurrentPosition(p => jump(p.coords.latitude, p.coords.longitude, 18), () => toast('Couldn’t get your location (the browser needs permission, and a secure page)', true)); };
+  $('mp-cancel').onclick = () => { dlg.remove(); };
+  $('mp-use').onclick = async () => {
+    const src = source(), btn = $('mp-use');
+    if (!src.url || !/\{z\}/.test(src.url) || !/\{x\}/.test(src.url) || !/\{y\}/.test(src.url)) return toast('Enter a tile address with {z}, {x} and {y} in it', true);
+    if (!(await planReplaceOk())) return;
+    btn.disabled = true; btn.textContent = 'Taking the picture…';
+    try {
+      const f = Math.max(1, Math.min(3, 2400 / Math.max(W, H))), off = document.createElement('canvas');
+      off.width = Math.round(W * f); off.height = Math.round(H * f);
+      const octx = off.getContext('2d');
+      let left = 1;
+      for (let i = 0; i < 50 && left; i++) { left = mapRender(octx, off.width, off.height, f, ms, src, null); if (left) await new Promise(r => setTimeout(r, 300)); }
+      // The provider's credit goes on the picture itself.
+      octx.save(); octx.font = `${Math.round(11 * f)}px sans-serif`;
+      const tw = octx.measureText(src.credit).width + 12 * f, bh = 18 * f;
+      octx.fillStyle = 'rgba(0,0,0,.55)'; octx.fillRect(off.width - tw, off.height - bh, tw, bh);
+      octx.fillStyle = '#fff'; octx.textBaseline = 'middle'; octx.fillText(src.credit, off.width - tw + 6 * f, off.height - bh / 2); octx.restore();
+      let blob;
+      try { blob = await new Promise((res, rej) => off.toBlob(b => b ? res(b) : rej(new Error('empty')), 'image/jpeg', 0.9)); }
+      catch (e) { throw new Error('This imagery source doesn’t allow its pictures to be saved by a web page. Choose another source, or take a screenshot and use “From a file”.'); }
+      await planUploadBlob(blob);
+      planUI.plan = await api('api/plan');
+      planUI.plan.px_per_m = f / mapMetresPerPx(ms.lat, ms.z);        // the map's own scale
+      await planSave();
+      persist(); dlg.remove();
+      toast(`Plan picture set from the map (${Math.round(W * mapMetresPerPx(ms.lat, ms.z))} m wide, scale set)`); planUI.edit = true; planUI.tab = 'plan'; planUI.k = 1; planUI.tx = planUI.ty = 0; await showPlan();
+    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = 'Use this view as the plan'; }
+  };
+  size(); redraw();
+  new ResizeObserver(() => { if (!dlg.isConnected) return; size(); redraw(); }).observe(view);
 }
 
 // ======================================================================
@@ -9321,25 +9693,11 @@ $('um-btn').onclick = (e) => { e.stopPropagation(); $('um-ds').value = dsMode; $
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   const light = t === 'light' || (t === 'auto' && matchMedia('(prefers-color-scheme: light)').matches);
-  document.documentElement.dataset.mode = light ? 'light' : 'dark';
   const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = light ? '#ffffff' : '#14161c';
 }
 $('um-theme').value = store.get('theme', 'auto'); applyTheme($('um-theme').value);
 $('um-theme').onchange = () => { store.set('theme', val('um-theme')); applyTheme(val('um-theme')); };
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(store.get('theme', 'auto')));
-// Look on this device (static/skins.css): layout, shapes, type and colours.
-// Classic = no data-skin. Only changes how the page is drawn, never settings.
-const SKINS = [['classic', 'Classic · dark top bar'], ['rail', 'Rail · icon sidebar'], ['dock', 'Dock · floating bottom dock'], ['terminal', 'Terminal · green phosphor'],
-  ['hud', 'HUD · mission control'], ['paper', 'Paper · newspaper masthead'], ['brute', 'Brutal · loud blocks'], ['neon', 'Neon · synthwave, right rail'],
-  ['soft', 'Soft · clay sidebar'], ['aurora', 'Aurora · frosted glass'], ['swiss', 'Swiss · numbered grid']];
-function applySkin(k) {
-  if (!SKINS.some(x => x[0] === k)) k = 'classic';
-  if (k === 'classic') delete document.documentElement.dataset.skin; else document.documentElement.dataset.skin = k;
-  window.dispatchEvent(new Event('resize'));  // the page area changed shape: grids and timelines re-measure
-}
-$('um-skin').innerHTML = SKINS.map(([k, n]) => `<option value="${esc(k)}">${esc(n)}</option>`).join('');
-$('um-skin').value = store.get('skin', 'classic'); applySkin($('um-skin').value);
-$('um-skin').onchange = () => { store.set('skin', val('um-skin')); applySkin(val('um-skin')); };
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
 // Restart GAZE (anyone signed in): it's back in about half a minute; the
 // page waits for it and reloads.

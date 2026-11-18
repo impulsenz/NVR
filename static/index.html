@@ -12,13 +12,11 @@
 <meta name="apple-mobile-web-app-title" content="GAZE">
 <meta name="theme-color" content="#14161c">
 <script>
-// Day or night colours and the chosen look (👤 menu), before anything is drawn: no flash.
-(function () { var t = 'auto', k = 'classic', d = document.documentElement; try { t = JSON.parse(localStorage.getItem('nvr-theme')) || 'auto'; } catch (e) {} try { k = JSON.parse(localStorage.getItem('nvr-skin')) || 'classic'; } catch (e) {}
-  d.dataset.theme = t; d.dataset.mode = (t === 'light' || (t === 'auto' && matchMedia('(prefers-color-scheme: light)').matches)) ? 'light' : 'dark';
-  if (k !== 'classic') d.dataset.skin = k; })();
+// Day or night colours (👤 menu), before anything is drawn: no flash.
+(function () { var t = 'auto'; try { t = JSON.parse(localStorage.getItem('nvr-theme')) || 'auto'; } catch (e) {}
+  document.documentElement.dataset.theme = t; })();
 </script>
 <link rel="stylesheet" href="app.css">
-<link rel="stylesheet" href="skins.css">
 </head>
 <body>
 <header>
@@ -55,8 +53,6 @@
       <select id="um-ds"><option value="auto">Automatic (on for phones)</option><option value="on">Always on</option><option value="off">Off</option></select>
       <label class="small muted" style="display:block;margin:6px 0 2px">Colours on this device</label>
       <select id="um-theme"><option value="auto">Automatic (follow this device)</option><option value="light">☀️ Day (light)</option><option value="dark">🌙 Night (dark)</option></select>
-      <label class="small muted" style="display:block;margin:6px 0 2px">Look on this device</label>
-      <select id="um-skin" title="Layout, shapes and colours of this page: eleven looks, each with a day and a night version"></select>
       <button type="button" id="um-install" hidden title="Add GAZE to this device's home screen or Start menu, like an app">📲 Install GAZE as an app</button>
       <a class="btn" id="um-openapp" hidden title="GAZE is installed on this computer: open this page in the GAZE app">📲 Open in GAZE app</a>
       <button type="button" id="um-pass">Change password</button>

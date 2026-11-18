@@ -69,6 +69,8 @@ detect.rs handle_ai ──▶ tracks::observe (no-op unless switched on)
   on save; off by default). `plan.jpg` is the picture, re-encoded to JPEG by the
   page. Restricted accounts get only their cameras and the links between them
   (`restrict_plan`), and only walks on their cameras.
+* `plan.json` also holds **walls** (segments in plan fractions, `plan::Wall`, at most 1500). The page's `planSight` ray-casts each camera's view against them for drawing only; tracking and linking ignore walls.
+* The **map picker** (`planMapPicker` in `app.js`) draws slippy-map tiles from a provider onto a canvas in the browser (Web-Mercator maths, rotation), snapshots it with the credit line, and uploads it like any picture; `px_per_m` comes from the latitude and zoom. GAZE's server never fetches imagery.
 * The detector's only involvement is one call after each AI look. A busy or
   broken tracker drops data; it never delays recording, detection or alerts.
 
@@ -131,17 +133,7 @@ Settings), `app.css` 1,700 lines, `index.html`. 38 timers; one WebSocket for
 live JPEG, one per watched video stream. Theme tokens in `:root` and the
 light override (including the `--tl-*` timeline tokens).
 
-**Looks (skins)**: `static/skins.css` (served at `/skins.css`, versioned like
-`app.css`) holds ten alternative designs; with no `data-skin` on `<html>` it
-does nothing (that is Classic). The choice is per device (`localStorage`
-`nvr-skin`, 👤 menu → Look; `SKINS`/`applySkin` in `app.js`, early inline script
-in `index.html`). `data-mode="light|dark"` is the resolved day/night, set next
-to `data-theme`. Part 1 of the file defines each look's palette with the same
-token names as `app.css`; part 2 (CSS nesting inside `:where()`, specificity 0)
-does layout and decoration, so any class rule in `app.css` still wins. Layout
-changes sit in `(min-width: 761px)`: phones keep the tab bar. Timeline tokens
-are derived from the palette (`color-mix`) in one place. To add a look: palette
-for both modes, a nested block, an entry in `SKINS`.
+Only one design exists (the original); the 1.3.x "looks" (`skins.css`) were removed. Day / night is the only choice (`data-theme`, `um-theme`).
 
 ## Updates and installation (Windows)
 

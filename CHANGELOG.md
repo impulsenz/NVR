@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## Unreleased
+- **Floor plan: pick your property from a satellite map.** *Pick from a satellite map…* (Plan page) opens a map in the page: search an address (or type coordinates), zoom with the mouse wheel or buttons, drag, rotate, and take a snapshot as the plan picture. The scale (metres per pixel) is set from the map automatically. The imagery is loaded by your browser from a provider you choose (Esri, OpenStreetMap, or your own tile address); GAZE itself still downloads no maps. The address search sends the text typed to OpenStreetMap's Nominatim. The snapshot keeps the provider's credit line. **Not tested against the real providers yet** (only a local stand-in).
+- **Floor plan: walls.** Draw walls (and fences); each camera's drawn view now stops at them, and a gap is a door. Straight-line and corner-snap help; Ctrl+Z, erase, Esc to finish. Walls are saved in the plan (cleared if the picture changes shape). They only affect the drawn views, not what is tracked.
+- **Floor plan: zoom and pan.** Mouse wheel zooms at the pointer; drag to pan; buttons and pinch on touch screens; fit to window.
+- **Floor plan: a shorter sidebar.** Tabs (Plan / Cameras / Walls / People) instead of one tall column; the settings are grouped and fold away.
+- **Removed: the ten alternative "looks"** (Rail, Dock, Terminal, …). Only the original design remains; Day / Night colours stay. A saved look choice in a browser is simply ignored.
+
 ## 1.3.2 — November 2026
 - **Recordings: footage in deep storage now plays when you scrub through time.** The player that follows the timeline built its playlist only from files in the camera's own folder, so anything that had moved to deep storage gave an empty playlist: the players stayed black and nothing loaded (the footage was listed, and opening one recording at a time worked). It now finds the files in deep storage. This went back to long before 1.3.
 
