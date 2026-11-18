@@ -1144,10 +1144,29 @@ mod tests {
         // A stand-in for GAZE: a copy of `sleep` with its own name.
         let exe = dir.join("fakegaze");
         std::fs::copy("/bin/sleep", &exe).unwrap();
+        // Some systems' `sleep` is one program that picks what to do from its
+        // own name (uutils coreutils on newer Ubuntu): under another name it
+        // exits at once and can't stand in for GAZE. Then there's nothing to test.
+        let mut probe = std::process::Command::new(&exe).arg("5").stderr(std::process::Stdio::null()).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let alive = probe.try_wait().unwrap().is_none();
+        let _ = probe.kill();
+        let _ = probe.wait();
+        if !alive {
+            eprintln!("skipped: this system's sleep doesn't run under another name");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
         let cfg = Settings { gaze_exe: exe.to_string_lossy().to_string(), gaze_args: vec!["30".into()], launch: "program".into(), kill_timeout_s: 2, ..Default::default() };
         assert!(find_gaze(&cfg.gaze_exe).is_empty());
         start_gaze(&cfg).unwrap();
-        std::thread::sleep(Duration::from_millis(300));
+        // (A busy computer can take a moment to show the new process.)
+        for _ in 0..30 {
+            if find_gaze(&cfg.gaze_exe).len() == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
         assert_eq!(find_gaze(&cfg.gaze_exe).len(), 1);
         stop_gaze(&cfg);
         assert!(find_gaze(&cfg.gaze_exe).is_empty());
