@@ -1,0 +1,95 @@
+# Linux checks: tests, the page smoke test, the Docker image, and a release
+# build of the Linux program. Runs on pull requests, by hand, and on pushes
+# to any branch that touches the program (the release workflow still builds
+# the Windows program on the default branch).
+#
+# Nothing here publishes anything. (Attaching the Linux program to releases
+# is done in release.yml, once this has been green.)
+name: Linux
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "static/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "tools/e2e/**"
+      - "packaging/**"
+      - ".dockerignore"
+      - ".github/workflows/linux.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --locked
+
+  smoke:
+    # Every page and settings section, both themes (tools/e2e/smoke.js).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked
+      - name: Install Playwright
+        run: |
+          npm install --no-save --no-package-lock playwright
+          npx playwright install --with-deps chromium
+      - name: Smoke test
+        run: node tools/e2e/smoke.js
+
+  docker:
+    # The image builds and the program in it starts and answers.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: docker build -f packaging/Dockerfile -t gaze .
+      - name: Start it and ask
+        run: |
+          docker run -d --name gaze -p 8080:8080 gaze
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/auth/state; then echo; exit 0; fi
+            sleep 2
+          done
+          docker logs gaze
+          exit 1
+
+  binary:
+    # The Linux program, as it would be released.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        env:
+          GAZE_UPDATE_REPO: ${{ github.repository }}
+        run: cargo build --release --locked --bin nvr
+      - name: Package
+        run: |
+          mkdir dist
+          cp target/release/nvr dist/GAZE-linux-x86_64
+          cd dist
+          sha256sum GAZE-linux-x86_64 | cut -d' ' -f1 > GAZE-linux-x86_64.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: GAZE-linux-x86_64
+          path: dist/*
