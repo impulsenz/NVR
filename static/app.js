@@ -9738,6 +9738,7 @@ async function boot() {
   document.body.classList.add('role-' + me.role);
   $('user-menu').hidden = false;
   $('um-name').textContent = me.username;
+  $('um-restart').hidden = me.role !== 'admin';  // restarting stops recording: administrators only (the server checks too)
   $('um-role').textContent = {admin: 'Admin — full access', operator: 'Operator — watch, move cameras, manage alerts', viewer: 'Viewer — watch only'}[me.role] + (me.cameras.length ? ` · ${me.cameras.length} camera${me.cameras.length === 1 ? '' : 's'}` : '');
   if (!started) {
     started = true;
@@ -9779,7 +9780,7 @@ $('um-theme').value = store.get('theme', 'auto'); applyTheme($('um-theme').value
 $('um-theme').onchange = () => { store.set('theme', val('um-theme')); applyTheme(val('um-theme')); };
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(store.get('theme', 'auto')));
 $('um-ds').onchange = () => { setDataSaver(val('um-ds')); toast('Data saver: ' + $('um-ds').selectedOptions[0].textContent); };
-// Restart GAZE (anyone signed in): it's back in about half a minute; the
+// Restart GAZE (administrators): it's back in about half a minute; the
 // page waits for it and reloads.
 $('um-restart').onclick = async () => {
   $('um-pop').hidden = true;

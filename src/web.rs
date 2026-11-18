@@ -2696,7 +2696,7 @@ async fn serve_video(path: PathBuf, req: Request, download: Option<String>) -> R
     res
 }
 
-/// Restart GAZE (the user menu's "Restart GAZE"; anyone signed in).
+/// Restart GAZE (the user menu's "Restart GAZE"; administrators only: see `allowed`).
 async fn restart_server(user: Option<axum::Extension<CurrentUser>>) -> Response {
     let who = user.as_ref().map(|u| u.0.0.username.clone()).unwrap_or_else(|| "someone".into());
     tracing::warn!("GAZE restarting (asked for by {who})");
@@ -6356,7 +6356,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
     }
     // A browser telling how playing recordings went (logged), or asking
     // for footage behind the playhead to be read ahead: anyone.
-    if path == "/api/playback-report" || path == "/api/warm" || path == "/api/restart" {
+    if path == "/api/playback-report" || path == "/api/warm" {
         return true;
     }
     // Talking through a camera's speaker: not for viewers.
@@ -7051,9 +7051,10 @@ mod tests {
         let post = axum::http::Method::POST;
         assert!(allowed(Viewer, &post, "/api/sprites-ready"));
         assert!(!allowed(Viewer, &post, "/api/settings"));
-        // Anyone signed in may restart GAZE (the user menu).
-        assert!(allowed(Viewer, &post, "/api/restart"));
-        assert!(allowed(Operator, &post, "/api/restart"));
+        // Only an administrator may restart GAZE (recording stops while it does).
+        assert!(allowed(Admin, &post, "/api/restart"));
+        assert!(!allowed(Operator, &post, "/api/restart"));
+        assert!(!allowed(Viewer, &post, "/api/restart"));
         assert!(!allowed(Operator, &axum::http::Method::GET, "/api/cameras"));
         // Only administrators delete footage.
         let del = axum::http::Method::DELETE;
