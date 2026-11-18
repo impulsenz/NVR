@@ -1,6 +1,7 @@
 # What's new in GAZE
 
 ## Unreleased
+- **AI on Linux: OpenVINO and CUDA** (Settings → Object recognition → Graphics API). *Automatic* uses CUDA when an NVIDIA card with CUDA 12 and cuDNN 9 is installed, otherwise OpenVINO, which runs on Intel graphics, an Intel NPU, or just the processor (faster than GAZE's built-in engine). The add-on downloads by itself the first time (OpenVINO about 85 MB, CUDA about 250 MB), is checked against a pinned SHA-256 and kept in `nvr-data/runtime/`. Changing it takes a restart. Windows keeps DirectML. Tested: OpenVINO on a processor (same answers as the built-in engine for detection, faces and plates). **Not tested on real hardware: CUDA, Intel graphics, NPU.** If an accelerator can't run a model, that model uses the processor and Settings → Tasks says why.
 - **Email notifications** (Settings → Notifications → Email): every notification (alert picture, summary, camera and drive warnings) can also go by email through any SMTP server (STARTTLS, TLS or a plain relay on your network), to one or more addresses, with the picture attached. Works with or without ntfy. The password is kept in the settings file and never sent back to the page. Existing settings files are unchanged (email is off by default).
 - **Sturdier internals** (no visible change): a fault in one part of GAZE can no longer lock up other parts through a poisoned lock (`src/sync.rs`); a test now fails if a new camera-specific web address is added without an access decision.
 

@@ -31,6 +31,10 @@ recordings ─▶ hls.rs (playlists from MP4 files) / vstore.rs (block reader fo
 Recording never reads `ai`, `detect` or `infer` (checked). AI failure degrades
 alerts only.
 
+## AI placement (`infer.rs`)
+
+Models run on an accelerator through ONNX Runtime (`Accel`: DirectML on Windows; CUDA or OpenVINO on Linux x86-64; setting `ai.accelerator`, `ai.openvino_device`) or on the processor with tract. One runtime library per process, so changing accelerator needs a restart. Linux runtimes come from PyPI wheels pinned by URL and SHA-256 (`OPENVINO_WHEEL`, `CUDA_WHEEL`), unpacked to `nvr-data/runtime/`. A model the accelerator can't run falls back to tract; recording never depends on any of this.
+
 ## Storage tiers
 
 ```
