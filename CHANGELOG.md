@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.3.2 — November 2026
 - **Recordings: footage in deep storage now plays when you scrub through time.** The player that follows the timeline built its playlist only from files in the camera's own folder, so anything that had moved to deep storage gave an empty playlist: the players stayed black and nothing loaded (the footage was listed, and opening one recording at a time worked). It now finds the files in deep storage. This went back to long before 1.3.
 
 ## 1.3.1 — November 2026
