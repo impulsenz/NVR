@@ -972,6 +972,9 @@ impl Detector {
         let dets = match res {
             Ok(d) => {
                 self.status.locked().ai_error = None;
+                // Following people on the floor plan (tracks.rs): hands over what
+                // was found and nothing more; a no-op unless it is switched on.
+                crate::tracks::observe(&self.cam.id, Local::now().timestamp_millis(), &frame, &d);
                 d
             }
             Err(e) => {

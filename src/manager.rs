@@ -402,6 +402,9 @@ pub struct Manager {
     pub known: crate::known::KnownStore,
     /// Learned states (garage door open / closed …), see states.rs.
     pub states: crate::states::StateStore,
+    /// The floor plan and its settings (plan.rs), and the walks followed on it (tracks.rs).
+    pub plan: crate::plan::PlanStore,
+    pub tracks: crate::tracks::Store,
     /// Cameras the daily network scan found that aren't added yet.
     pub new_cameras: Mutex<Vec<crate::discover::Found>>,
     pub monitor: Arc<Monitor>,
@@ -422,6 +425,7 @@ impl Manager {
 
     pub fn new(cfg_path: PathBuf, data_dir: PathBuf, config: Config) -> Arc<Self> {
         crate::infer::set_use_gpu(config.ai.device != "cpu");
+        crate::tracks::set_tuning(crate::plan::PlanStore::open(&data_dir).tuning());
         crate::infer::set_accelerator(&config.ai.accelerator, &config.ai.openvino_device);
         crate::picturelog::configure(&config.storage);
         crate::load::set_balance(config.hardware.balance);
@@ -446,6 +450,8 @@ impl Manager {
             recog: crate::recog::Recog::new(&data_dir_c),
             known: crate::known::KnownStore::open(&data_dir_c),
             states: crate::states::StateStore::open(&data_dir_c),
+            plan: crate::plan::PlanStore::open(&data_dir_c),
+            tracks: crate::tracks::Store::open(&data_dir_c),
             users: {
                 let u = crate::users::Users::open(&data_dir_c);
                 u.migrate_legacy(&config.server.username, &config.server.password);

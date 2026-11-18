@@ -121,6 +121,11 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
         .route("/api/cameras/{id}/heatmap", get(camera_heatmap))
+        .route("/api/plan", get(plan_get).put(plan_put))
+        .route("/api/plan/image", get(plan_image).post(plan_image_set).delete(plan_image_delete).layer(axum::extract::DefaultBodyLimit::max(crate::plan::MAX_IMAGE_BYTES + 1024)))
+        .route("/api/plan/journeys", get(plan_journeys))
+        .route("/api/plan/live", get(plan_live))
+        .route("/api/plan/tracks", axum::routing::delete(plan_tracks_delete))
         .route("/api/smart", get(smart_get))
         .route("/api/smart/scan", post(smart_scan))
         .route("/api/states", get(states_list).post(states_create))
@@ -730,6 +735,108 @@ async fn known_create(State(m): App, Json(r): Json<KnownReq>) -> Response {
         Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
         Err(e) => bad(e),
     }
+}
+
+// ---------- floor plan (plan.rs, tracks.rs) ----------
+
+/// The plan as an account may see it: only its cameras, and the links between them.
+fn plan_for(m: &Manager, user: &Option<axum::Extension<CurrentUser>>) -> crate::plan::Plan {
+    let mut p = m.plan.get();
+    if let Some(v) = visible(user) {
+        p.cameras.retain(|c| v.contains(&c.id));
+        p.links.retain(|l| v.contains(&l.a) && v.contains(&l.b));
+    }
+    p
+}
+
+async fn plan_get(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let mut v = serde_json::to_value(plan_for(&m, &user)).unwrap_or_default();
+    v["following"] = json!(crate::tracks::enabled());
+    Json(v).into_response()
+}
+
+async fn plan_put(State(m): App, Json(p): Json<crate::plan::Plan>) -> Response {
+    let was = m.plan.tuning();
+    match m.plan.update(p) {
+        Ok(new) => {
+            crate::tracks::set_tuning(new.tuning.clone());
+            if !new.tuning.enabled || new.tuning != was {
+                // Walks in progress were followed under other settings.
+                crate::tracks::reset();
+            }
+            Json(json!({"ok": true})).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+async fn plan_image(State(m): App, req: Request) -> Response {
+    match m.plan.image_path() {
+        Some(p) => serve_file(p, req, None, false).await,
+        None => err(StatusCode::NOT_FOUND, "no plan picture yet"),
+    }
+}
+
+async fn plan_image_set(State(m): App, body: Bytes) -> Response {
+    match m.plan.set_image(&body) {
+        Ok(p) => Json(json!({"ok": true, "width": p.image_w, "height": p.image_h})).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn plan_image_delete(State(m): App) -> Response {
+    match m.plan.remove_image() {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct JourneyQuery {
+    /// Look back this many hours (1 to 720, default 24).
+    hours: Option<u32>,
+}
+
+/// Journeys of the last hours, joined across cameras, with the numbers.
+async fn plan_journeys(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<JourneyQuery>) -> Response {
+    let plan = plan_for(&m, &user);
+    let hours = q.hours.unwrap_or(24).clamp(1, 720) as i64;
+    let now = Local::now().timestamp_millis();
+    let m2 = m.clone();
+    let vis = visible(&user);
+    let res = tokio::task::spawn_blocking(move || {
+        let mut tracks = m2.tracks.read(now - hours * 3_600_000, now + 60_000);
+        if let Some(v) = &vis {
+            tracks.retain(|t| v.contains(&t.cam));
+        }
+        let journeys = crate::tracks::link(&tracks, &plan);
+        let stats = crate::tracks::stats(&journeys, &tracks);
+        (journeys, stats)
+    })
+    .await;
+    match res {
+        Ok((journeys, stats)) => Json(json!({"following": crate::tracks::enabled(), "journeys": journeys, "stats": stats})).into_response(),
+        Err(e) => bad(anyhow::anyhow!("{e}")),
+    }
+}
+
+/// Where people are right now (walks still going), on the plan where the camera is calibrated.
+async fn plan_live(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let plan = plan_for(&m, &user);
+    let now = Local::now().timestamp_millis();
+    let people: Vec<_> = crate::tracks::live(now)
+        .into_iter()
+        .filter(|(cam, _, _, _)| plan.camera(cam).is_some())
+        .map(|(cam, id, label, p)| json!({"cam": cam, "id": id, "label": label, "t": p.t(), "plan": crate::tracks::on_plan(&plan, &cam, &p), "picture": [p.1, p.2]}))
+        .collect();
+    Json(json!({"following": crate::tracks::enabled(), "people": people})).into_response()
+}
+
+async fn plan_tracks_delete(State(m): App) -> Response {
+    let m2 = m.clone();
+    let n = tokio::task::spawn_blocking(move || m2.tracks.delete_all()).await.unwrap_or(0);
+    crate::tracks::reset();
+    Json(json!({"ok": true, "deleted_days": n})).into_response()
 }
 
 // ---------- where alerts happened (heatmap.rs) ----------
