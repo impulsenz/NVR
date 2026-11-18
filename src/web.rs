@@ -120,6 +120,10 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         )
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
+        .route("/api/states", get(states_list).post(states_create))
+        .route("/api/states/{id}", put(states_update).delete(states_delete))
+        .route("/api/states/{id}/examples", post(states_add_example))
+        .route("/api/states/{id}/examples/{thumb}", get(states_example).delete(states_remove_example))
         .route("/api/known-inbox", get(inbox_list))
         .route("/api/known-seen", get(known_seen))
         .route("/api/faces", get(all_faces))
@@ -721,6 +725,131 @@ async fn known_create(State(m): App, Json(r): Json<KnownReq>) -> Response {
     {
         Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
         Err(e) => bad(e),
+    }
+}
+
+// ---------- learned states (states.rs) ----------
+
+#[derive(Deserialize)]
+struct StateReq {
+    #[serde(default)]
+    camera: String,
+    name: String,
+    #[serde(default)]
+    region: Option<[f32; 4]>,
+    #[serde(default = "state_interval")]
+    interval_secs: u32,
+    #[serde(default)]
+    notify: bool,
+    #[serde(default)]
+    labels: Vec<String>,
+}
+
+fn state_interval() -> u32 {
+    10
+}
+
+/// The state, if the account may see its camera.
+fn state_for(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, id: &str) -> Result<crate::states::State, Response> {
+    let Some(s) = m.states.get(id) else {
+        return Err(err(StatusCode::NOT_FOUND, "no such state"));
+    };
+    if visible(user).is_some_and(|v| !v.contains(&s.camera)) {
+        return Err(err(StatusCode::FORBIDDEN, "your account can't see this camera"));
+    }
+    Ok(s)
+}
+
+async fn states_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let vis = visible(&user);
+    let list: Vec<_> = m.states.all().into_iter().filter(|s| vis.as_ref().is_none_or(|v| v.contains(&s.camera))).map(|s| m.states.info(&s)).collect();
+    Json(list).into_response()
+}
+
+async fn states_create(State(m): App, Json(r): Json<StateReq>) -> Response {
+    if m.camera(&r.camera).is_none() {
+        return err(StatusCode::NOT_FOUND, "camera not found");
+    }
+    match m.states.create(&r.camera, &r.name, r.region, r.interval_secs, r.notify, &r.labels) {
+        Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn states_update(State(m): App, Path(id): Path<String>, Json(r): Json<StateReq>) -> Response {
+    match m.states.update(&id, &r.name, r.region, r.interval_secs, r.notify) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn states_delete(State(m): App, Path(id): Path<String>) -> Response {
+    match m.states.delete(&id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ExampleReq {
+    label: String,
+}
+
+/// Take the camera's picture now as an example of a state.
+async fn states_add_example(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Json(r): Json<ExampleReq>) -> Response {
+    let s = match state_for(&m, &user, &id) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let Some(rt) = m.camera(&s.camera) else {
+        return err(StatusCode::NOT_FOUND, "camera not found");
+    };
+    let models = m.data_dir.join("models");
+    if !crate::clip::ready(&models) {
+        // The picture model (420 MB) is fetched once, in the background.
+        let dir = models.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::clip::model(&dir).await {
+                tracing::warn!("learned states: {e:#}");
+            }
+        });
+        return err(StatusCode::SERVICE_UNAVAILABLE, "Downloading the picture model (420 MB) the first time. Try again in a few minutes (Settings → Tasks shows the progress).");
+    }
+    let clip = match crate::clip::model(&models).await {
+        Ok(c) => c,
+        Err(e) => return bad(e),
+    };
+    let frame = match crate::states::current_frame(&m, &rt).await {
+        Ok(f) => f,
+        Err(e) => return bad(e),
+    };
+    let piece = crate::states::piece(&s, &frame);
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<f32>, Vec<u8>)> { Ok((clip.region(&piece)?, piece.fit(240).jpeg(80)?)) }).await;
+    let (v, jpg) = match out {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return bad(e),
+        Err(e) => return bad(anyhow::anyhow!("{e}")),
+    };
+    match m.states.add_example(&id, &r.label, &v, &jpg) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn states_remove_example(State(m): App, Path((id, thumb)): Path<(String, String)>) -> Response {
+    match m.states.remove_example(&id, &thumb) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+async fn states_example(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, thumb)): Path<(String, String)>, req: Request) -> Response {
+    if let Err(e) = state_for(&m, &user, &id) {
+        return e;
+    }
+    match m.states.example_path(&id, &thumb) {
+        Some(p) => serve_file(p, req, None, false).await,
+        None => err(StatusCode::NOT_FOUND, "not found"),
     }
 }
 
@@ -6500,6 +6629,9 @@ mod tests {
             "/api/known/{id}/photo",
             "/api/known/{id}/photo/{name}",
             "/api/preview/{token}",               // admin-only (setup preview)
+            "/api/states/{id}",                   // writes: admin only (`allowed`)
+            "/api/states/{id}/examples",          // handler: state_for() = visible() on the camera
+            "/api/states/{id}/examples/{thumb}",  // handler: state_for() (read); delete: admin only
             "/api/tts/downloads/{id}",            // admin-only
             "/api/users/{name}",                  // admin-only
             "/api/users/{name}/two-step-off",     // admin-only

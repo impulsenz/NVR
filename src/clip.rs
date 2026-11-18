@@ -197,6 +197,26 @@ impl Clip {
         Ok(unit(out.into_iter().next().context("no output")?))
     }
 
+    /// A picture's meaning with the whole picture squeezed to a square (no
+    /// edges cut off, as `picture` does): for learned states, where the
+    /// piece of the scene that matters can be anywhere in the picture.
+    pub fn region(&self, f: &crate::imgutil::Frame) -> Result<Vec<f32>> {
+        const MEAN: [f32; 3] = [0.481_454_66, 0.457_827_5, 0.408_210_73];
+        const STD: [f32; 3] = [0.268_629_54, 0.261_302_58, 0.275_777_1];
+        let r = f.resize(SIZE as u32, SIZE as u32);
+        let mut data = vec![0f32; 3 * SIZE * SIZE];
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let p = (y * SIZE + x) * 3;
+                for c in 0..3 {
+                    data[c * SIZE * SIZE + y * SIZE + x] = (r.rgb[p + c] as f32 / 255.0 - MEAN[c]) / STD[c];
+                }
+            }
+        }
+        let out = self.vision.run(crate::infer::Input::f32(&[1, 3, SIZE, SIZE], data))?;
+        Ok(unit(out.into_iter().next().context("no output")?))
+    }
+
     /// Words' meaning (512 numbers, length 1).
     pub fn words(&self, text: &str) -> Result<Vec<f32>> {
         let ids = self.bpe.encode(text);

@@ -400,6 +400,8 @@ pub struct Manager {
     pub recog: Arc<crate::recog::Recog>,
     /// Known people and vehicles.
     pub known: crate::known::KnownStore,
+    /// Learned states (garage door open / closed …), see states.rs.
+    pub states: crate::states::StateStore,
     /// Cameras the daily network scan found that aren't added yet.
     pub new_cameras: Mutex<Vec<crate::discover::Found>>,
     pub monitor: Arc<Monitor>,
@@ -443,6 +445,7 @@ impl Manager {
             new_cameras: Mutex::new(Vec::new()),
             recog: crate::recog::Recog::new(&data_dir_c),
             known: crate::known::KnownStore::open(&data_dir_c),
+            states: crate::states::StateStore::open(&data_dir_c),
             users: {
                 let u = crate::users::Users::open(&data_dir_c);
                 u.migrate_legacy(&config.server.username, &config.server.password);

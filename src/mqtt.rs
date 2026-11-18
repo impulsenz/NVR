@@ -158,6 +158,12 @@ async fn publish_state(mgr: &Arc<Manager>, client: &AsyncClient, p: &str, sent: 
             let on = st.as_ref().is_some_and(|s| s.event_active) && labels.iter().any(|l| l == o);
             put(client, sent, format!("{p}/{id}/{}", slug(o)), onoff(on)).await;
         }
+        // Learned states (garage door: open / closed …).
+        for st in mgr.states.all().into_iter().filter(|st| st.camera == rt.cfg.id) {
+            if let Some(l) = mgr.states.current(&st.id).label {
+                put(client, sent, format!("{p}/{id}/state/{}", slug(&st.name)), l).await;
+            }
+        }
         // New alerts: their details and picture.
         for e in rt.events.between(now - chrono::Duration::minutes(2), now) {
             if e.labels.is_empty() && !e.motion {
@@ -195,6 +201,7 @@ async fn discovery(mgr: &Arc<Manager>, client: &AsyncClient, p: &str) {
     let avail = json!([{"topic": format!("{p}/available")}]);
     let gaze_dev = json!({"identifiers": [format!("{p}_nvr")], "name": cfg.server.name, "manufacturer": "GAZE", "model": "NVR", "sw_version": env!("CARGO_PKG_VERSION")});
     let msg = |topic: String, v: serde_json::Value| (topic, v.to_string());
+    let states = mgr.states.all();
     let mut out = vec![msg(
         format!("homeassistant/select/{p}_mode/config"),
         json!({"name": "Mode", "unique_id": format!("{p}_mode"), "state_topic": format!("{p}/mode"), "command_topic": format!("{p}/mode/set"),
@@ -210,6 +217,12 @@ async fn discovery(mgr: &Arc<Manager>, client: &AsyncClient, p: &str) {
             json!({"name": "Online", "unique_id": uid("online"), "state_topic": format!("{p}/{id}/online"), "device_class": "connectivity", "entity_category": "diagnostic", "availability": avail, "device": dev})));
         out.push(msg(format!("homeassistant/image/{}/config", uid("snapshot")),
             json!({"name": "Last alert", "unique_id": uid("snapshot"), "image_topic": format!("{p}/{id}/snapshot"), "content_type": "image/jpeg", "availability": avail, "device": dev})));
+        for st in states.iter().filter(|st| st.camera == c.id) {
+            let k = format!("state_{}", slug(&st.name));
+            out.push(msg(format!("homeassistant/sensor/{}/config", uid(&k)),
+                json!({"name": st.name, "unique_id": uid(&k), "state_topic": format!("{p}/{id}/state/{}", slug(&st.name)),
+                       "icon": "mdi:eye-check", "availability": avail, "device": dev})));
+        }
         out.push(msg(format!("homeassistant/event/{}/config", uid("alert")),
             json!({"name": "Alert", "unique_id": uid("alert"), "state_topic": format!("{p}/{id}/event"), "event_types": ["alert"],
                    "availability": avail, "device": dev})));

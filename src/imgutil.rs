@@ -25,6 +25,22 @@ impl Frame {
         }
     }
 
+    /// A piece of the picture; `x, y, w, h` are fractions (0..1) of it.
+    pub fn crop(&self, x: f32, y: f32, w: f32, h: f32) -> Frame {
+        let fw = self.width as f32;
+        let fh = self.height as f32;
+        let x0 = ((x.clamp(0.0, 1.0) * fw) as u32).min(self.width.saturating_sub(8));
+        let y0 = ((y.clamp(0.0, 1.0) * fh) as u32).min(self.height.saturating_sub(8));
+        let cw = ((w.clamp(0.0, 1.0) * fw) as u32).clamp(8.min(self.width), self.width - x0);
+        let ch = ((h.clamp(0.0, 1.0) * fh) as u32).clamp(8.min(self.height), self.height - y0);
+        let mut out = Vec::with_capacity((cw * ch * 3) as usize);
+        for row in y0..y0 + ch {
+            let start = ((row * self.width + x0) * 3) as usize;
+            out.extend_from_slice(&self.rgb[start..start + (cw * 3) as usize]);
+        }
+        Frame { width: cw, height: ch, rgb: Arc::new(out) }
+    }
+
     /// Scale down so the longest side is at most `max` pixels.
     pub fn fit(&self, max: u32) -> Frame {
         let long = self.width.max(self.height);

@@ -55,4 +55,5 @@ another. Defaults were not re-evaluated one by one (not done).
 | Live view and display | `LiveConfig`, `DisplayConfig`, `OsdConfig`, `ViewConfig`, `DashboardConfig` | page (`app.js`) and `live.rs` |
 | Modes | `ModesConfig` | `notify.rs`, `manager.rs::privacy_watch` |
 | Notifications (ntfy + email), MQTT, webhooks, voice, siren | `NotifyConfig` (`.email`: `EmailConfig`), `MqttConfig`, `Webhook`, `TtsConfig` | `notify.rs` (`send`: both channels), `mail.rs`, `mqtt.rs`, `hooks.rs`, `tts.rs`, `siren.rs` |
+| Learned states (not in `nvr.toml`: their own data file `states.json`) | `states::State` | `states.rs`, `web.rs` (`/api/states`), `mqtt.rs` |
 | Watchdog | `settings.toml` | `watchdog/main.rs`; written by `watchdog_ctl.rs` |

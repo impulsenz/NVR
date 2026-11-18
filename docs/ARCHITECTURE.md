@@ -35,6 +35,10 @@ alerts only.
 
 Models run on an accelerator through ONNX Runtime (`Accel`: DirectML on Windows; CUDA or OpenVINO on Linux x86-64; setting `ai.accelerator`, `ai.openvino_device`) or on the processor with tract. One runtime library per process, so changing accelerator needs a restart. Linux runtimes come from PyPI wheels pinned by URL and SHA-256 (`OPENVINO_WHEEL`, `CUDA_WHEEL`), unpacked to `nvr-data/runtime/`. A model the accelerator can't run falls back to tract; recording never depends on any of this.
 
+## Learned states (`states.rs`)
+
+A state ("garage door": open / closed) is a camera, an optional area, and labelled examples, each stored as CLIP numbers (`Clip::region`, the picture squeezed to a square so nothing is cut off). A background loop (idle until a state has two labels with examples) takes the detector's latest frame (or a fresh grab), crops the area and scores it against each label (mean of the closest three examples, `classify`); a change needs two agreeing looks (`Debounce`). The result goes to the page, MQTT (`<prefix>/<camera>/state/<name>` plus a Home Assistant sensor) and, if set, `notify::send`. Recording, detection and alerts never read it.
+
 ## Storage tiers
 
 ```
@@ -63,6 +67,7 @@ deep storage <archive dir>/<camera folder>/*.mp4     archive::retention (days, G
 | Time-lapse previews | `.thumbs/` beside each camera folder |
 | Users, sessions, tokens | `users.rs` (Argon2), files in `nvr-data/` |
 | Cases | `nvr-data/cases/cases.json` + files |
+| Learned states | `nvr-data/states.json` (CLIP numbers per example) + `nvr-data/states/<id>/` example pictures (`states.rs`) |
 | Watchdog | `nvr-data/watchdog/{settings.toml,status.json,commands/,watchdog.log}` |
 | Global runtime state | 72 `static` Mutex/LazyLock/OnceLock (jobs, snooze, cloud/archive status, registries …); locked through `sync.rs` (`.locked()`, `.reader()`, `.writer()`), which ignores poisoning |
 

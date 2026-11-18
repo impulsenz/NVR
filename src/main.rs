@@ -56,6 +56,7 @@ mod remote;
 mod rtmp;
 mod seen;
 mod stationary;
+mod states;
 mod storage;
 mod sync;
 mod sysmon;
@@ -456,6 +457,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(notify::run(mgr.clone()));
     tokio::spawn(health::run(mgr.clone()));
     tokio::spawn(mqtt::run(mgr.clone()));
+    tokio::spawn(states::run(mgr.clone()));
     tokio::spawn(hooks::run(mgr.clone()));
     tokio::spawn(onvif_events::run(mgr.clone()));
     piper::init(&mgr.data_dir);

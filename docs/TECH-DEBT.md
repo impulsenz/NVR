@@ -18,6 +18,7 @@ the entry when it is fixed.** Source of the first entries: `AUDIT-2026-11.md`
 | L-4 | L | Legacy migration fields `ZoneConfig.watch_items`, `DetectConfig.package_area` | `config.rs` | Remove with L-3 | L-3 |
 | L-5 | L | Two NAS concepts (Backup = copy, Deep storage = move) with similar pages | `static/app.js` | Clearer names/intro text; maybe merge pages | — |
 | A-1 | M | CUDA, Intel graphics and NPU paths are untested on real hardware (OpenVINO on a CPU is tested: `NVR_TEST_MODELS=… GAZE_TEST_ACCEL=openvino cargo test onnx_runtime_matches_tract`). The CUDA wheel is not unpacked-size checked; accelerator choice can't change without a restart | `infer.rs` | Run the test with `GAZE_TEST_ACCEL=cuda` / `GAZE_TEST_OV_DEVICE=GPU` on such machines | hardware |
+| ST-1 | L | Learned states: `states.json` and its pictures aren't in Export / import setup; the Home Assistant sensor for a state made after MQTT connected appears at the next reconnect; no "from an alert picture" way to add examples | `states.rs`, `mqtt.rs`, `backup` | Add to export; republish discovery when states change | — |
 | S5 | M | `GET /api/snooze`: confirm constant-time signature check | `notify::snooze_ok` | Read and test | — |
 | S8 | M | Sign-in lockout: per user only? | `users.rs` | Check; add per-address limit | — |
 | X-1 | M | Not audited: `onvif_device.rs` input handling, `remote.rs` trust model, checksum pinning of ffmpeg/go2rtc/voice downloads, power-cut test of recording repair | — | Targeted review | — |
