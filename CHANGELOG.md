@@ -1,6 +1,7 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Email notifications** (Settings → Notifications → Email): every notification (alert picture, summary, camera and drive warnings) can also go by email through any SMTP server (STARTTLS, TLS or a plain relay on your network), to one or more addresses, with the picture attached. Works with or without ntfy. The password is kept in the settings file and never sent back to the page. Existing settings files are unchanged (email is off by default).
 - **Sturdier internals** (no visible change): a fault in one part of GAZE can no longer lock up other parts through a poisoned lock (`src/sync.rs`); a test now fails if a new camera-specific web address is added without an access decision.
 
 ## 1.1.11 — November 2026

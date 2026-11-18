@@ -40,7 +40,7 @@ pub async fn run(mgr: Arc<Manager>) {
         tokio::time::sleep(Duration::from_secs(30)).await;
         let cfg = mgr.config();
         let n = &cfg.notify;
-        let on = n.enabled && n.health && !n.topic.trim().is_empty();
+        let on = n.enabled && n.health && n.delivers();
         let now = Instant::now();
         let mut out: Vec<Message> = Vec::new();
         for rt in mgr.cameras() {

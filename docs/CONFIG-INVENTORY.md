@@ -54,5 +54,5 @@ another. Defaults were not re-evaluated one by one (not done).
 | AI | `AiConfig`, per camera `DetectConfig` | `ai.rs`, `infer.rs`, `detect.rs` |
 | Live view and display | `LiveConfig`, `DisplayConfig`, `OsdConfig`, `ViewConfig`, `DashboardConfig` | page (`app.js`) and `live.rs` |
 | Modes | `ModesConfig` | `notify.rs`, `manager.rs::privacy_watch` |
-| Notifications, MQTT, webhooks, voice, siren | `NotifyConfig`, `MqttConfig`, `Webhook`, `TtsConfig` | `notify.rs`, `mqtt.rs`, `hooks.rs`, `tts.rs`, `siren.rs` |
+| Notifications (ntfy + email), MQTT, webhooks, voice, siren | `NotifyConfig` (`.email`: `EmailConfig`), `MqttConfig`, `Webhook`, `TtsConfig` | `notify.rs` (`send`: both channels), `mail.rs`, `mqtt.rs`, `hooks.rs`, `tts.rs`, `siren.rs` |
 | Watchdog | `settings.toml` | `watchdog/main.rs`; written by `watchdog_ctl.rs` |

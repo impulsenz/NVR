@@ -868,6 +868,13 @@ impl Manager {
             if n.token.is_empty() {
                 n.token = old.notify.token.clone();
             }
+            if n.email.password.is_empty() {
+                n.email.password = old.notify.email.password.clone();
+            }
+            if !["starttls", "tls", "none"].contains(&n.email.security.as_str()) {
+                anyhow::bail!("email security must be starttls, tls or none");
+            }
+            n.email.host = n.email.host.trim().to_string();
             cfg.notify = n;
         }
         if let Some(mut r) = up.remotes {

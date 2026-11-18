@@ -9413,6 +9413,7 @@ function renderSmartHome(body) {
 
 async function renderNotify(body) {
   const n = settings.notify, st = await api('api/notify/status').catch(() => ({}));
+  const em = n.email || {enabled: false, host: '', port: 587, security: 'starttls', username: '', from: '', to: ''};
   const sub = () => `${(val('n-server') || 'https://ntfy.sh').replace(/\/$/, '')}/${val('n-topic')}`;
   body.innerHTML = `<div class="card"><h2>Phone notifications</h2>
     <p class="muted" style="margin-top:0">GAZE sends the alert picture to your phone as soon as it sees someone, then a short summary of what happened. It uses <b>ntfy</b>, a free notification app (Android and iPhone).</p>
@@ -9439,6 +9440,17 @@ async function renderNotify(body) {
       <label for="n-link">Open GAZE at${tip('The address your phone uses to open GAZE when you tap a notification. Empty works on your home Wi-Fi. For away from home, use a remote-access address, e.g. your computer’s Tailscale name.')}</label><div><input type="text" id="n-link" value="${esc(n.link)}" placeholder="https://my-pc.tail1234.ts.net">
         <div class="hint">Tapping a notification opens that alert here. Empty: your home network address.</div></div>
     </div></div>
+    <div class="card"><h2>Email${tip('The same notifications by email, through any SMTP server: your internet provider, Gmail or Outlook with an app password, or a mail server on your network. Works with or without the phone app.')}</h2>
+      <p class="muted" style="margin-top:0">Every notification (alert picture, summary, camera warnings) can also arrive by email, with the picture attached.</p>
+      <div class="form">
+        <span></span><div><label class="check"><input type="checkbox" id="m-on" ${em.enabled ? 'checked' : ''}> Send notifications by email</label></div>
+        <label for="m-host">Mail server</label><div class="row"><input type="text" id="m-host" value="${esc(em.host)}" placeholder="smtp.gmail.com" style="flex:1"><input type="number" id="m-port" min="1" max="65535" value="${em.port}" style="width:90px"></div>
+        <label for="m-sec">Security${tip('Most servers use STARTTLS on port 587, or TLS on port 465. Choose None only for a mail relay on your own network: the password would travel unprotected.')}</label><div><select id="m-sec">${[['starttls', 'STARTTLS (usually port 587)'], ['tls', 'TLS (usually port 465)'], ['none', 'None (relay on my own network)']].map(([k, t]) => `<option value="${k}" ${em.security === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+        <label for="m-user">User name</label><div><input type="text" id="m-user" value="${esc(em.username)}" autocomplete="off" placeholder="Empty if the server needs no login"></div>
+        <label for="m-pass">Password${tip('For Gmail and Outlook use an app password, not your normal one. It is kept in GAZE\u2019s settings file and never shown again.')}</label><div><input type="password" id="m-pass" autocomplete="new-password" placeholder="${em.has_password ? 'Saved – leave empty to keep' : ''}"></div>
+        <label for="m-from">From</label><div><input type="text" id="m-from" value="${esc(em.from)}" placeholder="Empty: the user name"></div>
+        <label for="m-to">Send to${tip('One or more addresses, separated by commas.')}</label><div><input type="text" id="m-to" value="${esc(em.to)}" placeholder="me@example.com, partner@example.com"></div>
+      </div></div>
     <div class="card"><div class="actions" style="margin:0"><button type="button" class="primary" id="n-save">Save</button><button type="button" id="n-test">Send a test</button>
       <span class="muted" style="margin-left:auto">${st.sent ? `${st.sent} sent since GAZE started${st.last_sent ? ', last ' + fmtDate(st.last_sent) : ''}` : ''}${st.last_error ? ` <span class="errc">· ${esc(st.last_error)}</span>` : ''}</span></div></div>`;
   // Home / Away / Night: which cameras notify in each.
@@ -9474,11 +9486,12 @@ async function renderNotify(body) {
     return {enabled: chk('n-on'), server: val('n-server').trim() || 'https://ntfy.sh', topic: val('n-topic').trim(), token: val('n-token'),
       objects: [...body.querySelectorAll('.n-obj:checked')].map(c => c.value), cameras: picked.length === cams.length ? [] : picked,
       gap_minutes: Math.max(0, num('n-gap') | 0), night_from: val('n-nfrom') || '22:00', night_to: val('n-nto') || '06:00',
-      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), health: chk('n-health'), link: val('n-link').trim()};
+      night_gap_minutes: Math.max(0, num('n-ngap') | 0), summary: chk('n-sum'), health: chk('n-health'), link: val('n-link').trim(),
+      email: {enabled: chk('m-on'), host: val('m-host').trim(), port: Math.round(num('m-port')) || 587, security: val('m-sec'), username: val('m-user').trim(), password: val('m-pass'), from: val('m-from').trim(), to: val('m-to').trim()}};
   };
   $('n-save').onclick = async () => {
     const f = form();
-    if (f.enabled && !f.topic) return toast('Choose a topic first', true);
+    if (f.enabled && !f.topic && !(f.email.enabled && f.email.host && f.email.to)) return toast('Choose a topic or set up email first', true);
     if (await saveSettings({notify: f}, 'Notifications saved')) renderNotify(body);
   };
   $('n-test').onclick = async () => {

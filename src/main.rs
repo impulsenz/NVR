@@ -36,6 +36,7 @@ mod load;
 mod logs;
 mod manager;
 mod mp4fix;
+mod mail;
 mod mqtt;
 mod notify;
 mod onvif;

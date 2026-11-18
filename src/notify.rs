@@ -129,11 +129,25 @@ pub fn snooze_ok(data_dir: &std::path::Path, camera: &str, minutes: i64, exp: i6
     exp > Local::now().timestamp() && want.len() == sig.len() && want.bytes().zip(sig.bytes()).fold(0, |a, (x, y)| a | (x ^ y)) == 0
 }
 
-/// Send one notification.
+/// Send one notification: to the ntfy topic and/or by email. One channel
+/// failing never stops the other; the error names whichever failed.
 pub async fn send(cfg: &NotifyConfig, m: Message<'_>) -> Result<()> {
-    if cfg.topic.trim().is_empty() {
-        bail!("choose a topic first");
+    let ntfy = !cfg.topic.trim().is_empty();
+    let email = cfg.email.ready();
+    if !ntfy && !email {
+        bail!("choose a topic or set up email first");
     }
+    let mut errors = Vec::new();
+    if ntfy && let Err(e) = send_ntfy(cfg, &m).await {
+        errors.push(format!("{e:#}"));
+    }
+    if email && let Err(e) = crate::mail::send(&cfg.email, &m).await {
+        errors.push(format!("email: {e:#}"));
+    }
+    if errors.is_empty() { Ok(()) } else { bail!("{}", errors.join("; ")) }
+}
+
+async fn send_ntfy(cfg: &NotifyConfig, m: &Message<'_>) -> Result<()> {
     let url = format!(
         "{}/{}",
         cfg.server.trim().trim_end_matches('/'),
@@ -156,13 +170,13 @@ pub async fn send(cfg: &NotifyConfig, m: Message<'_>) -> Result<()> {
     if !cfg.token.trim().is_empty() {
         req = req.header("Authorization", format!("Bearer {}", cfg.token.trim()));
     }
-    req = match m.picture {
+    req = match &m.picture {
         // With a picture the text goes in a header; the picture is the body.
         Some(p) => req
             .header("Message", header(&m.body))
             .header("Filename", "alert.jpg")
-            .body(p),
-        None => req.body(m.body),
+            .body(p.clone()),
+        None => req.body(m.body.clone()),
     };
     let resp = req
         .send()
@@ -569,7 +583,7 @@ pub async fn run(mgr: Arc<Manager>) {
         if n.retry_after.is_some_and(|t| t > std::time::Instant::now()) {
             continue;
         }
-        if cfg.notify.enabled && !cfg.notify.topic.trim().is_empty() {
+        if cfg.notify.enabled && cfg.notify.delivers() {
             n.round(&mgr).await;
         }
     }

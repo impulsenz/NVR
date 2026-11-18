@@ -600,6 +600,7 @@ async fn download_logs(req: Request) -> Response {
 async fn get_settings(State(m): App) -> Response {
     let mut cfg = m.config();
     let has_token = !cfg.notify.token.is_empty();
+    let has_email_password = !cfg.notify.email.password.is_empty();
     let has_cloud_password = !cfg.cloud.password.is_empty();
     let has_archive_password = !cfg.storage.archive.password.is_empty();
     cfg.storage.archive.password.clear();
@@ -610,9 +611,11 @@ async fn get_settings(State(m): App) -> Response {
     cfg.mqtt.password.clear();
     cfg.server.password.clear();
     cfg.notify.token.clear();
+    cfg.notify.email.password.clear();
     cfg.cloud.password.clear();
     let mut v = serde_json::to_value(&cfg).unwrap();
     v["notify"]["has_token"] = json!(has_token);
+    v["notify"]["email"]["has_password"] = json!(has_email_password);
     v["cloud"]["has_password"] = json!(has_cloud_password);
     v["storage"]["archive"]["has_password"] = json!(has_archive_password);
     v["mqtt"]["has_password"] = json!(has_mqtt_password);
@@ -4144,6 +4147,9 @@ async fn notify_test(State(m): App, Json(mut n): Json<crate::config::NotifyConfi
     let saved = m.config().notify;
     if n.token.is_empty() {
         n.token = saved.token;
+    }
+    if n.email.password.is_empty() {
+        n.email.password = saved.email.password;
     }
     let newest = m
         .cameras()

@@ -701,6 +701,59 @@ pub struct NotifyConfig {
     /// Also tell when a camera goes offline or stops recording, and when
     /// the recordings drive is nearly full.
     pub health: bool,
+    /// Also send every notification by email (works with or without ntfy).
+    pub email: EmailConfig,
+}
+
+impl NotifyConfig {
+    /// Is there somewhere to send to: an ntfy topic or an email address?
+    pub fn delivers(&self) -> bool {
+        !self.topic.trim().is_empty() || self.email.ready()
+    }
+}
+
+/// Notifications by email, through any SMTP server (your provider's, Gmail
+/// with an app password, or a mail relay on your network).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EmailConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    /// "starttls" (usually port 587), "tls" (usually 465) or "none" (a relay
+    /// on your own network; the password is then sent unprotected).
+    pub security: String,
+    pub username: String,
+    /// Kept in the settings file like the ntfy token; the page never gets it back.
+    pub password: String,
+    /// Sender address; empty = the user name.
+    pub from: String,
+    /// Recipients, separated by commas.
+    pub to: String,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: String::new(),
+            port: 587,
+            security: "starttls".into(),
+            username: String::new(),
+            password: String::new(),
+            from: String::new(),
+            to: String::new(),
+        }
+    }
+}
+
+impl EmailConfig {
+    pub fn recipients(&self) -> Vec<String> {
+        self.to.split([',', ';']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    }
+    pub fn ready(&self) -> bool {
+        self.enabled && !self.host.trim().is_empty() && !self.recipients().is_empty()
+    }
 }
 
 impl Default for NotifyConfig {
@@ -724,6 +777,7 @@ impl Default for NotifyConfig {
             summary: true,
             link: String::new(),
             health: true,
+            email: EmailConfig::default(),
         }
     }
 }

@@ -75,7 +75,7 @@ ETag, 304 (`pack`, `static_text`).
 
 ## Background workers (`tokio::spawn` in `main.rs`)
 
-housekeeping (retention), system monitor, cloud backup, **archive mover**,
+notifications (ntfy push and email, `notify.rs` + `mail.rs`), housekeeping (retention), system monitor, cloud backup, **archive mover**,
 watchdog sync, prebuilt time-lapse, finalize, discovery, identify, talk mixing,
 notifications, health, MQTT, hooks, ONVIF events, voices, sound detection,
 CLIP indexing, PTZ auto, RTMP restream, updates. Each has its own backoff;
