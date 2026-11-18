@@ -30,7 +30,7 @@ pub const MAX_EXAMPLES: usize = 20;
 const MIN_SCORE: f32 = 0.5;
 /// How much closer the best label must be than the runner-up. CLIP pictures
 /// of the same scene are all very similar, so this is small.
-const MIN_MARGIN: f32 = 0.004;
+const MIN_MARGIN: f32 = 0.01;
 /// Readings in a row that must agree before the state changes.
 const CONFIRM: u8 = 2;
 
