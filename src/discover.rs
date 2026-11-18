@@ -4,6 +4,7 @@
 //!
 //! A scan also runs once a day; cameras not seen before are reported.
 
+use crate::sync::MutexExt;
 use crate::manager::Manager;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -281,7 +282,7 @@ pub async fn daily(mgr: Arc<Manager>) {
                 warn!(target: "event", "New camera found on the network: {}{}", f.ip, if what.is_empty() { String::new() } else { format!(" ({what})") });
             }
         }
-        *mgr.new_cameras.lock().unwrap() = found
+        *mgr.new_cameras.locked() = found
             .iter()
             .filter(|f| !f.added)
             .filter(|&f| new.iter().any(|n| n.ip == f.ip) || !seen.contains(&f.ip))

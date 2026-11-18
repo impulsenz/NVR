@@ -2,6 +2,7 @@
 //! of the user's own (e.g. from Tailscale), or one GAZE makes for this
 //! computer's name and addresses (browsers warn about that one once).
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -77,13 +78,13 @@ pub struct Status {
 static STATUS: std::sync::Mutex<Option<Status>> = std::sync::Mutex::new(None);
 
 pub fn status() -> Status {
-    STATUS.lock().unwrap().clone().unwrap_or_default()
+    STATUS.locked().clone().unwrap_or_default()
 }
 
 /// Serve the web interface over https on `port` until GAZE stops.
 pub async fn serve(mgr: Arc<crate::manager::Manager>, bind: String, port: u16) {
     let cfg = mgr.config().server;
-    let set = |s: Status| *STATUS.lock().unwrap() = Some(s);
+    let set = |s: Status| *STATUS.locked() = Some(s);
     let (cert, key, source) = match certificate(&mgr.data_dir, &cfg) {
         Ok(x) => x,
         Err(e) => {

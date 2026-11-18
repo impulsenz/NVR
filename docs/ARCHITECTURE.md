@@ -60,7 +60,7 @@ deep storage <archive dir>/<camera folder>/*.mp4     archive::retention (days, G
 | Users, sessions, tokens | `users.rs` (Argon2), files in `nvr-data/` |
 | Cases | `nvr-data/cases/cases.json` + files |
 | Watchdog | `nvr-data/watchdog/{settings.toml,status.json,commands/,watchdog.log}` |
-| Global runtime state | 72 `static` Mutex/LazyLock/OnceLock (jobs, snooze, cloud/archive status, registries …) |
+| Global runtime state | 72 `static` Mutex/LazyLock/OnceLock (jobs, snooze, cloud/archive status, registries …); locked through `sync.rs` (`.locked()`, `.reader()`, `.writer()`), which ignores poisoning |
 
 ## Web layer (`src/web.rs`, 6,500 lines)
 

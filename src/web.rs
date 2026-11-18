@@ -1,5 +1,6 @@
 //! HTTP interface: the web UI, JSON API, live video and file playback.
 
+use crate::sync::MutexExt;
 use crate::config::{CameraConfig, Config, DashboardConfig, mask_url};
 use crate::ffmpeg;
 use crate::library::{self, Query as LibQuery};
@@ -462,7 +463,7 @@ async fn status(
         "safe_mode": Config::safe_mode(),
         "has_remotes": !cfg.remotes.is_empty(),
         "safe_mode_good_copy": Config::safe_mode().is_some() && m.cfg_path.with_extension("toml.good").is_file(),
-        "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.lock().unwrap().len() } else { 0 },
+        "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.locked().len() } else { 0 },
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
     }))
@@ -692,7 +693,7 @@ struct DiscoverReq {
 async fn discover_now(State(m): App, body: Option<Json<DiscoverReq>>) -> Response {
     let extra = crate::discover::parse_networks(&body.map(|b| b.0).unwrap_or_default().networks);
     let found = crate::discover::scan(&m, &extra).await;
-    *m.new_cameras.lock().unwrap() = found.iter().filter(|f| !f.added).cloned().collect();
+    *m.new_cameras.locked() = found.iter().filter(|f| !f.added).cloned().collect();
     Json(found).into_response()
 }
 
@@ -1873,7 +1874,7 @@ async fn start_preview(State(m): App, Json(req): Json<StreamReq>) -> Response {
         Local::now().timestamp_nanos_opt().unwrap_or(0),
         std::process::id()
     );
-    m.previews.lock().unwrap().insert(
+    m.previews.locked().insert(
         token.clone(),
         (
             req.url.trim().to_string(),
@@ -1886,7 +1887,7 @@ async fn start_preview(State(m): App, Json(req): Json<StreamReq>) -> Response {
 
 /// Live MJPEG of a preview stream (ends when the browser disconnects).
 async fn preview_stream(State(m): App, Path(token): Path<String>) -> Response {
-    let Some((url, transport, _)) = m.previews.lock().unwrap().get(&token).cloned() else {
+    let Some((url, transport, _)) = m.previews.locked().get(&token).cloned() else {
         return err(StatusCode::NOT_FOUND, "preview expired");
     };
     let ffmpeg = m.config().server.ffmpeg_path;
@@ -2061,7 +2062,7 @@ async fn grab_frame(
 }
 
 async fn cloud_status() -> Response {
-    Json(crate::cloud::STATUS.lock().unwrap().clone()).into_response()
+    Json(crate::cloud::STATUS.locked().clone()).into_response()
 }
 
 async fn cloud_remotes(Json(c): Json<crate::config::CloudConfig>) -> Response {
@@ -2485,7 +2486,7 @@ async fn slow_requests(req: Request, next: Next) -> Response {
         // (Kinds: "/media/x/rec", "/api/hls", "/api/timeline" …)
         let kind: String = path.split('/').filter(|x| !x.is_empty()).enumerate().filter(|(i, x)| *i == 0 || (*i == 1 && *x != "media") || (*i == 2 && path.starts_with("/media"))).map(|(_, x)| x).collect::<Vec<_>>().join("/");
         static LAST: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Instant>>> = std::sync::LazyLock::new(Default::default);
-        let mut l = LAST.lock().unwrap();
+        let mut l = LAST.locked();
         if l.get(&kind).is_none_or(|x| x.elapsed() > Duration::from_secs(10)) {
             l.insert(kind, Instant::now());
             tracing::warn!("slow to answer: {path} took {:.1} s (the disk or network drive may be busy)", took.as_secs_f64());
@@ -2621,14 +2622,14 @@ fn percent_decode(s: &str) -> String {
 /// minutes: walking the folders takes a moment).
 async fn usage_kinds(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
     static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<library::SpaceUse>)>> = std::sync::Mutex::new(None);
-    let cached = CACHE.lock().unwrap().as_ref().filter(|(t, _)| t.elapsed() < Duration::from_secs(180)).map(|(_, v)| v.clone());
+    let cached = CACHE.locked().as_ref().filter(|(t, _)| t.elapsed() < Duration::from_secs(180)).map(|(_, v)| v.clone());
     let list = match cached {
         Some(v) => v,
         None => {
             let v = tokio::task::spawn_blocking(move || m.cameras().iter().map(|c| library::space_use(c)).collect::<Vec<_>>())
                 .await
                 .unwrap_or_default();
-            *CACHE.lock().unwrap() = Some((std::time::Instant::now(), v.clone()));
+            *CACHE.locked() = Some((std::time::Instant::now(), v.clone()));
             v
         }
     };
@@ -2937,7 +2938,7 @@ async fn cases_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -
     static TRIED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::LazyLock::new(Default::default);
     for c in &list {
         for i in c.items.iter().filter(|i| i.picture.is_none() && i.video.is_some()) {
-            if !TRIED.lock().unwrap().insert(i.id.clone()) {
+            if !TRIED.locked().insert(i.id.clone()) {
                 continue;
             }
             let (cid, iid, v, title) = (c.id.clone(), i.id.clone(), i.video.clone().unwrap_or_default(), i.title.clone());
@@ -4179,7 +4180,7 @@ async fn notify_test(State(m): App, Json(mut n): Json<crate::config::NotifyConfi
 }
 
 async fn notify_status() -> Response {
-    Json(crate::notify::STATUS.lock().unwrap().clone()).into_response()
+    Json(crate::notify::STATUS.locked().clone()).into_response()
 }
 
 // ---------- System → Tasks ----------
@@ -4507,7 +4508,7 @@ async fn sprites_ready(
         let mut out = serde_json::Map::new();
         let mut todo = Vec::new();
         {
-            let seen = SEEN.lock().unwrap();
+            let seen = SEEN.locked();
             for (kind, name) in files {
                 match seen.get(&key(&kind, &name)) {
                     Some((t, Some(v))) if t.elapsed() < Duration::from_secs(600) => {
@@ -4535,7 +4536,7 @@ async fn sprites_ready(
                 .collect();
             hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
         });
-        let mut seen = SEEN.lock().unwrap();
+        let mut seen = SEEN.locked();
         if seen.len() > 50_000 {
             seen.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(600));
         }
@@ -5356,7 +5357,7 @@ async fn describe_search(State(m): App, user: Option<axum::Extension<CurrentUser
             "closest": closest,
             "hits": hits.iter().map(|(c, id, s)| json!({"camera": c, "id": id, "score": s})).collect::<Vec<_>>(),
             "looked": looked,
-            "waiting": crate::clip::STATUS.lock().unwrap().waiting,
+            "waiting": crate::clip::STATUS.locked().waiting,
         }))
         .into_response(),
         Err(e) => bad(e),
@@ -5364,7 +5365,7 @@ async fn describe_search(State(m): App, user: Option<axum::Extension<CurrentUser
 }
 
 async fn describe_status(State(m): App) -> Response {
-    let mut s = serde_json::to_value(crate::clip::STATUS.lock().unwrap().clone()).unwrap_or_default();
+    let mut s = serde_json::to_value(crate::clip::STATUS.locked().clone()).unwrap_or_default();
     s["on"] = json!(m.config().ai.search);
     Json(s).into_response()
 }
@@ -5372,7 +5373,7 @@ async fn describe_status(State(m): App) -> Response {
 /// What can be listened for, and what each camera is hearing now.
 async fn sound_status() -> Response {
     let kinds: Vec<_> = crate::sound::KINDS.iter().map(|k| json!({"id": k.0, "name": k.1})).collect();
-    let status = crate::sound::STATUS.lock().unwrap().clone();
+    let status = crate::sound::STATUS.locked().clone();
     Json(json!({ "kinds": kinds, "cameras": status })).into_response()
 }
 
@@ -5650,7 +5651,7 @@ async fn say(
     // messages while someone talks or the siren sounds (up to 2 minutes).
     let line = {
         static LINES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = std::sync::LazyLock::new(Default::default);
-        LINES.lock().unwrap().entry(cam.id.clone()).or_default().clone()
+        LINES.locked().entry(cam.id.clone()).or_default().clone()
     };
     let _turn = line.lock().await;
     let url = if cam.talk_url.trim().is_empty() { cam.url.clone() } else { cam.talk_url.trim().to_string() };
@@ -6468,6 +6469,57 @@ mod tests {
         }
         assert_eq!(camera_in_path("/api/status"), None);
         assert_eq!(camera_in_path("/api/cases/c1/items"), None);
+    }
+
+    /// Every route with a path parameter is either covered by the central
+    /// camera check (`camera_in_path`) or has been reviewed by a person and is
+    /// listed here. A new parameterised route fails this test until someone
+    /// decides which it is (see docs/SECURITY-CHECKLIST.md): that is the point.
+    #[test]
+    fn parameterised_routes_are_covered_or_reviewed() {
+        // Reviewed: the handler checks `visible(&user)` itself, or the route
+        // does not carry camera data.
+        const REVIEWED: &[&str] = &[
+            "/api/archive/{id}",                  // handler: visible()
+            "/api/archive/{id}/{name}",           // handler: visible()
+            "/api/auth/tokens/{id}",              // the caller's own token
+            "/api/cases/{id}",                    // cases: restricted accounts see only their cameras' items
+            "/api/cases/{id}/export",
+            "/api/cases/{id}/files/{name}",
+            "/api/cases/{id}/items",
+            "/api/cases/{id}/items/{item}",
+            "/api/known/{id}",                    // people and vehicles, not camera data
+            "/api/known/{id}/learn",
+            "/api/known/{id}/photo",
+            "/api/known/{id}/photo/{name}",
+            "/api/preview/{token}",               // admin-only (setup preview)
+            "/api/tts/downloads/{id}",            // admin-only
+            "/api/users/{name}",                  // admin-only
+            "/api/users/{name}/two-step-off",     // admin-only
+            "/remote/{i}/{cam}/frame.jpg",        // handler refuses restricted accounts
+            "/remote/{i}/{cam}/stream.mjpeg",     // handler refuses restricted accounts
+        ];
+        let src = include_str!("web.rs");
+        let mut seen = 0;
+        for chunk in src.split(".route(").skip(1) {
+            let Some(path) = chunk.split('"').nth(1) else { continue };
+            if !path.contains('{') || !path.starts_with('/') {
+                continue;
+            }
+            seen += 1;
+            let mut sample = String::new();
+            let mut rest = path;
+            while let Some(a) = rest.find('{') {
+                sample.push_str(&rest[..a]);
+                sample.push_str("x");
+                rest = &rest[rest.find('}').unwrap() + 1..];
+            }
+            sample.push_str(rest);
+            let covered = camera_in_path(&sample).is_some();
+            let reviewed = REVIEWED.contains(&path);
+            assert!(covered || reviewed, "route {path} takes a parameter but is neither covered by camera_in_path nor reviewed");
+        }
+        assert!(seen > 20, "the route scan found only {seen} routes: has the source layout changed?");
     }
 
     #[test]

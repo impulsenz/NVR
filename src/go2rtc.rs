@@ -14,6 +14,7 @@
 //!
 //! The FFmpeg pipeline is untouched and stays the default.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,11 +38,11 @@ pub fn healthy() -> bool {
 }
 
 pub fn status() -> String {
-    STATUS.lock().unwrap().clone()
+    STATUS.locked().clone()
 }
 
 fn set_status(s: impl Into<String>) {
-    *STATUS.lock().unwrap() = s.into();
+    *STATUS.locked() = s.into();
 }
 
 /// The name of one camera stream in go2rtc.

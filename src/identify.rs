@@ -2,6 +2,7 @@
 //! picture of its best moment, and name the people and vehicles GAZE has
 //! been taught (Settings > People & vehicles).
 
+use crate::sync::MutexExt;
 use crate::events::{Event, EventStore, FaceSeen, SeenBox};
 use crate::imgutil::Frame;
 use crate::manager::{CameraRuntime, Manager};
@@ -640,7 +641,7 @@ pub async fn run(mgr: Arc<Manager>) {
                             warn!("faces & plates: {msg}");
                             last_err = msg.clone();
                         }
-                        *mgr.recog.error.lock().unwrap() = Some(msg.clone());
+                        *mgr.recog.error.locked() = Some(msg.clone());
                         // Don't try the same alert forever.
                         job.problem(&msg);
                         let mut done = e;

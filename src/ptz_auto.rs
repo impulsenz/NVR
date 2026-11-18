@@ -7,6 +7,7 @@
 //!   back (first roam preset, or the camera's home position).
 //! While the camera moves itself, its movement isn't counted as motion.
 
+use crate::sync::MutexExt;
 use crate::manager::Manager;
 use crate::onvif::Target;
 use std::collections::HashMap;
@@ -19,7 +20,7 @@ const HANDS_OFF: Duration = Duration::from_secs(120);
 static MANUAL: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
 
 pub fn manual(camera: &str) {
-    MANUAL.lock().unwrap().insert(camera.to_string(), Instant::now());
+    MANUAL.locked().insert(camera.to_string(), Instant::now());
 }
 
 /// The camera is moving by itself (roaming, following) or has only just
@@ -29,17 +30,17 @@ static SETTLE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default
 const SETTLE_AFTER: Duration = Duration::from_millis(1500);
 
 pub fn settling(camera: &str) -> bool {
-    SETTLE.lock().unwrap().get(camera).is_some_and(|t| Instant::now() < *t)
+    SETTLE.locked().get(camera).is_some_and(|t| Instant::now() < *t)
 }
 
 fn settle_until(camera: &str, t: Instant) {
-    SETTLE.lock().unwrap().insert(camera.to_string(), t);
+    SETTLE.locked().insert(camera.to_string(), t);
 }
 
 /// The roaming / tracking settings were changed: start afresh, now.
 pub fn reset(camera: &str) {
-    MANUAL.lock().unwrap().remove(camera);
-    RESET.lock().unwrap().push(camera.to_string());
+    MANUAL.locked().remove(camera);
+    RESET.locked().push(camera.to_string());
 }
 static RESET: LazyLock<Mutex<Vec<String>>> = LazyLock::new(Default::default);
 
@@ -70,7 +71,7 @@ pub async fn run(mgr: Arc<Manager>) {
     let mut states: HashMap<String, State> = HashMap::new();
     loop {
         tokio::time::sleep(Duration::from_millis(400)).await;
-        for c in std::mem::take(&mut *RESET.lock().unwrap()) {
+        for c in std::mem::take(&mut *RESET.locked()) {
             states.remove(&c);
         }
         let cfg = mgr.config();
@@ -78,7 +79,7 @@ pub async fn run(mgr: Arc<Manager>) {
             let st = states.entry(cam.id.clone()).or_default();
             let p = &cam.ptz;
             let stay = Duration::from_secs(p.patrol_seconds as u64);
-            if MANUAL.lock().unwrap().get(&cam.id).is_some_and(|t| t.elapsed() < HANDS_OFF) {
+            if MANUAL.locked().get(&cam.id).is_some_and(|t| t.elapsed() < HANDS_OFF) {
                 st.next_at = Some(Instant::now() + stay);
                 st.moving_since = None;
                 continue;

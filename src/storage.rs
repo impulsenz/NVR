@@ -6,6 +6,7 @@
 //!   `.buffer/`                        pre-event buffer (short-lived)
 //!   `.thumbs/`                        cached previews
 
+use crate::sync::MutexExt;
 use crate::config::Config;
 use crate::events::EventStore;
 use anyhow::{Result, bail};
@@ -53,7 +54,7 @@ pub fn list(dir: &Path) -> Vec<Recording> {
     type Cache = HashMap<PathBuf, (std::time::Instant, std::sync::Arc<Vec<Recording>>)>;
     static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
     {
-        let mut c = CACHE.lock().unwrap();
+        let mut c = CACHE.locked();
         let map = c.get_or_insert_with(HashMap::new);
         if FORGET.swap(false, std::sync::atomic::Ordering::Relaxed) {
             map.clear();
@@ -65,7 +66,7 @@ pub fn list(dir: &Path) -> Vec<Recording> {
         }
     }
     let v = list_now(dir);
-    let mut c = CACHE.lock().unwrap();
+    let mut c = CACHE.locked();
     let map = c.get_or_insert_with(HashMap::new);
     map.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(60));
     map.insert(dir.to_path_buf(), (std::time::Instant::now(), std::sync::Arc::new(v.clone())));
@@ -79,7 +80,7 @@ pub fn names_in(dir: &Path) -> std::sync::Arc<std::collections::HashSet<String>>
     use std::sync::{Arc, Mutex};
     type Cache = HashMap<PathBuf, (std::time::Instant, Arc<HashSet<String>>)>;
     static CACHE: std::sync::LazyLock<Mutex<Cache>> = std::sync::LazyLock::new(Default::default);
-    if let Some((t, v)) = CACHE.lock().unwrap().get(dir)
+    if let Some((t, v)) = CACHE.locked().get(dir)
         && t.elapsed() < std::time::Duration::from_secs(5)
     {
         return v.clone();
@@ -89,7 +90,7 @@ pub fn names_in(dir: &Path) -> std::sync::Arc<std::collections::HashSet<String>>
             .map(|rd| rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect())
             .unwrap_or_default(),
     );
-    let mut c = CACHE.lock().unwrap();
+    let mut c = CACHE.locked();
     c.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(60));
     c.insert(dir.to_path_buf(), (std::time::Instant::now(), v.clone()));
     v
@@ -154,7 +155,7 @@ pub fn parse_start(name: &str) -> Option<DateTime<Local>> {
 static ARCHIVES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, PathBuf>>> = std::sync::LazyLock::new(Default::default);
 
 pub fn set_archive(local: &Path, deep: Option<PathBuf>) {
-    let mut m = ARCHIVES.lock().unwrap();
+    let mut m = ARCHIVES.locked();
     match deep {
         Some(d) => {
             m.insert(local.to_path_buf(), d);
@@ -167,7 +168,7 @@ pub fn set_archive(local: &Path, deep: Option<PathBuf>) {
 
 /// The deep storage folder of a camera's local folder, if it has one.
 pub fn archive_of(local: &Path) -> Option<PathBuf> {
-    ARCHIVES.lock().unwrap().get(local).cloned()
+    ARCHIVES.locked().get(local).cloned()
 }
 
 /// The recordings that moved to deep storage (newest first).
@@ -538,13 +539,13 @@ fn pruned(dir: &Path) {
         Some("timeline" | "events") => dir.parent().unwrap_or(dir),
         _ => dir,
     };
-    PRUNED.lock().unwrap().insert(cam.to_path_buf(), std::time::Instant::now());
+    PRUNED.locked().insert(cam.to_path_buf(), std::time::Instant::now());
 }
 
 /// Is this camera's oldest footage being deleted to make room (in the last
 /// few minutes)?
 pub fn pruning(camera_dir: &Path) -> bool {
-    PRUNED.lock().unwrap().get(camera_dir).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(300))
+    PRUNED.locked().get(camera_dir).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(300))
 }
 
 fn gb(x: f64) -> u64 {
@@ -688,7 +689,7 @@ mod tests {
 static UNREACHABLE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 pub fn unreachable() -> Vec<String> {
-    UNREACHABLE.lock().unwrap().clone()
+    UNREACHABLE.locked().clone()
 }
 
 pub async fn watch_roots(m: std::sync::Arc<crate::manager::Manager>) {
@@ -713,7 +714,7 @@ pub async fn watch_roots(m: std::sync::Arc<crate::manager::Manager>) {
         })
         .await
         .unwrap_or_default();
-        let was = std::mem::replace(&mut *UNREACHABLE.lock().unwrap(), bad.clone());
+        let was = std::mem::replace(&mut *UNREACHABLE.locked(), bad.clone());
         for b in bad.iter().filter(|b| !was.contains(b)) {
             tracing::warn!("the recordings folder {b} can't be reached");
         }

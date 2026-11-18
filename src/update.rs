@@ -7,6 +7,7 @@
 //! `nvr.old`) and restarts — as a Windows service too. With automatic
 //! updates on, this happens at night when no alert is going on.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local};
 use serde::Serialize;
@@ -97,7 +98,7 @@ pub fn restart_now() -> bool {
 }
 
 fn with<R>(f: impl FnOnce(&mut Status) -> R) -> R {
-    let mut g = STATUS.lock().unwrap();
+    let mut g = STATUS.locked();
     let s = g.get_or_insert_with(|| Status {
         current: VERSION.into(),
         repo: DEFAULT_REPO.into(),
@@ -186,7 +187,7 @@ fn limited(resp: &reqwest::Response) -> bool {
 /// checksum are at fixed download addresses. The API is only asked once
 /// per new version, for the release notes (optional).
 pub async fn check(repo: &str) -> Result<Status> {
-    if let Some(t) = *NOT_BEFORE.lock().unwrap()
+    if let Some(t) = *NOT_BEFORE.locked()
         && t > Local::now()
     {
         bail!(
@@ -214,7 +215,7 @@ pub async fn check(repo: &str) -> Result<Status> {
             .context("cannot reach GitHub")?;
         if limited(&resp) {
             let t = retry_time(&resp);
-            *NOT_BEFORE.lock().unwrap() = Some(t);
+            *NOT_BEFORE.locked() = Some(t);
             bail!(
                 "GitHub limits how often one internet connection can check; checking again at {}",
                 t.format("%H:%M")

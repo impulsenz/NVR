@@ -1,6 +1,7 @@
 //! Configuration stored in a TOML file (default: `nvr.toml`).
 //! The web UI edits it, so it is rewritten whenever settings are saved.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, bail};
 use chrono::{Datelike, NaiveDateTime, NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
@@ -1570,10 +1571,10 @@ impl Config {
     /// The settings file couldn't be read: GAZE started in safe mode with
     /// this problem, and saves nothing until it's fixed.
     pub fn safe_mode() -> Option<String> {
-        SAFE_MODE.lock().unwrap().clone()
+        SAFE_MODE.locked().clone()
     }
     pub fn set_safe_mode(problem: String) {
-        *SAFE_MODE.lock().unwrap() = Some(problem);
+        *SAFE_MODE.locked() = Some(problem);
     }
 
     /// For safe mode: the settings that can still be read from a broken
@@ -2152,7 +2153,7 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         Config::set_safe_mode("broken".into());
         r.save(&path).unwrap();
-        *SAFE_MODE.lock().unwrap() = None;
+        *SAFE_MODE.locked() = None;
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -8,6 +8,7 @@
 //! that can't run on the GPU (no DirectX 12 GPU, runtime missing, a model
 //! the GPU can't handle) run on the processor, and the reason is shown.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,20 +64,20 @@ pub fn status() -> String {
     if !use_gpu() {
         return "CPU (chosen in the settings)".into();
     }
-    if let Some(s) = STATUS.lock().unwrap().clone() {
+    if let Some(s) = STATUS.locked().clone() {
         return s;
     }
     if RUNTIME.get().is_some() {
         return "GPU (DirectML)".into();
     }
-    match RUNTIME_ERR.lock().unwrap().clone() {
+    match RUNTIME_ERR.locked().clone() {
         Some(e) => format!("CPU — the GPU can't be used: {e}"),
         None => "CPU until the GPU runtime is ready (downloading it the first time)".into(),
     }
 }
 
 fn note(s: String) {
-    *STATUS.lock().unwrap() = Some(s);
+    *STATUS.locked() = Some(s);
 }
 
 /// One input for a model: its shape and data.
@@ -125,7 +126,7 @@ impl Net {
     /// models check this and load again.
     pub fn misplaced(&self) -> bool {
         match self {
-            Net::Cpu(_) => use_gpu() && RUNTIME.get().is_some() && RUNTIME_ERR.lock().unwrap().is_none(),
+            Net::Cpu(_) => use_gpu() && RUNTIME.get().is_some() && RUNTIME_ERR.locked().is_none(),
             Net::Gpu(_) => !use_gpu(),
         }
     }
@@ -139,7 +140,7 @@ impl Net {
     pub fn run(&self, input: Input) -> Result<Vec<Vec<f32>>> {
         match self {
             Net::Cpu(plan) => run_tract(plan, input),
-            Net::Gpu(s) => run_ort(&mut s.lock().unwrap(), input),
+            Net::Gpu(s) => run_ort(&mut s.locked(), input),
         }
     }
 }
@@ -220,7 +221,7 @@ pub fn load(path: &Path, what: &str, cpu: impl FnOnce() -> Result<Plan>) -> Resu
     let why = if !use_gpu() {
         "processor chosen in the settings".to_string()
     } else {
-        match RUNTIME_ERR.lock().unwrap().clone() {
+        match RUNTIME_ERR.locked().clone() {
             Some(e) => format!("the GPU can't be used: {e}"),
             None => {
                 "the GPU runtime wasn't ready yet when it loaded (it moves to the GPU once ready)"
@@ -243,7 +244,7 @@ pub struct Placed {
 static PLACED: Mutex<Vec<Placed>> = Mutex::new(Vec::new());
 
 fn record(what: &str, gpu: bool, why: String) {
-    let mut p = PLACED.lock().unwrap();
+    let mut p = PLACED.locked();
     p.retain(|x| x.what != what);
     p.push(Placed {
         what: what.to_string(),
@@ -254,7 +255,7 @@ fn record(what: &str, gpu: bool, why: String) {
 
 /// Models loaded so far and where they run.
 pub fn placed() -> Vec<Placed> {
-    PLACED.lock().unwrap().clone()
+    PLACED.locked().clone()
 }
 
 fn gpu_session(env: &ort::environment::Environment, path: &Path) -> Result<ort::session::Session> {
@@ -304,14 +305,14 @@ pub async fn prepare(data_dir: &Path) -> bool {
     match res {
         Ok(env) => {
             info!("AI: GPU runtime ready (ONNX Runtime {ORT_VERSION} with DirectML)");
-            *RUNTIME_ERR.lock().unwrap() = None;
-            *STATUS.lock().unwrap() = None;
+            *RUNTIME_ERR.locked() = None;
+            *STATUS.locked() = None;
             let _ = RUNTIME.set(env);
             true
         }
         Err(e) => {
             warn!("AI: the GPU can't be used ({e:#}); AI runs on the processor");
-            *RUNTIME_ERR.lock().unwrap() = Some(format!("{e:#}"));
+            *RUNTIME_ERR.locked() = Some(format!("{e:#}"));
             false
         }
     }

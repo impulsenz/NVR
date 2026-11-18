@@ -3,6 +3,7 @@
 //! often under heavy load, and video decoding for motion detection moves
 //! between the CPU and the GPU depending on which one has capacity.
 
+use crate::sync::MutexExt;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -210,13 +211,13 @@ pub const DISK_READERS: usize = 3;
 pub struct DiskSlot;
 impl Drop for DiskSlot {
     fn drop(&mut self) {
-        *DISK_SLOTS.lock().unwrap() -= 1;
+        *DISK_SLOTS.locked() -= 1;
         DISK_FREE.notify_one();
     }
 }
 /// Wait for a turn to read from the disk (blocking threads only).
 pub fn disk_slot() -> DiskSlot {
-    let mut n = DISK_SLOTS.lock().unwrap();
+    let mut n = DISK_SLOTS.locked();
     while *n >= DISK_READERS {
         n = DISK_FREE.wait(n).unwrap();
     }

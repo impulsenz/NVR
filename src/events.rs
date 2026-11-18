@@ -1,6 +1,7 @@
 //! Motion/AI events for one camera, stored as JSON lines in
 //! `<camera folder>/events/events.jsonl` next to their thumbnails and clips.
 
+use crate::sync::{MutexExt, RwLockExt};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -299,8 +300,8 @@ impl EventStore {
             events: RwLock::new(events),
             writer: std::sync::Mutex::new(tx),
         };
-        if store.events.read().unwrap().len() != before {
-            store.rewrite(&store.events.read().unwrap());
+        if store.events.reader().len() != before {
+            store.rewrite(&store.events.reader());
         }
         store
     }
@@ -311,13 +312,13 @@ impl EventStore {
             .filter_map(|e| serde_json::to_string(e).ok())
             .map(|l| l + "\n")
             .collect();
-        let _ = self.writer.lock().unwrap().send(WriteOp::All(text));
+        let _ = self.writer.locked().send(WriteOp::All(text));
     }
 
     /// Wait until everything saved so far is on the disk.
     pub fn flush(&self) {
         let (tx, rx) = std::sync::mpsc::channel();
-        if self.writer.lock().unwrap().send(WriteOp::Flush(tx)).is_ok() {
+        if self.writer.locked().send(WriteOp::Flush(tx)).is_ok() {
             let _ = rx.recv_timeout(std::time::Duration::from_secs(30));
         }
     }
@@ -328,7 +329,7 @@ impl EventStore {
 
     fn append_line(&self, e: &Event) {
         if let Ok(line) = serde_json::to_string(e) {
-            let _ = self.writer.lock().unwrap().send(WriteOp::Line(line));
+            let _ = self.writer.locked().send(WriteOp::Line(line));
         }
     }
 
@@ -372,7 +373,7 @@ impl EventStore {
 
     /// Add a new event, or update it.
     fn insert_or_update(&self, e: Event) {
-        let mut ev = self.events.write().unwrap();
+        let mut ev = self.events.writer();
         self.append_line(&e);
         if let Some(slot) = ev.iter_mut().find(|x| x.id == e.id) {
             *slot = e;
@@ -388,7 +389,7 @@ impl EventStore {
     /// mustn't bring it back. New events come from the detector
     /// (`save_detected`).
     pub fn save(&self, e: Event) {
-        let mut ev = self.events.write().unwrap();
+        let mut ev = self.events.writer();
         if let Some(slot) = ev.iter_mut().find(|x| x.id == e.id) {
             self.append_line(&e);
             *slot = e;
@@ -398,7 +399,7 @@ impl EventStore {
     /// Store an alert's meaning (description search) without touching the
     /// rest of it (the alert may be changing meanwhile).
     pub fn set_meaning(&self, id: &str, m: Meaning) {
-        let mut ev = self.events.write().unwrap();
+        let mut ev = self.events.writer();
         if let Some(slot) = ev.iter_mut().find(|x| x.id == id) {
             slot.meaning = Some(m);
             self.append_line(slot);
@@ -407,8 +408,7 @@ impl EventStore {
 
     pub fn get(&self, id: &str) -> Option<Event> {
         self.events
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .find(|e| e.id == id)
             .cloned()
@@ -416,8 +416,7 @@ impl EventStore {
 
     pub fn between(&self, from: DateTime<Local>, to: DateTime<Local>) -> Vec<Event> {
         self.events
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .filter(|e| e.end >= from && e.start <= to)
             .cloned()
@@ -425,14 +424,14 @@ impl EventStore {
     }
 
     pub fn all(&self) -> Vec<Event> {
-        self.events.read().unwrap().clone()
+        self.events.reader().clone()
     }
 
     /// Delete events (and their files) that match `remove`, then compact the file.
     pub fn remove_where(&self, remove: impl Fn(&Event) -> bool) -> usize {
         let mut gone: Vec<String> = Vec::new();
         let removed = {
-            let mut ev = self.events.write().unwrap();
+            let mut ev = self.events.writer();
             let before = ev.len();
             ev.retain(|e| {
                 if remove(e) {
@@ -556,6 +555,36 @@ mod tests {
         s2.flush();
         assert_eq!(EventStore::open(&dir).all().len(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Measurement for docs/TECH-DEBT.md (M-3): `cargo test --release bench_between -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_between() {
+        let dir = std::env::temp_dir().join(format!("nvr-evb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("events")).unwrap();
+        let t0 = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00+00:00").unwrap().with_timezone(&Local);
+        let mut text = String::new();
+        for i in 0..100_000i64 {
+            let st = t0 + chrono::Duration::seconds(i * 30);
+            let line = serde_json::json!({"id": format!("e{i}"), "camera": "c", "start": st, "end": st + chrono::Duration::seconds(10),
+                "labels": [{"label": "person", "score": 0.9}], "notes": ["Person in Porch"], "boxes": []});
+            text.push_str(&line.to_string());
+            text.push('\n');
+        }
+        std::fs::write(dir.join("events/events.jsonl"), text).unwrap();
+        let t = std::time::Instant::now();
+        let s = EventStore::open(&dir);
+        println!("open (100k events): {:?}", t.elapsed());
+        let day = t0 + chrono::Duration::days(20);
+        let t = std::time::Instant::now();
+        let n: usize = (0..20).map(|_| s.between(day, day + chrono::Duration::days(1)).len()).sum();
+        println!("between (one day, {} hits) x20: {:?} per call", n / 20, t.elapsed() / 20);
+        let t = std::time::Instant::now();
+        let _ = s.all();
+        println!("all(): {:?}", t.elapsed());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

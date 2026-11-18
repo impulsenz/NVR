@@ -12,6 +12,7 @@
 //! The relay keeps the packets since the last keyframe, so a new consumer
 //! starts with a complete picture immediately.
 
+use crate::sync::MutexExt;
 use crate::config::{mask_url, redact};
 use crate::ffmpeg::{self, StreamInfo};
 use bytes::{Bytes, BytesMut};
@@ -137,7 +138,7 @@ impl Relay {
     /// Where to connect now: through go2rtc when it's chosen and running,
     /// the camera itself otherwise (asked again at every reconnect).
     fn source(&self) -> String {
-        if self.bypass_until.lock().unwrap().is_some_and(|t| Instant::now() < t) {
+        if self.bypass_until.locked().is_some_and(|t| Instant::now() < t) {
             return self.url.clone();
         }
         crate::go2rtc::source(&self.url, &self.stream.0, self.stream.1)
@@ -148,7 +149,7 @@ impl Relay {
     }
 
     pub fn status(&self) -> RelayStatus {
-        let s = self.shared.lock().unwrap();
+        let s = self.shared.locked();
         let mut st = s.status.clone();
         st.consumers = s.subs.iter().filter(|x| !x.is_closed()).count();
         st
@@ -158,7 +159,7 @@ impl Relay {
     /// The sound the camera sends on this stream ("pcm_mulaw, 8000 Hz"),
     /// `Some("")` when it sends none, `None` when not connected yet.
     pub fn audio(&self) -> Option<String> {
-        self.audio.lock().unwrap().clone()
+        self.audio.locked().clone()
     }
 
     pub fn info(&self) -> Option<StreamInfo> {
@@ -187,7 +188,7 @@ impl Relay {
 
     fn subscribe_with(&self, gop: bool) -> mpsc::Receiver<Bytes> {
         let (tx, rx) = mpsc::channel(QUEUE_CHUNKS);
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.locked();
         s.last_used = Instant::now();
         if s.connected && !s.headers.is_empty() {
             let mut start = s.headers.clone();
@@ -210,7 +211,7 @@ impl Relay {
             // Wait for someone to need the stream.
             loop {
                 let wanted = {
-                    let mut s = self.shared.lock().unwrap();
+                    let mut s = self.shared.locked();
                     s.subs.retain(|x| !x.is_closed());
                     !s.subs.is_empty()
                 };
@@ -228,14 +229,14 @@ impl Relay {
             if let Some(t) = last_fail {
                 let wait = backoff.saturating_sub(t.elapsed());
                 if !wait.is_zero() {
-                    self.shared.lock().unwrap().status.retry_in = Some(wait.as_secs() + 1);
+                    self.shared.locked().status.retry_in = Some(wait.as_secs() + 1);
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
                         _ = self.cancel.cancelled() => return,
                     }
                 }
             }
-            self.shared.lock().unwrap().status.retry_in = None;
+            self.shared.locked().status.retry_in = None;
             self.set_state(RelayState::Connecting, None);
             let via_go2rtc = self.source() != self.url;
             info!("{tag}: connecting to {}", mask_url(&self.source()));
@@ -256,7 +257,7 @@ impl Relay {
                 });
                 if self.go2rtc_fails.fetch_add(1, Relaxed) + 1 >= 2 {
                     self.go2rtc_fails.store(0, Relaxed);
-                    *self.bypass_until.lock().unwrap() = Some(Instant::now() + Duration::from_secs(600));
+                    *self.bypass_until.locked() = Some(Instant::now() + Duration::from_secs(600));
                     warn!("{tag}: no picture through go2rtc (see the go2rtc lines in the log) — connecting straight to the camera for 10 minutes");
                     backoff = Duration::from_secs(2);
                     last_fail = None;
@@ -268,7 +269,7 @@ impl Relay {
             // Ending the connection ends every consumer; they restart and
             // re-subscribe (keeps their timestamps consistent).
             {
-                let mut s = self.shared.lock().unwrap();
+                let mut s = self.shared.locked();
                 s.subs.clear();
                 s.connected = false;
                 s.headers.clear();
@@ -291,7 +292,7 @@ impl Relay {
                         backoff = (backoff * 2).min(MAX_BACKOFF);
                     }
                     warn!("{tag}: {e}; retrying in {}s", backoff.as_secs());
-                    let mut s = self.shared.lock().unwrap();
+                    let mut s = self.shared.locked();
                     s.status.state = RelayState::Retrying;
                     s.status.error = Some(e);
                     last_fail = Some(Instant::now());
@@ -301,7 +302,7 @@ impl Relay {
     }
 
     fn set_state(&self, state: RelayState, error: Option<String>) {
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.locked();
         s.status.state = state;
         if error.is_some() || state == RelayState::Connected {
             s.status.error = error;
@@ -363,7 +364,7 @@ impl Relay {
                     let n = match r {
                         Err(_) => break Some("no data from camera for 20 s".into()),
                         Ok(Err(e)) => break Some(e.to_string()),
-                        Ok(Ok(0)) => break Some(first_error.lock().unwrap().clone().unwrap_or_else(|| "camera closed the stream".into())),
+                        Ok(Ok(0)) => break Some(first_error.locked().clone().unwrap_or_else(|| "camera closed the stream".into())),
                         Ok(Ok(n)) => n,
                     };
                     buf.extend_from_slice(&chunk[..n]);
@@ -378,7 +379,7 @@ impl Relay {
                     let data = buf.split_to(whole).freeze();
                     if !got {
                         got = true;
-                        let mut s = self.shared.lock().unwrap();
+                        let mut s = self.shared.locked();
                         s.connected = true;
                         s.status.connects += 1;
                         drop(s);
@@ -393,7 +394,7 @@ impl Relay {
                         info!("[{}] {}: streaming engine changed — reconnecting", self.name, self.label);
                         break None;
                     }
-                    let mut s = self.shared.lock().unwrap();
+                    let mut s = self.shared.locked();
                     s.subs.retain(|x| !x.is_closed());
                     if !s.subs.is_empty() {
                         s.last_used = Instant::now();
@@ -409,7 +410,7 @@ impl Relay {
     }
 
     fn forward(&self, parser: &mut TsParser, data: Bytes) {
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.locked();
         for pkt in data.chunks_exact(TS) {
             match parser.packet(pkt) {
                 Kind::Header => {
@@ -466,7 +467,7 @@ impl Relay {
                         if audio.is_empty() {
                             info!("[{}] {}: the camera sends no sound", self.name, self.label);
                         }
-                        *self.audio.lock().unwrap() = Some(audio.clone());
+                        *self.audio.locked() = Some(audio.clone());
                     }
                     in_input = false;
                 } else if in_input
@@ -495,7 +496,7 @@ impl Relay {
             if let Some(m) = filter.filter(msg) {
                 let m = redact(&m, &self.url);
                 warn!("[{}] {} ffmpeg: {m}", self.name, self.label);
-                first_error.lock().unwrap().get_or_insert(m);
+                first_error.locked().get_or_insert(m);
             }
             if let Some(sm) = filter.summary(false) {
                 info!("[{}] {}: {sm}", self.name, self.label);

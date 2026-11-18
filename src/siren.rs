@@ -2,6 +2,7 @@
 //! spoken warnings in between ("The homeowner has been notified"), for a
 //! set time or until stopped.
 
+use crate::sync::MutexExt;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
@@ -9,22 +10,22 @@ use std::sync::Mutex;
 static RUNNING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 pub fn is_running(camera: &str) -> bool {
-    RUNNING.lock().unwrap().as_ref().is_some_and(|s| s.contains(camera))
+    RUNNING.locked().as_ref().is_some_and(|s| s.contains(camera))
 }
 
 /// Mark the siren as going; false when it already is.
 pub fn begin(camera: &str) -> bool {
-    RUNNING.lock().unwrap().get_or_insert_with(HashSet::new).insert(camera.to_string())
+    RUNNING.locked().get_or_insert_with(HashSet::new).insert(camera.to_string())
 }
 
 pub fn stop(camera: &str) {
-    if let Some(s) = RUNNING.lock().unwrap().as_mut() {
+    if let Some(s) = RUNNING.locked().as_mut() {
         s.remove(camera);
     }
 }
 
 pub fn running() -> Vec<String> {
-    RUNNING.lock().unwrap().as_ref().map(|s| s.iter().cloned().collect()).unwrap_or_default()
+    RUNNING.locked().as_ref().map(|s| s.iter().cloned().collect()).unwrap_or_default()
 }
 
 /// The alarm itself, 8 kHz: a wail rising and falling between about 650

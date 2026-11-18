@@ -4,6 +4,7 @@
 //! alerts can be found by what's in them without anyone labelling them.
 //! Runs on this computer; the models (420 MB) download the first time.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -278,16 +279,16 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
     tokio::time::sleep(Duration::from_secs(20)).await;
     loop {
         if !mgr.config().ai.search {
-            *STATUS.lock().unwrap() = Status::default();
+            *STATUS.locked() = Status::default();
             tokio::time::sleep(Duration::from_secs(10)).await;
             continue;
         }
-        STATUS.lock().unwrap().downloading = !ready(&models_dir(&mgr));
+        STATUS.locked().downloading = !ready(&models_dir(&mgr));
         let c = match model(&models_dir(&mgr)).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("description search: {e:#}");
-                *STATUS.lock().unwrap() = Status { error: Some(format!("{e:#}")), ..Default::default() };
+                *STATUS.locked() = Status { error: Some(format!("{e:#}")), ..Default::default() };
                 tokio::time::sleep(Duration::from_secs(300)).await;
                 continue;
             }
@@ -305,7 +306,7 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
         }
         todo.sort_by_key(|x| std::cmp::Reverse(x.3));
         {
-            let mut s = STATUS.lock().unwrap();
+            let mut s = STATUS.locked();
             *s = Status { ready: true, waiting: todo.len(), ..Default::default() };
         }
         let job = (todo.len() > 20).then(|| {
@@ -328,7 +329,7 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
             if let Some(j) = &job {
                 j.done_one();
             }
-            let mut s = STATUS.lock().unwrap();
+            let mut s = STATUS.locked();
             s.waiting = s.waiting.saturating_sub(1);
         }
         drop(job);

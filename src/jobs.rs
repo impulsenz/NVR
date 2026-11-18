@@ -5,6 +5,7 @@
 //! handle; dropping the handle marks it finished. Finished jobs stay in the
 //! list for a while.
 
+use crate::sync::MutexExt;
 use chrono::{DateTime, Local};
 use serde::Serialize;
 use std::sync::Mutex;
@@ -53,7 +54,7 @@ pub fn set_paused(kind: &str, pause: bool) -> bool {
     let Some(k) = PAUSABLE.iter().find(|k| **k == kind) else {
         return false;
     };
-    let mut p = PAUSED.lock().unwrap();
+    let mut p = PAUSED.locked();
     p.retain(|x| x != k);
     if pause {
         p.push(k);
@@ -62,11 +63,11 @@ pub fn set_paused(kind: &str, pause: bool) -> bool {
 }
 
 pub fn paused() -> Vec<&'static str> {
-    PAUSED.lock().unwrap().clone()
+    PAUSED.locked().clone()
 }
 
 pub fn is_paused(kind: &str) -> bool {
-    PAUSED.lock().unwrap().contains(&kind)
+    PAUSED.locked().contains(&kind)
 }
 static NEXT: AtomicU64 = AtomicU64::new(1);
 /// How many finished jobs to keep.
@@ -80,7 +81,7 @@ pub struct Job {
 pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let title = title.into();
-    let mut jobs = JOBS.lock().unwrap();
+    let mut jobs = JOBS.locked();
     // The same work done again (time-lapse previews every few seconds):
     // the new run takes the old finished one's place in the list.
     jobs.retain(|j| !(j.finished.is_some() && j.kind == kind && j.title == title));
@@ -120,7 +121,7 @@ pub fn start(kind: &'static str, title: impl Into<String>) -> Job {
 
 impl Job {
     fn with(&self, f: impl FnOnce(&mut JobInfo)) {
-        if let Some(j) = JOBS.lock().unwrap().iter_mut().find(|j| j.id == self.id) {
+        if let Some(j) = JOBS.locked().iter_mut().find(|j| j.id == self.id) {
             f(j);
         }
     }
@@ -167,7 +168,7 @@ impl Job {
     pub fn setter(&self) -> impl FnMut(u64) + Send + 'static {
         let id = self.id;
         move |n| {
-            if let Some(j) = JOBS.lock().unwrap().iter_mut().find(|j| j.id == id) {
+            if let Some(j) = JOBS.locked().iter_mut().find(|j| j.id == id) {
                 j.done = n;
             }
         }
@@ -218,7 +219,7 @@ impl Drop for Job {
 
 /// Running jobs first, then the most recently finished.
 pub fn list() -> Vec<JobInfo> {
-    let mut v = JOBS.lock().unwrap().clone();
+    let mut v = JOBS.locked().clone();
     v.sort_by(|a, b| {
         a.finished
             .is_some()

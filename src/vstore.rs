@@ -14,6 +14,7 @@
 //! - while one block is being watched, the next ones are already being read
 //!   (read-ahead), so the video doesn't wait for the NAS.
 
+use crate::sync::MutexExt;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -62,13 +63,13 @@ fn test_delay() {
 pub static IO_OPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn open(path: &Path) -> std::io::Result<Arc<File>> {
-    if let Some((f, at)) = ST.lock().unwrap().files.get_mut(path) {
+    if let Some((f, at)) = ST.locked().files.get_mut(path) {
         *at = Instant::now();
         return Ok(f.clone());
     }
     test_delay();
     let f = Arc::new(File::open(path)?);
-    let mut st = ST.lock().unwrap();
+    let mut st = ST.locked();
     close_idle(&mut st);
     if st.files.len() >= OPEN_FILES
         && let Some(old) = st.files.iter().min_by_key(|(_, (_, t))| *t).map(|(p, _)| p.clone())
@@ -83,7 +84,7 @@ fn open(path: &Path) -> std::io::Result<Arc<File>> {
 /// being recorded (it grows), every 10 minutes for a finished one (on a
 /// network drive each look is a trip to the NAS).
 pub fn meta(path: &Path) -> std::io::Result<(u64, SystemTime)> {
-    let kept = ST.lock().unwrap().meta.get(path).copied();
+    let kept = ST.locked().meta.get(path).copied();
     if let Some(m) = kept
         && m.at.elapsed() < if is_growing(path, m.modified) { Duration::from_millis(1500) } else { Duration::from_secs(600) }
     {
@@ -105,7 +106,7 @@ pub fn meta(path: &Path) -> std::io::Result<(u64, SystemTime)> {
         return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not a file"));
     }
     let m = Meta { len: md.len(), modified: md.modified().unwrap_or(SystemTime::UNIX_EPOCH), at: Instant::now() };
-    let mut st = ST.lock().unwrap();
+    let mut st = ST.locked();
     if st.meta.len() > 50_000 {
         st.meta.clear();
     }
@@ -119,14 +120,14 @@ pub fn meta(path: &Path) -> std::io::Result<(u64, SystemTime)> {
 pub fn warm(files: &[PathBuf]) {
     static BUSY: Mutex<bool> = Mutex::new(false);
     {
-        let mut b = BUSY.lock().unwrap();
+        let mut b = BUSY.locked();
         if *b {
             return;
         }
         *b = true;
     }
     for p in files {
-        if ST.lock().unwrap().bytes > BUDGET * 7 / 10 {
+        if ST.locked().bytes > BUDGET * 7 / 10 {
             break;
         }
         let Ok((len, modified)) = meta(p) else { continue };
@@ -136,12 +137,12 @@ pub fn warm(files: &[PathBuf]) {
             }
         }
     }
-    *BUSY.lock().unwrap() = false;
+    *BUSY.locked() = false;
 }
 
 /// Size and time of a file, as a folder listing told them.
 pub fn seed(path: &Path, len: u64, modified: SystemTime) {
-    let mut st = ST.lock().unwrap();
+    let mut st = ST.locked();
     if st.meta.len() > 50_000 {
         st.meta.clear();
     }
@@ -152,7 +153,7 @@ pub fn seed(path: &Path, len: u64, modified: SystemTime) {
 /// or moved: Windows doesn't allow some of that while a file is open). What
 /// was read stays in memory.
 pub fn close_all() {
-    ST.lock().unwrap().files.clear();
+    ST.locked().files.clear();
 }
 
 /// Files not asked for in a while are closed.
@@ -163,7 +164,7 @@ fn close_idle(st: &mut State) {
 /// The file was replaced or deleted: forget what's kept of it.
 #[allow(dead_code)]
 pub fn forget(path: &Path) {
-    let mut st = ST.lock().unwrap();
+    let mut st = ST.locked();
     st.files.remove(path);
     st.meta.remove(path);
     let gone: Vec<_> = st.blocks.keys().filter(|(p, _)| p == path).cloned().collect();
@@ -209,7 +210,7 @@ fn block(path: &Path, n: u64, len: u64, modified: SystemTime) -> std::io::Result
     // Being read by the read-ahead right now: wait for it rather than read
     // the same part twice.
     for _ in 0..400 {
-        let mut st = ST.lock().unwrap();
+        let mut st = ST.locked();
         if let Some((b, at)) = st.blocks.get_mut(&key) {
             *at = Instant::now();
             return Ok(b.clone());
@@ -239,7 +240,7 @@ fn block(path: &Path, n: u64, len: u64, modified: SystemTime) -> std::io::Result
         Ok(Arc::new(buf))
     })();
     let grows = is_growing(path, modified);
-    let mut st = ST.lock().unwrap();
+    let mut st = ST.locked();
     st.reading.remove(&key);
     let b = res?;
     // Kept unless it's the unfinished end of a file still being recorded.
@@ -268,7 +269,7 @@ fn block(path: &Path, n: u64, len: u64, modified: SystemTime) -> std::io::Result
 static NEXT: LazyLock<Mutex<HashMap<PathBuf, PathBuf>>> = LazyLock::new(Default::default);
 
 pub fn set_next(files: &[PathBuf]) {
-    let mut n = NEXT.lock().unwrap();
+    let mut n = NEXT.locked();
     if n.len() > 50_000 {
         n.clear();
     }
@@ -282,7 +283,7 @@ pub fn set_next(files: &[PathBuf]) {
 fn read_ahead(path: &Path, from: u64, len: u64, modified: SystemTime) {
     let last = len.saturating_sub(1) / BLOCK;
     if from + AHEAD > last + 1 && !is_growing(path, modified) {
-        let next = NEXT.lock().unwrap().get(path).cloned();
+        let next = NEXT.locked().get(path).cloned();
         if let Some(next) = next {
             let left = (from + AHEAD).saturating_sub(last + 1).min(2);
             if left > 0 {
@@ -301,13 +302,13 @@ fn read_ahead(path: &Path, from: u64, len: u64, modified: SystemTime) {
     for n in from..=(from + AHEAD - 1).min(last) {
         let key = (path.to_path_buf(), n);
         {
-            let st = ST.lock().unwrap();
+            let st = ST.locked();
             if st.blocks.contains_key(&key) || st.reading.contains(&key) {
                 continue;
             }
         }
         {
-            let mut busy = AHEAD_SLOTS.lock().unwrap();
+            let mut busy = AHEAD_SLOTS.locked();
             if *busy >= 4 {
                 return;
             }
@@ -316,7 +317,7 @@ fn read_ahead(path: &Path, from: u64, len: u64, modified: SystemTime) {
         let p = path.to_path_buf();
         std::thread::spawn(move || {
             let _ = block(&p, n, len, modified);
-            *AHEAD_SLOTS.lock().unwrap() -= 1;
+            *AHEAD_SLOTS.locked() -= 1;
         });
     }
 }
@@ -326,12 +327,12 @@ static LAST_READ: Mutex<Option<Instant>> = Mutex::new(None);
 /// Someone has been watching recordings in the last 20 seconds (background
 /// work that reads recordings waits).
 pub fn watching() -> bool {
-    LAST_READ.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_secs(20))
+    LAST_READ.locked().is_some_and(|t| t.elapsed() < Duration::from_secs(20))
 }
 
 /// Bytes `[a, b]` (inclusive) of a file, through the blocks.
 pub fn read(path: &Path, a: u64, b: u64) -> std::io::Result<Vec<u8>> {
-    *LAST_READ.lock().unwrap() = Some(Instant::now());
+    *LAST_READ.locked() = Some(Instant::now());
     let (len, modified) = meta(path)?;
     if len == 0 || a >= len {
         return Ok(Vec::new());

@@ -2,6 +2,7 @@
 //! e.g. home and a holiday house, or home and the shop. Each is reached at
 //! its own address with an API token made on that server.
 
+use crate::sync::MutexExt;
 use crate::config::RemoteServer;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -33,7 +34,7 @@ pub async fn cameras(r: &RemoteServer) -> serde_json::Value {
 
 /// Every camera it offers, asked now.
 pub async fn cameras_fresh(r: &RemoteServer) -> serde_json::Value {
-    CACHE.lock().unwrap().remove(&format!("{}|{}", base(r), r.token));
+    CACHE.locked().remove(&format!("{}|{}", base(r), r.token));
     cameras_cached(r).await
 }
 
@@ -41,7 +42,7 @@ static CACHE: LazyLock<Mutex<HashMap<String, (Instant, serde_json::Value)>>> = L
 
 async fn cameras_cached(r: &RemoteServer) -> serde_json::Value {
     let key = format!("{}|{}", base(r), r.token);
-    if let Some((t, v)) = CACHE.lock().unwrap().get(&key)
+    if let Some((t, v)) = CACHE.locked().get(&key)
         && t.elapsed() < Duration::from_secs(10)
     {
         return v.clone();
@@ -73,7 +74,7 @@ async fn cameras_cached(r: &RemoteServer) -> serde_json::Value {
     }
     .await;
     let v = res.unwrap_or_else(|e| serde_json::json!({"ok": false, "error": format!("{e:#}"), "cameras": []}));
-    CACHE.lock().unwrap().insert(key, (Instant::now(), v.clone()));
+    CACHE.locked().insert(key, (Instant::now(), v.clone()));
     v
 }
 

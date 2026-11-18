@@ -1,6 +1,7 @@
 //! Finding recordings and events for the Recordings page: filtered search,
 //! multi-camera timelines, and the file pieces needed to export a time range.
 
+use crate::sync::MutexExt;
 use crate::events::Event;
 use crate::manager::{CameraRuntime, Manager};
 use crate::storage::{self, Recording};
@@ -559,18 +560,18 @@ fn heights_file(dir: &std::path::Path) -> Option<PathBuf> {
 /// at a time, if not remembered).
 fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
     // Remembered from before (once per folder).
-    if HEIGHT_DIRS.lock().unwrap().insert(dir.to_path_buf())
+    if HEIGHT_DIRS.locked().insert(dir.to_path_buf())
         && let Some(f) = heights_file(dir)
         && let Ok(t) = std::fs::read_to_string(&f)
         && let Ok(m) = serde_json::from_str::<std::collections::HashMap<String, u32>>(&t)
     {
-        let mut c = HEIGHTS.lock().unwrap();
+        let mut c = HEIGHTS.locked();
         for (n, h) in m {
             c.insert(dir.join(n), h);
         }
     }
     let missing: Vec<PathBuf> = {
-        let c = HEIGHTS.lock().unwrap();
+        let c = HEIGHTS.locked();
         names.iter().map(|n| dir.join(n)).filter(|p| !c.contains_key(p)).collect()
     };
     if missing.is_empty() {
@@ -589,7 +590,7 @@ fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
         return;
     }
     let keep: std::collections::HashMap<String, u32> = {
-        let mut c = HEIGHTS.lock().unwrap();
+        let mut c = HEIGHTS.locked();
         for (p, h) in found {
             c.insert(p, h);
         }
@@ -613,30 +614,30 @@ fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
 fn prefetch_heights_soon(dir: &std::path::Path, names: Vec<String>) {
     static BUSY: std::sync::LazyLock<std::sync::Mutex<HashSet<PathBuf>>> = std::sync::LazyLock::new(Default::default);
     // Remembered ones first (instant), so most are known straight away.
-    if HEIGHT_DIRS.lock().unwrap().insert(dir.to_path_buf())
+    if HEIGHT_DIRS.locked().insert(dir.to_path_buf())
         && let Some(f) = heights_file(dir)
         && let Ok(t) = std::fs::read_to_string(&f)
         && let Ok(m) = serde_json::from_str::<std::collections::HashMap<String, u32>>(&t)
     {
-        let mut c = HEIGHTS.lock().unwrap();
+        let mut c = HEIGHTS.locked();
         for (n, h) in m {
             c.insert(dir.join(n), h);
         }
     }
-    let any = { let c = HEIGHTS.lock().unwrap(); names.iter().any(|n| !c.contains_key(&dir.join(n))) };
-    if !any || !BUSY.lock().unwrap().insert(dir.to_path_buf()) {
+    let any = { let c = HEIGHTS.locked(); names.iter().any(|n| !c.contains_key(&dir.join(n))) };
+    if !any || !BUSY.locked().insert(dir.to_path_buf()) {
         return;
     }
     let d = dir.to_path_buf();
     std::thread::spawn(move || {
         prefetch_heights(&d, &names);
-        BUSY.lock().unwrap().remove(&d);
+        BUSY.locked().remove(&d);
     });
 }
 
 /// Known picture height of a recording (never read here: see above).
 fn mp4_height_cached(path: &std::path::Path) -> Option<u32> {
-    HEIGHTS.lock().unwrap().get(path).copied()
+    HEIGHTS.locked().get(path).copied()
 }
 
 /// Picture height of an MP4 file from its `moov` box (wherever it is).

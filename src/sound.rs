@@ -4,6 +4,7 @@
 //! of everyday sound, 16 MB), run on this computer every half second on the
 //! last second of sound. What's heard makes an alert like a person seen.
 
+use crate::sync::MutexExt;
 use crate::config::CameraConfig;
 use crate::manager::Manager;
 use anyhow::{Context, Result};
@@ -164,7 +165,7 @@ pub struct Status {
 pub static STATUS: LazyLock<Mutex<HashMap<String, Status>>> = LazyLock::new(Default::default);
 
 fn set(id: &str, f: impl FnOnce(&mut Status)) {
-    f(STATUS.lock().unwrap().entry(id.to_string()).or_default());
+    f(STATUS.locked().entry(id.to_string()).or_default());
 }
 
 /// Listen to one camera until its settings change or it's removed.
@@ -271,7 +272,7 @@ pub async fn run(mgr: Arc<Manager>) {
             if !keep {
                 h.abort();
                 if !want.iter().any(|w| &w.id == id) {
-                    STATUS.lock().unwrap().remove(id);
+                    STATUS.locked().remove(id);
                 }
             }
             keep

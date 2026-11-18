@@ -1,6 +1,7 @@
 //! Object recognition: the built-in YOLOX model, run on this computer's
 //! graphics card or processor (downloaded on first use), or off.
 
+use crate::sync::{MutexExt, RwLockExt};
 use crate::config::AiConfig;
 use crate::imgutil::Frame;
 use anyhow::{Result, anyhow, bail};
@@ -244,10 +245,10 @@ impl AiHandle {
         }
     }
     pub fn get(&self) -> Arc<Ai> {
-        self.inner.read().unwrap().clone()
+        self.inner.reader().clone()
     }
     pub fn replace(&self, cfg: AiConfig, data_dir: &Path) {
-        *self.inner.write().unwrap() = Ai::new(cfg, data_dir);
+        *self.inner.writer() = Ai::new(cfg, data_dir);
     }
 }
 
@@ -296,11 +297,11 @@ impl Ai {
 
     /// The classes the loaded model knows (your model's own, or COCO's).
     pub fn labels(&self) -> Vec<String> {
-        self.model.lock().unwrap().as_ref().map(|m| m.labels()).unwrap_or_default()
+        self.model.locked().as_ref().map(|m| m.labels()).unwrap_or_default()
     }
 
     pub fn status(&self) -> AiStatus {
-        self.status.lock().unwrap().clone()
+        self.status.locked().clone()
     }
 
     fn model_path(&self) -> PathBuf {
@@ -324,14 +325,14 @@ impl Ai {
                 match tokio::task::spawn_blocking(move || Yolox::load_custom(&path, size, labels)).await {
                     Ok(Ok(m)) => {
                         info!("AI: your model loaded ({} classes, {}×{} input)", m.labels().len(), m.size, m.size);
-                        *self.model.lock().unwrap() = Some(Arc::new(m));
-                        let mut s = self.status.lock().unwrap();
+                        *self.model.locked() = Some(Arc::new(m));
+                        let mut s = self.status.locked();
                         s.ready = true;
                         s.error = None;
                     }
                     Ok(Err(e)) => {
                         warn!("AI: can't load your model: {e:#}");
-                        self.status.lock().unwrap().error = Some(format!("can't load your model: {e:#}"));
+                        self.status.locked().error = Some(format!("can't load your model: {e:#}"));
                     }
                     Err(e) => warn!("AI: {e}"),
                 }
@@ -344,7 +345,7 @@ impl Ai {
                 && let Err(e) = self.download_model(&self.cfg.builtin_model, &path).await
             {
                 warn!("AI: model download failed: {e:#}");
-                let mut s = self.status.lock().unwrap();
+                let mut s = self.status.locked();
                 s.downloading = false;
                 s.error = Some(format!("model download failed: {e:#}"));
                 return;
@@ -356,9 +357,9 @@ impl Ai {
                         "AI: built-in model {} loaded ({}×{} input)",
                         self.cfg.builtin_model, m.size, m.size
                     );
-                    *self.model.lock().unwrap() = Some(Arc::new(m));
+                    *self.model.locked() = Some(Arc::new(m));
                     {
-                        let mut s = self.status.lock().unwrap();
+                        let mut s = self.status.locked();
                         s.ready = true;
                         s.error = None;
                     }
@@ -366,7 +367,7 @@ impl Ai {
                 }
                 Ok(Err(e)) => {
                     warn!("AI: cannot load model {}: {e:#}", path.display());
-                    self.status.lock().unwrap().error = Some(format!("cannot load model: {e:#}"));
+                    self.status.locked().error = Some(format!("cannot load model: {e:#}"));
                     let _ = std::fs::remove_file(&path); // probably a broken download
                 }
                 Err(e) => warn!("AI: {e}"),
@@ -384,7 +385,7 @@ impl Ai {
             && let Err(e) = self.download_model(&name, &path).await
         {
             warn!("AI: download of the double-checking model failed: {e:#}");
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.locked();
             s.downloading = false;
             s.error = Some(format!("double-checking model download failed: {e:#}"));
             return;
@@ -393,7 +394,7 @@ impl Ai {
         match tokio::task::spawn_blocking(move || Yolox::load(&p)).await {
             Ok(Ok(m)) => {
                 info!("AI: {name} double-checks possible alerts");
-                *self.verifier.lock().unwrap() = Some(Arc::new(m));
+                *self.verifier.locked() = Some(Arc::new(m));
             }
             Ok(Err(e)) => {
                 warn!("AI: cannot load {}: {e:#}", path.display());
@@ -409,7 +410,7 @@ impl Ai {
         );
         info!("AI: downloading {url}");
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.locked();
             s.downloading = true;
             s.download_percent = Some(0.0);
         }
@@ -426,7 +427,7 @@ impl Ai {
             got += chunk.len() as u64;
             job.bytes(got, total.unwrap_or(0));
             if let Some(t) = total {
-                self.status.lock().unwrap().download_percent = Some(got as f32 * 100.0 / t as f32);
+                self.status.locked().download_percent = Some(got as f32 * 100.0 / t as f32);
             }
         }
         tokio::io::AsyncWriteExt::flush(&mut file).await?;
@@ -438,7 +439,7 @@ impl Ai {
             path.display(),
             got / 1_000_000
         );
-        let mut s = self.status.lock().unwrap();
+        let mut s = self.status.locked();
         s.downloading = false;
         s.download_percent = None;
         Ok(())
@@ -457,7 +458,7 @@ impl Ai {
             .map_err(|e| AiError::Failed(e.into()))?;
         let t = Instant::now();
         let res = self.detect_builtin(frame).await;
-        let mut s = self.status.lock().unwrap();
+        let mut s = self.status.locked();
         s.requests += 1;
         s.last_ms = Some(t.elapsed().as_millis() as u64);
         match &res {
@@ -478,12 +479,12 @@ impl Ai {
         if !self.enabled() {
             return Ok(vec![]);
         }
-        let model = self.model.lock().unwrap().clone();
+        let model = self.model.locked().clone();
         if model.is_none() {
             // Not loaded yet: the usual message (downloading / loading).
             self.detect_builtin(frame).await?;
         }
-        let Some(model) = self.model.lock().unwrap().clone() else {
+        let Some(model) = self.model.locked().clone() else {
             return Err(AiError::NotReady("AI model is loading".into()));
         };
         let f = if self.cfg.night_boost {
@@ -502,7 +503,7 @@ impl Ai {
         let _permit = self.busy.acquire().await.map_err(|e| AiError::Failed(e.into()))?;
         let (d, ms) = run(model, f.clone()).await?;
         let mut out = vec![(self.cfg.builtin_model.clone(), d, ms)];
-        let verifier = self.verifier.lock().unwrap().clone();
+        let verifier = self.verifier.locked().clone();
         if let (Some(v), Some(name)) = (verifier, self.verify_name()) {
             let (d, ms) = run(v, f).await?;
             out.push((name, d, ms));
@@ -511,7 +512,7 @@ impl Ai {
     }
 
     async fn detect_builtin(&self, frame: &Frame) -> Result<Vec<Detection>, AiError> {
-        let model = self.model.lock().unwrap().clone();
+        let model = self.model.locked().clone();
         let Some(model) = model else {
             let s = self.status();
             return Err(AiError::NotReady(match (s.downloading, s.error) {
@@ -537,7 +538,7 @@ impl Ai {
         // Something that could become an alert: the bigger model takes a
         // second look and has the final say (fewer false alerts, and the
         // right label when the fast model mixes up e.g. a cat and a person).
-        let verifier = self.verifier.lock().unwrap().clone();
+        let verifier = self.verifier.locked().clone();
         if let Some(v) = verifier
             && dets
                 .iter()

@@ -2,6 +2,7 @@
 //! process that writes fixed-length MP4 files, restarting it if it dies or
 //! stalls, and falling back from GPU to CPU if hardware encoding fails.
 
+use crate::sync::MutexExt;
 use crate::config::{CameraConfig, mask_url, redact};
 use crate::ffmpeg;
 use crate::manager::RuntimeEnv;
@@ -124,7 +125,7 @@ impl Recorder {
     }
 
     pub fn status(&self) -> RecStatus {
-        self.inner.lock().unwrap().status.clone()
+        self.inner.locked().status.clone()
     }
 
     /// Recompute whether we should be recording right now.
@@ -144,7 +145,7 @@ impl Recorder {
     }
 
     fn update(&self, f: impl FnOnce(&mut RecStatus)) {
-        f(&mut self.inner.lock().unwrap().status);
+        f(&mut self.inner.locked().status);
     }
 
     fn set_state(&self, state: RecState) {
@@ -317,7 +318,7 @@ impl Recorder {
                 crate::relay::feed(self.spec.relay.subscribe(), stdin, stop_feed.clone())
             });
             let started = Instant::now();
-            self.inner.lock().unwrap().last_progress = Instant::now();
+            self.inner.locked().last_progress = Instant::now();
             if let Some(stdout) = child.stdout.take() {
                 tokio::spawn(self.clone().read_progress(stdout));
             }
@@ -332,7 +333,7 @@ impl Recorder {
                     _ = wait_until_false(&mut want) => break Exit::Stopped,
                     _ = self.cancel.cancelled() => break Exit::Cancelled,
                     _ = watchdog.tick() => {
-                        if self.inner.lock().unwrap().last_progress.elapsed() > STALL_TIMEOUT {
+                        if self.inner.locked().last_progress.elapsed() > STALL_TIMEOUT {
                             break Exit::Stalled;
                         }
                         if moved_off_gpu && back.ready(&format!("{} recording conversion", self.cam.name)) {
@@ -431,7 +432,7 @@ impl Recorder {
             let us: i64 = value.trim().parse().unwrap_or(0);
             if us > last_us {
                 last_us = us;
-                let mut inner = self.inner.lock().unwrap();
+                let mut inner = self.inner.locked();
                 inner.last_progress = Instant::now();
                 let s = &mut inner.status;
                 s.recorded_seconds = us as f64 / 1e6;

@@ -14,6 +14,7 @@
 //! can't keep up (a slow phone connection) is dropped and reconnects, rather
 //! than holding video in memory or slowing the others down.
 
+use crate::sync::MutexExt;
 use crate::relay::Relay;
 use bytes::{Bytes, BytesMut};
 use std::sync::{Arc, Mutex};
@@ -62,14 +63,14 @@ impl LiveMux {
 
     /// Viewers watching now.
     pub fn viewers(&self) -> usize {
-        self.shared.lock().unwrap().viewers.iter().filter(|v| !v.is_closed()).count()
+        self.shared.locked().viewers.iter().filter(|v| !v.is_closed()).count()
     }
 
     /// Watch: MP4 pieces to pass on to the browser as they are. Ends when
     /// the stream stops (the browser then reconnects).
     pub fn subscribe(self: &Arc<Self>) -> mpsc::Receiver<Bytes> {
         let (tx, rx) = mpsc::channel(VIEWER_QUEUE);
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.locked();
         if let Some(init) = &s.init {
             // The header and the latest keyframe group in one piece.
             let mut first = BytesMut::with_capacity(init.len() + s.gop_bytes);
@@ -99,7 +100,7 @@ impl LiveMux {
         if let Err(e) = &res {
             warn!("{name}: live video (browser) stopped: {e:#}");
         }
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.locked();
         s.init = None;
         s.gop.clear();
         s.gop_bytes = 0;
@@ -166,7 +167,7 @@ impl LiveMux {
 
     /// Keep and send one piece of the MP4 stream.
     fn publish(&self, piece: Piece) {
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.locked();
         let bytes = match piece {
             Piece::Init(b) => {
                 s.init = Some(b.clone());

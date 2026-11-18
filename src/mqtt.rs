@@ -13,6 +13,7 @@
 //!   gaze/<camera>/event             JSON of each new alert
 //!   gaze/<camera>/snapshot          the alert's picture (JPEG)
 
+use crate::sync::MutexExt;
 use crate::manager::Manager;
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS};
 use serde_json::json;
@@ -29,10 +30,10 @@ pub struct Status {
 }
 static STATUS: Mutex<Option<Status>> = Mutex::new(None);
 pub fn status() -> Status {
-    STATUS.lock().unwrap().clone().unwrap_or_default()
+    STATUS.locked().clone().unwrap_or_default()
 }
 fn set_status(connected: bool, error: Option<String>) {
-    *STATUS.lock().unwrap() = Some(Status { connected, error });
+    *STATUS.locked() = Some(Status { connected, error });
 }
 
 fn slug(s: &str) -> String {

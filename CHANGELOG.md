@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Sturdier internals** (no visible change): a fault in one part of GAZE can no longer lock up other parts through a poisoned lock (`src/sync.rs`); a test now fails if a new camera-specific web address is added without an access decision.
+
 ## 1.1.11 — November 2026
 - **Eleven looks** (👤 menu → *Look on this device*): Classic (as before), Rail (icon sidebar), Dock (floating bottom dock), Terminal (green phosphor), HUD (mission control), Paper (newspaper masthead), Brutal (loud blocks), Neon (synthwave, menu on the right), Soft (clay sidebar), Aurora (frosted glass) and Swiss (numbered grid). Each changes the layout, shapes, type and colours, and each has a day and a night version that follow *Colours on this device*. Chosen per device; no GAZE setting changes, recording is untouched, and phones keep the bottom tab bar in every look.
 

@@ -9,6 +9,7 @@
 //! Finished files are copied to `<remote>/<camera id>/...`. Uploaded files are
 //! remembered in `<camera folder>/.cloud-uploaded`.
 
+use crate::sync::MutexExt;
 use crate::config::CloudConfig;
 use crate::manager::Manager;
 use anyhow::{Result, bail};
@@ -307,7 +308,7 @@ pub async fn run(mgr: Arc<Manager>) {
             let done = uploaded_list(&dir);
             let store = stores.get(&cam.id).map(|s| s.as_ref());
             let todo = pending(&dir, &cfg.cloud.upload, store, &done);
-            STATUS.lock().unwrap().waiting = todo.len();
+            STATUS.locked().waiting = todo.len();
             let sizes: Vec<u64> = todo
                 .iter()
                 .map(|(p, _)| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
@@ -370,7 +371,7 @@ pub async fn run(mgr: Arc<Manager>) {
                         }
                         info!("[{}] cloud: uploaded {rel}", cam.name);
                         last_error.clear();
-                        let mut st = STATUS.lock().unwrap();
+                        let mut st = STATUS.locked();
                         st.last_upload = Some(chrono::Local::now());
                         st.uploaded += 1;
                         st.waiting = st.waiting.saturating_sub(1);
@@ -385,7 +386,7 @@ pub async fn run(mgr: Arc<Manager>) {
                         if let Some(j) = &job {
                             j.fail(&msg);
                         }
-                        STATUS.lock().unwrap().last_error = Some(msg);
+                        STATUS.locked().last_error = Some(msg);
                         fails += 1;
                         let wait = Duration::from_secs((60u64 << (fails - 1).min(5)).min(1800));
                         next_try = tokio::time::Instant::now() + wait;

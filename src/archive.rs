@@ -10,6 +10,7 @@
 //!
 //! What's being moved shows in System → Tasks (files left, size, speed).
 
+use crate::sync::MutexExt;
 use crate::config::{ArchivePlan, Config};
 use crate::manager::Manager;
 use crate::storage::{self, Recording};
@@ -124,7 +125,7 @@ pub fn overview(cfg: &Config) -> Value {
         })
         .collect();
     let free = if reachable { fs4::available_space(&a.dir).ok() } else { None };
-    json!({"enabled": a.enabled, "reachable": reachable, "free_bytes": free, "status": STATUS.lock().unwrap().clone(), "cameras": cams})
+    json!({"enabled": a.enabled, "reachable": reachable, "free_bytes": free, "status": STATUS.locked().clone(), "cameras": cams})
 }
 
 /// Tell `storage` where each camera's older footage is.
@@ -164,13 +165,13 @@ pub async fn run(mgr: Arc<Manager>) {
         crate::cloud::connect_share_to(&a.dir.to_string_lossy(), &a.user, &a.password).await;
         if let Err(e) = std::fs::create_dir_all(&a.dir) {
             let msg = format!("can't use {}: {e}", a.dir.display());
-            STATUS.lock().unwrap().last_error = Some(msg.clone());
+            STATUS.locked().last_error = Some(msg.clone());
             fails += 1;
             next_try = tokio::time::Instant::now() + Duration::from_secs((60u64 << (fails - 1).min(5)).min(1800));
             warn!("deep storage: {msg}");
             continue;
         }
-        STATUS.lock().unwrap().running = true;
+        STATUS.locked().running = true;
         'cams: for cam in &cfg.cameras {
             let Some(plan) = cfg.archive_for(cam) else { continue };
             let dir = cfg.camera_dir(cam);
@@ -198,7 +199,7 @@ pub async fn run(mgr: Arc<Manager>) {
                         job.done_one();
                         let secs = began.elapsed().as_secs_f64().max(0.001);
                         job.transfer(done_bytes, total, (done_bytes as f64 / secs) as u64);
-                        let mut st = STATUS.lock().unwrap();
+                        let mut st = STATUS.locked();
                         st.moved_files += 1;
                         st.moved_bytes += r.size;
                         st.last_error = None;
@@ -207,7 +208,7 @@ pub async fn run(mgr: Arc<Manager>) {
                         let msg = format!("{e:#}");
                         warn!("[{}] deep storage: {msg}", cam.name);
                         job.fail(&msg);
-                        STATUS.lock().unwrap().last_error = Some(msg);
+                        STATUS.locked().last_error = Some(msg);
                         fails += 1;
                         next_try = tokio::time::Instant::now() + Duration::from_secs((60u64 << (fails - 1).min(5)).min(1800));
                         break 'cams;
@@ -219,10 +220,10 @@ pub async fn run(mgr: Arc<Manager>) {
             last_retention = std::time::Instant::now();
             let cfg2 = cfg.clone();
             if let Ok(n) = tokio::task::spawn_blocking(move || retention(&cfg2)).await {
-                STATUS.lock().unwrap().deleted_files += n;
+                STATUS.locked().deleted_files += n;
             }
         }
-        let mut st = STATUS.lock().unwrap();
+        let mut st = STATUS.locked();
         st.running = false;
         st.last_run = Some(Local::now());
     }

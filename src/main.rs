@@ -56,6 +56,7 @@ mod rtmp;
 mod seen;
 mod stationary;
 mod storage;
+mod sync;
 mod sysmon;
 mod talk;
 mod talkmix;
@@ -70,6 +71,7 @@ mod web;
 mod winservice;
 mod zones;
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result};
 
 use tracing::{error, info, warn};
@@ -188,7 +190,7 @@ fn main() -> Result<()> {
     let _ = mode;
     tray::attach_console();
     update::set_restart(|| {
-        *AFTER.lock().unwrap() = Some(tray::Action::Restart);
+        *AFTER.locked() = Some(tray::Action::Restart);
         QUIT.notify_one();
     });
     let res = runtime()?.block_on(run(&path, true));
@@ -198,7 +200,7 @@ fn main() -> Result<()> {
     }
     tray::remove();
     let exe = exe();
-    match *AFTER.lock().unwrap() {
+    match *AFTER.locked() {
         Some(tray::Action::Restart) if res.is_ok() => {
             // Unix: replace this process (same process for systemd & co).
             #[cfg(unix)]
@@ -504,7 +506,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
                 companion: false,
             },
             Box::new(|action| {
-                *AFTER.lock().unwrap() = Some(action);
+                *AFTER.locked() = Some(action);
                 QUIT.notify_one();
             }),
         );

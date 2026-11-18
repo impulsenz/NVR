@@ -1,6 +1,7 @@
 //! In-app log: every log message is kept in memory (for the Logs page) and
 //! appended to `nvr.log` in the data folder (rotated at 10 MB).
 
+use crate::sync::MutexExt;
 use chrono::{DateTime, Local};
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -60,12 +61,12 @@ impl LogBuffer {
             .append(true)
             .open(&path)
         {
-            *self.file.lock().unwrap() = Some((path, f));
+            *self.file.locked() = Some((path, f));
         }
     }
 
     pub fn file_path(&self) -> Option<PathBuf> {
-        self.file.lock().unwrap().as_ref().map(|(p, _)| p.clone())
+        self.file.locked().as_ref().map(|(p, _)| p.clone())
     }
 
     fn push(&self, level: &'static str, kind: &'static str, message: String) {
@@ -81,7 +82,7 @@ impl LogBuffer {
             camera,
             message,
         };
-        if let Some((path, file)) = self.file.lock().unwrap().as_mut() {
+        if let Some((path, file)) = self.file.locked().as_mut() {
             let _ = writeln!(
                 file,
                 "{} {:5} {}",
@@ -101,7 +102,7 @@ impl LogBuffer {
                 }
             }
         }
-        let mut e = self.entries.lock().unwrap();
+        let mut e = self.entries.locked();
         e.push_back(entry);
         while e.len() > KEEP {
             e.pop_front();
@@ -115,7 +116,7 @@ impl LogBuffer {
                 .map(str::to_lowercase)
                 .filter(|s| !s.is_empty());
         let min = level_rank(q.level.as_deref().unwrap_or("info"));
-        let e = self.entries.lock().unwrap();
+        let e = self.entries.locked();
         let mut out: Vec<LogEntry> = e
             .iter()
             .rev()
@@ -144,7 +145,7 @@ impl LogBuffer {
 
     /// Ids of errors since `since` (newest last), at most 500.
     pub fn error_ids_since(&self, since: DateTime<Local>) -> Vec<u64> {
-        let e = self.entries.lock().unwrap();
+        let e = self.entries.locked();
         let mut v: Vec<u64> = e
             .iter()
             .rev()
@@ -159,7 +160,7 @@ impl LogBuffer {
 
     /// Count of warnings/errors since `since`.
     pub fn problems_since(&self, since: DateTime<Local>) -> (usize, usize) {
-        let e = self.entries.lock().unwrap();
+        let e = self.entries.locked();
         let recent = e.iter().rev().take_while(|x| x.time >= since);
         let (mut w, mut er) = (0, 0);
         for x in recent {

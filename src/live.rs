@@ -3,6 +3,7 @@
 //! stream open or poll single frames (used by the multi-camera grid).
 //! The process only runs while somebody is watching.
 
+use crate::sync::MutexExt;
 use crate::config::{CameraConfig, redact};
 use crate::ffmpeg;
 use crate::manager::RuntimeEnv;
@@ -86,7 +87,7 @@ impl Live {
 
     /// Frames per second currently produced (0 when idle).
     pub fn fps(&self) -> f32 {
-        let f = self.fps.lock().unwrap();
+        let f = self.fps.locked();
         if f.1.elapsed() > Duration::from_secs(5) {
             0.0
         } else {
@@ -96,7 +97,7 @@ impl Live {
 
     /// Frames per second this stream is produced at.
     pub fn target_fps(&self) -> u32 {
-        let v = self.view.lock().unwrap();
+        let v = self.view.locked();
         match self.quality {
             Quality::Sub if v.grid_fps > 0 => v.grid_fps,
             Quality::Sub => self.env.live.fps,
@@ -108,7 +109,7 @@ impl Live {
     /// Apply new live-view options (restarts this stream if the rate changes).
     pub fn set_view(&self, v: crate::config::ViewConfig) {
         let before = self.target_fps();
-        *self.view.lock().unwrap() = v;
+        *self.view.locked() = v;
         if self.target_fps() != before {
             self.view_changed.notify_waiters();
         }
@@ -129,7 +130,7 @@ impl Live {
     }
 
     fn ensure_running(self: &Arc<Self>) {
-        let mut running = self.running.lock().unwrap();
+        let mut running = self.running.locked();
         if !*running && !self.cancel.is_cancelled() {
             *running = true;
             tokio::spawn(self.clone().produce());
@@ -145,7 +146,7 @@ impl Live {
 
     /// The latest frame, waiting briefly for one if the stream is just starting.
     pub async fn frame(self: &Arc<Self>) -> Result<Bytes> {
-        *self.last_poll.lock().unwrap() = Instant::now();
+        *self.last_poll.locked() = Instant::now();
         let mut rx = self.tx.subscribe();
         self.ensure_running();
         let fresh = |f: &Frame| {
@@ -211,7 +212,7 @@ impl Live {
     fn wanted(&self) -> bool {
         !self.cancel.is_cancelled()
             && (self.tx.receiver_count() > 0
-                || self.last_poll.lock().unwrap().elapsed() < POLL_KEEPALIVE)
+                || self.last_poll.locked().elapsed() < POLL_KEEPALIVE)
     }
 
     async fn produce(self: Arc<Self>) {
@@ -255,7 +256,7 @@ impl Live {
                 self.use_gpu.store(false, Ordering::SeqCst);
             }
             {
-                let mut running = self.running.lock().unwrap();
+                let mut running = self.running.locked();
                 if !self.wanted() {
                     *running = false;
                     info!(
@@ -301,7 +302,7 @@ impl Live {
 
     fn publish(&self, frame: Bytes) {
         self.tx.send_replace(Some((Instant::now(), frame)));
-        let mut f = self.fps.lock().unwrap();
+        let mut f = self.fps.locked();
         f.0 += 1;
         let el = f.1.elapsed().as_secs_f32();
         if el >= 2.0 {

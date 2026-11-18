@@ -3,6 +3,7 @@
 //! huggingface.co/rhasspy/piper-voices). Downloaded on request (the engine
 //! about 20 MB once, each voice about 60 MB), kept under nvr-data/voices.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -62,7 +63,7 @@ pub fn installed(id: &str) -> bool {
 }
 
 pub fn catalog() -> Vec<Entry> {
-    let busy = BUSY.lock().unwrap().clone();
+    let busy = BUSY.locked().clone();
     CATALOG
         .iter()
         .map(|(id, name, lang, _)| Entry {
@@ -81,7 +82,7 @@ pub fn ensure(id: &str) -> bool {
     if installed(id) {
         return true;
     }
-    if CATALOG.iter().any(|v| v.0 == id) && !BUSY.lock().unwrap().iter().any(|b| b == id) {
+    if CATALOG.iter().any(|v| v.0 == id) && !BUSY.locked().iter().any(|b| b == id) {
         let id = id.to_string();
         tokio::spawn(async move {
             tracing::info!("downloading the chosen voice {id}");
@@ -107,7 +108,7 @@ pub async fn keep_ready(m: std::sync::Arc<crate::manager::Manager>) {
 pub async fn download(id: &str) -> Result<()> {
     let Some((_, name, _, path)) = CATALOG.iter().find(|v| v.0 == id) else { bail!("unknown voice") };
     {
-        let mut b = BUSY.lock().unwrap();
+        let mut b = BUSY.locked();
         if b.iter().any(|x| x == id) {
             bail!("already downloading");
         }
@@ -132,7 +133,7 @@ pub async fn download(id: &str) -> Result<()> {
         anyhow::Ok(())
     }
     .await;
-    BUSY.lock().unwrap().retain(|x| x != id);
+    BUSY.locked().retain(|x| x != id);
     res
 }
 

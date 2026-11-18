@@ -13,6 +13,7 @@
 //! in the case first. A protected item can't be removed from its case, and
 //! a case with protected items can't be deleted.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
@@ -97,11 +98,11 @@ pub fn init(data_dir: &Path) {
         let n: usize = cases.iter().map(|c| c.items.iter().filter(|i| i.protected).count()).sum();
         tracing::info!("Evidence Locker: {} case(s), {n} protected item(s)", cases.len());
     }
-    *LOCKER.lock().unwrap() = Some(Locker { dir, cases });
+    *LOCKER.locked() = Some(Locker { dir, cases });
 }
 
 fn with<R>(f: impl FnOnce(&mut Locker) -> Result<R>) -> Result<R> {
-    let mut g = LOCKER.lock().unwrap();
+    let mut g = LOCKER.locked();
     let l = g.as_mut().context("the Evidence Locker isn't ready")?;
     f(l)
 }
@@ -116,7 +117,7 @@ fn save(l: &Locker) -> Result<()> {
 }
 
 pub fn list() -> Vec<Case> {
-    LOCKER.lock().unwrap().as_ref().map(|l| l.cases.clone()).unwrap_or_default()
+    LOCKER.locked().as_ref().map(|l| l.cases.clone()).unwrap_or_default()
 }
 
 pub fn get(id: &str) -> Option<Case> {
@@ -125,7 +126,7 @@ pub fn get(id: &str) -> Option<Case> {
 
 /// The folder a case's files are kept in.
 pub fn case_dir(id: &str) -> Option<PathBuf> {
-    let g = LOCKER.lock().unwrap();
+    let g = LOCKER.locked();
     let l = g.as_ref()?;
     l.cases.iter().any(|c| c.id == id).then(|| l.dir.join(id))
 }
@@ -244,7 +245,7 @@ pub fn remove_item(case: &str, item: &str) -> Result<()> {
 
 /// The case (by name) whose protected items lock this alert.
 pub fn locks_event(camera: &str, event: &str) -> Option<String> {
-    let g = LOCKER.lock().unwrap();
+    let g = LOCKER.locked();
     let l = g.as_ref()?;
     l.cases.iter().find(|c| c.items.iter().any(|i| i.protected && i.camera == camera && i.event.as_deref() == Some(event))).map(|c| c.name.clone())
 }
@@ -252,7 +253,7 @@ pub fn locks_event(camera: &str, event: &str) -> Option<String> {
 /// The case whose protected items lock footage of this camera between these
 /// times (a recording file, an alert clip).
 pub fn locks_time(camera: &str, from: DateTime<Local>, to: DateTime<Local>) -> Option<String> {
-    let g = LOCKER.lock().unwrap();
+    let g = LOCKER.locked();
     let l = g.as_ref()?;
     l.cases
         .iter()

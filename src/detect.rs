@@ -6,6 +6,7 @@
 //! `ai_interval` seconds). Activity is grouped into events, saved with a
 //! thumbnail, and (in event-recording modes) turned into full-quality clips.
 
+use crate::sync::MutexExt;
 use crate::ai::{AiError, AiHandle, Detection};
 use crate::buffer::EventBuffer;
 use crate::config::{CameraConfig, redact};
@@ -428,14 +429,14 @@ impl Detector {
     /// The camera itself detected something (its own motion, person or
     /// vehicle detection, a doorbell press): an alert, as if GAZE had seen it.
     pub fn external(&self, label: &str, note: &str) {
-        let mut q = self.external.lock().unwrap();
+        let mut q = self.external.locked();
         if q.len() < 20 {
             q.push((label.to_string(), note.to_string()));
         }
     }
 
     pub fn status(&self) -> DetectStatus {
-        self.status.lock().unwrap().clone()
+        self.status.locked().clone()
     }
 
     /// Frames as they are analysed (RGB, about 640 px wide).
@@ -445,7 +446,7 @@ impl Detector {
 
     /// The most recent analysed frame.
     pub fn latest_frame(&self) -> Option<Frame> {
-        self.latest.lock().unwrap().clone()
+        self.latest.locked().clone()
     }
 
     /// Analysis size: 640 px wide, keeping the sub-stream's shape.
@@ -479,15 +480,15 @@ impl Detector {
                 if let Some(a) = active.take() {
                     self.finish(a);
                 }
-                self.status.lock().unwrap().running = false;
+                self.status.locked().running = false;
                 return;
             }
             if let Err(e) = res {
                 let msg = redact(&format!("{e:#}"), self.cam.live_url());
                 warn!("[{}] detection: {msg}", self.cam.name);
-                self.status.lock().unwrap().error = Some(msg);
+                self.status.locked().error = Some(msg);
             }
-            self.status.lock().unwrap().running = false;
+            self.status.locked().running = false;
             if started.elapsed() < Duration::from_secs(15) {
                 failures += 1;
                 if use_gpu && failures >= 2 {
@@ -517,7 +518,7 @@ impl Detector {
         active: &mut Option<Active>,
     ) -> Result<()> {
         let use_gpu = *use_gpu_now;
-        self.status.lock().unwrap().gpu_decoding = use_gpu;
+        self.status.locked().gpu_decoding = use_gpu;
         // Automatic CPU/GPU choice (when a GPU is set up but sub-streams are
         // not forced onto it): move when one side is overloaded for a while.
         let auto = crate::load::balance()
@@ -573,7 +574,7 @@ impl Detector {
                     // Lost or corrupt stream data: the next frames are broken.
                     let l = line.to_ascii_lowercase();
                     if l.contains("[mpegts") || l.contains("corrupt") || l.contains("concealing") {
-                        *damaged.lock().unwrap() = Some(Instant::now());
+                        *damaged.locked() = Some(Instant::now());
                         continue;
                     }
                     if l.contains("deprecated") {
@@ -584,13 +585,13 @@ impl Detector {
                         warn!("[{name}] detection ffmpeg: {}", redact(&msg, &url));
                     }
                     if filter.decode_warnings > before {
-                        *damaged.lock().unwrap() = Some(Instant::now());
+                        *damaged.locked() = Some(Instant::now());
                     }
                 }
             });
         }
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.locked();
             s.running = true;
             s.error = None;
         }
@@ -667,17 +668,17 @@ impl Detector {
                 rgb: Arc::new(buf),
             };
             // The live grid gets every frame right away.
-            *self.latest.lock().unwrap() = Some(frame.clone());
+            *self.latest.locked() = Some(frame.clone());
             self.frames.send_replace(Some(frame.clone()));
             // A sudden colour cast (typically green) is a broken frame even
             // when the decoder said nothing.
             if tint.check(&frame) {
-                *damaged_at.lock().unwrap() = Some(Instant::now());
+                *damaged_at.locked() = Some(Instant::now());
             }
             pending.push_back((frame, Instant::now()));
             fps_count += 1;
             if fps_since.elapsed() >= Duration::from_secs(5) {
-                self.status.lock().unwrap().fps =
+                self.status.locked().fps =
                     fps_count as f32 / fps_since.elapsed().as_secs_f32();
                 fps_count = 0;
                 fps_since = Instant::now();
@@ -692,8 +693,7 @@ impl Detector {
             {
                 let (frame, at) = pending.pop_front().unwrap();
                 let damaged = damaged_at
-                    .lock()
-                    .unwrap()
+                    .locked()
                     .is_some_and(|t| t + Duration::from_millis(1500) >= at);
                 if damaged {
                     // Keep the event alive but don't learn from or save broken
@@ -735,7 +735,7 @@ impl Detector {
                 let look_anyway = settling && self.cam.ptz.follow;
                 let moving = d.motion && !settling && m.as_ref().is_some_and(|m| m.moving);
                 {
-                    let mut s = self.status.lock().unwrap();
+                    let mut s = self.status.locked();
                     s.motion = moving;
                     s.motion_level = m.as_ref().map(|m| m.fraction).unwrap_or(0.0);
                     s.objects = m.as_ref().map(|m| m.objects.clone()).unwrap_or_default();
@@ -749,7 +749,7 @@ impl Detector {
                     }
                 }
                 if !moving && active.is_none() {
-                    *self.quiet.lock().unwrap() = Some((frame.clone(), Instant::now()));
+                    *self.quiet.locked() = Some((frame.clone(), Instant::now()));
                 }
                 let now = Local::now();
                 if moving && let Some(o) = m.as_ref().and_then(|m| m.objects.first()) {
@@ -764,7 +764,7 @@ impl Detector {
                 }
 
                 // What the camera itself reported.
-                let ext: Vec<(String, String)> = std::mem::take(&mut *self.external.lock().unwrap());
+                let ext: Vec<(String, String)> = std::mem::take(&mut *self.external.locked());
                 for (label, note) in ext {
                     // (Only the camera's own motion detection counts as
                     // motion; a sound or a doorbell press doesn't.)
@@ -857,8 +857,7 @@ impl Detector {
         // differs anyway: light, shadows, day and night).
         let quiet = self
             .quiet
-            .lock()
-            .unwrap()
+            .locked()
             .clone()
             .filter(|(_, at)| at.elapsed() < Duration::from_secs(120))
             .map(|(f, _)| f);
@@ -972,12 +971,12 @@ impl Detector {
         let d = &self.cam.detect;
         let dets = match res {
             Ok(d) => {
-                self.status.lock().unwrap().ai_error = None;
+                self.status.locked().ai_error = None;
                 d
             }
             Err(e) => {
                 let msg = e.to_string();
-                let mut s = self.status.lock().unwrap();
+                let mut s = self.status.locked();
                 if s.ai_error.as_deref() != Some(&msg) {
                     warn!("[{}] AI: {msg}", self.cam.name);
                 }
@@ -1009,7 +1008,7 @@ impl Detector {
             .cloned()
             .collect();
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.locked();
             s.seen_now = hits.iter().map(|x| SeenBox { label: x.label.clone(), score: x.score, x: x.x, y: x.y, w: x.w, h: x.h }).collect();
             s.seen_at = Some(Instant::now());
         }
@@ -1048,7 +1047,7 @@ impl Detector {
                 .filter(|x| x.score >= 0.3 && kinds.contains(&x.label))
                 .cloned()
                 .collect();
-            let (keep, notes) = self.parked.lock().unwrap().filter(
+            let (keep, notes) = self.parked.locked().filter(
                 candidates,
                 kinds,
                 Duration::from_secs(d.parked_seconds.max(10) as u64),
@@ -1058,8 +1057,8 @@ impl Detector {
                     .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label)),
             );
             hits = others;
-            let parked = self.parked.lock().unwrap().parked();
-            self.status.lock().unwrap().parked = parked;
+            let parked = self.parked.locked().parked();
+            self.status.locked().parked = parked;
             for n in notes {
                 info!(target: "event", "[{}] {n}", self.cam.name);
                 if let Some(a) = active.as_mut()
@@ -1105,7 +1104,7 @@ impl Detector {
         // Not confirmed in full quality a moment ago, at the same spot: still
         // nothing (no new alert for it).
         {
-            let mut rj = self.rejected.lock().unwrap();
+            let mut rj = self.rejected.locked();
             rj.retain(|(_, _, t)| t.elapsed() < Duration::from_secs(120));
             if !rj.is_empty() {
                 hits.retain(|h| !rj.iter().any(|(l, b, _)| *l == h.label && same_spot(h, *b)));
@@ -1114,7 +1113,7 @@ impl Detector {
         // Zones: required areas, crossings, loitering.
         let mut zone_notes = Vec::new();
         if !self.cam.zones.is_empty() {
-            let r = self.zones.lock().unwrap().check(&self.cam.zones, hits);
+            let r = self.zones.locked().check(&self.cam.zones, hits);
             hits = r.keep;
             zone_notes = r.notes;
         }
@@ -1298,7 +1297,7 @@ impl Detector {
                     e.notes.push(format!("Full-quality check: a {new}, not a {label}"));
                 }
                 HdVerdict::NotSeen => {
-                    self.rejected.lock().unwrap().push((label.clone(), b, Instant::now()));
+                    self.rejected.locked().push((label.clone(), b, Instant::now()));
                     if drop {
                         info!(target: "event", "[{}] {label}: not seen in full quality — left out", self.cam.name);
                         e.labels.retain(|l| l.label != label);
@@ -1368,7 +1367,7 @@ impl Detector {
     }
 
     fn mark_active(&self, a: &Active) {
-        let mut s = self.status.lock().unwrap();
+        let mut s = self.status.locked();
         s.event_active = true;
         s.active_labels = a.event.labels.clone();
         s.last_event = Some(a.event.start);
@@ -1412,7 +1411,7 @@ impl Detector {
         if a.zone_before.is_empty() {
             return None;
         }
-        let now = self.latest.lock().unwrap().clone()?;
+        let now = self.latest.locked().clone()?;
         let sigs: Vec<Option<Vec<f32>>> = a
             .zone_before
             .iter()
@@ -1427,7 +1426,7 @@ impl Detector {
 
     fn finish(&self, mut a: Active) {
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.locked();
             s.event_active = false;
             s.active_labels.clear();
         }
@@ -1459,7 +1458,7 @@ impl Detector {
         a.event.end = a.last_activity.max(a.event.start + CDuration::seconds(1));
         // Item left or taken: the area looks different now that it's quiet.
         if !a.zone_before.is_empty()
-            && let Some(now) = self.latest.lock().unwrap().clone()
+            && let Some(now) = self.latest.locked().clone()
         {
             let person = a.event.labels.iter().any(|l| l.label == "person");
             for (zi, (z, before, before_pic)) in a.zone_before.iter().enumerate() {

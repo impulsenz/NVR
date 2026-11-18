@@ -4,6 +4,7 @@
 //! in alerts). A **vehicle** has number plates and photos. Kept in
 //! `nvr-data/known.json`, photos in `nvr-data/known/<id>/`.
 
+use crate::sync::{RwLockExt};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -92,7 +93,7 @@ impl KnownStore {
     }
 
     fn save(&self) -> Result<()> {
-        let b = serde_json::to_vec_pretty(&*self.items.read().unwrap())?;
+        let b = serde_json::to_vec_pretty(&*self.items.reader())?;
         let tmp = self.file.with_extension("json.tmp");
         std::fs::write(&tmp, b)?;
         std::fs::rename(&tmp, &self.file)?;
@@ -102,7 +103,7 @@ impl KnownStore {
     /// For a backup: the list (with faceprints) and every photo, as
     /// (path inside the backup, bytes).
     pub fn export(&self) -> (Vec<u8>, Vec<(String, Vec<u8>)>) {
-        let items = self.items.read().unwrap().clone();
+        let items = self.items.reader().clone();
         let mut photos = Vec::new();
         for k in &items {
             for p in &k.photos {
@@ -122,7 +123,7 @@ impl KnownStore {
         let ok = |s: &str| !s.is_empty() && s.len() <= 80 && !s.contains(['/', '\\', ':']) && !s.starts_with('.');
         let mut n = 0;
         {
-            let mut items = self.items.write().unwrap();
+            let mut items = self.items.writer();
             for mut k in incoming {
                 if !ok(&k.id) {
                     continue;
@@ -142,8 +143,7 @@ impl KnownStore {
 
     pub fn list(&self) -> Vec<KnownInfo> {
         self.items
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .map(|k| KnownInfo {
                 id: k.id.clone(),
@@ -158,8 +158,7 @@ impl KnownStore {
 
     pub fn get(&self, id: &str) -> Option<Known> {
         self.items
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .find(|k| k.id == id)
             .cloned()
@@ -183,7 +182,7 @@ impl KnownStore {
             id = "known".into();
         }
         {
-            let mut items = self.items.write().unwrap();
+            let mut items = self.items.writer();
             let mut n = 2;
             let root = id.clone();
             while items.iter().any(|k| k.id == id) {
@@ -204,7 +203,7 @@ impl KnownStore {
 
     pub fn update(&self, id: &str, name: Option<&str>, plates: Option<Vec<String>>) -> Result<()> {
         {
-            let mut items = self.items.write().unwrap();
+            let mut items = self.items.writer();
             let k = items
                 .iter_mut()
                 .find(|k| k.id == id)
@@ -220,7 +219,7 @@ impl KnownStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
-        self.items.write().unwrap().retain(|k| k.id != id);
+        self.items.writer().retain(|k| k.id != id);
         let _ = std::fs::remove_dir_all(self.dir.join(id));
         self.save()
     }
@@ -234,7 +233,7 @@ impl KnownStore {
         photo: Option<&[u8]>,
     ) -> Result<()> {
         {
-            let mut items = self.items.write().unwrap();
+            let mut items = self.items.writer();
             let k = items
                 .iter_mut()
                 .find(|k| k.id == id)
@@ -275,7 +274,7 @@ impl KnownStore {
     /// are dropped, and it's remembered as not them.
     pub fn not_this(&self, name: &str, print: &[f32]) -> Result<()> {
         {
-            let mut items = self.items.write().unwrap();
+            let mut items = self.items.writer();
             let Some(k) = items
                 .iter_mut()
                 .find(|k| k.kind == "person" && k.name == name)
@@ -294,8 +293,7 @@ impl KnownStore {
     /// The known person this faceprint belongs to (name, similarity).
     pub fn match_face(&self, print: &[f32]) -> Option<(String, f32)> {
         self.items
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .filter(|k| k.kind == "person")
             .filter_map(|k| {
@@ -319,8 +317,7 @@ impl KnownStore {
     /// The known vehicle with this plate.
     pub fn match_plate(&self, plate: &str) -> Option<String> {
         self.items
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .filter(|k| k.kind == "vehicle")
             .find(|k| {

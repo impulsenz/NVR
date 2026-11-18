@@ -6,6 +6,7 @@
 //! profile token), ContinuousMove / Stop, and presets.
 //! Authentication is WS-Security UsernameToken with a password digest.
 
+use crate::sync::MutexExt;
 use crate::config::{CameraConfig, PtzConfig};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
@@ -287,7 +288,7 @@ impl Onvif {
     /// Find the services and a PTZ-capable profile (cached).
     async fn discover(&self, t: &Target) -> Result<Discovered> {
         {
-            let c = self.cache.lock().unwrap();
+            let c = self.cache.locked();
             if c.target.as_ref() == Some(t) && !c.profile.is_empty() {
                 return Ok(c.clone());
             }
@@ -332,7 +333,7 @@ impl Onvif {
             ptz,
             profile,
         };
-        *self.cache.lock().unwrap() = d.clone();
+        *self.cache.locked() = d.clone();
         Ok(d)
     }
 

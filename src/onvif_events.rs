@@ -5,6 +5,7 @@
 //! (the camera keeps the events until asked), which works through NAT and
 //! firewalls, unlike the camera calling GAZE.
 
+use crate::sync::MutexExt;
 use crate::config::CameraConfig;
 use crate::manager::Manager;
 use crate::onvif::{Target, attr_values, capability_xaddr, security_header, tag_text};
@@ -24,10 +25,10 @@ pub struct Status {
 }
 static STATUS: Mutex<Option<HashMap<String, Status>>> = Mutex::new(None);
 pub fn status(camera: &str) -> Option<Status> {
-    STATUS.lock().unwrap().as_ref()?.get(camera).cloned()
+    STATUS.locked().as_ref()?.get(camera).cloned()
 }
 fn set(camera: &str, f: impl FnOnce(&mut Status)) {
-    let mut s = STATUS.lock().unwrap();
+    let mut s = STATUS.locked();
     f(s.get_or_insert_with(HashMap::new).entry(camera.to_string()).or_default());
 }
 
@@ -176,7 +177,7 @@ pub async fn run(mgr: Arc<Manager>) {
             if !keep {
                 h.abort();
                 if !want.iter().any(|w| &w.id == id) {
-                    STATUS.lock().unwrap().as_mut().map(|m| m.remove(id));
+                    STATUS.locked().as_mut().map(|m| m.remove(id));
                 }
             }
             keep

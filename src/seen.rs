@@ -1,6 +1,7 @@
 //! Which alerts have been viewed: everything up to `before`, plus single
 //! alerts viewed since. Kept in `nvr-data/alerts-seen.json`.
 
+use crate::sync::MutexExt;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -38,7 +39,7 @@ impl Seen {
     }
 
     fn save(&self) {
-        let st = self.st.lock().unwrap();
+        let st = self.st.locked();
         if let Ok(b) = serde_json::to_vec(&*st) {
             let tmp = self.file.with_extension("json.tmp");
             if std::fs::write(&tmp, b).is_ok() {
@@ -48,18 +49,18 @@ impl Seen {
     }
 
     pub fn is_seen(&self, id: &str, start: DateTime<Local>) -> bool {
-        let st = self.st.lock().unwrap();
+        let st = self.st.locked();
         st.before.is_some_and(|b| start <= b) || st.ids.contains(id)
     }
 
     pub fn mark(&self, ids: &[String]) {
-        self.st.lock().unwrap().ids.extend(ids.iter().cloned());
+        self.st.locked().ids.extend(ids.iter().cloned());
         self.save();
     }
 
     pub fn mark_all(&self) {
         {
-            let mut st = self.st.lock().unwrap();
+            let mut st = self.st.locked();
             st.before = Some(Local::now());
             st.ids.clear();
         }
@@ -68,7 +69,7 @@ impl Seen {
 
     pub fn unmark(&self, id: &str, start: DateTime<Local>) {
         {
-            let mut st = self.st.lock().unwrap();
+            let mut st = self.st.locked();
             st.ids.remove(id);
             // Viewed because of "mark all": keep the others, move the line back.
             if st.before.is_some_and(|b| start <= b) {

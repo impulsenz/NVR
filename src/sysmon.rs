@@ -2,6 +2,7 @@
 //! history (fine-grained for 6 hours, per-minute for 30 days; the per-minute
 //! history is saved to disk so it survives restarts).
 
+use crate::sync::MutexExt;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::Write;
@@ -133,7 +134,7 @@ impl Monitor {
     }
 
     pub fn current(&self) -> Current {
-        self.current.lock().unwrap().clone()
+        self.current.locked().clone()
     }
 
     /// History for the last `seconds`, reduced to at most `points` points.
@@ -144,8 +145,7 @@ impl Monitor {
         // before them, the per-minute history (kept on disk) fills in.
         let fine: Vec<Point> = if seconds <= 6 * 3600 {
             self.fine
-                .lock()
-                .unwrap()
+                .locked()
                 .iter()
                 .filter(|s| s.t >= from)
                 .map(|s| Point {
@@ -169,8 +169,7 @@ impl Monitor {
         let until = fine.first().map(|p| p.t).unwrap_or(i64::MAX);
         let mut raw: Vec<Point> = self
             .minutes
-            .lock()
-            .unwrap()
+            .locked()
             .iter()
             .filter(|p| p.t >= from && p.t < until)
             .copied()
@@ -266,7 +265,7 @@ impl Monitor {
                 net_out: tx as f32 / secs,
             };
             crate::load::update(s.cpu, s.gpu);
-            *self.current.lock().unwrap() = Current {
+            *self.current.locked() = Current {
                 sample: s,
                 cpu_name: sys
                     .cpus()
@@ -292,7 +291,7 @@ impl Monitor {
                 },
             };
             {
-                let mut f = self.fine.lock().unwrap();
+                let mut f = self.fine.locked();
                 f.push_back(s);
                 while f.len() > FINE_KEEP {
                     f.pop_front();
@@ -303,7 +302,7 @@ impl Monitor {
                 let p = aggregate(&minute);
                 minute.clear();
                 {
-                    let mut m = self.minutes.lock().unwrap();
+                    let mut m = self.minutes.locked();
                     m.push_back(p);
                     while m.len() > MINUTE_KEEP {
                         m.pop_front();
@@ -338,7 +337,7 @@ impl Monitor {
         }
         // Keep the file from growing forever: rewrite it once a day.
         if p.t % 86_400 < 60 {
-            let m = self.minutes.lock().unwrap();
+            let m = self.minutes.locked();
             let text: String = m
                 .iter()
                 .map(|p| {
@@ -534,7 +533,7 @@ fn stream(cmd: &'static str, args: Vec<String>, restart_every: Option<Duration>)
                 if l.is_empty() {
                     continue;
                 }
-                let mut s = st.lock().unwrap();
+                let mut s = st.locked();
                 // typeperf: the first quoted line names the columns.
                 if l.starts_with('"') && first_quoted {
                     first_quoted = false;
@@ -557,7 +556,7 @@ fn stream(cmd: &'static str, args: Vec<String>, restart_every: Option<Duration>)
 /// The latest reading of a stream (header and line together, as one
 /// sample's output), if it's recent.
 fn latest(s: &StreamRef) -> Option<String> {
-    let s = s.lock().unwrap();
+    let s = s.locked();
     let (at, l) = s.last.as_ref()?;
     if at.elapsed() > Duration::from_secs(5) {
         return None;
@@ -571,7 +570,7 @@ fn latest(s: &StreamRef) -> Option<String> {
 static STREAMS: std::sync::OnceLock<Mutex<std::collections::HashMap<&'static str, StreamRef>>> = std::sync::OnceLock::new();
 
 fn named_stream(name: &'static str, cmd: &'static str, args: &[&str], restart_every: Option<Duration>) -> StreamRef {
-    let mut m = STREAMS.get_or_init(Default::default).lock().unwrap();
+    let mut m = STREAMS.get_or_init(Default::default).locked();
     m.entry(name)
         .or_insert_with(|| stream(cmd, args.iter().map(|a| a.to_string()).collect(), restart_every))
         .clone()
@@ -671,6 +670,7 @@ fn sysfs_busy() -> Option<f32> {
 /// the plain busy time read instead didn't match Task Manager).
 #[cfg(windows)]
 mod pdh {
+    use crate::sync::MutexExt;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     use windows_sys::Win32::System::Performance::*;
@@ -706,7 +706,7 @@ mod pdh {
                 let mut v: PDH_FMT_COUNTERVALUE = std::mem::zeroed();
                 // 0x8000: PDH_FMT_NOCAP100 (it can go over 100 with turbo).
                 if PdhGetFormattedCounterValue(c, PDH_FMT_DOUBLE | 0x8000, std::ptr::null_mut(), &mut v) == 0 && v.CStatus <= 1 {
-                    *LAST.lock().unwrap() = Some((Instant::now(), v.Anonymous.doubleValue as f32));
+                    *LAST.locked() = Some((Instant::now(), v.Anonymous.doubleValue as f32));
                 }
             }
         }
@@ -714,7 +714,7 @@ mod pdh {
 
     pub fn latest() -> Option<f32> {
         start();
-        LAST.lock().unwrap().filter(|(t, _)| t.elapsed() < Duration::from_secs(4)).map(|(_, v)| v)
+        LAST.locked().filter(|(t, _)| t.elapsed() < Duration::from_secs(4)).map(|(_, v)| v)
     }
 }
 

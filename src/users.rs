@@ -12,6 +12,7 @@
 //! sign in). Repeated wrong passwords lock out the user name and the
 //! address they come from, for longer each time.
 
+use crate::sync::{MutexExt, RwLockExt};
 use crate::config::DashboardConfig;
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Duration, Utc};
@@ -289,7 +290,7 @@ impl Users {
     }
 
     fn save(&self) -> Result<()> {
-        let b = serde_json::to_vec_pretty(&*self.users.read().unwrap())?;
+        let b = serde_json::to_vec_pretty(&*self.users.reader())?;
         let tmp = self.file.with_extension("json.tmp");
         std::fs::write(&tmp, b)?;
         private(&tmp);
@@ -301,7 +302,7 @@ impl Users {
     /// with `secrets`, also passwords (as stored: hashed), two-step sign-in
     /// and API tokens.
     pub fn export(&self, secrets: bool) -> Vec<u8> {
-        let mut users = self.users.read().unwrap().clone();
+        let mut users = self.users.reader().clone();
         if !secrets {
             for u in &mut users {
                 u.hash.clear();
@@ -321,7 +322,7 @@ impl Users {
         let incoming: Vec<User> = serde_json::from_slice(json)?;
         let (mut n, mut skipped) = (0, 0);
         {
-            let mut users = self.users.write().unwrap();
+            let mut users = self.users.writer();
             for mut u in incoming {
                 let Ok(name) = check_name(&u.username) else { continue };
                 u.username = name;
@@ -351,7 +352,7 @@ impl Users {
     }
 
     fn save_sessions(&self) {
-        let s = self.sessions.lock().unwrap();
+        let s = self.sessions.locked();
         if let Ok(b) = serde_json::to_vec(&*s) {
             let tmp = self.sessions_file.with_extension("json.tmp");
             if std::fs::write(&tmp, b).is_ok() {
@@ -363,7 +364,7 @@ impl Users {
 
     /// No accounts yet: the first visitor sets up the admin account.
     pub fn setup_needed(&self) -> bool {
-        self.users.read().unwrap().is_empty()
+        self.users.reader().is_empty()
     }
 
     /// Earlier versions had one optional login in the settings: it becomes
@@ -373,7 +374,7 @@ impl Users {
             return;
         }
         if let Ok(h) = hash(password) {
-            self.users.write().unwrap().push(User {
+            self.users.writer().push(User {
                 username: username.trim().to_string(),
                 hash: h,
                 role: Role::Admin,
@@ -422,7 +423,7 @@ impl Users {
         check_password(password)?;
         let h = hash(password)?;
         {
-            let mut u = self.users.write().unwrap();
+            let mut u = self.users.writer();
             if first && !u.is_empty() {
                 bail!("the admin account already exists");
             }
@@ -456,7 +457,7 @@ impl Users {
             check_password(p)?;
         }
         {
-            let mut all = self.users.write().unwrap();
+            let mut all = self.users.writer();
             let admins = all.iter().filter(|u| u.role == Role::Admin).count();
             let u = all
                 .iter_mut()
@@ -478,8 +479,7 @@ impl Users {
         if password.is_some() {
             // Signed in elsewhere with the old password: signed out.
             self.sessions
-                .lock()
-                .unwrap()
+                .locked()
                 .retain(|_, s| s.user != username);
             self.save_sessions();
         }
@@ -488,7 +488,7 @@ impl Users {
 
     pub fn delete(&self, username: &str) -> Result<()> {
         {
-            let mut all = self.users.write().unwrap();
+            let mut all = self.users.writer();
             let admins = all.iter().filter(|u| u.role == Role::Admin).count();
             let u = all
                 .iter()
@@ -500,8 +500,7 @@ impl Users {
             all.retain(|u| u.username != username);
         }
         self.sessions
-            .lock()
-            .unwrap()
+            .locked()
             .retain(|_, s| s.user != username);
         self.save_sessions();
         self.save()
@@ -509,8 +508,7 @@ impl Users {
 
     pub fn list(&self) -> Vec<Me> {
         self.users
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .map(|u| Me {
                 username: u.username.clone(),
@@ -544,7 +542,7 @@ impl Users {
     }
 
     fn failed(&self, keys: &[String]) {
-        let mut f = self.failures.lock().unwrap();
+        let mut f = self.failures.locked();
         for k in keys {
             let e = f.entry(k.clone()).or_insert((0, Utc::now()));
             e.0 += 1;
@@ -553,19 +551,19 @@ impl Users {
     }
 
     pub fn has_two_step(&self, name: &str) -> bool {
-        self.users.read().unwrap().iter().any(|u| u.username == name && u.totp.is_some())
+        self.users.reader().iter().any(|u| u.username == name && u.totp.is_some())
     }
 
     /// A code from the authenticator app (this 30 s, or the one before or
     /// after: phone clocks drift), or an unused recovery code.
     fn check_code(&self, name: &str, code: &str) -> bool {
-        let mut users = self.users.write().unwrap();
+        let mut users = self.users.writer();
         let Some(u) = users.iter_mut().find(|u| u.username == name) else { return false };
         let Some(secret) = u.totp.as_ref().and_then(|s| base32_decode(s)) else { return false };
         let digits: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
         if digits.len() == 6 {
             let step = Utc::now().timestamp() / 30;
-            let mut last = LAST_STEP.lock().unwrap();
+            let mut last = LAST_STEP.locked();
             let used = last.get(name).copied().unwrap_or(i64::MIN);
             for s in [step - 1, step, step + 1] {
                 // Each code works once (no replaying one seen over a shoulder).
@@ -594,14 +592,14 @@ impl Users {
         let mut k = [0u8; 20];
         rand_core::OsRng.fill_bytes(&mut k);
         let secret = base32_encode(&k);
-        PENDING.lock().unwrap().insert(name.to_string(), secret.clone());
+        PENDING.locked().insert(name.to_string(), secret.clone());
         let uri = format!("otpauth://totp/GAZE:{}?secret={secret}&issuer=GAZE&digits=6&period=30", pct(name));
         (secret, uri)
     }
 
     /// Confirm with a code from the app; returns the recovery codes (shown once).
     pub fn finish_two_step(&self, name: &str, code: &str) -> Result<Vec<String>> {
-        let secret = PENDING.lock().unwrap().get(name).cloned().ok_or_else(|| anyhow::anyhow!("start again: scan the new QR code"))?;
+        let secret = PENDING.locked().get(name).cloned().ok_or_else(|| anyhow::anyhow!("start again: scan the new QR code"))?;
         let key = base32_decode(&secret).unwrap_or_default();
         let step = Utc::now().timestamp() / 30;
         let digits: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -618,12 +616,12 @@ impl Users {
             })
             .collect();
         {
-            let mut users = self.users.write().unwrap();
+            let mut users = self.users.writer();
             let u = users.iter_mut().find(|u| u.username == name).ok_or_else(|| anyhow::anyhow!("no such user"))?;
             u.totp = Some(secret);
             u.recovery = codes.iter().map(|c| sha256_hex(&c.replace('-', ""))).collect();
         }
-        PENDING.lock().unwrap().remove(name);
+        PENDING.locked().remove(name);
         self.save()?;
         Ok(codes)
     }
@@ -631,7 +629,7 @@ impl Users {
     /// Turn two-step sign-in off (the user, after their password; or an admin).
     pub fn stop_two_step(&self, name: &str) -> Result<()> {
         {
-            let mut users = self.users.write().unwrap();
+            let mut users = self.users.writer();
             let u = users.iter_mut().find(|u| u.username == name).ok_or_else(|| anyhow::anyhow!("no such user"))?;
             u.totp = None;
             u.recovery.clear();
@@ -647,7 +645,7 @@ impl Users {
             format!("ip:{from}"),
         ];
         {
-            let f = self.failures.lock().unwrap();
+            let f = self.failures.locked();
             for k in &keys {
                 if let Some((n, at)) = f.get(k) {
                     let wait = lockout(*n) - (Utc::now() - *at);
@@ -662,8 +660,7 @@ impl Users {
         }
         let user = self
             .users
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .find(|u| u.username.eq_ignore_ascii_case(username.trim()))
             .map(|u| (u.username.clone(), u.hash.clone()));
@@ -675,7 +672,7 @@ impl Users {
                 false
             }
         };
-        let mut f = self.failures.lock().unwrap();
+        let mut f = self.failures.locked();
         if ok {
             for k in &keys {
                 f.remove(k);
@@ -698,7 +695,7 @@ impl Users {
         let t = token();
         let days = if remember { remember_days() as i64 } else { 1 };
         {
-            let mut s = self.sessions.lock().unwrap();
+            let mut s = self.sessions.locked();
             s.retain(|_, x| x.expires > Utc::now());
             s.insert(
                 digest(&t),
@@ -714,7 +711,7 @@ impl Users {
     }
 
     pub fn logout(&self, token: &str) {
-        self.sessions.lock().unwrap().remove(&digest(token));
+        self.sessions.locked().remove(&digest(token));
         self.save_sessions();
     }
 
@@ -722,7 +719,7 @@ impl Users {
     /// The user an API token belongs to ("Authorization: Bearer …").
     pub fn token_user(&self, token: &str) -> Option<User> {
         let h = digest(token.trim());
-        self.users.read().unwrap().iter().find(|u| u.tokens.iter().any(|t| t.hash == h)).cloned()
+        self.users.reader().iter().find(|u| u.tokens.iter().any(|t| t.hash == h)).cloned()
     }
 
     /// A new API token for this user: shown once, only its hash is kept.
@@ -734,7 +731,7 @@ impl Users {
         let t = format!("gaze_{}", token());
         let id = token()[..12].to_string();
         {
-            let mut users = self.users.write().unwrap();
+            let mut users = self.users.writer();
             let u = users.iter_mut().find(|u| u.username == user).ok_or_else(|| anyhow::anyhow!("no such user"))?;
             if u.tokens.len() >= 20 {
                 bail!("at most 20 tokens per user — remove one first");
@@ -746,14 +743,14 @@ impl Users {
     }
 
     pub fn tokens(&self, user: &str) -> Vec<serde_json::Value> {
-        self.users.read().unwrap().iter().find(|u| u.username == user)
+        self.users.reader().iter().find(|u| u.username == user)
             .map(|u| u.tokens.iter().map(|t| serde_json::json!({"id": t.id, "name": t.name, "created": t.created})).collect())
             .unwrap_or_default()
     }
 
     pub fn remove_token(&self, user: &str, id: &str) -> Result<()> {
         {
-            let mut users = self.users.write().unwrap();
+            let mut users = self.users.writer();
             let u = users.iter_mut().find(|u| u.username == user).ok_or_else(|| anyhow::anyhow!("no such user"))?;
             u.tokens.retain(|t| t.id != id);
         }
@@ -762,7 +759,7 @@ impl Users {
 
     pub fn session_user(&self, token: &str) -> Option<User> {
         let name = {
-            let mut s = self.sessions.lock().unwrap();
+            let mut s = self.sessions.locked();
             let key = digest(token);
             let sess = s.get_mut(&key)?;
             let now = Utc::now();
@@ -789,8 +786,7 @@ impl Users {
             user
         };
         self.users
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .find(|u| u.username == name)
             .cloned()
@@ -798,8 +794,7 @@ impl Users {
 
     pub fn layout(&self, username: &str, device: &str) -> Option<DashboardConfig> {
         self.users
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .find(|u| u.username == username)
             .and_then(|u| u.layouts.get(device).cloned())
@@ -807,7 +802,7 @@ impl Users {
 
     pub fn set_layout(&self, username: &str, device: &str, d: DashboardConfig) -> Result<()> {
         {
-            let mut all = self.users.write().unwrap();
+            let mut all = self.users.writer();
             let u = all
                 .iter_mut()
                 .find(|u| u.username == username)

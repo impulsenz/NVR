@@ -2,6 +2,7 @@
 //! web UI go through here: they are validated, saved to disk, and applied by
 //! restarting only what is affected.
 
+use crate::sync::{MutexExt, RwLockExt};
 use crate::ai::AiHandle;
 use crate::buffer::{self, EventBuffer};
 use crate::config::{
@@ -244,7 +245,7 @@ impl CameraRuntime {
     /// Stop recording (finishing the current files), detection and live view.
     async fn stop(&self) {
         self.cancel.cancel();
-        let tasks: Vec<_> = self.tasks.lock().unwrap().drain(..).collect();
+        let tasks: Vec<_> = self.tasks.locked().drain(..).collect();
         let _ = tokio::time::timeout(
             Duration::from_secs(15),
             futures_util::future::join_all(tasks),
@@ -253,7 +254,7 @@ impl CameraRuntime {
     }
 
     pub fn detector(&self) -> Option<Arc<Detector>> {
-        self.detector.lock().unwrap().clone()
+        self.detector.locked().clone()
     }
 
     /// Is this alert still going on (its end not known yet)?
@@ -451,12 +452,12 @@ impl Manager {
             onvif: Mutex::new(HashMap::new()),
         });
         let cams: Vec<_> = config.cameras.iter().map(|c| m.start_camera(c)).collect();
-        *m.cameras.write().unwrap() = cams;
+        *m.cameras.writer() = cams;
         m
     }
 
     fn store(&self, cam: &CameraConfig, dir: &std::path::Path) -> Arc<EventStore> {
-        let mut stores = self.stores.lock().unwrap();
+        let mut stores = self.stores.locked();
         match stores.get(&cam.id) {
             Some(s) if s.dir() == dir.join("events") => s.clone(),
             _ => {
@@ -497,24 +498,23 @@ impl Manager {
     }
 
     pub fn config(&self) -> Config {
-        self.config.read().unwrap().clone()
+        self.config.reader().clone()
     }
 
     pub fn cameras(&self) -> Vec<Arc<CameraRuntime>> {
-        self.cameras.read().unwrap().clone()
+        self.cameras.reader().clone()
     }
 
     pub fn camera(&self, id: &str) -> Option<Arc<CameraRuntime>> {
         self.cameras
-            .read()
-            .unwrap()
+            .reader()
             .iter()
             .find(|c| c.cfg.id == id)
             .cloned()
     }
 
     pub fn event_stores(&self) -> HashMap<String, Arc<EventStore>> {
-        self.stores.lock().unwrap().clone()
+        self.stores.locked().clone()
     }
 
     /// Use the ffmpeg at `path` (saved in the settings).
@@ -532,7 +532,7 @@ impl Manager {
         new.validate()?;
         new.save(&self.cfg_path)?;
         crate::picturelog::configure(&new.storage);
-        *self.config.write().unwrap() = new;
+        *self.config.writer() = new;
         Ok(())
     }
 
@@ -549,7 +549,7 @@ impl Manager {
         self.commit(cfg)?;
         info!("added camera \"{}\"", cam.name);
         let rt = self.start_camera(&cam);
-        self.cameras.write().unwrap().push(rt);
+        self.cameras.writer().push(rt);
         Ok(cam)
     }
 
@@ -630,7 +630,7 @@ impl Manager {
             if let Some(rt) = self.camera(id) {
                 rt.stop().await;
             }
-            self.stores.lock().unwrap().remove(id);
+            self.stores.locked().remove(id);
         }
         self.restart_camera(&cam).await;
         if let Some((from, to)) = move_from {
@@ -657,7 +657,7 @@ impl Manager {
                     Ok(Ok(r)) => {
                         job.step(format!("{} files, {} MB", r.files, r.bytes / 1_000_000));
                         // The moved alerts and recordings show up: read afresh.
-                        me.stores.lock().unwrap().remove(&id2);
+                        me.stores.locked().remove(&id2);
                         if let Some(c) = me.config().cameras.into_iter().find(|c| c.id == id2) {
                             me.restart_camera(&c).await;
                         }
@@ -683,7 +683,7 @@ impl Manager {
             old.stop().await;
         }
         let rt = self.start_camera(cam);
-        let mut cams = self.cameras.write().unwrap();
+        let mut cams = self.cameras.writer();
         if let Some(slot) = cams.iter_mut().find(|c| c.cfg.id == cam.id) {
             *slot = rt;
         } else {
@@ -702,8 +702,8 @@ impl Manager {
         cfg.dashboard.remove_camera(id);
         self.commit(cfg)?;
         let rt = self.camera(id);
-        self.cameras.write().unwrap().retain(|c| c.cfg.id != id);
-        self.stores.lock().unwrap().remove(id);
+        self.cameras.writer().retain(|c| c.cfg.id != id);
+        self.stores.locked().remove(id);
         if let Some(rt) = rt {
             rt.stop().await;
             if delete_recordings {
@@ -719,8 +719,7 @@ impl Manager {
 
     pub fn onvif(&self, id: &str) -> Arc<crate::onvif::Onvif> {
         self.onvif
-            .lock()
-            .unwrap()
+            .locked()
             .entry(id.to_string())
             .or_default()
             .clone()
@@ -938,7 +937,7 @@ impl Manager {
                 if let Some(rt) = self.camera(&c.id) {
                     rt.stop().await;
                 }
-                self.cameras.write().unwrap().retain(|r| r.cfg.id != c.id);
+                self.cameras.writer().retain(|r| r.cfg.id != c.id);
             }
         }
         self.apply(old, new, false).await
@@ -961,7 +960,7 @@ impl Manager {
                 if let Some(rt) = self.camera(&cam.id) {
                     rt.stop().await;
                 }
-                self.stores.lock().unwrap().remove(&cam.id);
+                self.stores.locked().remove(&cam.id);
                 jobs.push((from, to));
             }
         }
@@ -1037,7 +1036,7 @@ impl Manager {
     }
 
     pub fn usage(&self) -> UsageReport {
-        self.usage.lock().unwrap().clone()
+        self.usage.locked().clone()
     }
 
     fn compute_usage(cfg: &Config) -> UsageReport {
@@ -1167,12 +1166,11 @@ impl Manager {
                         }
                     }
                 }
-                *me.usage.lock().unwrap() = Self::compute_usage(&cfg);
+                *me.usage.locked() = Self::compute_usage(&cfg);
             })
             .await;
             self.previews
-                .lock()
-                .unwrap()
+                .locked()
                 .retain(|_, v| v.2.elapsed() < Duration::from_secs(1800));
             n += 1;
         }

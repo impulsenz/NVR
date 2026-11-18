@@ -10,6 +10,7 @@
 //! At most one notification per camera per `gap_minutes` (a shorter gap at
 //! night); the summary of an alert whose picture was sent always follows.
 
+use crate::sync::MutexExt;
 use crate::config::NotifyConfig;
 use crate::events::Event;
 use crate::manager::{CameraRuntime, Manager};
@@ -61,13 +62,13 @@ static SNOOZE: std::sync::Mutex<Option<HashMap<String, DateTime<Local>>>> = std:
 
 /// Until when this camera's notifications are snoozed.
 pub fn snoozed_until(camera: &str) -> Option<DateTime<Local>> {
-    let s = SNOOZE.lock().unwrap();
+    let s = SNOOZE.locked();
     s.as_ref()?.get(camera).copied().filter(|t| *t > Local::now())
 }
 
 /// Snooze a camera's notifications for some minutes (0 = notify again now).
 pub fn snooze(camera: &str, minutes: i64) {
-    let mut s = SNOOZE.lock().unwrap();
+    let mut s = SNOOZE.locked();
     let m = s.get_or_insert_with(HashMap::new);
     if minutes <= 0 {
         m.remove(camera);
@@ -370,7 +371,7 @@ impl Notifier {
         match r {
             Ok(()) => {
                 self.last_error.clear();
-                let mut st = STATUS.lock().unwrap();
+                let mut st = STATUS.locked();
                 st.sent += 1;
                 st.last_sent = Some(Local::now());
                 st.last_error = None;
@@ -383,7 +384,7 @@ impl Notifier {
                     warn!("notifications: {msg}");
                     self.last_error = msg.clone();
                 }
-                STATUS.lock().unwrap().last_error = Some(msg);
+                STATUS.locked().last_error = Some(msg);
                 false
             }
         }

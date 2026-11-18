@@ -9,6 +9,7 @@
 //! encoded to G.711 (μ-law or A-law, whichever the camera asks for) and sent
 //! in 20 ms RTP packets, interleaved on the RTSP connection.
 
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, anyhow, bail};
 use md5::{Digest, Md5};
 use std::collections::HashSet;
@@ -446,7 +447,7 @@ impl Talk {
 
     pub async fn open(camera: &str, url: &str) -> Result<Talk> {
         {
-            let mut busy = BUSY.lock().unwrap();
+            let mut busy = BUSY.locked();
             let busy = busy.get_or_insert_with(HashSet::new);
             if !busy.insert(camera.to_string()) {
                 bail!("someone else is already talking through this camera");
@@ -628,7 +629,7 @@ impl Talk {
 }
 
 fn release(camera: &str) {
-    if let Some(b) = BUSY.lock().unwrap().as_mut() {
+    if let Some(b) = BUSY.locked().as_mut() {
         b.remove(camera);
     }
 }

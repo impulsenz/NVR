@@ -4,6 +4,7 @@
 //! clip (`<camera>/events/<event id>.mp4`) covering the event plus the
 //! pre-/post-event time.
 
+use crate::sync::MutexExt;
 use crate::events::EventStore;
 use chrono::{DateTime, Duration as CDuration, Local, NaiveDateTime, TimeZone};
 use std::collections::HashMap;
@@ -62,18 +63,18 @@ impl EventBuffer {
 
     /// An event started: keep footage from `start - pre` on.
     pub fn hold(&self, id: &str, start: DateTime<Local>) {
-        self.holds.lock().unwrap().insert(id.to_string(), start);
+        self.holds.locked().insert(id.to_string(), start);
     }
 
     /// An event was discarded (e.g. motion without a recognized object).
     pub fn release(&self, id: &str) {
-        self.holds.lock().unwrap().remove(id);
+        self.holds.locked().remove(id);
     }
 
     /// An event finished: build a clip from `start - pre` to `end + post`.
     pub fn finish(&self, id: &str, from: DateTime<Local>, to: DateTime<Local>) {
-        self.holds.lock().unwrap().remove(id);
-        self.jobs.lock().unwrap().push(Job {
+        self.holds.locked().remove(id);
+        self.jobs.locked().push(Job {
             event_id: id.to_string(),
             from,
             to,
@@ -117,7 +118,7 @@ impl EventBuffer {
                     // Shutting down: wait for the recorder to close its last
                     // file, then save clips for every finished event.
                     tokio::time::sleep(Duration::from_millis(500)).await;
-                    if self.jobs.lock().unwrap().is_empty() {
+                    if self.jobs.locked().is_empty() {
                         return;
                     }
                     tokio::time::sleep(Duration::from_secs(6)).await;
@@ -143,7 +144,7 @@ impl EventBuffer {
 
         // Build clips whose time range is fully written.
         let ready: Vec<Job> = {
-            let mut jobs = self.jobs.lock().unwrap();
+            let mut jobs = self.jobs.locked();
             let (ready, wait): (Vec<Job>, Vec<Job>) =
                 jobs.drain(..).partition(|j| j.to <= writing_start);
             *jobs = wait;
@@ -177,8 +178,8 @@ impl EventBuffer {
         // Delete buffer files nobody needs any more.
         let now = Local::now();
         let keep_from = {
-            let holds = self.holds.lock().unwrap();
-            let jobs = self.jobs.lock().unwrap();
+            let holds = self.holds.locked();
+            let jobs = self.jobs.locked();
             let mut t = now - CDuration::seconds(self.pre + 5);
             for h in holds.values() {
                 t = t.min(*h - CDuration::seconds(self.pre + 5));

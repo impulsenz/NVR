@@ -3,6 +3,7 @@
 //! through when the service takes it (H.264), so it costs almost nothing;
 //! sound is added (silent if the camera has none: YouTube needs a soundtrack).
 
+use crate::sync::MutexExt;
 use crate::config::CameraConfig;
 use crate::manager::Manager;
 use std::collections::HashMap;
@@ -19,7 +20,7 @@ pub struct Status {
 }
 static STATUS: LazyLock<Mutex<HashMap<String, Status>>> = LazyLock::new(Default::default);
 pub fn status(camera: &str) -> Option<Status> {
-    STATUS.lock().unwrap().get(camera).cloned()
+    STATUS.locked().get(camera).cloned()
 }
 
 /// The address with the stream key hidden, for logs.
@@ -66,7 +67,7 @@ async fn stream(mgr: &Arc<Manager>, cam: &CameraConfig) -> anyhow::Result<()> {
     let stop = tokio_util::sync::CancellationToken::new();
     let _feed = crate::relay::feed(relay.subscribe(), child.stdin.take().unwrap(), stop.clone());
     let _stop = stop.drop_guard();
-    STATUS.lock().unwrap().insert(cam.id.clone(), Status { live: true, since: Some(chrono::Local::now()), error: None });
+    STATUS.locked().insert(cam.id.clone(), Status { live: true, since: Some(chrono::Local::now()), error: None });
     info!("[{}] streaming live to {}", cam.name, safe(&cam.stream_url));
     let mut err = String::new();
     let mut stderr = child.stderr.take().unwrap();
@@ -105,7 +106,7 @@ pub async fn run(mgr: Arc<Manager>) {
             if !keep {
                 h.abort();
                 if !want.iter().any(|w| &w.id == id) {
-                    STATUS.lock().unwrap().remove(id);
+                    STATUS.locked().remove(id);
                 }
             }
             keep
@@ -122,7 +123,7 @@ pub async fn run(mgr: Arc<Manager>) {
                         Ok(()) => return,
                         Err(e) => {
                             warn!("[{}] live stream: {e:#} — trying again in {wait} s", cam.name);
-                            STATUS.lock().unwrap().insert(cam.id.clone(), Status { live: false, since: None, error: Some(format!("{e:#}")) });
+                            STATUS.locked().insert(cam.id.clone(), Status { live: false, since: None, error: Some(format!("{e:#}")) });
                         }
                     }
                     tokio::time::sleep(Duration::from_secs(wait)).await;

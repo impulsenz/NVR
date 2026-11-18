@@ -10,6 +10,7 @@
 //! The models (≈50 MB together) download the first time they're needed,
 //! load only while used and unload after a few idle minutes.
 
+use crate::sync::MutexExt;
 use crate::imgutil::Frame;
 use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
@@ -91,11 +92,11 @@ impl Recog {
 
     /// Load the models again next time (e.g. on the GPU now).
     pub fn unload(&self) {
-        *self.loaded.lock().unwrap() = Loaded::default();
+        *self.loaded.locked() = Loaded::default();
     }
 
     pub fn unload_if_idle(&self) {
-        let mut l = self.loaded.lock().unwrap();
+        let mut l = self.loaded.locked();
         if l.used.is_some_and(|u| u.elapsed() > IDLE_UNLOAD) {
             *l = Loaded::default();
             info!("faces & plates: models unloaded (idle)");
@@ -110,7 +111,7 @@ impl Recog {
         u8_input: Option<[usize; 4]>,
     ) -> Result<Plan> {
         {
-            let mut l = self.loaded.lock().unwrap();
+            let mut l = self.loaded.locked();
             l.used = Some(Instant::now());
             // (Loaded before the GPU was ready, or the place changed: again.)
             let slot = pick(&mut l);
@@ -122,14 +123,14 @@ impl Recog {
             }
         }
         let _g = self.gate.lock().await;
-        if let Some(p) = pick(&mut self.loaded.lock().unwrap()) {
+        if let Some(p) = pick(&mut self.loaded.locked()) {
             return Ok(p.clone());
         }
         let path = self.dir.join(which.0);
         if !path.exists() {
-            *self.downloading.lock().unwrap() = Some(which.0.to_string());
+            *self.downloading.locked() = Some(which.0.to_string());
             let r = download(which.1, &path).await;
-            *self.downloading.lock().unwrap() = None;
+            *self.downloading.locked() = None;
             r.map_err(|e| anyhow!("downloading {}: {e:#}", which.0))?;
         }
         let p = path.clone();
@@ -155,7 +156,7 @@ impl Recog {
             Ok(Arc::new(net))
         })
         .await??;
-        *pick(&mut self.loaded.lock().unwrap()) = Some(plan.clone());
+        *pick(&mut self.loaded.locked()) = Some(plan.clone());
         info!("faces & plates: {} loaded", which.0);
         Ok(plan)
     }
