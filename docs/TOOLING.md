@@ -29,9 +29,9 @@ error, a console error, an unexpected failed request or an empty page
 node tools/e2e/smoke.js            # SHOTS=/some/folder keeps a screenshot of each view
 ```
 
-It reads `SECTIONS` from `static/app.js`, so a new settings page is covered
+It runs with two unreachable cameras (so pages show their players) and also opens the Recordings date picker in both themes, failing if anything is drawn over it. It reads `SECTIONS` from `static/app.js`, so a new settings page is covered
 automatically. It does **not** check how pages look or what buttons do, and
-it runs with no cameras (see the expected-failure list in the script). Not in
+the cameras can't be reached (see the expected-failure list in the script). Not in
 CI yet.
 
 ## In CI (`.github/workflows/`)

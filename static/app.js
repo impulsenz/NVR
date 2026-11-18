@@ -1096,7 +1096,7 @@ function renderPlan() {
   const hoursSel = [[1, 'Last hour'], [6, 'Last 6 hours'], [24, 'Last 24 hours'], [72, 'Last 3 days'], [168, 'Last 7 days']].map(([h, t]) => `<option value="${h}" ${planUI.hours === h ? 'selected' : ''}>${t}</option>`).join('');
   root.innerHTML = `<div class="plan-bar">
       <h2 style="margin:0">Floor plan</h2>
-      <span class="chip ${planUI.jr.following ? 'on' : ''}" id="pl-chip">${planUI.jr.following ? 'Following people' : 'Not following people'}</span>
+      <span class="pl-badge ${planUI.jr.following ? 'on' : ''}" id="pl-chip">${planUI.jr.following ? 'Following people' : 'Not following people'}</span>
       <span class="muted small" id="pl-now"></span>
       <span style="flex:1"></span>
       <select id="pl-hours" class="small">${hoursSel}</select>

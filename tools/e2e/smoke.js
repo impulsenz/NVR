@@ -27,11 +27,14 @@ const sections = () => {
   return m[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
 };
 // Requests that legitimately fail on an empty install (no cameras, no internet).
-const EXPECTED = [/\/api\/plan\/image/, /\/api\/watchdog/, /favicon/, /\/api\/update/, /\/api\/smart/, /\/overview\.jpg/ /* no cameras: no overview picture */];
+const EXPECTED = [/\/live\/[^/]+\/(frame\.jpg|stream\.mjpeg)/, /\/snapshot\// /* the test cameras can't be reached */, /\/api\/plan\/image/, /\/api\/watchdog/, /favicon/, /\/api\/update/, /\/api\/smart/, /\/overview\.jpg/ /* no cameras: no overview picture */];
 
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gaze-smoke-'));
-  fs.writeFileSync(path.join(dir, 'nvr.toml'), `[server]\nlisten = "127.0.0.1:${PORT}"\nhttps_port = 0\n`);
+  // Two cameras that can't be reached: enough for the pages to show their players
+  // (a page with no cameras hides layout bugs that only appear beside them).
+  const cam = (id, name) => `\n[[cameras]]\nid = "${id}"\nname = "${name}"\nurl = "rtsp://127.0.0.1:1/${id}"\n`;
+  fs.writeFileSync(path.join(dir, 'nvr.toml'), `[server]\nlisten = "127.0.0.1:${PORT}"\nhttps_port = 0\n` + cam('front', 'Front Door') + cam('garage', 'Garage'));
   const server = spawn(BIN, ['--dir', dir], { stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => (log += d));
@@ -72,6 +75,29 @@ const EXPECTED = [/\/api\/plan\/image/, /\/api\/watchdog/, /favicon/, /\/api\/up
       if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, `${theme}-${t.replace(/[#/]/g, '_')}.png`) }); }
       visited++;
     }
+  }
+  // The Recordings date picker must open above everything beside and below it
+  // (it was once drawn under the players, with its right half hidden).
+  for (const theme of ['dark', 'light']) {
+    await page.emulateMedia({ colorScheme: theme });
+    where = `${theme} recordings date picker`;
+    await page.goto(`${BASE}/?picker=${theme}#recordings`);
+    await page.waitForTimeout(1200);
+    await page.locator('#f-date-btn').click();
+    await page.waitForTimeout(300);
+    const covered = await page.evaluate(() => {
+      const pop = document.getElementById('f-date-pop');
+      if (!pop || pop.hidden) return 'the date picker did not open';
+      const r = pop.getBoundingClientRect();
+      // Points across the picker, including its far right and bottom edges.
+      for (const [fx, fy] of [[0.1, 0.1], [0.5, 0.1], [0.95, 0.1], [0.95, 0.5], [0.5, 0.95], [0.95, 0.95]]) {
+        const hit = document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy);
+        if (!hit || !pop.contains(hit)) return `something covers the date picker at ${Math.round(fx * 100)}% across, ${Math.round(fy * 100)}% down: ${hit && (hit.tagName + '.' + hit.className)}`;
+      }
+      return '';
+    });
+    if (covered) problems.push(`${where}: ${covered}`);
+    visited++;
   }
   await browser.close();
   stop();
