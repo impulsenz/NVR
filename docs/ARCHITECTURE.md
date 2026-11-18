@@ -39,6 +39,10 @@ Models run on an accelerator through ONNX Runtime (`Accel`: DirectML on Windows;
 
 A state ("garage door": open / closed) is a camera, an optional area, and labelled examples, each stored as CLIP numbers (`Clip::region`, the picture squeezed to a square so nothing is cut off). A background loop (idle until a state has two labels with examples) takes the detector's latest frame (or a fresh grab), crops the area and scores it against each label (mean of the closest three examples, `classify`); a change needs two agreeing looks (`Debounce`). The result goes to the page, MQTT (`<prefix>/<camera>/state/<name>` plus a Home Assistant sensor) and, if set, `notify::send`. Recording, detection and alerts never read it.
 
+## Drive health (`smart.rs`)
+
+Runs `smartctl --scan -j`, then `smartctl -a -j` per drive (the program is optional and external; nothing is linked). `parse` turns one drive's JSON into `Drive` (health `ok` / `warning` / `failing` / `unknown`); `run` rescans every 6 h and tells `notify::send` once per new problem. Shown in Settings → System; `/api/smart` is admin only. Read-only: recording and storage never consult it.
+
 ## Storage tiers
 
 ```

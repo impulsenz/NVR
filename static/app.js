@@ -8782,6 +8782,17 @@ async function renderSystemSettings(body) {
     const streaming = {engine: val('y-engine'), go2rtc_path: val('y-g2r').trim()};
     if (await saveSettings({server, remotes, streaming})) { remotesAt = 0; sysinfo = null; renderSystemSettings(body); }
   };
+  // Drive health (smart.rs): every drive smartctl can see.
+  const driveCard = async () => {
+    const o = await api('api/smart').catch(() => ({drives: [], note: 'Could not ask.'}));
+    const tag = (h) => h === 'ok' ? '<b class="ok">Healthy</b>' : h === 'warning' ? '<b class="warnc">Needs attention</b>' : h === 'failing' ? '<b class="errc">Failing</b>' : '<span class="muted">No data</span>';
+    return `<div class="card" id="drives"><h2>Drive health${tip('Reads each drive’s own health report (SMART) through smartctl, which is installed separately (smartmontools). It checks every few hours and notifies you, under “Warn me when something’s wrong”, if a drive starts to fail, before the footage on it is lost.')}</h2>
+      ${o.drives.length ? `<table class="users"><thead><tr><th>Drive</th><th>Type</th><th>Size</th><th>Temp</th><th>Age</th><th>Health</th></tr></thead><tbody>${o.drives.map(d => `<tr><td><b>${esc(d.model || d.name)}</b><div class="muted small">${esc(d.name)}</div></td><td>${esc(d.kind)}</td><td>${d.size_gb ? (d.size_gb >= 1000 ? (d.size_gb / 1000).toFixed(1) + ' TB' : d.size_gb + ' GB') : ''}</td><td>${d.temperature_c != null ? d.temperature_c + ' °C' : ''}</td><td>${d.power_on_hours != null ? Math.round(d.power_on_hours / 24) + ' days' : ''}</td><td>${tag(d.health)}${d.problems.map(x => `<div class="small">${esc(x)}</div>`).join('')}${d.note ? `<div class="muted small">${esc(d.note)}</div>` : ''}</td></tr>`).join('')}</tbody></table>` : `<p class="muted" style="margin-top:0">${esc(o.note || 'Not checked yet.')}</p>`}
+      <div class="actions"><button type="button" id="dr-scan">Check now</button><span class="muted small" style="margin-left:auto">${o.checked ? 'Last checked ' + fmtDate(o.checked) : ''}</span></div></div>`;
+  };
+  body.insertAdjacentHTML('beforeend', await driveCard());
+  const wireDrives = () => { const b = $('dr-scan'); if (b) b.onclick = async () => { b.disabled = true; b.textContent = 'Checking…'; try { await api('api/smart/scan', {method: 'POST'}); } catch (e) { toast(e.message, true); } $('drives').outerHTML = await driveCard(); wireDrives(); }; };
+  wireDrives();
 }
 
 async function renderInfo(body) {

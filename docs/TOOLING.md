@@ -18,6 +18,22 @@ camera addresses or recordings to an outside service without the owner's say.
 | `tools/audit/css_duplicates.py` | — | this repository | CSS drift scan | local |
 | `tools/bench/` | — | this repository (1.0 audit) | Simulated cameras, CPU/memory/process counts (needs MediaMTX, Node, Playwright) | local |
 
+## Page smoke test (`tools/e2e/smoke.js`)
+
+Starts the built program in a scratch folder, signs in, opens every page and
+every Settings section in the day and night theme and fails on a script
+error, a console error, an unexpected failed request or an empty page
+(50 page views, about 40 s). Needs Node + Playwright and `cargo build`:
+
+```bash
+node tools/e2e/smoke.js            # SHOTS=/some/folder keeps a screenshot of each view
+```
+
+It reads `SECTIONS` from `static/app.js`, so a new settings page is covered
+automatically. It does **not** check how pages look or what buttons do, and
+it runs with no cameras (see the expected-failure list in the script). Not in
+CI yet.
+
 ## In CI (`.github/workflows/`)
 
 | Workflow | Does |

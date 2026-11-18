@@ -64,6 +64,10 @@ Download `GAZE.exe` from the [latest release](https://github.com/impulsenz/NVR/r
 put it in a folder of its own and run it. GAZE starts in the system tray; click the icon to open it in
 your browser. After that it can update itself (Settings → About).
 
+### Linux and Docker
+
+See [docs/LINUX.md](docs/LINUX.md): systemd unit, Dockerfile and AI acceleration (OpenVINO, CUDA).
+
 ### Building from source
 
 You need [Rust](https://rustup.rs) and ffmpeg.
