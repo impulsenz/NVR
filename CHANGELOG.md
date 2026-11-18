@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.2.1 — November 2026
 - **Page smoke test** for developers (`tools/e2e/smoke.js`): opens every page and settings section in both themes and fails on script errors. No change to GAZE itself.
 - **Linux packaging**: a systemd unit (`packaging/gaze.service`), a Dockerfile (`packaging/Dockerfile`) and a guide (`docs/LINUX.md`). The Docker image has not been built yet and there's no Linux download in the releases yet.
 - **Sturdier camera access checks** (no visible change): the rule that keeps a camera-limited account off other cameras now lives in one tested function instead of twelve copies.
