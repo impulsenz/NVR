@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings: the video comes before the time-lapse pictures.** Only the first two pages of each file's scrubbing pictures (about 3 MB a page) are fetched ahead of time (it was every page of every file in view, gigabytes at a time); the rest load when scrubbing reaches them. They are fetched only while Recordings is open, and wait while any camera's video list is being asked for or a playing camera has under 8 s loaded ahead.
+
 ## 1.7.2 — November 2026
 - **Recordings loading again when the timeline has many time-lapse pages.** The time-lapse pictures used for scrubbing (about 3 MB a page) could fill the browser's connections so that every camera's video list timed out ("continuous playback off … manifestLoadTimeOut") and nothing played. They now wait while a camera's video list is still being asked for, load two at a time (was three), and the video list is given 30 s (was 10 s). Recording itself was never affected.
 

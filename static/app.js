@@ -1789,6 +1789,7 @@ function route() {
   // (HD when both are).
   if (page === 'recordings' && lastPage !== 'recordings') pickRecordedStream();
   if (page !== lastPage) { cutPageDownloads(); lastPage = page; }
+  if (page === 'recordings') setTimeout(pumpSprites, 1500);  // the queued pictures carry on, after the video has started
   unparkVideos($('page-' + page));
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
@@ -2042,10 +2043,17 @@ function videosLoading() {
     // A playlist still being asked for counts too: the sprite pages (3 MB
     // each) otherwise fill the browser's connections and it times out.
     if (el._h && !el._h.ready && el._h.reqAt && Date.now() - el._h.reqAt < 40000) return true;
+    if (el._mode === 'hls' && tl.playing && aheadSecs(el) < 8) return true;
   }
   return false;
 }
+// Only the first pages of a file's preview are fetched ahead of time (a page
+// is ~3 MB, a long file has dozens): the rest are fetched when scrubbing or
+// the time-lapse reaches them (spritePage). Background fetching also stays
+// on the Recordings page, where the pictures are used.
+const SPRITE_AHEAD_PAGES = 2;
 function pumpSprites() {
+  if (page !== 'recordings') return;
   while (spriteQBusy < 2 && spriteQ.length) {
     if (videosLoading()) { clearTimeout(pumpSprites.t); pumpSprites.t = setTimeout(pumpSprites, 400); return; }
     const url = spriteQ.shift();
@@ -2060,7 +2068,7 @@ function pumpSprites() {
 }
 function preloadSprite(sp) {
   if (!sp) return sp;
-  for (let p = 0; p < sp.info.pages; p++) if (!spritePages.has(sp.url + p) && !spriteQ.includes(sp.url + p)) spriteQ.push(sp.url + p);
+  for (let p = 0; p < Math.min(sp.info.pages, SPRITE_AHEAD_PAGES); p++) if (!spritePages.has(sp.url + p) && !spriteQ.includes(sp.url + p)) spriteQ.push(sp.url + p);
   pumpSprites();
   return sp;
 }
@@ -6716,7 +6724,7 @@ const pagesDone = new Set();
 async function previewReady(cam, sg) {
   const sp = await spriteFor(cam, sg);
   if (!sp) return null;
-  const ok = await Promise.all([...Array(sp.info.pages).keys()].map(p => pagesDone.has(sp.url + p) ? true :
+  const ok = await Promise.all([...Array(Math.min(sp.info.pages, SPRITE_AHEAD_PAGES)).keys()].map(p => pagesDone.has(sp.url + p) ? true :
     new Promise(r => { const im = spritePage(sp.url + p);
       const done = () => { if (im.naturalWidth) { pagesDone.add(sp.url + p); r(true); } else if (im._cut) r('cut'); else { if (spritePages.get(sp.url + p) === im) spritePages.delete(sp.url + p); r(false); } };
       if (im.complete) done(); else { im.addEventListener('load', done, {once: true}); im.addEventListener('error', done, {once: true}); } })));
