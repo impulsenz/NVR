@@ -2039,11 +2039,14 @@ function videosLoading() {
     if (!(el.classList.contains('src-sub') || el.classList.contains('src-hd'))) continue;
     const v = activeVideo(el);
     if (v && v.readyState < 3) return true;
+    // A playlist still being asked for counts too: the sprite pages (3 MB
+    // each) otherwise fill the browser's connections and it times out.
+    if (el._h && !el._h.ready && el._h.reqAt && Date.now() - el._h.reqAt < 40000) return true;
   }
   return false;
 }
 function pumpSprites() {
-  while (spriteQBusy < 3 && spriteQ.length) {
+  while (spriteQBusy < 2 && spriteQ.length) {
     if (videosLoading()) { clearTimeout(pumpSprites.t); pumpSprites.t = setTimeout(pumpSprites, 400); return; }
     const url = spriteQ.shift();
     if (spritePages.has(url)) continue;
@@ -5319,7 +5322,7 @@ function hlsFor(el, cam) {
   // stepped over by the player itself, quickly, instead of waiting.
   const hls = new hlsLib({autoStartLoad: false, maxBufferLength: AHEAD_SECS, maxMaxBufferLength: AHEAD_SECS, maxBufferSize: 150e6, backBufferLength: AHEAD_SECS, maxBufferHole: 2,
     highBufferWatchdogPeriod: 1, nudgeMaxRetry: 10, nudgeOffset: 0.2,
-    startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1});
+    startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1, manifestLoadingTimeOut: 30000, levelLoadingTimeOut: 30000});
   hls.attachMedia(el._hlsV);
   const h = el._h = {hls, cam, frags: [], ready: false};
   hls.on(hlsLib.Events.LEVEL_LOADED, (_, d) => {

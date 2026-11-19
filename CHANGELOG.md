@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings loading again when the timeline has many time-lapse pages.** The time-lapse pictures used for scrubbing (about 3 MB a page) could fill the browser's connections so that every camera's video list timed out ("continuous playback off … manifestLoadTimeOut") and nothing played. They now wait while a camera's video list is still being asked for, load two at a time (was three), and the video list is given 30 s (was 10 s). Recording itself was never affected.
+
 ## 1.7.1 — November 2026
 - **Daily summary: just the latest one for each camera.** The Alerts page now shows one summary per camera, at the top: when a new one is made (by hand or at the set time), it replaces that camera's earlier one, whichever day or hours it covered. Earlier summaries left over from older versions are tidied away the next time that camera gets a new one. The footage is never touched.
 
