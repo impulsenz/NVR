@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.3 — November 2026
 - **Recordings: the video comes before the time-lapse pictures.** Only the first two pages of each file's scrubbing pictures (about 3 MB a page) are fetched ahead of time (it was every page of every file in view, gigabytes at a time); the rest load when scrubbing reaches them. They are fetched only while Recordings is open, and wait while any camera's video list is being asked for or a playing camera has under 8 s loaded ahead.
 
 ## 1.7.2 — November 2026
