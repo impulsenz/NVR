@@ -4794,7 +4794,7 @@ function renderSummaries() {
       <div class="sum-pic"><img loading="lazy" alt="" src="${sumUrl(c.camera, c.id, '/poster')}&v=${enc(c.built_at)}"><span class="sum-badge">DAILY SUMMARY</span>${c.scheduled ? '<span class="sum-auto">made automatically</span>' : ''}<span class="sum-len">▶ ${fmtDur(c.seconds)}</span></div>
       <div class="sum-body"><b>${esc(c.camera_name)}</b><span>${esc(sumWhen(c.id, c.from, c.to))}</span>
       <span class="muted small">${esc(sumCounts(c.counts))}</span></div></article>`).join('');
-  box.innerHTML = `<div class="sum-head"><h3>🎬 Daily summaries</h3><span class="muted small">Videos GAZE makes from the footage, showing only objects the AI recognised. They are not alerts.</span><span class="spacer"></span>
+  box.innerHTML = `<div class="sum-head"><h3>🎬 Daily summaries</h3><span class="muted small">The latest video for each camera, showing only objects the AI recognised; a new one replaces it. They are not alerts.</span><span class="spacer"></span>
       <button type="button" class="small primary" id="sum-new">＋ Make summaries…</button></div>
     ${live || cards ? `<div class="sum-cards">${live}${cards}</div>` : `<p class="muted small" style="margin:6px 0 0">None yet. Make one now, or set a time under Settings → Daily summary so a new one is waiting each morning.</p>`}`;
   $('sum-new').onclick = () => openSummaries();
@@ -10298,7 +10298,7 @@ async function renderSummarySettings(body) {
   const rest = ALL.filter(o => !common.includes(o));
   const chip = (o) => `<label class="check"><input type="checkbox" class="sm-obj" value="${esc(o)}" ${picked.has(o) ? 'checked' : ''}> ${labelIcon(o)} ${esc(o)}</label>`;
   const cams = status.cameras, sel = new Set(sm.cameras.length ? sm.cameras : cams.map(c => c.id));
-  body.innerHTML = `<div class="card"><h2>Daily summary${tip('A short video of a camera’s day with only the objects the AI recognised, shown together over the empty scene. They appear on the Alerts page as “Daily summary” cards, clearly separate from alerts.')}</h2>
+  body.innerHTML = `<div class="card"><h2>Daily summary${tip('A short video of a camera’s day with only the objects the AI recognised, shown together over the empty scene. They appear at the top of the Alerts page as “Daily summary” cards, clearly separate from alerts: only the latest for each camera, replaced as soon as a new one is made.')}</h2>
       <p class="muted" style="margin-top:0">A short video of each camera’s day (or the last few hours) showing <b>only what the AI recognised</b>, with its name and the time it was there; click an object to open the real footage. Make them from the <b>Alerts</b> page whenever you like, or have one waiting every day.</p>
       <h3 style="margin:14px 0 6px">What to show</h3>
       <p class="muted small" style="margin:0 0 6px">Chosen kinds are shown <b>even if they never raised an alert or were never recorded as one</b>: the AI looks at the footage again for the summary. “vehicle” covers cars, trucks, buses and motorbikes.</p>
@@ -10312,7 +10312,7 @@ async function renderSummarySettings(body) {
         <label>Cameras</label><div class="checks">${cams.map(c => `<label class="check"><input type="checkbox" class="sm-cam" value="${esc(c.id)}" ${sel.has(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('') || '<span class="muted">No cameras</span>'}</div>
         <label for="sm-speed">Speed${tip('How much faster than real time people and vehicles move. Objects in different parts of the picture always play at the same time, whenever they really happened; a higher speed makes the video shorter and busier.')}</label><div class="row"><select id="sm-speed">${[[1, 'As it happened'], [2, '2× faster'], [3, '3× faster'], [4, '4× faster'], [6, '6× faster']].map(([v, t]) => `<option value="${v}" ${Math.round(sm.speed || 2) === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <label for="sm-secs">Video length${tip('About how long each video is at most. A busy day is shown faster, or with objects overlapping a little, to fit.')}</label><div class="row"><input type="number" id="sm-secs" min="10" max="600" value="${sm.seconds}" style="width:90px"><span class="muted">seconds</span></div>
-        <label for="sm-keep">Keep for${tip('Summaries are small videos made from your footage. Older ones are deleted. The footage itself is not touched.')}</label><div class="row"><input type="number" id="sm-keep" min="1" max="365" value="${sm.keep_days}" style="width:90px"><span class="muted">days</span></div>
+        <label for="sm-keep">Keep for${tip('Each camera keeps only its latest summary (a new one replaces it). If no new one is made, it is deleted after this many days. The footage itself is not touched.')}</label><div class="row"><input type="number" id="sm-keep" min="1" max="365" value="${sm.keep_days}" style="width:90px"><span class="muted">days</span></div>
       </div>
       <p class="muted small">Needs object recognition (Settings → Object recognition) switched on. Summaries are made one after another when the computer is not busy; recording is never slowed.</p></div>
     <div class="card"><div class="actions" style="margin:0"><button type="button" class="primary" id="sm-save">Save</button><a class="btn" href="#alerts">Open the Alerts page to make summaries now</a></div></div>`;

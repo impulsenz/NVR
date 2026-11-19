@@ -1341,6 +1341,20 @@ fn tidy(dir: &Path, keep_days: u32) {
     }
 }
 
+/// One summary per camera: once `id` is made, the camera's other summaries
+/// (their video, objects and card picture) are deleted. Never footage, and
+/// never a video still being written (`*.part.mp4`).
+fn keep_only(dir: &Path, id: &str) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let path = e.path();
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        if stem != id && !stem.ends_with(".part") && path.extension().is_some_and(|x| x == "mp4" || x == "json" || x == "jpg") {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// How `enqueue` went.
 #[derive(Debug, PartialEq)]
 pub enum Enqueued {
@@ -1451,6 +1465,9 @@ fn run_one(req: &Request, mgr: &Arc<Manager>, handle: &tokio::runtime::Handle, p
             .collect())
     };
     make(req, &sources, &ffmpeg, &dir.join(format!("{}.mp4", req.id)), &mut classify, pr)?;
+    // The new one replaces the camera's earlier summary.
+    keep_only(&dir, &req.id);
+    JOBS.locked().retain(|_, j| j.req.camera != req.camera || j.req.id == req.id || !matches!(j.state, State::Done));
     Ok(())
 }
 
@@ -1531,8 +1548,9 @@ pub struct Card {
     pub counts: Vec<(String, usize)>,
 }
 
-/// Finished summaries (newest first, at most `limit`) of the cameras `visible`
-/// allows (all when None), and the ones queued or being made.
+/// The latest finished summary of each camera `visible` allows (all when None),
+/// newest first, at most `limit`, and the ones queued or being made. (Folders
+/// from before 1.7.1 may still hold older ones until the camera's next summary.)
 pub fn list(mgr: &Manager, visible: Option<&[String]>, limit: usize) -> (Vec<Card>, Vec<serde_json::Value>) {
     let mut cards: Vec<Card> = Vec::new();
     for rt in mgr.cameras() {
@@ -1548,6 +1566,12 @@ pub fn list(mgr: &Manager, visible: Option<&[String]>, limit: usize) -> (Vec<Car
                 continue;
             }
             let Some(m) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Meta>(&b).ok()) else { continue };
+            if let Some(c) = cards.iter_mut().find(|c| &c.camera == id) {
+                if m.built_at > c.built_at {
+                    *c = Card { camera: id.clone(), camera_name: rt.cfg.name.clone(), id: m.id, from: m.from, to: m.to, built_at: m.built_at, scheduled: m.scheduled, seconds: m.seconds, objects: m.objects.len(), counts: m.counts };
+                }
+                continue;
+            }
             cards.push(Card { camera: id.clone(), camera_name: rt.cfg.name.clone(), id: m.id, from: m.from, to: m.to, built_at: m.built_at, scheduled: m.scheduled, seconds: m.seconds, objects: m.objects.len(), counts: m.counts });
         }
     }
@@ -1886,6 +1910,22 @@ mod tests {
         assert!(!r.objects[0].boxes.is_empty() && r.objects[0].out_end >= r.objects[0].out_start);
         // The poster is the busiest moment: it has the object in it.
         assert_ne!(r.poster, bg);
+    }
+
+    #[test]
+    fn a_new_summary_replaces_the_cameras_earlier_ones() {
+        let dir = std::env::temp_dir().join(format!("gaze-syn-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let files = ["2026-11-18.mp4", "2026-11-18.json", "2026-11-18.jpg", "2026-11-19_0630_24h.mp4", "2026-11-19_0630_24h.json", "2026-11-19_0630_24h.jpg", "2026-11-19.part.mp4", "notes.txt"];
+        for f in files {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        keep_only(&dir, "2026-11-19_0630_24h");
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["2026-11-19.part.mp4", "2026-11-19_0630_24h.jpg", "2026-11-19_0630_24h.json", "2026-11-19_0630_24h.mp4", "notes.txt"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
