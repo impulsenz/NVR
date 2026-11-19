@@ -57,5 +57,6 @@ another. Defaults were not re-evaluated one by one (not done).
 | Notifications (ntfy + email), MQTT, webhooks, voice, siren | `NotifyConfig` (`.email`: `EmailConfig`, `.digest`: `DigestConfig`), `MqttConfig`, `Webhook`, `TtsConfig` | `notify.rs` (`send`: both channels), `mail.rs`, `digest.rs`, `mqtt.rs`, `hooks.rs`, `tts.rs`, `siren.rs` |
 | Learned states (not in `nvr.toml`: their own data file `states.json`) | `states::State` | `states.rs`, `web.rs` (`/api/states`), `mqtt.rs` |
 | Daily summary (`[summary]`: schedule on/off, time, hours covered, cameras, kinds of object, video length, speed, days kept; videos in `nvr-data/synopsis/`) | `config::SummaryConfig` (defaults: off, 06:30, 24 h, all cameras, person/vehicle/dog/cat/bird, 60 s, 2× speed, 30 days; absent in old files = defaults) | `synopsis.rs`, `web.rs` (`/api/summaries*`, `/api/cameras/{id}/synopsis*`), Settings → Daily summary |
+| Heat map (no setting: always logs; `nvr-data/heat/`, 30 days) | `heatmap::KEEP_DAYS` | `heatmap.rs`, `detect.rs`, `web.rs` (`/api/heatmaps`) |
 | Floor plan and following people (not in `nvr.toml`: `plan.json` (incl. walls, icon sizes), `plan.jpg`, `tracks/`) | `plan::Plan`, `plan::Tuning` (14 settings + labels, off by default) | `plan.rs`, `tracks.rs`, `geo.rs`, `web.rs` (`/api/plan*`) |
 | Watchdog | `settings.toml` | `watchdog/main.rs`; written by `watchdog_ctl.rs` |

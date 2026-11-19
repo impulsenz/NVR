@@ -19,7 +19,7 @@ const PORT = process.env.GAZE_PORT || '18181';
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS;
 const PASS = 'smoke-test-password-1';
-const PAGES = ['live', 'alerts', 'recordings', 'plan', 'evidence', 'system', 'settings'];
+const PAGES = ['live', 'alerts', 'recordings', 'heat', 'plan', 'evidence', 'system', 'settings'];
 // Keep in step with SECTIONS in static/app.js (the test reads it from there).
 const sections = () => {
   const js = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'app.js'), 'utf8');

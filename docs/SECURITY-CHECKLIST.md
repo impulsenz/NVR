@@ -60,6 +60,10 @@ See the S-entries in `TECH-DEBT.md`.
       connection's own address, or, from a proxy on this computer, the **last**
       `X-Forwarded-For` address. IPv6 is counted per /64 (`users::ip_bucket`).
 
+## Heat map
+
+- [ ] `GET /api/heatmaps` filters cameras by `visible(&user)`; the `camera=` filter can only narrow. The log holds boxes and counts only (no pictures) in `nvr-data/heat/<camera id>/<day>.json`; the camera id is checked by `valid_folder`.
+
 ## Daily summary
 
 - [ ] `/api/cameras/{id}/synopsis*` are under `camera_in_path`; `/api/summaries` (list) filters by `visible(&user)` and `/api/summaries/make` limits cameras with `allowed_cameras`, so a restricted account only sees and makes its own cameras' summaries.

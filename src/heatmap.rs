@@ -1,48 +1,333 @@
-//! Where things happen on a camera (Settings → camera → Motion → "Where
-//! alerts happened"): the boxes stored with each alert (what was detected,
-//! as fractions of the picture) added up into a coarse grid. Painting ignore
-//! areas over the hot patches that shouldn't count (a swaying tree, a road)
-//! is then a matter of looking, not guessing.
+//! The Heat map page: where motion and recognised objects happen on each
+//! camera, to review like the alerts: which kinds, over the last day, week or
+//! month. It is also how to see where motion is *wasted* (a swaying branch, a
+//! flag, a road): motion that no recognised object explains.
 //!
-//! Only reads alerts that are already stored: nothing is recorded for it and
-//! recording and detection never use it. It shows where alerts were *raised*:
-//! a movement that was already ignored left no alert and isn't in it.
+//! What is logged, always, with nothing to switch on:
+//!   * every look of the motion detector: the boxes of moving areas, **before**
+//!     the ignore areas are applied (so areas already ignored still show what
+//!     is there), and
+//!   * every look of the AI: the boxes of every object it recognised (people,
+//!     vehicles, animals, anything), whether or not they raise an alert or are
+//!     wanted by any setting.
+//!
+//! They are added up per hour into a coarse 64×36 grid per kind and kept as
+//! small files (`nvr-data/heat/<camera>/<day>.json`, only the cells that
+//! counted) for 30 days. The page smooths the grid when it draws it. Before
+//! this log existed (or for hours GAZE was off) the boxes stored with alerts
+//! stand in, so there is something to look at at once.
+//!
+//! Counts are "looks": about a second of something being there per look, so a
+//! person who stands still for a minute weighs more than one who walks past.
+//!
+//! Recording, detection and alerts never read any of it; a failure here
+//! drops data, never delays them.
 
+use crate::detect::MotionObject;
 use crate::events::Event;
-use chrono::{DateTime, Local};
+use crate::manager::Manager;
+use crate::sync::MutexExt;
+use chrono::{DateTime, Local, NaiveDate, TimeZone};
 use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 
 pub const COLS: usize = 64;
 pub const ROWS: usize = 36;
+/// Cells, then one more that counts the boxes added.
+const GRID: usize = COLS * ROWS + 1;
+/// Days of log kept.
+pub const KEEP_DAYS: i64 = 30;
+/// How sure the AI must be for an object to count.
+const MIN_SCORE: f32 = 0.4;
 
-/// Which detections to count.
-#[derive(Debug, Clone, Copy, PartialEq)]
+type Grid = Vec<u32>;
+/// One hour of one camera: label ("motion" or an object's name) → grid.
+type Hour = HashMap<String, Grid>;
+
+/// What has been seen since the last write to disk: (camera, hour) → kinds.
+static ACC: LazyLock<Mutex<HashMap<(String, i64), Hour>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The cells a box covers, as (first column, last column, first row, last row).
+fn cells_of(b: [f32; 4]) -> Option<(usize, usize, usize, usize)> {
+    let [x, y, w, h] = b;
+    if ![x, y, w, h].iter().all(|v| v.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let (x0, y0) = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+    let (x1, y1) = ((x + w).clamp(0.0, 1.0), (y + h).clamp(0.0, 1.0));
+    if x1 <= x0 || y1 <= y0 {
+        return None; // wholly outside the picture
+    }
+    let c0 = ((x0 * COLS as f32) as usize).min(COLS - 1);
+    let c1 = (((x1 * COLS as f32).ceil() as usize).max(1) - 1).min(COLS - 1);
+    let r0 = ((y0 * ROWS as f32) as usize).min(ROWS - 1);
+    let r1 = (((y1 * ROWS as f32).ceil() as usize).max(1) - 1).min(ROWS - 1);
+    Some((c0, c1, r0, r1))
+}
+
+fn add_box(g: &mut Grid, b: [f32; 4]) -> bool {
+    let Some((c0, c1, r0, r1)) = cells_of(b) else { return false };
+    for r in r0..=r1 {
+        for c in c0..=c1 {
+            g[r * COLS + c] = g[r * COLS + c].saturating_add(1);
+        }
+    }
+    g[COLS * ROWS] = g[COLS * ROWS].saturating_add(1);
+    true
+}
+
+fn record(cam: &str, now_ms: i64, label: &str, b: [f32; 4]) {
+    let hour = now_ms.div_euclid(3_600_000);
+    let mut acc = ACC.locked();
+    let g = acc.entry((cam.to_string(), hour)).or_default().entry(label.to_string()).or_insert_with(|| vec![0; GRID]);
+    add_box(g, b);
+}
+
+/// One look of the motion detector: its moving areas (before ignore areas).
+pub fn motion(cam: &str, now_ms: i64, objects: &[MotionObject]) {
+    for o in objects {
+        record(cam, now_ms, "motion", [o.x, o.y, o.w, o.h]);
+    }
+}
+
+/// One look of the AI: everything it recognised, whatever it is.
+pub fn objects(cam: &str, now_ms: i64, dets: &[crate::ai::Detection]) {
+    for d in dets.iter().filter(|d| d.score >= MIN_SCORE) {
+        record(cam, now_ms, crate::ai::canon(&d.label), [d.x, d.y, d.w, d.h]);
+    }
+}
+
+// ---------- on disk ----------
+
+/// hour → label → the cells that counted, as `[cell, count]` (cell `COLS*ROWS` = boxes added).
+type DayFile = BTreeMap<String, BTreeMap<String, Vec<[u32; 2]>>>;
+
+fn dir(data: &Path, cam: &str) -> Option<PathBuf> {
+    crate::storage::valid_folder(cam).then(|| data.join("heat").join(cam))
+}
+
+fn day_of(hour: i64) -> NaiveDate {
+    Local.timestamp_opt(hour * 3600, 0).single().map(|t| t.date_naive()).unwrap_or_default()
+}
+
+fn sparse(g: &Grid) -> Vec<[u32; 2]> {
+    g.iter().enumerate().filter(|(_, v)| **v > 0).map(|(i, v)| [i as u32, *v]).collect()
+}
+
+fn read_day(path: &Path) -> DayFile {
+    std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Write what has been seen since last time into the day files.
+pub fn flush(data: &Path) {
+    let taken = std::mem::take(&mut *ACC.locked());
+    let mut by_file: HashMap<(String, NaiveDate), Vec<(i64, Hour)>> = HashMap::new();
+    for ((cam, hour), h) in taken {
+        by_file.entry((cam, day_of(hour))).or_default().push((hour, h));
+    }
+    for ((cam, day), hours) in by_file {
+        let Some(d) = dir(data, &cam) else { continue };
+        if std::fs::create_dir_all(&d).is_err() {
+            continue;
+        }
+        let path = d.join(format!("{day}.json"));
+        let mut file = read_day(&path);
+        for (hour, h) in hours {
+            let slot = file.entry(hour.to_string()).or_default();
+            for (label, g) in h {
+                // Add to what is there.
+                let mut cur: Grid = vec![0; GRID];
+                for [i, v] in slot.get(&label).cloned().unwrap_or_default() {
+                    if let Some(c) = cur.get_mut(i as usize) {
+                        *c = v;
+                    }
+                }
+                for (c, v) in cur.iter_mut().zip(g.iter()) {
+                    *c = c.saturating_add(*v);
+                }
+                slot.insert(label, sparse(&cur));
+            }
+        }
+        let tmp = path.with_extension("json.tmp");
+        if let Ok(b) = serde_json::to_vec(&file)
+            && std::fs::write(&tmp, b).is_ok()
+        {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
+
+/// Remove day files older than `KEEP_DAYS`.
+pub fn tidy(data: &Path) {
+    let Ok(cams) = std::fs::read_dir(data.join("heat")) else { return };
+    let cutoff = Local::now().date_naive() - chrono::Duration::days(KEEP_DAYS);
+    for c in cams.flatten() {
+        let Ok(files) = std::fs::read_dir(c.path()) else { continue };
+        for f in files.flatten() {
+            let p = f.path();
+            let day = p.file_stem().and_then(|s| s.to_str()).and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+            if day.is_some_and(|d| d < cutoff) {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+}
+
+/// Write the log every minute and tidy it every hour.
+pub async fn run(mgr: Arc<Manager>) {
+    let mut n = 0u32;
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let data = mgr.data_dir.clone();
+        n += 1;
+        let _ = tokio::task::spawn_blocking(move || {
+            flush(&data);
+            if n % 60 == 1 {
+                tidy(&data);
+            }
+        })
+        .await;
+    }
+}
+
+// ---------- reading it back ----------
+
+/// Everything logged for one camera in a period: label → grid.
+#[derive(Debug, Default)]
+pub struct Raw {
+    pub grids: HashMap<String, Grid>,
+    /// Hours that had anything logged.
+    pub hours: usize,
+    /// Alerts whose boxes stood in for hours before the log started.
+    pub alerts_used: usize,
+}
+
+fn add_into(raw: &mut Raw, label: &str, cells: impl Iterator<Item = (usize, u32)>) {
+    let g = raw.grids.entry(label.to_string()).or_insert_with(|| vec![0; GRID]);
+    for (i, v) in cells {
+        if let Some(c) = g.get_mut(i) {
+            *c = c.saturating_add(v);
+        }
+    }
+}
+
+/// What was logged for `cam` in `from..=to`, plus the boxes stored with
+/// `events` for the time before the log began.
+pub fn read(data: &Path, cam: &str, from: DateTime<Local>, to: DateTime<Local>, events: &[Event]) -> Raw {
+    let mut raw = Raw::default();
+    let (from_h, to_h) = (from.timestamp().div_euclid(3600), to.timestamp().div_euclid(3600));
+    let mut hours_seen = std::collections::HashSet::new();
+    let mut first_logged: Option<i64> = None;
+    if let Some(d) = dir(data, cam) {
+        // The earliest hour ever logged for this camera (the first day file).
+        let mut names: Vec<String> = std::fs::read_dir(&d).into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str().map(String::from)).filter(|n| n.ends_with(".json")).collect();
+        names.sort();
+        if let Some(first) = names.first() {
+            first_logged = read_day(&d.join(first)).keys().filter_map(|h| h.parse::<i64>().ok()).min();
+        }
+        let mut day = from.date_naive();
+        while day <= to.date_naive() {
+            for (h, labels) in read_day(&d.join(format!("{day}.json"))) {
+                let Ok(h) = h.parse::<i64>() else { continue };
+                if h < from_h || h > to_h {
+                    continue;
+                }
+                hours_seen.insert(h);
+                for (label, cells) in labels {
+                    add_into(&mut raw, &label, cells.into_iter().map(|[i, v]| (i as usize, v)));
+                }
+            }
+            day = day.succ_opt().unwrap_or(to.date_naive() + chrono::Duration::days(1));
+        }
+    }
+    // Not written yet.
+    for ((c, h), labels) in ACC.locked().iter() {
+        if c != cam || *h < from_h || *h > to_h {
+            continue;
+        }
+        hours_seen.insert(*h);
+        first_logged = Some(first_logged.map_or(*h, |f| f.min(*h)));
+        for (label, g) in labels {
+            add_into(&mut raw, label, g.iter().enumerate().map(|(i, v)| (i, *v)));
+        }
+    }
+    raw.hours = hours_seen.len();
+    // Before the log: the alerts' own boxes.
+    let log_start = first_logged.map(|h| h * 3600);
+    for e in events.iter().filter(|e| e.start >= from && e.start <= to && log_start.is_none_or(|s| e.start.timestamp() < s)) {
+        let mut any = false;
+        for b in &e.boxes {
+            let label = crate::ai::canon(&b.label);
+            let mut g = vec![0; GRID];
+            if add_box(&mut g, [b.x, b.y, b.w, b.h]) {
+                add_into(&mut raw, label, g.iter().enumerate().map(|(i, v)| (i, *v)));
+                any = true;
+            }
+        }
+        if any {
+            raw.alerts_used += 1;
+        }
+    }
+    raw
+}
+
+// ---------- kinds ----------
+
+/// What to show.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
-    All,
+    /// Anything that moved (before ignore areas).
+    Motion,
+    /// Everything the AI recognised.
+    Objects,
     People,
     Vehicles,
     Animals,
+    /// Recognised things that are not people, vehicles or animals.
+    Other,
+    /// One kind by its name.
+    Label(String),
+    /// Motion that no recognised object explains: the places to ignore.
+    Unexplained,
 }
 
 impl Kind {
     pub fn parse(s: &str) -> Option<Kind> {
         Some(match s {
-            "" | "all" => Kind::All,
+            "" | "motion" => Kind::Motion,
+            "objects" | "all" => Kind::Objects,
             "people" | "person" => Kind::People,
             "vehicles" | "vehicle" => Kind::Vehicles,
             "animals" | "animal" => Kind::Animals,
-            _ => return None,
+            "other" => Kind::Other,
+            "unexplained" => Kind::Unexplained,
+            _ => {
+                let l = s.strip_prefix("label:")?.trim().to_lowercase();
+                if l.is_empty() || l.len() > 40 || l == "motion" || !l.chars().all(|c| c.is_alphanumeric() || " -_".contains(c)) {
+                    return None;
+                }
+                Kind::Label(l)
+            }
         })
     }
 
-    fn takes(self, label: &str) -> bool {
-        let vehicle = matches!(label, "vehicle" | "bicycle");
+    fn takes(&self, label: &str) -> bool {
+        if label == "motion" {
+            return *self == Kind::Motion;
+        }
+        let animal = crate::ai::ANIMALS.contains(&label);
+        let vehicle = label == "vehicle" || label == "bicycle";
         match self {
-            Kind::All => true,
+            Kind::Motion | Kind::Unexplained => false,
+            Kind::Objects => true,
             Kind::People => label == "person",
             Kind::Vehicles => vehicle,
-            // Everything else that isn't a parcel: dogs, cats, birds, horses …
-            Kind::Animals => label != "person" && !vehicle && label != "package",
+            Kind::Animals => animal,
+            Kind::Other => label != "person" && !vehicle && !animal,
+            Kind::Label(l) => label == l,
         }
     }
 }
@@ -51,47 +336,92 @@ impl Kind {
 pub struct Heatmap {
     pub cols: usize,
     pub rows: usize,
-    /// Row by row, left to right: how many detections covered each cell.
+    /// Row by row, left to right: how many looks had something there.
+    /// (For "unexplained": 0 to 1000, how much motion nothing explains.)
     pub cells: Vec<u32>,
     pub max: u32,
-    /// Alerts in the period that had a picture with something in it.
-    pub alerts: usize,
-    /// Detections counted.
-    pub detections: usize,
+    /// The level the busiest 5% of the places reach: a good "full heat",
+    /// so one very hot spot doesn't make everything else look cold.
+    pub p95: u32,
+    /// Boxes counted.
+    pub detections: u32,
+    /// Hours that had anything logged, and alerts that stood in for older time.
+    pub hours: usize,
+    pub alerts_used: usize,
+    /// Every kind of recognised object seen in the period, the most first.
+    pub labels: Vec<String>,
 }
 
-/// Add up the detections of the alerts in `events` that started in
-/// `from..=to`. A detection covers every cell its box touches.
-pub fn build(events: &[Event], from: DateTime<Local>, to: DateTime<Local>, kind: Kind) -> Heatmap {
-    let mut cells = vec![0u32; COLS * ROWS];
-    let (mut alerts, mut detections) = (0, 0);
-    for e in events.iter().filter(|e| e.start >= from && e.start <= to) {
-        let mut any = false;
-        for b in e.boxes.iter().filter(|b| kind.takes(&b.label)) {
-            if ![b.x, b.y, b.w, b.h].iter().all(|v| v.is_finite()) || b.w <= 0.0 || b.h <= 0.0 {
-                continue;
-            }
-            let (x0, y0) = (b.x.clamp(0.0, 1.0), b.y.clamp(0.0, 1.0));
-            let (x1, y1) = ((b.x + b.w).clamp(0.0, 1.0), (b.y + b.h).clamp(0.0, 1.0));
-            if x1 <= x0 || y1 <= y0 {
-                continue; // wholly outside the picture
-            }
-            let (c0, c1) = (((x0 * COLS as f32) as usize).min(COLS - 1), (((x1 * COLS as f32).ceil() as usize).max(1) - 1).min(COLS - 1));
-            let (r0, r1) = (((y0 * ROWS as f32) as usize).min(ROWS - 1), (((y1 * ROWS as f32).ceil() as usize).max(1) - 1).min(ROWS - 1));
-            for r in r0..=r1 {
-                for c in c0..=c1 {
-                    cells[r * COLS + c] += 1;
+fn p95(cells: &[u32]) -> u32 {
+    let mut v: Vec<u32> = cells.iter().copied().filter(|c| *c > 0).collect();
+    if v.is_empty() {
+        return 0;
+    }
+    v.sort_unstable();
+    v[((v.len() - 1) as f32 * 0.95) as usize]
+}
+
+/// Motion that nothing recognised accounts for, per cell, 0 to 1000: motion
+/// and recognised objects are each scaled to their own busy level, objects
+/// are spread a little (their boxes are bigger than the movement inside
+/// them), and what motion has beyond that is what is left.
+pub fn unexplained(motion: &[u32], objects: &[u32]) -> Vec<u32> {
+    let (pm, po) = (p95(motion).max(1) as f32, p95(objects).max(1) as f32);
+    let mut spread = vec![0f32; COLS * ROWS];
+    for r in 0..ROWS {
+        for c in 0..COLS {
+            let mut best = 0f32;
+            for rr in r.saturating_sub(1)..=(r + 1).min(ROWS - 1) {
+                for cc in c.saturating_sub(1)..=(c + 1).min(COLS - 1) {
+                    best = best.max(objects[rr * COLS + cc] as f32 / po);
                 }
             }
-            detections += 1;
-            any = true;
-        }
-        if any {
-            alerts += 1;
+            spread[r * COLS + c] = best;
         }
     }
-    let max = cells.iter().copied().max().unwrap_or(0);
-    Heatmap { cols: COLS, rows: ROWS, cells, max, alerts, detections }
+    (0..COLS * ROWS).map(|i| (((motion[i] as f32 / pm).min(1.0) - spread[i].min(1.0) * 0.9).max(0.0) * 1000.0) as u32).collect()
+}
+
+/// The grid for one kind of what was logged.
+pub fn select(raw: &Raw, kind: &Kind) -> Heatmap {
+    let mut cells = vec![0u32; COLS * ROWS];
+    let mut detections = 0u32;
+    if *kind == Kind::Unexplained {
+        let zero = vec![0; GRID];
+        let m = raw.grids.get("motion").unwrap_or(&zero);
+        let mut obj = vec![0u32; COLS * ROWS];
+        for (l, g) in &raw.grids {
+            if l != "motion" {
+                for (o, v) in obj.iter_mut().zip(g.iter()) {
+                    *o = o.saturating_add(*v);
+                }
+            }
+        }
+        cells = unexplained(&m[..COLS * ROWS], &obj);
+        detections = m[COLS * ROWS];
+    } else {
+        for (l, g) in &raw.grids {
+            if kind.takes(l) {
+                for (c, v) in cells.iter_mut().zip(g.iter()) {
+                    *c = c.saturating_add(*v);
+                }
+                detections = detections.saturating_add(g[COLS * ROWS]);
+            }
+        }
+    }
+    let mut labels: Vec<(&String, u64)> = raw.grids.iter().filter(|(l, _)| l.as_str() != "motion").map(|(l, g)| (l, g[COLS * ROWS] as u64)).filter(|(_, n)| *n > 0).collect();
+    labels.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    Heatmap {
+        cols: COLS,
+        rows: ROWS,
+        max: cells.iter().copied().max().unwrap_or(0),
+        p95: p95(&cells),
+        cells,
+        detections,
+        hours: raw.hours,
+        alerts_used: raw.alerts_used,
+        labels: labels.into_iter().map(|(l, _)| l.clone()).collect(),
+    }
 }
 
 #[cfg(test)]
@@ -105,66 +435,150 @@ mod tests {
         e
     }
 
-    fn at(h: i64) -> DateTime<Local> {
-        chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00+00:00").unwrap().with_timezone(&Local) - chrono::Duration::hours(h)
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("nvr-heat-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn mo(x: f32, y: f32, w: f32, h: f32) -> MotionObject {
+        MotionObject { x, y, w, h, size: 100 }
+    }
+
+    fn det(label: &str, score: f32, x: f32, y: f32, w: f32, h: f32) -> crate::ai::Detection {
+        crate::ai::Detection { label: label.into(), score, x, y, w, h }
     }
 
     #[test]
     fn a_box_heats_exactly_the_cells_it_covers() {
-        // The left half, top half of the picture.
-        let h = build(&[event(at(1), vec![("person", 0.0, 0.0, 0.5, 0.5)])], at(24), at(0), Kind::All);
-        assert_eq!((h.alerts, h.detections, h.max), (1, 1, 1));
-        let hot = |r: usize, c: usize| h.cells[r * COLS + c];
-        assert_eq!(hot(0, 0), 1);
-        assert_eq!(hot(ROWS / 2 - 1, COLS / 2 - 1), 1);
-        assert_eq!(hot(ROWS / 2, 0), 0, "below the box");
-        assert_eq!(hot(0, COLS / 2), 0, "right of the box");
-        assert_eq!(h.cells.iter().filter(|v| **v > 0).count(), (ROWS / 2) * (COLS / 2));
+        let mut g = vec![0; GRID];
+        assert!(add_box(&mut g, [0.0, 0.0, 0.5, 0.5]));
+        assert_eq!(g[COLS * ROWS], 1);
+        assert_eq!(g[0], 1);
+        assert_eq!(g[(ROWS / 2 - 1) * COLS + COLS / 2 - 1], 1);
+        assert_eq!(g[(ROWS / 2) * COLS], 0, "below the box");
+        assert_eq!(g[COLS / 2], 0, "right of the box");
+        assert_eq!(g[..COLS * ROWS].iter().filter(|v| **v > 0).count(), (ROWS / 2) * (COLS / 2));
+        // Nonsense and boxes off the picture add nothing.
+        assert!(!add_box(&mut g, [f32::NAN, 0.0, 0.1, 0.1]));
+        assert!(!add_box(&mut g, [1.2, 0.0, 0.1, 0.1]));
+        assert!(!add_box(&mut g, [0.1, 0.1, 0.0, 0.1]));
     }
 
     #[test]
-    fn overlapping_detections_add_up_and_the_period_and_kind_are_respected() {
-        let evs = [
-            event(at(1), vec![("person", 0.4, 0.4, 0.2, 0.2)]),
-            event(at(2), vec![("person", 0.4, 0.4, 0.2, 0.2), ("vehicle", 0.0, 0.8, 0.3, 0.2)]),
-            event(at(100), vec![("person", 0.4, 0.4, 0.2, 0.2)]), // too long ago
-            event(at(3), vec![("dog", 0.9, 0.9, 0.1, 0.1)]),
-        ];
-        let all = build(&evs, at(24), at(0), Kind::All);
-        assert_eq!((all.alerts, all.detections), (3, 4));
-        assert_eq!(all.max, 2, "two people in the same place");
-        let people = build(&evs, at(24), at(0), Kind::People);
-        assert_eq!((people.alerts, people.detections, people.max), (2, 2, 2));
-        let vehicles = build(&evs, at(24), at(0), Kind::Vehicles);
-        assert_eq!((vehicles.alerts, vehicles.detections), (1, 1));
-        let animals = build(&evs, at(24), at(0), Kind::Animals);
-        assert_eq!((animals.alerts, animals.detections), (1, 1));
-        // The older alert counts when the period reaches it.
-        assert_eq!(build(&evs, at(200), at(0), Kind::People).detections, 3);
+    fn what_is_seen_is_written_to_disk_added_up_and_read_back_by_period_and_kind() {
+        let data = scratch("roundtrip");
+        let cam = "front";
+        let now = Local::now();
+        let ms = now.timestamp_millis();
+        // Motion in the top left, a person and a car lower down, a cat, something unusual.
+        motion(cam, ms, &[mo(0.0, 0.0, 0.25, 0.25), mo(0.0, 0.0, 0.25, 0.25)]);
+        objects(cam, ms, &[det("person", 0.9, 0.5, 0.5, 0.1, 0.3), det("truck", 0.8, 0.6, 0.7, 0.3, 0.2), det("cat", 0.7, 0.9, 0.9, 0.1, 0.1), det("chair", 0.8, 0.1, 0.5, 0.1, 0.1), det("person", 0.2, 0.0, 0.5, 0.1, 0.1)]);
+        // Some of it already on disk, some still waiting: both count, and the second write adds to the first.
+        flush(&data);
+        motion(cam, ms, &[mo(0.0, 0.0, 0.25, 0.25)]);
+        let raw = read(&data, cam, now - chrono::Duration::hours(2), now + chrono::Duration::hours(1), &[]);
+        let all = select(&raw, &Kind::Motion);
+        assert_eq!(all.detections, 3, "two on disk, one waiting");
+        assert_eq!(all.cells[0], 3);
+        assert_eq!(all.cells[(ROWS - 1) * COLS + COLS - 1], 0);
+        // Kinds.
+        assert_eq!(select(&raw, &Kind::People).detections, 1, "the 20%-sure person is not counted");
+        assert_eq!(select(&raw, &Kind::Vehicles).detections, 1, "a truck is a vehicle");
+        assert_eq!(select(&raw, &Kind::Animals).detections, 1);
+        assert_eq!(select(&raw, &Kind::Other).detections, 1, "the chair");
+        assert_eq!(select(&raw, &Kind::Objects).detections, 4, "everything the AI saw, not motion");
+        assert_eq!(select(&raw, &Kind::Label("cat".into())).detections, 1);
+        assert_eq!(select(&raw, &Kind::Label("dog".into())).detections, 0);
+        // Which kinds were seen, for the page's choices.
+        let labels = select(&raw, &Kind::Objects).labels;
+        for l in ["person", "vehicle", "cat", "chair"] {
+            assert!(labels.contains(&l.to_string()), "{labels:?}");
+        }
+        assert!(!labels.contains(&"motion".to_string()));
+        // Another period or another camera has none of it.
+        assert_eq!(select(&read(&data, cam, now - chrono::Duration::days(10), now - chrono::Duration::days(5), &[]), &Kind::Motion).detections, 0);
+        assert_eq!(select(&read(&data, "back", now - chrono::Duration::hours(2), now + chrono::Duration::hours(1), &[]), &Kind::Motion).detections, 0);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
-    fn rubbish_and_edge_boxes_never_panic_or_miscount() {
-        let evs = [event(at(1), vec![
-            ("person", f32::NAN, 0.0, 0.1, 0.1),
-            ("person", 0.0, 0.0, 0.0, 0.5),   // no width
-            ("person", 1.5, 1.5, 0.2, 0.2),   // wholly outside
-            ("person", -0.5, -0.5, 0.6, 0.6), // partly outside: its inside part counts
-            ("person", 0.95, 0.95, 0.5, 0.5), // at the bottom-right corner
-        ])];
-        let h = build(&evs, at(24), at(0), Kind::All);
-        assert_eq!(h.detections, 2);
-        assert!(h.cells[0] > 0 && h.cells[COLS * ROWS - 1] > 0);
-        // Nothing to show is an empty (not failing) map.
-        let none = build(&[], at(24), at(0), Kind::All);
-        assert_eq!((none.alerts, none.max, none.cells.len()), (0, 0, COLS * ROWS));
+    fn alerts_stand_in_for_the_time_before_the_log_began_and_not_after() {
+        let data = scratch("fallback");
+        let cam = "side";
+        let now = Local::now();
+        // No log at all: the alerts' boxes are used.
+        let evs = [event(now - chrono::Duration::hours(30), vec![("person", 0.4, 0.4, 0.2, 0.2), ("motion", 0.0, 0.0, 0.1, 0.1)])];
+        let raw = read(&data, cam, now - chrono::Duration::days(3), now, &evs);
+        assert_eq!((raw.alerts_used, select(&raw, &Kind::People).detections, select(&raw, &Kind::Motion).detections), (1, 1, 1));
+        // The log starts now: an older alert still counts, one from inside the logged time does not (it was logged already).
+        motion(cam, now.timestamp_millis(), &[mo(0.5, 0.5, 0.1, 0.1)]);
+        flush(&data);
+        let evs = [event(now - chrono::Duration::hours(30), vec![("person", 0.4, 0.4, 0.2, 0.2)]), event(now + chrono::Duration::minutes(5), vec![("person", 0.4, 0.4, 0.2, 0.2)])];
+        let raw = read(&data, cam, now - chrono::Duration::days(3), now + chrono::Duration::hours(1), &evs);
+        assert_eq!(select(&raw, &Kind::People).detections, 1, "only the old one");
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
-    fn kinds_are_parsed_and_unknown_ones_refused() {
-        assert_eq!(Kind::parse(""), Some(Kind::All));
+    fn motion_that_nothing_recognised_stands_out_and_motion_with_a_person_in_it_does_not() {
+        let mut motion = vec![0u32; COLS * ROWS];
+        let mut objects = vec![0u32; COLS * ROWS];
+        // A path where people walk (lots of motion, lots of people) and a tree (lots of motion, no one).
+        for r in 20..24 {
+            for c in 10..30 {
+                motion[r * COLS + c] = 400;
+                objects[r * COLS + c] = 40;
+            }
+        }
+        for r in 3..8 {
+            for c in 45..55 {
+                motion[r * COLS + c] = 380;
+            }
+        }
+        let u = unexplained(&motion, &objects);
+        let tree = u[5 * COLS + 50];
+        let path = u[21 * COLS + 20];
+        assert!(tree > 800, "the tree should stand out: {tree}");
+        assert!(path < 200, "the path is explained by the people on it: {path}");
+        assert_eq!(u[30 * COLS + 5], 0, "nothing where nothing moved");
+    }
+
+    #[test]
+    fn kinds_are_parsed_strictly() {
+        assert_eq!(Kind::parse(""), Some(Kind::Motion));
         assert_eq!(Kind::parse("people"), Some(Kind::People));
-        assert_eq!(Kind::parse("animal"), Some(Kind::Animals));
-        assert_eq!(Kind::parse("cars"), None);
+        assert_eq!(Kind::parse("label:Cat"), Some(Kind::Label("cat".into())));
+        assert_eq!(Kind::parse("label:sports ball"), Some(Kind::Label("sports ball".into())));
+        for bad in ["nope", "label:", "label:motion", "label:../x", "label:a/b", &format!("label:{}", "x".repeat(60))] {
+            assert_eq!(Kind::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn old_day_files_are_removed_and_recent_ones_kept() {
+        let data = scratch("tidy");
+        let d = data.join("heat").join("cam");
+        std::fs::create_dir_all(&d).unwrap();
+        let today = Local::now().date_naive();
+        for age in [0, 5, KEEP_DAYS + 3] {
+            std::fs::write(d.join(format!("{}.json", today - chrono::Duration::days(age))), "{}").unwrap();
+        }
+        tidy(&data);
+        let left = std::fs::read_dir(&d).unwrap().count();
+        assert_eq!(left, 2);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn scaling_uses_a_high_level_not_the_single_hottest_cell() {
+        let mut cells = vec![0u32; COLS * ROWS];
+        for (i, c) in cells.iter_mut().enumerate().take(200) {
+            *c = 10 + (i % 5) as u32;
+        }
+        cells[500] = 100_000; // one extreme cell
+        let p = p95(&cells);
+        assert!(p < 20, "one extreme cell must not set the scale: {p}");
     }
 }

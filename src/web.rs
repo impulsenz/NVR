@@ -119,7 +119,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         )
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
-        .route("/api/cameras/{id}/heatmap", get(camera_heatmap))
+        .route("/api/heatmaps", get(heatmaps))
         .route("/api/cameras/{id}/synopsis", get(synopsis_get).post(synopsis_start).delete(synopsis_delete))
         .route("/api/cameras/{id}/synopsis/video", get(synopsis_video))
         .route("/api/cameras/{id}/synopsis/poster", get(synopsis_poster))
@@ -846,29 +846,44 @@ async fn plan_tracks_delete(State(m): App) -> Response {
     Json(json!({"ok": true, "deleted_days": n})).into_response()
 }
 
-// ---------- where alerts happened (heatmap.rs) ----------
+// ---------- the Heat map page (heatmap.rs) ----------
 
 #[derive(Deserialize)]
 struct HeatQuery {
+    /// Days back (1 to 30, default 7).
     days: Option<u32>,
+    /// What to show: motion, objects, people, vehicles, animals, other, unexplained or label:<name>.
     #[serde(default)]
     kind: String,
+    /// One camera (default: every camera the account can see).
+    camera: Option<String>,
 }
 
-/// A camera's detections added up over the last `days` (1 to 90, default 7).
-async fn camera_heatmap(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Query(q): Query<HeatQuery>) -> Response {
-    if let Some(denied) = camera_denied(&user, &id) {
-        return denied;
-    }
-    let c = camera!(m, id);
+/// Each camera's heat map for the period and kind, with its ignore areas.
+async fn heatmaps(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<HeatQuery>) -> Response {
     let Some(kind) = crate::heatmap::Kind::parse(&q.kind) else {
-        return err(StatusCode::BAD_REQUEST, "kind: all, people, vehicles or animals");
+        return err(StatusCode::BAD_REQUEST, "kind: motion, objects, people, vehicles, animals, other, unexplained or label:<name>");
     };
-    let days = q.days.unwrap_or(7).clamp(1, 90) as i64;
+    let days = q.days.unwrap_or(7).clamp(1, crate::heatmap::KEEP_DAYS as u32) as i64;
     let now = Local::now();
     let from = now - chrono::Duration::days(days);
-    let events = c.events.between(from, now);
-    Json(crate::heatmap::build(&events, from, now, kind)).into_response()
+    let vis = visible(&user);
+    let data = m.data_dir.clone();
+    let cfg = m.config();
+    let mut out = Vec::new();
+    for rt in m.cameras() {
+        let id = &rt.cfg.id;
+        if vis.as_ref().is_some_and(|v| !v.contains(id)) || q.camera.as_ref().is_some_and(|c| c != id) {
+            continue;
+        }
+        let events = rt.events.between(from, now);
+        let (d, cam, kind) = (data.clone(), id.clone(), kind.clone());
+        let heat = tokio::task::spawn_blocking(move || crate::heatmap::select(&crate::heatmap::read(&d, &cam, from, now, &events), &kind)).await;
+        let Ok(heat) = heat else { continue };
+        let mask = cfg.cameras.iter().find(|c| c.id == *id).map(|c| c.detect.mask.clone()).unwrap_or_default();
+        out.push(json!({ "camera": id, "name": rt.cfg.name, "mask": mask, "heat": heat }));
+    }
+    Json(json!({ "days": days, "cameras": out })).into_response()
 }
 
 // ---------- daily summary (synopsis.rs) ----------

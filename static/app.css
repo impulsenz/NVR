@@ -2,6 +2,7 @@
   --bg: #0e1014; --panel: #161920; --panel2: #1d212a; --panel3: #252a35; --border: #2a2f3a;
   --text: #e6e8ec; --muted: #8b93a3; --accent: #4f8cff; --accent2: rgba(79,140,255,.16);
   --red: #ef4444; --amber: #f59e0b; --green: #22c55e; --purple: #a78bfa;
+  --heat-1: #3b4fd8; --heat-2: #19b5c9; --heat-3: #4ade80; --heat-4: #facc15; --heat-5: #ef4444;
   --auth-bg: radial-gradient(ellipse at 50% 30%, #1d2533 0%, #0e1014 70%);
   /* timelines and graphs: lanes, scale, playhead, grid (day values below) */
   --tl-lane: linear-gradient(180deg, #181c25 0%, #12151c 100%); --tl-lane-hover: linear-gradient(180deg, #1b202a 0%, #141821 100%);
@@ -18,6 +19,7 @@
   --bg: #f2f4f7; --panel: #ffffff; --panel2: #eef1f5; --panel3: #e2e6ed; --border: #d5dae3;
   --text: #1a1e26; --muted: #5b6474; --accent: #2563eb; --accent2: rgba(37,99,235,.12);
   --red: #dc2626; --amber: #b45309; --green: #15803d; --purple: #7c3aed;
+  --heat-1: #2f43c4; --heat-2: #0e9aa8; --heat-3: #22a85a; --heat-4: #d99a06; --heat-5: #d11f1f;
   --auth-bg: radial-gradient(ellipse at 50% 30%, #ffffff 0%, #e6eaf0 75%);
   --tl-lane: linear-gradient(180deg, #fafbfd 0%, #eef2f7 100%); --tl-lane-hover: linear-gradient(180deg, #ffffff 0%, #f3f6fa 100%);
   --tl-axis: linear-gradient(180deg, #f5f7fa, #e9edf3); --tl-axis-text: #596375; --tl-axis-day: #6d28d9; --tl-tick: #8a93a3;
@@ -32,6 +34,7 @@
     --bg: #f2f4f7; --panel: #ffffff; --panel2: #eef1f5; --panel3: #e2e6ed; --border: #d5dae3;
   --text: #1a1e26; --muted: #5b6474; --accent: #2563eb; --accent2: rgba(37,99,235,.12);
   --red: #dc2626; --amber: #b45309; --green: #15803d; --purple: #7c3aed;
+  --heat-1: #2f43c4; --heat-2: #0e9aa8; --heat-3: #22a85a; --heat-4: #d99a06; --heat-5: #d11f1f;
     --auth-bg: radial-gradient(ellipse at 50% 30%, #ffffff 0%, #e6eaf0 75%);
     --tl-lane: linear-gradient(180deg, #fafbfd 0%, #eef2f7 100%); --tl-lane-hover: linear-gradient(180deg, #ffffff 0%, #f3f6fa 100%);
     --tl-axis: linear-gradient(180deg, #f5f7fa, #e9edf3); --tl-axis-text: #596375; --tl-axis-day: #6d28d9; --tl-tick: #8a93a3;
@@ -1851,3 +1854,17 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .syn-chips { position: absolute; inset: 0 0 48px 0; pointer-events: none; }
 .syn-chip { position: absolute; pointer-events: auto; background: var(--panel); color: var(--text); border: 1px solid var(--accent); border-radius: 6px; padding: 3px 8px; font-size: 12px; white-space: nowrap; text-decoration: none; box-shadow: 0 2px 8px var(--tl-shadow); }
 .syn-chip:hover { background: var(--accent); color: #fff; }
+
+/* Heat map page: a soft colour ramp over each camera's picture */
+.heat-kinds { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.heat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.heat-grid.one { grid-template-columns: minmax(0, 1fr); max-width: calc((100vh - 260px) * 16 / 9); }
+.heat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.heat-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex-wrap: wrap; }
+.heat-stage { position: relative; aspect-ratio: 16 / 9; background: var(--tl-thumb-bg); overflow: hidden; }
+.heat-stage img, .heat-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.heat-stage img { object-fit: fill; }
+.heat-cv { filter: blur(6px); transform: scale(1.04); pointer-events: none; }
+.heat-mask { image-rendering: pixelated; pointer-events: none; }
+.heat-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.heat-ramp { width: 220px; max-width: 50%; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--heat-1), var(--heat-2), var(--heat-3), var(--heat-4), var(--heat-5)); }

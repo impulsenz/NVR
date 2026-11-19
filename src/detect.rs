@@ -734,6 +734,10 @@ impl Detector {
                 was_settling = settling;
                 let look_anyway = settling && self.cam.ptz.follow;
                 let moving = d.motion && !settling && m.as_ref().is_some_and(|m| m.moving);
+                // Where things move, for the Heat map page: all of it, however it is set up to alert.
+                if !settling && let Some(m) = m.as_ref().filter(|m| !m.raw.is_empty()) {
+                    crate::heatmap::motion(&self.cam.id, Local::now().timestamp_millis(), &m.raw);
+                }
                 {
                     let mut s = self.status.locked();
                     s.motion = moving;
@@ -975,6 +979,8 @@ impl Detector {
                 // Following people on the floor plan (tracks.rs): hands over what
                 // was found and nothing more; a no-op unless it is switched on.
                 crate::tracks::observe(&self.cam.id, Local::now().timestamp_millis(), &frame, &d);
+                // And for the Heat map page: everything the AI recognised, wanted or not.
+                crate::heatmap::objects(&self.cam.id, Local::now().timestamp_millis(), &d);
                 d
             }
             Err(e) => {
@@ -1693,6 +1699,9 @@ pub struct MotionResult {
     pub biggest: u32,
     /// Share of the picture that changed, 0..1.
     pub fraction: f32,
+    /// The moving areas as they are before the ignore areas apply (for the
+    /// heat map: where motion is, including where it is ignored).
+    pub raw: Vec<MotionObject>,
 }
 
 #[derive(Clone)]
@@ -1733,6 +1742,8 @@ pub struct MotionDetector {
     /// Pixels of a 640-wide picture per grid cell.
     cell_px: f32,
     ignore: Vec<bool>,
+    /// Some of the picture is an ignore area.
+    masked: bool,
     since: Option<Instant>,
     start: (f32, f32),
     gap: u32,
@@ -1754,7 +1765,9 @@ impl MotionDetector {
             None => vec![false; w * h],
         };
         let scale = 640.0 / w as f32;
+        let masked = ignore.iter().any(|x| *x);
         Self {
+            masked,
             w,
             h,
             src_w: src_w as usize,
@@ -1808,9 +1821,15 @@ impl MotionDetector {
         }
         let (w, h) = (self.w, self.h);
         let mut changed = vec![false; w * h];
+        // (With ignore areas, also what changed there: for the heat map.)
+        let mut changed_all = if self.masked { vec![false; w * h] } else { Vec::new() };
         let mut n = 0usize;
         for i in 0..w * h {
-            if !self.ignore[i] && (g[i] - self.bg[i]).abs() > self.s.min_contrast {
+            let diff = (g[i] - self.bg[i]).abs() > self.s.min_contrast;
+            if self.masked {
+                changed_all[i] = diff;
+            }
+            if !self.ignore[i] && diff {
                 changed[i] = true;
                 n += 1;
             }
@@ -1825,6 +1844,7 @@ impl MotionDetector {
                 objects: vec![],
                 biggest: 0,
                 fraction,
+                raw: vec![],
             });
         }
         let alpha = if self.frames < 10 { 0.5 } else { 0.1 };
@@ -1839,6 +1859,13 @@ impl MotionDetector {
         objects.sort_by(|a, b| b.size.cmp(&a.size));
         let biggest = objects.first().map(|o| o.size).unwrap_or(0);
         objects.retain(|o| o.size >= self.s.min_object_px.max(1));
+        let raw = if self.masked {
+            let mut r = self.objects(&changed_all);
+            r.retain(|o| o.size >= self.s.min_object_px.max(1));
+            r
+        } else {
+            objects.clone()
+        };
 
         // Make time and travel.
         if let Some(o) = objects.first() {
@@ -1870,6 +1897,7 @@ impl MotionDetector {
             objects,
             biggest,
             fraction,
+            raw,
         })
     }
 
@@ -2115,6 +2143,32 @@ mod tests {
         assert!(super::masked_share(&mask, &det(0.1)) > 0.99); // in the trees
         assert!(super::masked_share(&mask, &det(0.7)) < 0.01); // on the drive
         assert!(super::masked_share(&mask, &det(0.4)) <= 0.5); // half in: kept
+    }
+
+    #[test]
+    fn the_heat_map_sees_motion_in_ignored_areas_but_alerts_do_not() {
+        let mut mask = vec![false; crate::config::MASK_W * crate::config::MASK_H];
+        for y in 0..crate::config::MASK_H {
+            for x in 0..crate::config::MASK_W / 2 {
+                mask[y * crate::config::MASK_W + x] = true; // ignore the left half
+            }
+        }
+        let mut s = settings(500, 0, 0.0);
+        s.mask = Some(mask);
+        let mut m = MotionDetector::new(640, 360, s);
+        let t = Instant::now();
+        for i in 0..12 {
+            m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
+        }
+        // Something moves in the ignored left half: no alert and no object, but the heat map has it.
+        let r = m.feed_at(&frame(640, 360, Some((100, 100, 60))), t + Duration::from_secs(3)).unwrap();
+        assert!(!r.moving && r.objects.is_empty());
+        assert_eq!(r.raw.len(), 1, "the heat map should still see it");
+        assert!(r.raw[0].x < 0.25);
+        // Outside the ignored area both agree.
+        let r = m.feed_at(&frame(640, 360, Some((450, 100, 60))), t + Duration::from_secs(4)).unwrap();
+        assert_eq!(r.objects.len(), 1);
+        assert!(r.raw.iter().any(|o| o.x > 0.6));
     }
 
     #[test]

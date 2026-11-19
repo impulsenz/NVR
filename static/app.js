@@ -1758,7 +1758,7 @@ function planMapPicker() {
 // ======================================================================
 // Routing & status
 // ======================================================================
-const PAGES = ['live', 'recordings', 'plan', 'evidence', 'system', 'settings'];
+const PAGES = ['live', 'recordings', 'heat', 'plan', 'evidence', 'system', 'settings'];
 // A notification link: #alerts?open=<camera>~<alert id> opens that alert.
 let openAlertId = null, lastNavPage = null;
 function route() {
@@ -1778,6 +1778,7 @@ function route() {
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
   for (const s of PAGES) $('page-' + s).hidden = s !== page;
+  if (page !== 'heat') stopHeat();
   if (page !== 'plan') { stopPlanPoll(); planUI.edit = false; planUI.tool = null; planUI.scalePts = []; }
   if (page !== 'live' || sub) dropGrid();
   if (page !== 'live' && typeof soundCam !== 'undefined' && soundCam) stopSound();
@@ -1793,6 +1794,7 @@ function route() {
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
   else if (page === 'system') showSystem();
   else if (page === 'plan') showPlan();
+  else if (page === 'heat') showHeat(sub ? decodeURIComponent(sub) : null);
   else if (page === 'evidence') showEvidence();
   else showSettings(sub || 'cameras');
   updateSubscriptions();
@@ -7901,18 +7903,13 @@ async function openCameraDialog(id, clone) {
         <label>Ignore areas</label>
         <div><div class="surface" id="d-mask" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair">
             <img alt="" id="d-mask-img" style="object-fit:fill"><div class="msg" id="d-mask-msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div>
-            <canvas id="d-heat-cv" width="64" height="36" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
             <canvas id="d-mask-grid" width="160" height="90" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated"></canvas>
             <svg id="d-mask-boxes" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none" viewBox="0 0 1 1" preserveAspectRatio="none"></svg></div>
           <div class="row mask-tools" style="margin-top:6px">
             <div class="seg" id="d-mask-tool"><button type="button" class="small on" data-v="paint">🖌 Paint</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
             <label class="muted small" style="margin:0">Brush <select id="d-mask-brush" class="small"><option value="1">Fine</option><option value="3" selected>Small</option><option value="7">Medium</option><option value="15">Large</option></select></label>
             <button type="button" class="small" id="d-mask-clear">Clear</button><button type="button" class="small" id="d-mask-invert">Invert</button></div>
-          <div class="row mask-tools" style="margin-top:6px">
-            <label class="muted small" style="margin:0">Where alerts happened${tip('Shows where, on this camera, people, vehicles and animals were found in the alerts of the last day, week or month: blue = a few times, orange and red = most often. A red patch where nothing important ever happens (a tree, a road) is a good place to paint as an ignore area. It only shows places that raised alerts.')}
-              <select id="d-heat" class="small"><option value="0">Hide</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
-            <select id="d-heat-kind" class="small" title="What to show"><option value="all">Everything</option><option value="people">People</option><option value="vehicles">Vehicles</option><option value="animals">Animals</option></select>
-            <span class="muted small" id="d-heat-note"></span></div>
+          ${id && !clone ? `<div class="hint" style="margin:6px 0 0">🔥 To see where motion and objects happen on this camera, and which movement nothing recognised (branches, flags, shadows), open the <a href="#heat/${enc(id)}">Heat map</a>.</div>` : ''}
           <div class="hint" style="margin:4px 0 0">Paint over the picture to mark areas to ignore (red); switch to Erase to unmark. Right-click (or hold Shift) erases too.</div>
           <label class="check" style="margin-top:6px"><input type="checkbox" id="d-mask-ai" ${c.detect.ai_ignores_mask !== false ? 'checked' : ''}> AI ignores these areas too — something it finds mostly inside them (say a parked car) doesn't alert, even when something else set off the check. Untick to still get AI alerts there (motion there is ignored either way).</label>
           <div id="d-meter" class="hint" style="margin-top:8px"></div></div>
@@ -8290,30 +8287,6 @@ function setupMaskEditor(mask, camId) {
   maskCells = decodeMask(mask);
   const cv = $('d-mask-grid');
   const paint = wirePainter({cv, cells: () => maskCells, rgba: [239, 68, 68, 115], tools: $('d-mask-tool'), brush: $('d-mask-brush'), brushKey: 'maskBrush', brushDefault: '3'});
-  // Where alerts happened: the camera's detections added up (heatmap.rs), drawn under the painting.
-  const heatDraw = async () => {
-    const cv = $('d-heat-cv'), note = $('d-heat-note'), days = +val('d-heat');
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    if (!days) { note.textContent = ''; return; }
-    if (!camId) { note.textContent = 'Save the camera first.'; return; }
-    try {
-      const h = await api(`api/cameras/${enc(camId)}/heatmap?days=${days}&kind=${val('d-heat-kind')}`);
-      if (!$('d-heat-cv') || +val('d-heat') !== days) return;
-      cv.width = h.cols; cv.height = h.rows;
-      const css = getComputedStyle(document.documentElement);
-      const [lo, mid, hi] = ['--accent', '--amber', '--red'].map(n => css.getPropertyValue(n).trim() || '#888');
-      h.cells.forEach((v, i) => {
-        if (!v) return;
-        const r = v / h.max;
-        ctx.globalAlpha = 0.25 + 0.55 * r;
-        ctx.fillStyle = r > 0.66 ? hi : r > 0.33 ? mid : lo;
-        ctx.fillRect(i % h.cols, Math.floor(i / h.cols), 1, 1);
-      });
-      note.textContent = h.detections ? `${h.alerts} alert${h.alerts === 1 ? '' : 's'}, ${h.detections} detection${h.detections === 1 ? '' : 's'}` : 'No alerts with detections in this period.';
-    } catch (e) { note.textContent = e.message; }
-  };
-  $('d-heat').onchange = $('d-heat-kind').onchange = heatDraw;
   $('d-mask-clear').onclick = () => { maskCells.fill(false); paint(); };
   $('d-mask-invert').onclick = () => { maskCells = maskCells.map(x => !x); paint(); };
   if (maskUnbind) maskUnbind();
@@ -10212,6 +10185,105 @@ async function renderKnown(body) {
       renderKnown(body);
     };
   });
+}
+
+// ---------- Heat map page (heatmap.rs) ----------
+// Where motion and recognised objects happen on each camera, to review like the
+// alerts. GAZE logs every look of the motion detector (before ignore areas apply)
+// and of the AI (everything it recognises, wanted or not). The grid is coarse,
+// so it is smoothed here when drawn: blurred a little as numbers, scaled up with
+// smoothing, and given a soft colour ramp.
+const HEAT_KINDS = [['motion', 'Motion', 'Everything that moved, including where movement is already ignored.'],
+  ['unexplained', 'Motion nothing recognised', 'Movement in which the AI never found a person, vehicle, animal or anything else: usually branches, flags, shadows or reflections. These are the places to paint as ignore areas to avoid motion alerts.'],
+  ['objects', 'Everything the AI sees', 'Every object the AI recognised, whether or not it raises an alert.'],
+  ['people', 'People', ''], ['vehicles', 'Vehicles', 'Cars, trucks, buses, motorbikes and bicycles.'], ['animals', 'Animals', 'Dogs, cats, birds and other animals.'], ['other', 'Other objects', 'Anything else the AI recognised: chairs, bags, bins …']];
+const heat = {days: +store.get('heat-days', 7) || 7, kind: store.get('heat-kind', 'motion'), data: null, cam: null, timer: null, mask: store.get('heat-mask', true)};
+function stopHeat() { clearTimeout(heat.timer); heat.timer = null; }
+async function showHeat(camId) {
+  heat.cam = camId;
+  stopHeat();
+  await loadHeat();
+}
+async function loadHeat() {
+  const root = $('heat-root'); if (!root) return;
+  if (!heat.data) root.innerHTML = '<div class="card muted">Loading…</div>';
+  try { heat.data = await api(`api/heatmaps?days=${heat.days}&kind=${enc(heat.kind)}${heat.cam ? `&camera=${enc(heat.cam)}` : ''}`); }
+  catch (e) { root.innerHTML = `<div class="card errc">${esc(e.message)}</div>`; return; }
+  if (page !== 'heat') return;
+  renderHeat();
+  // Newer data every few minutes while the page is open.
+  heat.timer = setTimeout(loadHeat, 120000);
+}
+// A soft blur of the numbers: spreads each look to its neighbours so single cells don't stand out.
+function heatSmooth(cells, cols, rows, passes = 2) {
+  let a = Float32Array.from(cells);
+  for (let p = 0; p < passes; p++) {
+    const t = new Float32Array(a.length), o = new Float32Array(a.length);
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) { const i = y * cols + x; t[i] = (a[i - (x > 0 ? 1 : 0)] + 2 * a[i] + a[i + (x < cols - 1 ? 1 : 0)]) / 4; }
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) { const i = y * cols + x; o[i] = (t[i - (y > 0 ? cols : 0)] + 2 * t[i] + t[i + (y < rows - 1 ? cols : 0)]) / 4; }
+    a = o;
+  }
+  return a;
+}
+function heatPalette() {
+  const css = getComputedStyle(document.documentElement);
+  return [1, 2, 3, 4, 5].map(n => { const c = css.getPropertyValue('--heat-' + n).trim() || '#888888'; const m = /^#?([0-9a-f]{6})$/i.exec(c); const v = m ? parseInt(m[1], 16) : 0x888888; return [v >> 16 & 255, v >> 8 & 255, v & 255]; });
+}
+function drawHeat(cv, h, kind) {
+  const pal = heatPalette(), sm = heatSmooth(h.cells, h.cols, h.rows);
+  // Full heat is the level the busiest 5% of places reach (of the smoothed numbers), so one very hot spot doesn't make the rest look cold.
+  const nz = [...sm].filter(v => v > 0.01).sort((a, b) => a - b);
+  const full = kind === 'unexplained' ? 700 : Math.max(nz.length ? nz[Math.floor((nz.length - 1) * 0.95)] : 1, 1);
+  const small = document.createElement('canvas'); small.width = h.cols; small.height = h.rows;
+  const sc = small.getContext('2d'), img = sc.createImageData(h.cols, h.rows);
+  for (let i = 0; i < sm.length; i++) {
+    const t = Math.sqrt(Math.min(sm[i] / full, 1));          // a gentle curve: faint places still show
+    const k = t * (pal.length - 1), a = Math.min(Math.floor(k), pal.length - 2), f = k - a;
+    const c = pal[a].map((v, n) => v + (pal[a + 1][n] - v) * f);
+    img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2];
+    img.data[i * 4 + 3] = sm[i] < 0.02 ? 0 : Math.round(255 * Math.min(0.9, 0.12 + 0.8 * t));
+  }
+  sc.putImageData(img, 0, 0);
+  cv.width = 640; cv.height = 360;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(small, 0, 0, cv.width, cv.height);   // bilinear scaling; the page's CSS blurs it a little more
+}
+function renderHeat() {
+  const root = $('heat-root'), d = heat.data; if (!root || !d) return;
+  const kinds = HEAT_KINDS.map(([k, t, tp]) => `<button type="button" class="small ${heat.kind === k ? 'primary' : ''}" data-k="${k}" ${tp ? `title="${esc(tp)}"` : ''}>${esc(t)}</button>`).join('');
+  const seen = [...new Set(d.cameras.flatMap(c => c.heat.labels))];
+  const one = heat.kind.startsWith('label:') ? heat.kind.slice(6) : '';
+  const more = `<select id="ht-label" class="small" title="One kind of object"><option value="">A specific object…</option>${seen.map(l => `<option value="${esc(l)}" ${l === one ? 'selected' : ''}>${labelIcon(l)} ${esc(l)}</option>`).join('')}</select>`;
+  const kindInfo = (HEAT_KINDS.find(x => x[0] === heat.kind) || [])[2] || '';
+  const total = d.cameras.reduce((n, c) => n + c.heat.detections, 0), hours = Math.max(0, ...d.cameras.map(c => c.heat.hours)), alerts = d.cameras.reduce((n, c) => n + c.heat.alerts_used, 0);
+  const sparse = total < 300;
+  const kindName = one ? one : heat.kind === 'unexplained' ? 'motion' : (HEAT_KINDS.find(x => x[0] === heat.kind) || [, 'detections'])[1].toLowerCase();
+  const info = `${total ? `Based on ${total.toLocaleString()} ${esc(kindName)} detections over ${hours} hour${hours === 1 ? '' : 's'} with activity${alerts ? `, plus the pictures of ${alerts} older alerts` : ''}.` : 'Nothing logged for this yet.'}${sparse ? ' <b>Not much data yet</b>: GAZE logs every movement and every recognised object from now on, so the picture gets smoother and more reliable after a few days.' : ''}`;
+  const cards = d.cameras.map(c => `<article class="heat-card ${heat.cam ? 'big' : ''}" data-cam="${esc(c.camera)}">
+      <div class="heat-head"><b>${esc(c.name)}</b><span class="muted small">${c.heat.detections ? `${c.heat.detections.toLocaleString()} detections` : 'nothing yet'}</span><span class="spacer"></span>
+        ${isAdmin() ? `<button type="button" class="small" data-ign="${esc(c.camera)}" title="Paint areas to ignore for this camera">Ignore areas…</button>` : ''}
+        ${heat.cam ? '<a class="btn small" href="#heat">All cameras</a>' : `<a class="btn small" href="#heat/${enc(c.camera)}">Bigger</a>`}</div>
+      <div class="heat-stage"><img alt="" src="live/${enc(c.camera)}/frame.jpg?t=${Date.now()}" onerror="this.style.visibility='hidden'"><canvas class="heat-cv" data-i="${esc(c.camera)}"></canvas>${heat.mask ? `<canvas class="heat-mask" width="${MASK_W}" height="${MASK_H}" data-m="${esc(c.camera)}"></canvas>` : ''}</div>
+    </article>`).join('');
+  root.innerHTML = `<div class="plan-bar"><h2 style="margin:0">Heat map</h2><span class="muted small">Where things happen on each camera</span><span class="spacer"></span>
+      <label class="check small"><input type="checkbox" id="ht-mask" ${heat.mask ? 'checked' : ''}> Show ignore areas</label>
+      <select id="ht-days" class="small">${[[1, 'Last 24 hours'], [7, 'Last 7 days'], [30, 'Last 30 days']].map(([v, t]) => `<option value="${v}" ${heat.days === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <div class="heat-kinds">${kinds}${more}</div>
+    ${kindInfo ? `<p class="muted small" style="margin:8px 0 0">${esc(kindInfo)}</p>` : ''}
+    <p class="muted small" style="margin:6px 0 10px">${info}</p>
+    ${d.cameras.length ? `<div class="heat-grid ${heat.cam ? 'one' : ''}">${cards}</div><div class="heat-legend"><span class="muted small">less</span><span class="heat-ramp"></span><span class="muted small">more</span></div>` : '<div class="card muted">No cameras to show.</div>'}`;
+  for (const c of d.cameras) {
+    const cv = root.querySelector(`.heat-cv[data-i="${CSS.escape(c.camera)}"]`); if (cv) drawHeat(cv, c.heat, heat.kind);
+    const mk = root.querySelector(`.heat-mask[data-m="${CSS.escape(c.camera)}"]`);
+    if (mk) { const cells = decodeMask(c.mask), x = mk.getContext('2d'); x.fillStyle = 'rgba(239, 68, 68, 0.28)'; cells.forEach((on, i) => { if (on) x.fillRect(i % MASK_W, Math.floor(i / MASK_W), 1, 1); }); }
+  }
+  root.querySelectorAll('.heat-kinds [data-k]').forEach(b => b.onclick = () => { heat.kind = b.dataset.k; store.set('heat-kind', heat.kind); stopHeat(); loadHeat(); });
+  $('ht-label').onchange = () => { if (val('ht-label')) { heat.kind = 'label:' + val('ht-label'); store.set('heat-kind', heat.kind); stopHeat(); loadHeat(); } };
+  $('ht-days').onchange = () => { heat.days = +val('ht-days'); store.set('heat-days', heat.days); stopHeat(); loadHeat(); };
+  $('ht-mask').onchange = () => { heat.mask = chk('ht-mask'); store.set('heat-mask', heat.mask); renderHeat(); };
+  root.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => { await openCameraDialog(b.dataset.ign); const t = document.querySelector('#c-tabs [data-t="detection"]'); if (t) t.click(); });
 }
 
 // ---------- Settings → Daily summary ----------
