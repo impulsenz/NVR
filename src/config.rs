@@ -761,6 +761,9 @@ pub struct SummaryConfig {
     pub objects: Vec<String>,
     /// How long each video should be, in seconds (10 to 600).
     pub seconds: u32,
+    /// Objects play at least this many times faster than they happened (1 to 6):
+    /// at 2, someone's 10-second walk takes 5 s, and they share the screen with others.
+    pub speed: f32,
     /// Delete summaries older than this many days (1 to 365).
     pub keep_days: u32,
 }
@@ -773,7 +776,8 @@ impl Default for SummaryConfig {
             hours: 24,
             cameras: Vec::new(),
             objects: ["person", "vehicle", "dog", "cat", "bird"].map(String::from).to_vec(),
-            seconds: 120,
+            seconds: 60,
+            speed: 2.0,
             keep_days: 30,
         }
     }

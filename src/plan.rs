@@ -146,6 +146,13 @@ pub struct PlanCamera {
     pub range_m: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calib: Option<Calib>,
+    /// How big its icon is drawn, as a multiple of the plan's icon size (1 = as the plan).
+    #[serde(default = "one")]
+    pub size: f64,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 fn default_fov() -> f64 {
@@ -191,6 +198,8 @@ pub struct Plan {
     pub links: Vec<Link>,
     /// Walls: what a camera's drawn view can't pass.
     pub walls: Vec<Wall>,
+    /// How big camera icons are drawn on the map (1 = normal; 0 in an old file = normal).
+    pub icon_scale: f64,
     pub tuning: Tuning,
     pub updated: Option<DateTime<Local>>,
 }
@@ -241,6 +250,9 @@ impl Plan {
             if !c.range_m.is_finite() || !(1.0..=500.0).contains(&c.range_m) {
                 bail!("{}: range between 1 and 500 metres", c.id);
             }
+            if !c.size.is_finite() || !(0.2..=8.0).contains(&c.size) {
+                bail!("{}: icon size between 20% and 800%", c.id);
+            }
             if let Some(k) = &c.calib {
                 if !k.picture.iter().chain(k.plan.iter()).all(|p| unit(p[0]) && unit(p[1])) {
                     bail!("{}: calibration points must be inside the picture and the plan", c.id);
@@ -256,6 +268,12 @@ impl Plan {
         }
         if self.walls.len() > MAX_WALLS {
             bail!("at most {MAX_WALLS} walls");
+        }
+        if self.icon_scale == 0.0 {
+            self.icon_scale = 1.0;
+        }
+        if !self.icon_scale.is_finite() || !(0.2..=8.0).contains(&self.icon_scale) {
+            bail!("camera icon size between 20% and 800%");
         }
         for w in &self.walls {
             if ![w.x1, w.y1, w.x2, w.y2].iter().all(|v| unit(*v)) {
@@ -389,7 +407,7 @@ mod tests {
     use super::*;
 
     fn cam(id: &str) -> PlanCamera {
-        PlanCamera { id: id.into(), x: 0.5, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: None }
+        PlanCamera { id: id.into(), x: 0.5, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: None, size: 1.0 }
     }
 
     fn jpeg(w: u32, h: u32) -> Vec<u8> {
@@ -479,6 +497,29 @@ mod tests {
         // Saving the plan can't give it a picture it doesn't have.
         let p = s.update(Plan { has_image: true, image_w: 999, ..Default::default() }).unwrap();
         assert!(!p.has_image && p.image_w == 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn icon_sizes_are_checked_and_an_old_plan_without_them_gets_normal_size() {
+        let dir = std::env::temp_dir().join(format!("nvr-plan-icons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = PlanStore::open(&dir);
+        // Nothing saved for the sizes (an old plan.json, or a plan sent without them): normal.
+        let p = s.update(Plan { cameras: vec![PlanCamera { size: 1.0, ..cam("a") }], ..Default::default() }).unwrap();
+        assert_eq!(p.icon_scale, 1.0);
+        let old: PlanCamera = serde_json::from_str(r#"{"id":"b","x":0.5,"y":0.5}"#).unwrap();
+        assert_eq!(old.size, 1.0);
+        // Bigger and smaller, kept.
+        let p = s.update(Plan { icon_scale: 2.5, cameras: vec![PlanCamera { size: 0.5, ..cam("a") }], ..Default::default() }).unwrap();
+        assert_eq!((p.icon_scale, p.cameras[0].size), (2.5, 0.5));
+        assert_eq!(s.get().icon_scale, 2.5);
+        // Absurd sizes refused.
+        for bad in [0.01, 50.0, f64::NAN] {
+            assert!(s.update(Plan { icon_scale: bad, ..Default::default() }).is_err(), "{bad}");
+            assert!(s.update(Plan { cameras: vec![PlanCamera { size: bad, ..cam("a") }], ..Default::default() }).is_err(), "{bad}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

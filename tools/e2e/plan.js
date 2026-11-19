@@ -1,9 +1,9 @@
 // Floor-plan page test: starts GAZE in a scratch folder, makes a plan from the
 // satellite map picker (tiles are stubbed in the browser, no internet), then
 // checks wall clipping (`planSight`), mouse-wheel zoom, wall drawing and that
-// the sidebar stays compact.
+// the sidebar stays compact, and camera icons can be resized.
 //
-//   cargo build && node tools/e2e/plan.js        # GAZE_BIN, GAZE_PORT (18182)
+//   cargo build && node tools/e2e/plan.js        # GAZE_BIN, GAZE_PORT (18182), SHOTS=<folder>
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -18,7 +18,7 @@ const TILE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQV
 
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gaze-plan-'));
-  fs.writeFileSync(path.join(dir, 'nvr.toml'), `[server]\nlisten = "127.0.0.1:${PORT}"\nhttps_port = 0\n`);
+  fs.writeFileSync(path.join(dir, 'nvr.toml'), `[server]\nlisten = "127.0.0.1:${PORT}"\nhttps_port = 0\n\n[[cameras]]\nid = "cam1"\nname = "Gate"\nurl = "rtsp://127.0.0.1:1/x"\n`);
   const server = spawn(BIN, ['--dir', dir], { stdio: 'ignore' });
   const stop = () => { try { server.kill(); } catch {} };
   process.on('exit', stop);
@@ -113,6 +113,39 @@ const TILE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQV
   check((await scale()) < k1, 'the mouse wheel does not zoom out');
   const side = await page.locator('#pl-side').boundingBox();
   check(side && side.height <= 1000, `the sidebar is taller than the window (${side && Math.round(side.height)} px)`);
+
+  // 4. Camera icons are sized in proportion to the map (they grow when you zoom in) and can be made bigger or smaller.
+  const cur = await (await ctx.request.get(`${BASE}/api/plan`)).json();
+  const put = await ctx.request.put(`${BASE}/api/plan`, { data: { ...cur, icon_scale: 1, cameras: [{ id: 'cam1', x: 0.5, y: 0.5, rotation_deg: 0, fov_deg: 90, range_m: 15, size: 1 }] } });
+  check(put.ok(), 'could not place a camera on the plan: ' + (await put.text()));
+  await page.reload();
+  await page.waitForTimeout(1200);
+  await page.locator('#pl-edit').click();
+  await page.locator('.pl-tabs [data-tab="cams"]').click();
+  const icon = () => page.evaluate(() => { const c = document.querySelector('.pl-cam circle'); return c ? { r: +c.getAttribute('r'), px: c.getBoundingClientRect().width } : null; });
+  const i1 = await icon();
+  check(i1 && i1.r > 0, 'no camera icon on the plan');
+  if (i1) {
+    await page.evaluate(() => { const e = document.getElementById('pl-isz'); e.value = 200; e.dispatchEvent(new Event('input')); });
+    const i2 = await icon();
+    check(Math.abs(i2.r / i1.r - 2) < 0.02 && i2.px > i1.px * 1.8, `the icon size slider does not resize the icons (${i1.px} -> ${i2.px} px)`);
+    await page.locator('[data-sel="cam1"]').click();
+    await page.evaluate(() => { const e = document.getElementById('pc-sz'); e.value = 50; e.dispatchEvent(new Event('input')); });
+    const i3 = await icon();
+    check(Math.abs(i3.r / i2.r - 0.5) < 0.02, `one camera's size does not resize its icon (${i2.r} -> ${i3.r})`);
+    const st2 = await page.locator('#pl-stage').boundingBox();
+    await page.mouse.move(st2.x + st2.width / 2, st2.y + st2.height / 2);
+    await page.mouse.wheel(0, -500);
+    await page.waitForTimeout(400);
+    const i4 = await icon();
+    if (process.env.SHOTS) { fs.mkdirSync(process.env.SHOTS, { recursive: true }); await page.screenshot({ path: path.join(process.env.SHOTS, 'plan-icons.png') }); }
+    check(i4.px > i3.px * 1.3, `the icons do not grow with the map when zoomed in (${i3.px} -> ${i4.px} px)`);
+    // Kept: saved with the plan.
+    await page.evaluate(() => { const e = document.getElementById('pl-isz'); e.dispatchEvent(new Event('change')); });
+    await page.waitForTimeout(500);
+    const saved = await (await ctx.request.get(`${BASE}/api/plan`)).json();
+    check(saved.icon_scale === 2, `the icon size was not saved (${saved.icon_scale})`);
+  }
 
   await browser.close();
   stop();

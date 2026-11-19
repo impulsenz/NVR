@@ -14,7 +14,7 @@
 //!   1. *Empty scene*: a few keyframes per hour give a per-pixel median, the
 //!      scene without anything passing through it (one per hour, so day and
 //!      night both work).
-//!   2. *Movement*: the footage is decoded at 4 pictures a second at 640×360
+//!   2. *Movement*: the footage is decoded at 6 pictures a second at 640×360
 //!      and compared with a slowly adapting copy of the scene (things that
 //!      stop become scene after a minute); the changed areas are cut out and
 //!      joined from picture to picture into **tubes**.
@@ -53,8 +53,8 @@ pub const H: usize = 360;
 const DW: usize = W / 2;
 const DH: usize = H / 2;
 /// Pictures looked at per second of footage, and in the result.
-const ANALYSIS_FPS: f64 = 4.0;
-const OUT_FPS: f64 = 12.0;
+const ANALYSIS_FPS: f64 = 6.0;
+const OUT_FPS: f64 = 24.0;
 /// A cell of the movement grid is 8×8 detection pixels = 16×16 picture pixels.
 const CELL: usize = 8;
 const CW: usize = DW / CELL;
@@ -64,10 +64,10 @@ const GC: usize = 16;
 const GR: usize = 9;
 type Foot = [u64; 3];
 /// Longest piece of one tube (frames) and most tubes kept.
-const MAX_TUBE_FRAMES: usize = 360;
+const MAX_TUBE_FRAMES: usize = 540;
 const MAX_TUBES: usize = 400;
 /// Fewest pictures an object must be seen in, and the least it must move.
-const MIN_TUBE_FRAMES: usize = 6;
+const MIN_TUBE_FRAMES: usize = 8;
 /// Memory for cut-outs; past this the day is analysed no further.
 const MAX_CROP_BYTES: usize = 320 << 20;
 
@@ -80,11 +80,13 @@ pub struct Params {
     pub min_cells: usize,
     /// Wanted length of the video, in seconds.
     pub target_secs: u32,
+    /// Objects play at least this much faster than real time (1 = as it happened).
+    pub speed: f64,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { threshold: 28, min_cells: 3, target_secs: 120 }
+        Params { threshold: 28, min_cells: 3, target_secs: 60, speed: 2.0 }
     }
 }
 
@@ -430,8 +432,51 @@ fn dilate(a: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
     o
 }
 
-/// The cut-out of a moving area: its pixels with a soft edge (RGBA).
-pub fn cutout(full: &[u8], fg: &[u8], b: &Blob) -> Vec<u8> {
+/// Soften a 0–255 mask with a box blur (twice ≈ a smooth bell), radius `r`.
+fn feather(a: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
+    let mut cur: Vec<u8> = a.to_vec();
+    for _ in 0..2 {
+        let mut t = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (lo, hi) = (x.saturating_sub(r), (x + r).min(w - 1));
+                let sum: u32 = cur[y * w + lo..=y * w + hi].iter().map(|&v| v as u32).sum();
+                t[y * w + x] = (sum / (hi - lo + 1) as u32) as u8;
+            }
+        }
+        for y in 0..h {
+            let (lo, hi) = (y.saturating_sub(r), (y + r).min(h - 1));
+            for x in 0..w {
+                let sum: u32 = (lo..=hi).map(|yy| t[yy * w + x] as u32).sum();
+                cur[y * w + x] = (sum / (hi - lo + 1) as u32) as u8;
+            }
+        }
+    }
+    cur
+}
+
+/// How bright the scene `bg` is in the area of `b` (sampled).
+fn area_luma(bg: &[u8], b: &Blob) -> f32 {
+    let (mut sum, mut n) = (0.0f32, 0.0f32);
+    for y in (b.y0..b.y1).step_by(4) {
+        for x in (b.x0..b.x1).step_by(4) {
+            let i = (y * W + x) * 3;
+            sum += bg[i] as f32 * 0.3 + bg[i + 1] as f32 * 0.59 + bg[i + 2] as f32 * 0.11;
+            n += 1.0;
+        }
+    }
+    if n > 0.0 { sum / n } else { 128.0 }
+}
+
+/// How much to brighten (or darken) an object seen in the light of `src` so it
+/// sits naturally on the scene shown, `shown`, in the area of `b`.
+pub fn relight(src: &[u8], shown: &[u8], b: &Blob) -> f32 {
+    (area_luma(shown, b).max(8.0) / area_luma(src, b).max(8.0)).clamp(0.6, 1.6)
+}
+
+/// The cut-out of a moving area: its pixels with a soft, feathered edge (RGBA),
+/// lightened by `gain` to match the scene it will be shown on.
+pub fn cutout(full: &[u8], fg: &[u8], b: &Blob, gain: f32) -> Vec<u8> {
     let (w, h) = (b.x1 - b.x0, b.y1 - b.y0);
     let mut a = vec![0u8; w * h];
     for y in 0..h {
@@ -440,23 +485,17 @@ pub fn cutout(full: &[u8], fg: &[u8], b: &Blob) -> Vec<u8> {
             a[y * w + x] = fg[fy * DW + fx] * 255;
         }
     }
-    let a = dilate(&a, w, h, 3);
-    // Soften the edge (3×3 average).
+    // Fill small holes, then fade the edge over a few pixels.
+    let a = feather(&dilate(&a, w, h, 3), w, h, 2);
     let mut rgba = vec![0u8; w * h * 4];
     for y in 0..h {
         for x in 0..w {
-            let mut s = 0u32;
-            let mut c = 0u32;
-            for yy in y.saturating_sub(1)..=(y + 1).min(h - 1) {
-                for xx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
-                    s += a[yy * w + xx] as u32;
-                    c += 1;
-                }
-            }
             let src = ((b.y0 + y) * W + b.x0 + x) * 3;
             let d = (y * w + x) * 4;
-            rgba[d..d + 3].copy_from_slice(&full[src..src + 3]);
-            rgba[d + 3] = (s / c) as u8;
+            for c in 0..3 {
+                rgba[d + c] = (full[src + c] as f32 * gain).min(255.0) as u8;
+            }
+            rgba[d + 3] = a[y * w + x];
         }
     }
     rgba
@@ -665,7 +704,7 @@ impl Tracker {
             self.bytes += rgba.len();
             t.frames.push(TFrame { rel_ms: rel, x: b.x0 as u16, y: b.y0 as u16, w: (b.x1 - b.x0) as u16, h: (b.y1 - b.y0) as u16, rgba });
             // Still after 10 s and never named by the AI: scenery (a flag, a shrub).
-            if t.frames.len() == 40 && t.votes.is_empty() && t.travel() < 12.0 {
+            if t.frames.len() == 60 && t.votes.is_empty() && t.travel() < 12.0 {
                 let freed = t.kill();
                 self.bytes = self.bytes.saturating_sub(freed);
             }
@@ -721,16 +760,16 @@ fn pop(a: &Foot, b: &Foot) -> u32 {
     (a[0] & b[0]).count_ones() + (a[1] & b[1]).count_ones() + (a[2] & b[2]).count_ones()
 }
 
-/// Start picture of each tube (in the given order) and the total length: each
-/// as early as it fits (not before the one before it), allowing `tol` cells
-/// of overlap per picture on average.
+/// Start picture of each tube and the total length. Each tube goes as early as
+/// it fits, **anywhere on the timeline**, so objects in different parts of the
+/// picture play at the same time; `tol` is how many cells of overlap per
+/// picture, on average, are allowed (0 = they never cover each other).
 pub fn schedule(foots: &[Vec<Foot>], tol: f64) -> (Vec<usize>, usize) {
     let mut occ: Vec<Foot> = Vec::new();
     let mut starts = Vec::with_capacity(foots.len());
-    let mut lo = 0usize;
     for foot in foots {
         let allow = (tol * foot.len() as f64) as u32;
-        let mut o = lo;
+        let mut o = 0usize;
         loop {
             let mut cost = 0u32;
             for (f, cell) in foot.iter().enumerate() {
@@ -756,7 +795,6 @@ pub fn schedule(foots: &[Vec<Foot>], tol: f64) -> (Vec<usize>, usize) {
             }
         }
         starts.push(o);
-        lo = o;
     }
     (starts, occ.len())
 }
@@ -767,13 +805,17 @@ pub struct Plan {
     pub len: usize,
 }
 
-/// Fit the tubes into `target` pictures: first without overlap, then with a
-/// little, then faster.
-pub fn plan(tubes: &[Tube], target: usize) -> Plan {
+/// Fit the tubes into `target` pictures, as fast as asked for: at `base` times
+/// real time first, letting objects overlap a little more and then play faster
+/// only while it is still too long.
+pub fn plan(tubes: &[Tube], target: usize, base: f64) -> Plan {
+    let base = base.clamp(1.0, 6.0);
+    let mut speeds: Vec<f64> = vec![base, base * 1.5, base * 2.0, base * 3.0, base * 4.0].into_iter().filter(|s| *s <= 8.0).collect();
+    speeds.dedup();
     let mut best: Option<Plan> = None;
-    for &speed in &[1.0, 1.5, 2.0, 3.0, 4.0] {
+    for speed in speeds {
         let foots: Vec<Vec<Foot>> = tubes.iter().map(|t| footprint(t, speed)).collect();
-        for &tol in &[0.0, 0.15, 0.4, 1.0] {
+        for &tol in &[0.0, 0.2, 0.6, 1.5, 3.0] {
             let (starts, len) = schedule(&foots, tol);
             if len <= target {
                 return Plan { speed, starts, len };
@@ -781,7 +823,7 @@ pub fn plan(tubes: &[Tube], target: usize) -> Plan {
             best = Some(Plan { speed, starts, len });
         }
     }
-    best.unwrap_or(Plan { speed: 1.0, starts: Vec::new(), len: 0 })
+    best.unwrap_or(Plan { speed: base, starts: Vec::new(), len: 0 })
 }
 
 // ---------- the video ----------
@@ -826,35 +868,96 @@ pub struct Meta {
     pub notes: Vec<String>,
 }
 
-fn blit(dst: &mut [u8], f: &TFrame) {
-    let (w, h) = (f.w as usize, f.h as usize);
-    for y in 0..h {
-        let dy = f.y as usize + y;
-        if dy >= H {
-            break;
+/// Lay one moment of an object on the picture. Between two seen moments the
+/// object is drawn as both, each moved towards where it is now and faded by how
+/// near it is in time, so its movement is smooth instead of stepping (the
+/// footage is looked at 6 times a second, the video shows 24). Returns the box it
+/// ended up in (x, y, w, h).
+fn blit_between(dst: &mut [u8], a: &TFrame, b: Option<&TFrame>, t: f32) -> (i32, i32, i32, i32) {
+    let b = b.filter(|_| t > 0.0);
+    // How far the object moved between the two moments.
+    let (dx, dy) = match b {
+        Some(b) => {
+            let (ac, bc) = (Tube::centre(a), Tube::centre(b));
+            (bc.0 - ac.0, bc.1 - ac.1)
         }
-        for x in 0..w {
-            let dx = f.x as usize + x;
-            if dx >= W {
-                break;
-            }
-            let s = (y * w + x) * 4;
-            let a = f.rgba[s + 3] as u32;
-            if a == 0 {
+        None => (0.0, 0.0),
+    };
+    // (moment, where its top-left goes, how much of it)
+    let mut layers: Vec<(&TFrame, i32, i32, f32)> = vec![(a, (a.x as f32 + dx * t).round() as i32, (a.y as f32 + dy * t).round() as i32, 1.0 - t)];
+    if let Some(b) = b {
+        layers.push((b, (b.x as f32 - dx * (1.0 - t)).round() as i32, (b.y as f32 - dy * (1.0 - t)).round() as i32, t));
+    }
+    let x0 = layers.iter().map(|l| l.1).min().unwrap().max(0);
+    let y0 = layers.iter().map(|l| l.2).min().unwrap().max(0);
+    let x1 = layers.iter().map(|l| l.1 + l.0.w as i32).max().unwrap().min(W as i32);
+    let y1 = layers.iter().map(|l| l.2 + l.0.h as i32).max().unwrap().min(H as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return (x0, y0, 0, 0);
+    }
+    let (uw, uh) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    // Colour and coverage of both added up (so two solid layers stay solid).
+    let mut acc = vec![0f32; uw * uh * 4];
+    for (f, lx, ly, wgt) in &layers {
+        if *wgt <= 0.0 {
+            continue;
+        }
+        let (fw, fh) = (f.w as i32, f.h as i32);
+        for y in 0..fh {
+            let uy = ly + y - y0;
+            if uy < 0 || uy >= uh as i32 {
                 continue;
             }
-            let d = (dy * W + dx) * 3;
-            for c in 0..3 {
-                dst[d + c] = ((f.rgba[s + c] as u32 * a + dst[d + c] as u32 * (255 - a)) / 255) as u8;
+            for x in 0..fw {
+                let ux = lx + x - x0;
+                if ux < 0 || ux >= uw as i32 {
+                    continue;
+                }
+                let s = ((y * fw + x) * 4) as usize;
+                let al = f.rgba[s + 3] as f32 / 255.0 * wgt;
+                if al <= 0.0 {
+                    continue;
+                }
+                let d = (uy as usize * uw + ux as usize) * 4;
+                for c in 0..3 {
+                    acc[d + c] += f.rgba[s + c] as f32 * al;
+                }
+                acc[d + 3] += al;
             }
         }
     }
+    for uy in 0..uh {
+        for ux in 0..uw {
+            let d = (uy * uw + ux) * 4;
+            let al = acc[d + 3];
+            if al <= 0.001 {
+                continue;
+            }
+            let cover = al.min(1.0);
+            let o = ((y0 as usize + uy) * W + x0 as usize + ux) * 3;
+            for c in 0..3 {
+                // (average colour of what covers it) × coverage + what was there × the rest
+                dst[o + c] = (acc[d + c] / al * cover + dst[o + c] as f32 * (1.0 - cover)).min(255.0) as u8;
+            }
+        }
+    }
+    let (bx, by) = (layers.iter().map(|l| l.1 as f32 * l.3).sum::<f32>().round() as i32, layers.iter().map(|l| l.2 as f32 * l.3).sum::<f32>().round() as i32);
+    (bx, by, a.w as i32, a.h as i32)
 }
 
-fn outline(dst: &mut [u8], f: &TFrame, colour: [u8; 3]) {
-    let (x0, y0) = (f.x as usize, f.y as usize);
-    let (x1, y1) = ((x0 + f.w as usize).min(W) - 1, (y0 + f.h as usize).min(H) - 1);
-    let mut put = |x: usize, y: usize| dst[(y * W + x) * 3..(y * W + x) * 3 + 3].copy_from_slice(&colour);
+fn outline(dst: &mut [u8], bx: (i32, i32, i32, i32), colour: [u8; 3]) {
+    let (x0, y0) = (bx.0.max(0) as usize, bx.1.max(0) as usize);
+    let (x1, y1) = (((bx.0 + bx.2).min(W as i32) - 1).max(0) as usize, ((bx.1 + bx.3).min(H as i32) - 1).max(0) as usize);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    // Drawn half-strength, so it frames the object without a hard line.
+    let mut put = |x: usize, y: usize| {
+        let i = (y * W + x) * 3;
+        for c in 0..3 {
+            dst[i + c] = ((dst[i + c] as u32 + colour[c] as u32 * 2) / 3) as u8;
+        }
+    };
     for x in x0..=x1 {
         put(x, y0);
         put(x, y1);
@@ -929,14 +1032,19 @@ pub fn render(bg: &[u8], tubes: &[Tube], plan: &Plan, sink: &mut dyn FnMut(&[u8]
                 continue;
             }
             shown += 1;
-            let fr = &t.frames[frame_at(t, (f - s) as f64 * step)];
-            blit(&mut frame, fr);
-            outline(&mut frame, fr, colour_of(&metas[i].label));
-            let label = format!("{} {}", metas[i].label, clock(t.start_ms + fr.rel_ms as i64));
-            let ly = if fr.y >= 12 { fr.y as i32 - 12 } else { (fr.y + fr.h) as i32 + 1 };
-            crate::draw::caption(&mut frame, W as u32, H as u32, fr.x as i32, ly, &label, 1);
+            // Which two seen moments it is between, and how far.
+            let rel = (f - s) as f64 * step;
+            let ia = frame_at(t, rel);
+            let fa = &t.frames[ia];
+            let next = t.frames.get(ia + 1).filter(|n| n.rel_ms.saturating_sub(fa.rel_ms) <= 600);
+            let frac = next.map(|n| ((rel - fa.rel_ms as f64) / (n.rel_ms - fa.rel_ms).max(1) as f64).clamp(0.0, 1.0) as f32).unwrap_or(0.0);
+            let bx = blit_between(&mut frame, fa, next, frac);
+            outline(&mut frame, bx, colour_of(&metas[i].label));
+            let label = format!("{} {}", metas[i].label, clock(t.start_ms + fa.rel_ms as i64));
+            let ly = if bx.1 >= 12 { bx.1 - 12 } else { bx.1 + bx.3 + 1 };
+            crate::draw::caption(&mut frame, W as u32, H as u32, bx.0, ly, &label, 1);
             if (f - s) % (OUT_FPS as usize / 2).max(1) == 0 {
-                metas[i].boxes.push([f as u32, fr.x as u32, fr.y as u32, fr.w as u32, fr.h as u32]);
+                metas[i].boxes.push([f as u32, bx.0.max(0) as u32, bx.1.max(0) as u32, bx.2 as u32, bx.3 as u32]);
             }
         }
         if shown > poster_n {
@@ -1062,7 +1170,8 @@ pub fn make(req: &Request, sources: &[Source], ffmpeg: &str, out: &Path, classif
             }
             if let Some(blobs) = det.step(&buf) {
                 let fg = det.fg.clone();
-                tr.feed(ms, &blobs, &mut |bl| cutout(&buf, &fg, bl));
+                let src_bg = nearest_bg(&bgs, block);
+                tr.feed(ms, &blobs, &mut |bl| cutout(&buf, &fg, bl, relight(src_bg, &show, bl)));
                 if tr.wants_look(ms) && looks < MAX_LOOKS_TOTAL {
                     looks += 1;
                     match classify(&buf) {
@@ -1103,9 +1212,9 @@ pub fn make(req: &Request, sources: &[Source], ffmpeg: &str, out: &Path, classif
     tubes.sort_by_key(|t| t.start_ms);
     // Arrangement.
     pr.set("Arranging", 84);
-    let plan = plan(&tubes, (p.target_secs as f64 * OUT_FPS) as usize);
-    if plan.speed > 1.0 {
-        notes.push(format!("Played {}× faster to fit {} s.", plan.speed, p.target_secs));
+    let plan = plan(&tubes, (p.target_secs as f64 * OUT_FPS) as usize, p.speed);
+    if plan.speed > p.speed.clamp(1.0, 6.0) {
+        notes.push(format!("Played {}× faster than real time to fit {} s.", plan.speed, p.target_secs));
     }
     // Video.
     if let Some(dir) = out.parent() {
@@ -1268,7 +1377,7 @@ pub fn enqueue(mgr: &Arc<Manager>, handle: &tokio::runtime::Handle, camera: &str
         from,
         to,
         scheduled,
-        params: Params { target_secs: sc.seconds.clamp(10, 600), ..d },
+        params: Params { target_secs: sc.seconds.clamp(10, 600), speed: sc.speed.clamp(1.0, 6.0) as f64, ..d },
         wanted,
     };
     let k = key(camera, id);
@@ -1603,8 +1712,8 @@ mod tests {
             let f = scene(i);
             let blobs = d.step(&f).unwrap();
             let fg = d.fg.clone();
-            let ms = i as i64 * 250;
-            tr.feed(ms, &blobs, &mut |b| cutout(&f, &fg, b));
+            let ms = (i as f64 * 1000.0 / ANALYSIS_FPS) as i64;
+            tr.feed(ms, &blobs, &mut |b| cutout(&f, &fg, b, 1.0));
             if tr.wants_look(ms) {
                 tr.apply(ms, &ai(&blobs));
             }
@@ -1677,19 +1786,91 @@ mod tests {
     }
 
     #[test]
-    fn a_long_busy_day_is_sped_up_to_the_wanted_length() {
-        // 60 walks across the same row: 60 × 10 s can't fit in 60 s without help.
+    fn objects_in_different_parts_of_the_picture_play_together_whenever_they_happened() {
+        // Three people at 3 different heights, hours apart, each 10 s long: they share the screen from the start.
+        let tubes: Vec<Tube> = (0..3).map(|i| walker(i as i64 * 3_600_000, 10.0, 20 + i * 100, 0)).collect();
+        let foots: Vec<Vec<Foot>> = tubes.iter().map(|t| footprint(t, 1.0)).collect();
+        let (starts, len) = schedule(&foots, 0.0);
+        assert_eq!(starts, vec![0, 0, 0], "nothing is in the way, so they all start at once");
+        assert_eq!(len, foots[0].len(), "one person's time, not three");
+        // Even a later tube slots into a gap left earlier (it is not queued after the others).
+        let tubes = vec![walker(0, 10.0, 100, 0), walker(3_600_000, 10.0, 100, 0), walker(7_200_000, 10.0, 250, 0)];
+        let foots: Vec<Vec<Foot>> = tubes.iter().map(|t| footprint(t, 1.0)).collect();
+        let (starts, _) = schedule(&foots, 0.0);
+        assert_eq!(starts[2], 0, "the third is elsewhere on the picture: it starts with the first: {starts:?}");
+    }
+
+    #[test]
+    fn a_long_busy_day_is_played_at_the_asked_speed_and_faster_only_when_it_must() {
+        // 60 walks across the same row.
         let tubes: Vec<Tube> = (0..60).map(|i| walker(i * 600_000, 10.0, 100, 0)).collect();
-        let p = plan(&tubes, 60 * OUT_FPS as usize);
-        assert!(p.len <= 60 * OUT_FPS as usize || p.speed >= 4.0, "len {} speed {}", p.len, p.speed);
-        assert!(p.speed > 1.0);
+        // Plenty of time: played at the asked speed (here 2×), not faster.
+        let roomy = plan(&tubes, 600 * OUT_FPS as usize, 2.0);
+        assert_eq!(roomy.speed, 2.0);
+        assert!(roomy.len <= 600 * OUT_FPS as usize);
+        // A short wish: faster.
+        let tight = plan(&tubes, 10 * OUT_FPS as usize, 1.0);
+        assert!(tight.speed > 1.0, "speed {}", tight.speed);
+        // Faster means shorter, not longer.
+        let slow = plan(&tubes, 10_000 * OUT_FPS as usize, 1.0);
+        assert!(roomy.len <= slow.len, "{} vs {}", roomy.len, slow.len);
+    }
+
+    #[test]
+    fn an_object_moves_smoothly_between_the_moments_it_was_seen() {
+        let bg = solid(30, 30, 30);
+        // Seen twice, a sixth of a second apart, 60 px apart.
+        let mk = |ms: u32, x: u16| TFrame { rel_ms: ms, x, y: 100, w: 40, h: 80, rgba: vec![255; 40 * 80 * 4] };
+        let mut t = Tube::new(0, mk(0, 100));
+        t.frames.push(mk(167, 160));
+        t.votes.push(("person".into(), 2, 0.9));
+        let pl = Plan { speed: 1.0, starts: vec![0], len: 6 };
+        // The left edge of the white object in each video picture.
+        let mut lefts: Vec<i32> = Vec::new();
+        render(&bg, &[t], &pl, &mut |f| {
+            let row = 140 * W * 3;
+            let left = (0..W).find(|x| f[row + x * 3 + 1] > 200).map(|x| x as i32);
+            lefts.extend(left);
+            Ok(())
+        }, &Progress::new()).unwrap();
+        // The first pictures cover the 167 ms: steady steps to the right, no jump back and no big leap.
+        let steps: Vec<i32> = lefts.windows(2).take(5).map(|w| w[1] - w[0]).collect();
+        assert!(steps.iter().all(|&d| (3..=30).contains(&d)), "movement not smooth: lefts {:?}", &lefts[..8.min(lefts.len())]);
+        assert!(lefts[0] >= 95 && lefts[0] <= 105, "{lefts:?}");
+    }
+
+    #[test]
+    fn an_object_is_brightened_to_suit_the_scene_it_is_shown_on() {
+        let (day, night) = (solid(160, 160, 160), solid(80, 80, 80));
+        let b = Blob { x0: 100, y0: 100, x1: 160, y1: 200 };
+        // Seen at night (dark scene), shown on a day scene: lighter. The other way round: darker.
+        assert!((relight(&night, &day, &b) - 1.6).abs() < 0.01);
+        assert!(relight(&day, &night, &b) < 0.7);
+        assert!((relight(&day, &day, &b) - 1.0).abs() < 0.01);
+        // The cut-out has the gain in its colours.
+        let fg = vec![1u8; DW * DH];
+        let c = cutout(&solid(100, 100, 100), &fg, &b, 1.5);
+        let mid = ((50 * 60) + 30) * 4;
+        assert_eq!(&c[mid..mid + 3], &[150, 150, 150]);
+        // And its edge fades over several pixels instead of stopping hard.
+        let mut half = vec![0u8; DW * DH];
+        for y in 0..DH {
+            for x in 65..DW {
+                half[y * DW + x] = 1;
+            }
+        }
+        let c = cutout(&solid(100, 100, 100), &half, &b, 1.0);
+        let row: Vec<u8> = (0..60).map(|x| c[(50 * 60 + x) * 4 + 3]).collect();
+        let soft = row.iter().filter(|&&a| a > 10 && a < 245).count();
+        assert!(soft >= 6, "edge too hard ({soft} soft pixels): {row:?}");
+        assert!(row[0] < 30 && row[59] > 225, "{row:?}");
     }
 
     #[test]
     fn the_video_has_the_scene_with_named_objects_and_their_clock_times() {
         let bg = solid(30, 30, 30);
         let tubes = vec![walker(Local::now().timestamp_millis(), 5.0, 100, 0)];
-        let pl = plan(&tubes, 10 * OUT_FPS as usize);
+        let pl = plan(&tubes, 10 * OUT_FPS as usize, 2.0);
         let mut frames = 0;
         let mut painted = false;
         let pr = Progress::new();

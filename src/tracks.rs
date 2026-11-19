@@ -777,7 +777,7 @@ mod tests {
     /// Two cameras side by side on a 40 m × 20 m plan: A looks at the left half, B at the right.
     fn plan() -> Plan {
         let calib = |x0: f64, x1: f64| Calib { picture: [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]], plan: [[x0, 1.0], [x1, 1.0], [x1, 0.0], [x0, 0.0]] };
-        let cam = |id: &str, x0: f64, x1: f64| PlanCamera { id: id.into(), x: (x0 + x1) / 2.0, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: Some(calib(x0, x1)) };
+        let cam = |id: &str, x0: f64, x1: f64| PlanCamera { id: id.into(), x: (x0 + x1) / 2.0, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: Some(calib(x0, x1)), size: 1.0 };
         Plan { has_image: true, image_w: 800, image_h: 400, px_per_m: 20.0, cameras: vec![cam("a", 0.0, 0.5), cam("b", 0.5, 1.0)], tuning: tuning(), ..Default::default() }
     }
 
@@ -856,7 +856,7 @@ mod tests {
     #[test]
     fn neighbours_drawn_on_the_plan_limit_the_joins_unless_all_pairs_are_allowed() {
         let mut p = plan();
-        p.cameras.push(PlanCamera { id: "c".into(), x: 0.9, y: 0.1, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: None });
+        p.cameras.push(PlanCamera { id: "c".into(), x: 0.9, y: 0.1, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: None, size: 1.0 });
         p.links = vec![Link { a: "a".into(), b: "b".into(), travel_seconds: Some(3.0) }];
         // C is not a neighbour of A, so A → C is never joined (no calibration on C: only timing counts).
         let a = walk("a1", "a", 0, 5, 0.0, 1.0, None);

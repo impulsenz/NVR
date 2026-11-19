@@ -899,6 +899,7 @@ impl Manager {
             s.time = s.time.trim().to_string();
             s.hours = s.hours.clamp(1, 72);
             s.seconds = s.seconds.clamp(10, 600);
+            s.speed = if s.speed.is_finite() { s.speed.clamp(1.0, 6.0) } else { 2.0 };
             s.keep_days = s.keep_days.clamp(1, 365);
             crate::ai::canon_list(&mut s.objects);
             if s.objects.is_empty() {

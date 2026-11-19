@@ -1362,8 +1362,9 @@ function drawPlanSvg() {
   }
   if (planUI.edit && planUI.tool === 'wall') for (const w of walls) for (const [x, y] of [[w[0], w[1]], [w[2], w[3]]]) h += `<circle class="pl-wend" r="${3.5 * u}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}"/>`;
   for (const c of p.cameras) {
-    const [x, y] = XY([c.x, c.y]), calibrated = !!c.calib, lab = y > planH() * 0.9 ? y - 22 * u : y + 30 * u;
-    h += `<g class="pl-cam ${planUI.cam === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><circle r="${13 * u}" cx="${x}" cy="${y}"/><text x="${x}" y="${y + 4.5 * u}" text-anchor="middle" class="pl-ico" style="font-size:${13 * u}px">📹</text>
+    // The icon is as big as the map makes it (it grows when you zoom in), times the plan's icon size and this camera's.
+    const R0 = 13 * (p.icon_scale || 1) * (c.size || 1), [x, y] = XY([c.x, c.y]), calibrated = !!c.calib, lab = y > planH() * 0.9 ? y - R0 - 9 * u : y + R0 + 17 * u;
+    h += `<g class="pl-cam ${planUI.cam === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><circle r="${R0}" cx="${x}" cy="${y}"/><text x="${x}" y="${y + R0 * 0.35}" text-anchor="middle" class="pl-ico" style="font-size:${R0}px">📹</text>
       <text x="${x}" y="${lab}" text-anchor="middle" class="pl-label" style="font-size:${15 * u}px">${esc(camName(c.id))}${calibrated ? '' : ' ·'}</text></g>`;
     if (planUI.edit && planUI.cam === c.id) { const R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6) * 0.8, a = c.rotation_deg * Math.PI / 180; h += `<circle class="pl-handle" r="${9 * u}" cx="${x + R * Math.sin(a)}" cy="${y - R * Math.cos(a)}"/>`; }
   }
@@ -1390,7 +1391,7 @@ function drawPlanLive() {
 
 async function planSave(msg) {
   const p = planUI.plan;
-  try { await api('api/plan', {method: 'PUT', json: {px_per_m: p.px_per_m, cameras: p.cameras, links: p.links, walls: p.walls || [], tuning: p.tuning}}); if (msg) toast(msg); }
+  try { await api('api/plan', {method: 'PUT', json: {px_per_m: p.px_per_m, icon_scale: p.icon_scale || 1, cameras: p.cameras, links: p.links, walls: p.walls || [], tuning: p.tuning}}); if (msg) toast(msg); }
   catch (e) { toast(e.message, true); await showPlan(); }
 }
 
@@ -1471,11 +1472,14 @@ function planTabCams() {
   const camBox = c ? `<div class="card"><h2>${esc(camName(c.id))}</h2><div class="pl-fields">
       <label for="pc-rot">Facing${tip('Which way the camera looks, in degrees clockwise from the top of the plan. You can also drag the round handle on the map.')}</label><div class="row"><input type="range" id="pc-rot" min="0" max="359" value="${Math.round(c.rotation_deg)}" style="flex:1"><span class="muted small" id="pc-rot-v">${Math.round(c.rotation_deg)}°</span></div>
       <label for="pc-fov">View width</label><div class="row"><input type="range" id="pc-fov" min="10" max="360" value="${Math.round(c.fov_deg)}" style="flex:1"><span class="muted small" id="pc-fov-v">${Math.round(c.fov_deg)}°</span></div>
-      <label for="pc-rng">Range</label><div class="row"><input type="range" id="pc-rng" min="2" max="100" value="${Math.round(c.range_m)}" style="flex:1"><span class="muted small" id="pc-rng-v">${Math.round(c.range_m)} m</span></div></div>
+      <label for="pc-rng">Range</label><div class="row"><input type="range" id="pc-rng" min="2" max="100" value="${Math.round(c.range_m)}" style="flex:1"><span class="muted small" id="pc-rng-v">${Math.round(c.range_m)} m</span></div>
+      <label for="pc-sz">Icon size${tip('How big this camera’s icon is on the map, on top of the size set for all cameras above.')}</label><div class="row"><input type="range" id="pc-sz" min="30" max="400" value="${Math.round((c.size || 1) * 100)}" style="flex:1"><span class="muted small" id="pc-sz-v">${Math.round((c.size || 1) * 100)}%</span></div></div>
       <details class="pl-det"><summary>Neighbours${tip('Cameras whose views meet this one: someone leaving one may appear on the other. When any neighbours are drawn, walks are only joined between neighbours (unless you allow all pairs under People). Give the usual walking time if you know it.')}</summary>
       ${p.cameras.filter(o => o.id !== c.id).map(o => { const l = p.links.find(x => (x.a === c.id && x.b === o.id) || (x.a === o.id && x.b === c.id)); return `<div class="row"><label class="check" style="min-width:130px"><input type="checkbox" class="pc-nb" data-id="${esc(o.id)}" ${l ? 'checked' : ''}> ${esc(camName(o.id))}</label><input type="number" class="pc-tt small" data-id="${esc(o.id)}" min="0" max="3600" step="1" placeholder="walk time (s)" value="${l && l.travel_seconds != null ? l.travel_seconds : ''}" style="width:120px" ${l ? '' : 'disabled'}></div>`; }).join('') || '<span class="muted small">Place another camera to link it.</span>'}</details>
       <div class="actions"><button type="button" class="primary small" id="pc-cal" ${p.px_per_m > 0 ? '' : 'disabled title="Set the scale first"'}>${c.calib ? '✓ Calibrated — redo' : 'Calibrate…'}</button>${c.calib ? '<button type="button" class="small" id="pc-uncal">Clear</button>' : ''}<button type="button" class="small danger" id="pc-del">Remove from plan</button></div></div>` : '';
-  return `<div class="card"><h2>Cameras</h2><div class="pl-cams">${cams.map(k => `<div class="row"><span style="flex:1">${esc(k.name)}</span>${on.has(k.id) ? `<button type="button" class="small ${planUI.cam === k.id ? 'primary' : ''}" data-sel="${esc(k.id)}">Select</button>` : `<button type="button" class="small" data-add="${esc(k.id)}">＋ Place</button>`}</div>`).join('')}</div></div>${camBox}`;
+  return `<div class="card"><h2>Cameras</h2>
+    <div class="pl-fields" style="margin-bottom:8px"><label for="pl-isz">Icon size${tip('How big the camera icons are drawn on the map, in proportion to the map: they grow when you zoom in. Each camera can also be made bigger or smaller below.')}</label><div class="row"><input type="range" id="pl-isz" min="30" max="400" value="${Math.round((p.icon_scale || 1) * 100)}" style="flex:1"><span class="muted small" id="pl-isz-v">${Math.round((p.icon_scale || 1) * 100)}%</span></div></div>
+    <div class="pl-cams">${cams.map(k => `<div class="row"><span style="flex:1">${esc(k.name)}</span>${on.has(k.id) ? `<button type="button" class="small ${planUI.cam === k.id ? 'primary' : ''}" data-sel="${esc(k.id)}">Select</button>` : `<button type="button" class="small" data-add="${esc(k.id)}">＋ Place</button>`}</div>`).join('')}</div></div>${camBox}`;
 }
 
 function planTabWalls() {
@@ -1517,9 +1521,11 @@ function planBindSide() {
   const undo = $('wl-undo'); if (undo) undo.onclick = () => { p.walls.pop(); planSave(); drawPlanSvg(); renderPlanSide(); };
   const clr = $('wl-clear'); if (clr) clr.onclick = () => { if (!confirm(`Remove all ${p.walls.length} walls?`)) return; p.walls = []; planSave(); drawPlanSvg(); renderPlanSide(); };
   const ortho = $('wl-ortho'); if (ortho) ortho.onchange = () => { planUI.ortho = ortho.checked; };
-  side.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => { const id = b.dataset.add; p.cameras.push({id, x: 0.5, y: 0.5, rotation_deg: 0, fov_deg: 90, range_m: 15}); planUI.cam = id; await planSave(); renderPlanSide(); drawPlanSvg(); });
+  side.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => { const id = b.dataset.add; p.cameras.push({id, x: 0.5, y: 0.5, rotation_deg: 0, fov_deg: 90, range_m: 15, size: 1}); planUI.cam = id; await planSave(); renderPlanSide(); drawPlanSvg(); });
   side.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => { planUI.cam = b.dataset.sel; renderPlanSide(); drawPlanSvg(); });
   const c = p.cameras.find(x => x.id === planUI.cam);
+  const isz = $('pl-isz'); if (isz) { isz.oninput = () => { p.icon_scale = isz.value / 100; $('pl-isz-v').textContent = isz.value + '%'; drawPlanSvg(); }; isz.onchange = () => planSave(); }
+  const csz = $('pc-sz'); if (csz && c) { csz.oninput = () => { c.size = csz.value / 100; $('pc-sz-v').textContent = csz.value + '%'; drawPlanSvg(); }; csz.onchange = () => planSave(); }
   if (c && planUI.tab === 'cams') {
     for (const [id, key, unit] of [['pc-rot', 'rotation_deg', '°'], ['pc-fov', 'fov_deg', '°'], ['pc-rng', 'range_m', ' m']]) { const el = $(id); el.oninput = () => { c[key] = +el.value; $(id + '-v').textContent = el.value + unit; drawPlanSvg(); }; el.onchange = () => planSave(); }
     const syncLinks = () => { p.links = p.links.filter(l => l.a !== c.id && l.b !== c.id); side.querySelectorAll('.pc-nb').forEach(n => { if (!n.checked) return; const tt = side.querySelector(`.pc-tt[data-id="${CSS.escape(n.dataset.id)}"]`).value; p.links.push({a: c.id, b: n.dataset.id, travel_seconds: tt === '' ? null : +tt}); }); };
@@ -4865,8 +4871,8 @@ function openSummaries(sel) {
     if (st.state !== 'done') { out.innerHTML = '<p class="muted">Not ready yet.</p>'; return; }
     const m = st.meta;
     out.innerHTML = `<div class="syn-title"><b>${esc(m.camera_name)}</b> · ${esc(sumWhen(m.id, m.from, m.to))} <button type="button" class="small" id="sy-back">← All summaries</button></div>
-      <div class="syn-vid"><video id="sy-v" controls playsinline loop src="${sumUrl(m.camera, m.id, '/video')}&v=${enc(m.built_at)}"></video><div id="sy-ov"></div></div>
-      <p class="muted small" style="margin:6px 0">${esc(sumCounts(m.counts))} from ${fmtDur(m.footage_seconds)} of footage, in ${fmtDur(m.seconds)}${m.speed > 1 ? ` (played ${m.speed}× faster)` : ''}. Click an object to open the real footage.
+      <div class="syn-vid"><video id="sy-v" controls playsinline loop src="${sumUrl(m.camera, m.id, '/video')}&v=${enc(m.built_at)}"></video><div id="sy-ov"></div><div id="sy-chips" class="syn-chips"></div></div>
+      <p class="muted small" style="margin:6px 0">${esc(sumCounts(m.counts))} from ${fmtDur(m.footage_seconds)} of footage, in ${fmtDur(m.seconds)}${m.speed > 1 ? ` (played ${m.speed}× faster)` : ''}. Click an object, or pause the video, to open the real footage.
         <a href="${sumUrl(m.camera, m.id, '/video')}&download=1" download>⇩ Download</a> · <a href="#" id="sy-del">Delete this summary</a></p>
       ${(m.notes || []).map(n => `<p class="warnc small" style="margin:2px 0">${esc(n)}</p>`).join('')}
       <div class="syn-list">${m.objects.map(o => `<button type="button" class="small" data-t="${esc(o.at)}" title="${esc(o.label)} (${Math.round(o.score * 100)}%), real time">${labelIcon(o.label)} ${esc(sumTime(o.at))}</button>`).join('') || '<span class="muted">Nothing the AI recognised moved in that time.</span>'}</div>`;
@@ -4886,6 +4892,24 @@ function openSummaries(sel) {
       return best;
     };
     const pos = (e) => { const r = v.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * m.w, (e.clientY - r.top) / r.height * m.h]; };
+    // Pause the video and a link to each object on screen appears: open the real footage of that moment.
+    const chips = $('sy-chips');
+    const showLinks = () => {
+      const f = Math.floor((v.currentTime || 0) * m.fps), here = [];
+      for (const o of m.objects) {
+        if (f < o.out_start || f > o.out_end) continue;
+        let b = null; for (const q of o.boxes) { if (q[0] <= f) b = q; else break; }
+        // The real moment this picture shows (spread evenly over the object's time on screen).
+        const span = Math.max(o.out_end - o.out_start, 1), at = new Date(o.at).getTime(), end = new Date(o.end).getTime();
+        if (b) here.push({o, b, when: new Date(at + (f - o.out_start) / span * (end - at)).toISOString()});
+      }
+      here.sort((a, b) => a.b[2] - b.b[2]);
+      chips.innerHTML = here.map(({o, b, when}, i) => `<a class="syn-chip" href="#recordings" data-t="${esc(when)}" style="left:${Math.min(Math.max(b[1] / m.w * 100, 1), 62).toFixed(1)}%;top:calc(${Math.min((b[2] + b[4]) / m.h * 100, 88).toFixed(1)}% + ${i * 26}px)" title="Open the real footage of this ${esc(o.label)}">${labelIcon(o.label)} ${esc(o.label)} ${esc(new Date(when).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'}))} · open footage ↗</a>`).join('');
+      chips.querySelectorAll('.syn-chip').forEach(a => a.onclick = (e) => { e.preventDefault(); open(a.dataset.t); });
+    };
+    v.onpause = showLinks;
+    v.onseeked = () => { if (v.paused) showLinks(); };
+    v.onplay = () => { chips.innerHTML = ''; };
     ov.onmousemove = (e) => { ov.style.cursor = objAt(...pos(e)) ? 'pointer' : 'default'; };
     ov.onclick = (e) => { const o = objAt(...pos(e)); if (o) open(o.at); else if (v.paused) v.play(); else v.pause(); };
   }
@@ -10195,7 +10219,7 @@ async function renderKnown(body) {
 // they are alerted on or recorded) and when one is made by itself.
 async function renderSummarySettings(body) {
   if (!sysinfo) sysinfo = await api('api/system').catch(() => null);
-  const sm = settings.summary || {enabled: false, time: '06:30', hours: 24, cameras: [], objects: ['person', 'vehicle', 'dog', 'cat', 'bird'], seconds: 120, keep_days: 30};
+  const sm = settings.summary || {enabled: false, time: '06:30', hours: 24, cameras: [], objects: ['person', 'vehicle', 'dog', 'cat', 'bird'], seconds: 60, speed: 2, keep_days: 30};
   const main = (sysinfo && sysinfo.ai_objects) || ['person', 'vehicle'], more = ((sysinfo && sysinfo.ai_more) || []).filter(o => !main.includes(o));
   const picked = new Set(canonKinds(sm.objects)), ALL = [...new Set([...main, ...more, ...picked])];
   const common = ['person', 'vehicle', 'bicycle', 'dog', 'cat', 'bird', 'horse', 'cow', 'sheep', 'bear', 'backpack', 'suitcase', 'umbrella'].filter(o => ALL.includes(o));
@@ -10214,7 +10238,8 @@ async function renderSummarySettings(body) {
         <label for="sm-time">At</label><div class="row"><input type="time" id="sm-time" value="${esc(sm.time)}" style="width:130px"><span class="muted small">every day (if GAZE was off then, it is made when it starts, up to 6 hours late). E.g. 06:30 to have it when you wake up, or 17:30 for when you get home.</span></div>
         <label for="sm-hours">Covering${tip('How far back from that time the video goes. 24 hours at 06:30 covers yesterday morning to this morning; 9 hours at 17:30 covers your day away from home.')}</label><div class="row"><input type="number" id="sm-hours" min="1" max="72" value="${sm.hours}" style="width:90px"><span class="muted">hours before that time</span></div>
         <label>Cameras</label><div class="checks">${cams.map(c => `<label class="check"><input type="checkbox" class="sm-cam" value="${esc(c.id)}" ${sel.has(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('') || '<span class="muted">No cameras</span>'}</div>
-        <label for="sm-secs">Video length${tip('About how long each video is. A busy day is shown faster, or with people overlapping a little, to fit.')}</label><div class="row"><input type="number" id="sm-secs" min="10" max="600" value="${sm.seconds}" style="width:90px"><span class="muted">seconds</span></div>
+        <label for="sm-speed">Speed${tip('How much faster than real time people and vehicles move. Objects in different parts of the picture always play at the same time, whenever they really happened; a higher speed makes the video shorter and busier.')}</label><div class="row"><select id="sm-speed">${[[1, 'As it happened'], [2, '2× faster'], [3, '3× faster'], [4, '4× faster'], [6, '6× faster']].map(([v, t]) => `<option value="${v}" ${Math.round(sm.speed || 2) === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+        <label for="sm-secs">Video length${tip('About how long each video is at most. A busy day is shown faster, or with objects overlapping a little, to fit.')}</label><div class="row"><input type="number" id="sm-secs" min="10" max="600" value="${sm.seconds}" style="width:90px"><span class="muted">seconds</span></div>
         <label for="sm-keep">Keep for${tip('Summaries are small videos made from your footage. Older ones are deleted. The footage itself is not touched.')}</label><div class="row"><input type="number" id="sm-keep" min="1" max="365" value="${sm.keep_days}" style="width:90px"><span class="muted">days</span></div>
       </div>
       <p class="muted small">Needs object recognition (Settings → Object recognition) switched on. Summaries are made one after another when the computer is not busy; recording is never slowed.</p></div>
@@ -10224,7 +10249,7 @@ async function renderSummarySettings(body) {
     if (!objs.length) return toast('Choose at least one kind of object to show', true);
     const cs = [...body.querySelectorAll('.sm-cam')], pk = cs.filter(c => c.checked).map(c => c.value);
     if (!pk.length) return toast('Choose at least one camera', true);
-    await saveSettings({summary: {enabled: chk('sm-on'), time: val('sm-time') || '06:30', hours: Math.max(1, Math.round(num('sm-hours')) || 24), cameras: pk.length === cs.length ? [] : pk, objects: objs, seconds: Math.max(10, Math.round(num('sm-secs')) || 120), keep_days: Math.max(1, Math.round(num('sm-keep')) || 30)}}, 'Daily summary saved');
+    await saveSettings({summary: {enabled: chk('sm-on'), time: val('sm-time') || '06:30', hours: Math.max(1, Math.round(num('sm-hours')) || 24), cameras: pk.length === cs.length ? [] : pk, objects: objs, seconds: Math.max(10, Math.round(num('sm-secs')) || 60), speed: +val('sm-speed') || 2, keep_days: Math.max(1, Math.round(num('sm-keep')) || 30)}}, 'Daily summary saved');
   };
 }
 

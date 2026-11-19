@@ -7081,7 +7081,7 @@ mod tests {
     #[test]
     fn a_limited_account_sees_only_its_cameras_on_the_plan() {
         use crate::plan::{Link, Plan, PlanCamera};
-        let cam = |id: &str| PlanCamera { id: id.into(), x: 0.5, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: None };
+        let cam = |id: &str| PlanCamera { id: id.into(), x: 0.5, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: None, size: 1.0 };
         let link = |a: &str, b: &str| Link { a: a.into(), b: b.into(), travel_seconds: None };
         let plan = Plan { cameras: vec![cam("front"), cam("back"), cam("gate")], links: vec![link("front", "back"), link("back", "gate")], ..Default::default() };
         let all = restrict_plan(plan.clone(), None);
