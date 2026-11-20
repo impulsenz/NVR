@@ -6267,7 +6267,7 @@ function drawTimeline() {
       const st = cam(c.camera); if (st && st.recorder && st.recorder.state === 'recording') recOn = true;
     }
     const nEv = evs.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
-    const lane = solidBars(pieces, 15000 / span * 100, 'div', 'seg') + evMarks(evs, pct, '', '', lanePx, tl.groups, 126);
+    const lane = solidBars(pieces, 15000 / span * 100, 'div', 'seg') + evMarks(evs, pct, '', '', lanePx, tl.groups, 184);
     rows = `<div class="tl-row merged"><span class="label"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">All cameras</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</span><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}<div class="tl-buf"></div></div><div class="tlp" data-cam="*" title="Time-lapse previews of the cameras shown — blue: ready to scrub · striped: loading · grey: not loaded yet"></div></div></div>`;
   }
   for (const c of mergedNow ? [] : shownCams) {

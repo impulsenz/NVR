@@ -227,6 +227,10 @@
         <button id="tl-play" class="primary">▶ Play</button>
         <button id="tl-back10" title="Back one frame (pauses)">−1 frame</button>
         <button id="tl-fwd10" title="Forward one frame (pauses)">+1 frame</button>
+        <button id="tl-in" title="The clip starts here">[ Clip start</button>
+        <button id="tl-out" title="The clip ends here">Clip end ]</button>
+        <button id="tl-clear" hidden>Clear</button>
+        <span class="timecode" id="tl-sel-info"></span>
         <button id="tl-prev-ev" title="Previous alert">⏮ Alert</button>
         <button id="tl-next-ev" title="Next alert">Alert ⏭</button>
         <button id="tl-live" title="Watch what's happening now on every camera (Play, dragging or clicking the timeline goes back to the recordings)">● Live</button>
@@ -241,13 +245,6 @@
         <button id="tl-vmerge" title="Show all the cameras as one line (the default), or each as its own line">▮ Merge cameras</button>
         <label class="muted tl-layout-l" title="How the camera pictures are arranged: Auto picks the layout that makes them as big as the screen allows">Layout <select id="tl-layout"><option value="auto">Auto (best fit)</option><option value="1">1 across</option><option value="2">2 across</option><option value="3">3 across</option><option value="4">4 across</option><option value="5">5 across</option><option value="6">6 across</option></select></label>
         <button id="tl-orient" title="Switch the timeline between along the bottom and down the side (the side one leaves more room for the pictures when there are many cameras)">⇅ Vertical</button>
-      </div>
-      <div class="controls">
-        <button id="tl-in" title="The clip starts here">[ Clip start</button>
-        <button id="tl-out" title="The clip ends here">Clip end ]</button>
-        <button id="tl-clear" hidden>Clear</button>
-        <span class="timecode" id="tl-sel-info"></span>
-        <span class="spacer"></span>
         <button type="button" id="tl-case-pic" class="op-only" title="Keep the picture at the playhead (each camera shown) in an Evidence Locker case">🗄️ Picture to case</button>
         <button type="button" id="tl-case-clip" class="op-only" hidden title="Keep this clip (each camera shown) in an Evidence Locker case, protected from deletion">🗄️ Clip to case</button>
         <span id="tl-export" class="row"></span>
