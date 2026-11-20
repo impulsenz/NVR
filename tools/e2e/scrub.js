@@ -88,6 +88,9 @@ const fail = (m) => { console.error('FAIL: ' + m); process.exitCode = 1; };
   // A moment 15 minutes from any picture is not pictured; one 3 s from a picture is.
   const found = await page.evaluate(([x, y]) => [!!scrubFind('front', x), !!scrubFind('front', y)], [h1 + 5 * 60000, h0 + 40 * 60000 + 3000]);
   if (found[0] || !found[1]) fail('nearest picture rule: ' + JSON.stringify(found));
+  // Footage without pictures is drawn as "generating" (striped), footage with pictures is not.
+  const gen = await page.evaluate(([h0]) => { const segs = [{kind: 'sub', start: new Date(h0 - 1800000).toISOString(), end: new Date(h0 + 1800000).toISOString()}]; return stripPieces('front', h0 - 3600000, 7200000, segs).map(p => p.cls + ':' + Math.round(p.a) + '-' + Math.round(p.b)); }, [h0]);
+  if (!gen.some((x) => x.startsWith('s-loading:25-50')) || !gen.some((x) => x.startsWith('s-ready'))) fail('strip pieces: ' + JSON.stringify(gen));
   if (problems.length) fail(problems.join('\n'));
   console.log('requests:', asked.length);
   await browser.close();
