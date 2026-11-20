@@ -38,8 +38,7 @@ CI yet.
 
 | Workflow | Does |
 |---|---|
-| `release.yml` | Builds `GAZE.exe` and `GAZE-Watchdog.exe` on Windows and `GAZE-linux-x86_64` on Linux (separate job), publishes the release |
-| `linux.yml` | On changes: tests, page smoke test, Docker image build + start, release-mode Linux build (publishes nothing) |
+| `release.yml` | Builds `GAZE.exe` and `GAZE-Watchdog.exe` (+ `GAZE-Watchdog.version`) on Windows and publishes the release. Windows only |
 | `security.yml` | `cargo audit` on dependency changes and weekly |
 | `quality.yml` | On pull requests / by hand: tests, clippy correctness lints, **Windows compile check** |
 

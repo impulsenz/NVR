@@ -4,8 +4,8 @@ GAZE builds and runs on 64-bit Linux. The Windows extras (tray icon, Windows
 service, watchdog, self-update) don't apply; use systemd (or Docker) to keep
 it running and your package manager for ffmpeg.
 
-**Status:** CI (`.github/workflows/linux.yml`) runs the tests, the page smoke
-test, builds the Docker image and starts it, on every change. The systemd
+**Status:** Releases are Windows only now, and the Linux CI workflow is removed (it used to run the tests, the page smoke
+test, build the Docker image and start it). No Linux program is attached to releases any more; build it from source. The systemd
 unit was checked with `systemd-analyze verify` but has not been run under its
 own `gaze` user: report anything that needs fixing.
 

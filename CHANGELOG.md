@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## Unreleased
+- **Releases are Windows only.** The Linux program is no longer built or attached, and the Linux check workflow (`linux.yml`) is gone. The Linux source and `docs/LINUX.md` are still in the repository.
+- **The watchdog no longer "updates" with every GAZE release.** It has its own version now (it was GAZE's), published with each release as `GAZE-Watchdog.version`; it offers an update only when that number is higher than its own. Watchdogs older than this change update one last time.
+
 ## 1.7.4 — November 2026
 - **Recordings: no more loading 10 minutes ahead.** Each camera now loads about 20 seconds ahead of the playhead (it was 10 minutes) and keeps 10 seconds of what was watched, and the page no longer asks the server to read the footage behind the playhead into memory. With many cameras on screen the old setting meant hundreds of Mbps of loading and gigabytes of memory. Going back or scrubbing now fetches from the disk instead of from memory.
 

@@ -10,11 +10,11 @@
 # - "Run workflow" is started by hand on the default branch and the version
 #   in Cargo.toml has no release yet (e.g. to retry a failed release).
 #
-# GAZE installations find the release, download the program for their
-# system and update themselves (Settings → About; Windows only: Linux
-# installations update with their own tools, the Linux program is attached
-# for download). On another branch, "Run
-# workflow" only builds (the program is attached to the run).
+# Windows only. GAZE installations find the release, download GAZE.exe and
+# update themselves (Settings → About). The watchdog is attached too, with
+# its own version file (GAZE-Watchdog.version): it updates only when that
+# changes. On another branch, "Run workflow" only builds (the program is
+# attached to the run).
 name: Release
 
 on:
@@ -86,6 +86,9 @@ jobs:
           cp "${{ matrix.exe }}" "dist/${{ matrix.asset }}"
           # The optional watchdog (its own program, built from the same source).
           cp "target/release/gaze-watchdog.exe" "dist/GAZE-Watchdog.exe"
+          # The watchdog's own version (its VERSION in src/watchdog/main.rs, not
+          # GAZE's): watchdogs update only when this changes.
+          grep -m1 '^const VERSION' src/watchdog/main.rs | cut -d'"' -f2 > dist/GAZE-Watchdog.version
           cd dist
           sha256sum "${{ matrix.asset }}" | cut -d' ' -f1 > "${{ matrix.asset }}.sha256"
           sha256sum "GAZE-Watchdog.exe" | cut -d' ' -f1 > "GAZE-Watchdog.exe.sha256"
@@ -94,34 +97,8 @@ jobs:
           name: ${{ matrix.asset }}
           path: dist/*
 
-  build-linux:
-    # The Linux program (x86-64). Separate from the Windows build on purpose:
-    # if it fails, the Windows release still goes out (see `release`).
-    needs: version
-    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        env:
-          GAZE_UPDATE_REPO: ${{ github.repository }}
-        run: cargo build --release --locked --bin nvr
-      - name: Package
-        run: |
-          mkdir dist
-          cp target/release/nvr dist/GAZE-linux-x86_64
-          cd dist
-          sha256sum GAZE-linux-x86_64 | cut -d' ' -f1 > GAZE-linux-x86_64.sha256
-      - uses: actions/upload-artifact@v7
-        with:
-          name: GAZE-linux-x86_64
-          path: dist/*
-
   release:
-    # Needs the Windows build; the Linux program is attached when it built.
-    needs: [version, build, build-linux]
+    needs: [version, build]
     if: always() && needs.version.outputs.release == 'true' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:

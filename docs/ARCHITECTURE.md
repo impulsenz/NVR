@@ -153,7 +153,7 @@ Only one design exists (the original); the 1.3.x "looks" (`skins.css`) were remo
 
 ## Updates and installation (Windows)
 
-Releases on GitHub (`release.yml`): `GAZE.exe`, `GAZE-Watchdog.exe` + `.sha256`.
+Releases on GitHub (`release.yml`, Windows only): `GAZE.exe`, `GAZE-Watchdog.exe` (+ `.sha256` each) and `GAZE-Watchdog.version`. The watchdog has its own version (`VERSION` in `src/watchdog/main.rs`, raised only when the watchdog is changed on purpose) and updates only when that file differs from its own.
 GAZE updates itself (`update.rs`, swap-and-restart); the watchdog updates
 itself (`watchdog/main.rs`) or on request from GAZE's page. Every open page
 reloads when the server's boot id changes.

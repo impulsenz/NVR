@@ -25,7 +25,13 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The watchdog's own version. NOT the GAZE version: it changes only when the
+/// watchdog itself is changed on purpose (raise it then, and only then), so
+/// a GAZE release doesn't make every watchdog "update". Releases publish it
+/// as `GAZE-Watchdog.version` next to the program.
+const VERSION: &str = "1.7.3";
+/// Release file holding the version of the watchdog in that release.
+const VERSION_ASSET: &str = "GAZE-Watchdog.version";
 const TASK_NAME: &str = "GazeWatchdog";
 /// Set by the Windows service manager's stop: the watchdog finishes.
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -614,19 +620,19 @@ fn repo() -> String {
     std::env::var("GAZE_UPDATE_REPO").unwrap_or_else(|_| DEFAULT_REPO.to_string())
 }
 
-/// The newest release's version (from github.com's own page, which isn't
-/// limited like its API).
+/// The version of the watchdog in the newest release (a small file next to
+/// the program; the GAZE version of the release says nothing about it).
 async fn latest_version() -> Result<String, String> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("GAZE-Watchdog/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let r = client.get(format!("{}/{}/releases/latest", web_base(), repo())).send().await.map_err(|e| format!("can't reach GitHub: {e}"))?;
-    let loc = r.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    loc.rsplit_once("/releases/tag/").map(|(_, t)| t.split(['?', '#']).next().unwrap_or(t).trim_start_matches('v').to_string()).filter(|t| !t.is_empty()).ok_or_else(|| "no releases yet".to_string())
+    let r = client.get(format!("{}/{}/releases/latest/download/{VERSION_ASSET}", web_base(), repo())).send().await.map_err(|e| format!("can't reach GitHub: {e}"))?;
+    let t = r.error_for_status().map_err(|e| format!("the newest release doesn't say which watchdog it has: {e}"))?.text().await.map_err(|e| e.to_string())?;
+    let v = t.trim().trim_start_matches('v').to_string();
+    parse_version(&v).map(|_| v).ok_or_else(|| "the newest release's watchdog version isn't readable".to_string())
 }
 
 /// Download the new watchdog next to this one, check it, put it in place
@@ -641,7 +647,7 @@ async fn install_update(data: &Path) -> Result<String, String> {
         return Err("Updates of the watchdog are for Windows".into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base = format!("{}/{}/releases/download/v{latest}/{ASSET}", web_base(), repo());
+    let base = format!("{}/{}/releases/latest/download/{ASSET}", web_base(), repo());
     let client = reqwest::Client::builder().user_agent(concat!("GAZE-Watchdog/", env!("CARGO_PKG_VERSION"))).connect_timeout(Duration::from_secs(30)).timeout(Duration::from_secs(300)).build().map_err(|e| e.to_string())?;
     let want = client.get(format!("{base}.sha256")).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| format!("no checksum for {latest}: {e}"))?.text().await.map_err(|e| e.to_string())?;
     let want = want.split_whitespace().next().unwrap_or("").to_lowercase();
