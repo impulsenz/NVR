@@ -47,6 +47,9 @@ pub const ROWS: usize = 36;
 const GRID: usize = COLS * ROWS + 1;
 /// Days of log kept.
 pub const KEEP_DAYS: i64 = 30;
+/// The only objects the page shows (everything the AI sees, and the list of what it saw):
+/// the rest is still logged, and still explains movement for "unexplained motion".
+pub const SHOWN: [&str; 4] = ["person", "vehicle", "cat", "dog"];
 /// How sure the AI must be for an object to count.
 const MIN_SCORE: f32 = 0.4;
 
@@ -393,7 +396,7 @@ impl Kind {
         let vehicle = label == "vehicle" || label == "bicycle";
         match self {
             Kind::Motion | Kind::Unexplained => false,
-            Kind::Objects => true,
+            Kind::Objects => SHOWN.contains(&label),
             Kind::People => label == "person",
             Kind::Vehicles => vehicle,
             Kind::Animals => animal,
@@ -501,7 +504,7 @@ pub fn select(raw: &Raw, kind: &Kind) -> Heatmap {
             }
         }
     }
-    let mut labels: Vec<(&String, u64)> = raw.grids.iter().filter(|(l, _)| l.as_str() != "motion").map(|(l, g)| (l, g[COLS * ROWS] as u64)).filter(|(_, n)| *n > 0).collect();
+    let mut labels: Vec<(&String, u64)> = raw.grids.iter().filter(|(l, _)| SHOWN.contains(&l.as_str())).map(|(l, g)| (l, g[COLS * ROWS] as u64)).filter(|(_, n)| *n > 0).collect();
     labels.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
     let counts: Vec<u32> = labels.iter().map(|(_, n)| (*n).min(u32::MAX as u64) as u32).collect();
     Heatmap {
@@ -584,14 +587,15 @@ mod tests {
         assert_eq!(select(&raw, &Kind::Vehicles).detections, 1, "a truck is a vehicle");
         assert_eq!(select(&raw, &Kind::Animals).detections, 1);
         assert_eq!(select(&raw, &Kind::Other).detections, 1, "the chair");
-        assert_eq!(select(&raw, &Kind::Objects).detections, 4, "everything the AI saw, not motion");
+        assert_eq!(select(&raw, &Kind::Objects).detections, 3, "a person, a truck and a cat: the chair is not shown, nor is motion");
         assert_eq!(select(&raw, &Kind::Label("cat".into())).detections, 1);
         assert_eq!(select(&raw, &Kind::Label("dog".into())).detections, 0);
         // Which kinds were seen, for the page's choices.
         let labels = select(&raw, &Kind::Objects).labels;
-        for l in ["person", "vehicle", "cat", "chair"] {
+        for l in ["person", "vehicle", "cat"] {
             assert!(labels.contains(&l.to_string()), "{labels:?}");
         }
+        assert!(!labels.contains(&"chair".to_string()), "only person, vehicle, cat and dog are listed: {labels:?}");
         assert!(!labels.contains(&"motion".to_string()));
         // Another period or another camera has none of it.
         assert_eq!(select(&read(&data, cam, now - chrono::Duration::days(10), now - chrono::Duration::days(5), &[], None), &Kind::Motion).detections, 0);

@@ -10244,10 +10244,11 @@ async function renderKnown(body) {
 // smoothing, and given a soft colour ramp.
 const HEAT_KINDS = [['motion', 'Motion', 'Everything that moved.'],
   ['unexplained', 'Unexplained motion', 'Movement in which the AI never found a person, vehicle, animal or anything else: usually branches, flags, shadows or reflections. These are the places to paint as ignore areas to avoid motion alerts. (Tick "Include areas ignored in the Motion settings" to see the ones you have already painted.)'],
-  ['objects', 'Everything the AI sees', 'Every object the AI recognised, whether or not it raises an alert.'],
-  ['people', 'People', ''], ['vehicles', 'Vehicles', 'Cars, trucks, buses, motorbikes and bicycles.'], ['animals', 'Animals', 'Dogs, cats, birds and other animals.'], ['other', 'Other objects', 'Anything else the AI recognised: chairs, bags, bins …']];
+  ['objects', 'Everything the AI sees', 'People, vehicles, cats and dogs the AI recognised, whether or not they raise an alert.'],
+  ['people', 'People', ''], ['vehicles', 'Vehicles', 'Cars, trucks, buses, motorbikes and bicycles.'], ['label:cat', 'Cats', ''], ['label:dog', 'Dogs', '']];
 const HEAT_SIZES = [['s', 'Small', 240], ['m', 'Medium', 340], ['l', 'Large', 520]];
-const heat = {days: +store.get('heat-days', 7) || 7, kind: store.get('heat-kind', 'motion'), data: null, cam: null, timer: null,
+const HEAT_KIND_OK = (k) => HEAT_KINDS.some(x => x[0] === k);
+const heat = {days: +store.get('heat-days', 7) || 7, kind: HEAT_KIND_OK(store.get('heat-kind', 'motion')) ? store.get('heat-kind', 'motion') : 'motion', data: null, cam: null, timer: null,
   mask: store.get('heat-mask', true),                 // outline the ignore areas on the pictures
   incl: store.get('heat-incl', false),                // count what happened inside the ignore areas too
   size: store.get('heat-size', 'm'), op: +store.get('heat-op', 85) || 85,
@@ -10316,9 +10317,6 @@ function renderHeat() {
   const all = d.cameras, shown = all.filter(c => heat.cam || !heat.off.has(c.camera));
   const one = heat.kind.startsWith('label:') ? heat.kind.slice(6) : '';
   const kindBtn = ([k, t, tp]) => `<button type="button" class="${heat.kind === k ? 'on' : ''}" data-k="${k}" ${tp ? `title="${esc(tp)}"` : ''}>${esc(t)}</button>`;
-  const seen = [...new Set(all.flatMap(c => c.heat.labels))];
-  if (one && !seen.includes(one)) seen.unshift(one);
-  const more = `<select id="ht-label" class="small" title="One kind of object">${one ? '' : '<option value="">A specific object…</option>'}${seen.map(l => `<option value="${esc(l)}" ${l === one ? 'selected' : ''}>${labelIcon(l)} ${esc(l)}</option>`).join('')}</select>`;
   const kindInfo = one ? '' : (HEAT_KINDS.find(x => x[0] === heat.kind) || [])[2] || '';
   const kindName = one || (HEAT_KINDS.find(x => x[0] === heat.kind) || [, 'detections'])[1].toLowerCase();
   const total = shown.reduce((n, c) => n + c.heat.detections, 0), hours = Math.max(0, ...shown.map(c => c.heat.hours)), alerts = shown.reduce((n, c) => n + c.heat.alerts_used, 0);
@@ -10339,7 +10337,7 @@ function renderHeat() {
     return chips.join('');
   };
   const stage = (c) => `<div class="heat-stage"><img alt="" src="live/${enc(c.camera)}/frame.jpg?t=${Date.now()}" onerror="this.style.visibility='hidden'"><canvas class="heat-cv" data-i="${esc(c.camera)}"></canvas>${heat.mask && c.has_ignore ? `<canvas class="heat-mask" width="${MASK_W}" height="${MASK_H}" data-m="${esc(c.camera)}"></canvas>` : ''}${c.heat.detections ? '' : `<div class="heat-empty">${c.heat.ignored_share > 0 && !heat.incl ? 'Everything logged here was inside an ignored area.<br>Tick “Include areas ignored in the Motion settings” to see it.' : 'Nothing logged for this yet.'}</div>`}</div>`;
-  const actions = (c) => `${isAdmin() ? `<button type="button" class="small" data-ign="${esc(c.camera)}" title="Open this camera’s Motion settings to paint areas to ignore">Ignore areas…</button>` : ''}${heat.cam ? '<a class="btn small" href="#heat">All cameras</a>' : `<a class="btn small" href="#heat/${enc(c.camera)}">Open</a>`}`;
+  const actions = (c) => `${isAdmin() ? `<button type="button" class="small" data-ign="${esc(c.camera)}" title="Open this camera’s Motion settings to paint areas to ignore">Ignore areas…</button><button type="button" class="small" data-edit="${esc(c.camera)}" title="Open this camera’s settings">Edit camera</button>` : ''}${heat.cam ? '<a class="btn small" href="#heat">All cameras</a>' : `<a class="btn small" href="#heat/${enc(c.camera)}">Open</a>`}`;
   const card = (c) => `<article class="heat-card ${c.heat.detections ? '' : 'quiet'}" data-cam="${esc(c.camera)}">
       <div class="heat-head"><b>${esc(c.name)}</b><span class="spacer"></span>${actions(c)}</div>
       ${stage(c)}
@@ -10360,7 +10358,7 @@ function renderHeat() {
       <div class="seg" id="ht-days">${[[1, '24 hours'], [7, '7 days'], [30, '30 days']].map(([v, t]) => `<button type="button" class="small ${heat.days === v ? 'on' : ''}" data-d="${v}">${t}</button>`).join('')}</div></div>
     <div class="card heat-ctl">
       <div class="heat-row"><span class="heat-lab">Movement</span><div class="seg">${HEAT_KINDS.slice(0, 2).map(kindBtn).join('')}</div></div>
-      <div class="heat-row"><span class="heat-lab">What the AI recognised</span><div class="seg">${HEAT_KINDS.slice(2).map(kindBtn).join('')}</div>${more}</div>
+      <div class="heat-row"><span class="heat-lab">What the AI saw</span><div class="seg">${HEAT_KINDS.slice(2).map(kindBtn).join('')}</div></div>
       ${camChips}
       <div class="heat-row"><span class="heat-lab">Ignored areas</span><div class="heat-chips">
         <label class="check small" title="Areas painted as ignore in a camera’s Motion settings (a branch that always moves, a flag). Off: they are left out of the heat, as they are for alerts. They are always logged, so ticking this shows them again."><input type="checkbox" id="ht-incl" ${heat.incl ? 'checked' : ''}> Include areas ignored in the Motion settings</label>
@@ -10381,7 +10379,6 @@ function renderHeat() {
   }
   const reload = () => { stopHeat(); loadHeat(); };
   root.querySelectorAll('.heat-ctl [data-k]').forEach(b => b.onclick = () => { heat.kind = b.dataset.k; store.set('heat-kind', heat.kind); reload(); });
-  $('ht-label').onchange = () => { if (val('ht-label')) { heat.kind = 'label:' + val('ht-label'); store.set('heat-kind', heat.kind); reload(); } };
   root.querySelectorAll('#ht-days [data-d]').forEach(b => b.onclick = () => { heat.days = +b.dataset.d; store.set('heat-days', heat.days); reload(); });
   $('ht-incl').onchange = () => { heat.incl = chk('ht-incl'); store.set('heat-incl', heat.incl); reload(); };
   $('ht-mask').onchange = () => { heat.mask = chk('ht-mask'); store.set('heat-mask', heat.mask); renderHeat(); };
@@ -10390,6 +10387,7 @@ function renderHeat() {
   root.querySelectorAll('.heat-cam').forEach(b => b.onclick = () => { const k = b.dataset.cam; heat.off.has(k) ? heat.off.delete(k) : heat.off.add(k); store.set('heat-off', [...heat.off]); renderHeat(); });
   if ($('ht-allcams')) $('ht-allcams').onclick = () => { heat.off.clear(); store.set('heat-off', []); renderHeat(); };
   root.querySelectorAll('.heat-bar').forEach(b => b.onclick = () => { heat.kind = 'label:' + b.dataset.l; store.set('heat-kind', heat.kind); reload(); });
+  root.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openCameraDialog(b.dataset.edit));
   root.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => { await openCameraDialog(b.dataset.ign); const t = document.querySelector('#c-tabs [data-t="detection"]'); if (t) t.click(); });
 }
 
