@@ -1,5 +1,13 @@
 # What's new in GAZE
 
+## Unreleased
+- **Time-lapse previews keep working on older footage.**
+  - **They move with the footage.** When a recording moved to deep storage its previews were deleted, so every moved file was decoded again from the NAS (the traffic and lag on older footage). They are now copied next to it, and deleted from the local disk only after that.
+  - **They are built while you watch.** The background job used to wait up to 10 minutes per file whenever anyone was playing or scrubbing. The newest footage is never held up now, and older footage goes at a gentler pace instead of stopping. The catch-up looks again every 90 seconds while there is a backlog (60 files at a time, was 30 every 10 minutes), and runs unless the computer is really busy (above 82% it waits, above 94% it stops for now; it was 70% and 85%).
+  - **A preview cut short isn't saved as complete.** If reading stalled for a minute or the build ran over 10 minutes (a slow network drive), the part made was kept as the whole preview and never remade. It is now refused, so the older one is kept and it is tried again.
+  - **One build per file at a time.** A page and the background job asking for the same preview used to write into the same folder together.
+  - **An idle Recordings page asks for missing previews less and less often** (6 s, 12 s … up to 2 minutes; it was every 6 s for as long as the page stayed open).
+
 ## 1.7.10 — November 2026
 - **The camera window no longer polls for sound while closed.** After a camera's settings window had been opened once, the page asked the server what the camera hears every 1½ seconds for as long as it stayed open, even on an idle system. It now asks only while the window is open on its Audio tab.
 - **Code tidy-up:** every clippy warning fixed (there are none now), one possible crash on a camera deleted while being steered, and the whole source formatted with rustfmt (one commit, so history stays readable), with a check in the quality workflow so it stays that way.

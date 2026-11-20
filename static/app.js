@@ -7124,8 +7124,9 @@ function knownPreviewsSoon() {
     stripsSoon();
   }, 250);
 }
-async function prefetchSprites() {
+async function prefetchSprites(isRetry) {
   if (!TIMELAPSE) return;
+  if (!isRetry) tl.pfRetryN = 0;
   const gen = tl.pfGen = (tl.pfGen || 0) + 1;
   tl.pv = tl.pv || new Map();
   {
@@ -7168,7 +7169,9 @@ async function prefetchSprites() {
   // still the one shown), so gaps fill in by themselves.
   Promise.all([worker(), worker()]).then(() => {
     clearTimeout(tl.pfRetry);
-    if (missing && gen === tl.pfGen) tl.pfRetry = setTimeout(() => { if (gen === tl.pfGen && page === 'recordings' && !document.hidden) prefetchSprites(); }, 6000);
+    // Still missing ones are asked for again, less and less often (6 s, 12 s … up to 2 minutes): each ask can make the
+    // server build a preview, and an idle page shouldn't keep doing that every few seconds.
+    if (missing && gen === tl.pfGen) tl.pfRetry = setTimeout(() => { if (gen === tl.pfGen && page === 'recordings' && !document.hidden) prefetchSprites(true); }, Math.min(120000, 6000 * 2 ** Math.min(tl.pfRetryN++, 5)));
   });
 }
 // A camera's current picture as the preview (scrubbing up to now).

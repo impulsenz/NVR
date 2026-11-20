@@ -16,7 +16,7 @@ use crate::storage::{self, Recording};
 use crate::sync::MutexExt;
 use chrono::{DateTime, Duration as CDuration, Local};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -43,6 +43,31 @@ pub fn due(dir: &Path, plan: &ArchivePlan, now: DateTime<Local>) -> Vec<Recordin
     storage::list(dir).into_iter().skip(1).filter(|r| r.end < cutoff && r.end < settled).collect()
 }
 
+/// Copy a recording's cached previews (`.thumbs/<name>.*`) next to where the recording went, the pages
+/// first and the file that says they are complete last. Returns how many were copied.
+pub fn copy_previews(from_dir: &Path, to_dir: &Path, name: &str) -> usize {
+    let (src, dst) = (from_dir.join(".thumbs"), to_dir.join(".thumbs"));
+    let prefix = format!("{name}.");
+    let Ok(rd) = std::fs::read_dir(&src) else { return 0 };
+    let mut files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&prefix))).collect();
+    if files.is_empty() || std::fs::create_dir_all(&dst).is_err() {
+        return 0;
+    }
+    // (".sprite.json" last: a preview is only counted as there once it exists.)
+    files.sort_by_key(|p| p.to_string_lossy().ends_with(".sprite.json"));
+    let mut n = 0;
+    for f in files {
+        let Some(file_name) = f.file_name() else { continue };
+        let tmp = dst.join(format!("{}.part", file_name.to_string_lossy()));
+        if std::fs::copy(&f, &tmp).is_ok() && std::fs::rename(&tmp, dst.join(file_name)).is_ok() {
+            n += 1;
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    n
+}
+
 /// Move one recording: copied and checked, then taken off the local disk.
 pub fn move_one(dir: &Path, plan: &ArchivePlan, r: &Recording) -> anyhow::Result<()> {
     let src = dir.join(&r.name);
@@ -52,6 +77,12 @@ pub fn move_one(dir: &Path, plan: &ArchivePlan, r: &Recording) -> anyhow::Result
     let have = std::fs::metadata(&dest).map(|m| m.len() == r.size).unwrap_or(false);
     if !have {
         crate::cloud::copy_local(&src, &dest)?;
+    }
+    // Its time-lapse previews go with it (they are tiny next to the video): deleting them here made every
+    // moved file's previews be decoded again from the NAS. A preview that can't be copied is made again later.
+    let copied = copy_previews(dir, &plan.dest, &r.name);
+    if copied > 0 {
+        tracing::debug!("deep storage: {} preview file(s) of {} moved with it", copied, r.name);
     }
     storage::delete_recording(dir, &r.name)?;
     Ok(())
@@ -232,6 +263,31 @@ pub async fn run(mgr: Arc<Manager>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn previews_go_with_the_recording_and_are_complete_when_they_arrive() {
+        let base = std::env::temp_dir().join(format!("nvr-arch-prev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (local, deep) = (base.join("local"), base.join("deep"));
+        std::fs::create_dir_all(local.join(".thumbs")).unwrap();
+        std::fs::create_dir_all(&deep).unwrap();
+        let name = "cam_2026-11-19_10-00-00.mp4";
+        for f in [
+            format!("{name}.sprite-000.jpg"),
+            format!("{name}.sprite-001.jpg"),
+            format!("{name}.sprite.json"),
+            format!("{name}.jpg"),
+            "other_2026-11-19_10-00-00.mp4.sprite.json".to_string(),
+        ] {
+            std::fs::write(local.join(".thumbs").join(f), b"x").unwrap();
+        }
+        assert_eq!(copy_previews(&local, &deep, name), 4, "this recording's four files, not the other one's");
+        let got: Vec<String> = std::fs::read_dir(deep.join(".thumbs")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(got.len(), 4, "{got:?}");
+        assert!(got.iter().all(|f| !f.ends_with(".part")), "nothing half-copied is left: {got:?}");
+        assert_eq!(copy_previews(&local, &deep, "nothing_2026-11-19_10-00-00.mp4"), 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn old_files_move_new_stay_and_retention_deletes() {

@@ -760,11 +760,18 @@ async fn sprite_with(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::P
     };
     let timeout = Duration::from_secs(600);
     let started = Instant::now();
+    // Stopped because ffmpeg went quiet for a minute or the whole thing took too long (a slow network drive),
+    // not because the recording ended: what was made is only the first part of it.
+    let mut cut_short = false;
     loop {
         let mut buf = vec![0u8; frame_len];
         match tokio::time::timeout(Duration::from_secs(60), out.read_exact(&mut buf)).await {
             Ok(Ok(_)) => {}
-            _ => break,
+            Ok(Err(_)) => break,
+            Err(_) => {
+                cut_short = true;
+                break;
+            }
         }
         // A picture that decoded as one flat colour (black, or the green of
         // a frame that couldn't be decoded): keep the previous one, or, at
@@ -790,6 +797,7 @@ async fn sprite_with(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::P
             pages += 1;
         }
         if started.elapsed() > timeout {
+            cut_short = true;
             break;
         }
     }
@@ -800,6 +808,10 @@ async fn sprite_with(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::P
     }
     if count == 0 {
         bail!("no pictures could be read from the recording");
+    }
+    // Not kept as if it were complete (it would never be made again): the caller keeps the older one, or tries later.
+    if cut_short && duration > 0.0 && (count as f64) * interval < duration * 0.8 {
+        bail!("the preview was cut short ({count} pictures of about {}): the drive was too slow", (duration / interval).round());
     }
     let version = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     Ok(SpriteInfo {

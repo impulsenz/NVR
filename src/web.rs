@@ -4024,6 +4024,16 @@ async fn recording_thumb(State(m): App, Path((id, name)): Path<(String, String)>
     serve_file(cache, req, None, false).await
 }
 
+/// The lock for building one file's preview (see `ensure_sprite`).
+fn sprite_lock(prefix: &std::path::Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = std::sync::LazyLock::new(Default::default);
+    let mut g = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    if g.len() > 4000 {
+        g.retain(|_, v| Arc::strong_count(v) > 1);
+    }
+    g.entry(prefix.to_path_buf()).or_default().clone()
+}
+
 async fn ensure_sprite(m: &Manager, c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyhow::Result<(PathBuf, ffmpeg::SpriteInfo)> {
     let src = media_path(c, kind, name)?;
     let dir = src.parent().unwrap().join(".thumbs");
@@ -4055,6 +4065,10 @@ async fn ensure_sprite(m: &Manager, c: &crate::manager::CameraRuntime, kind: &st
     if let Some(i) = ready {
         return Ok((prefix, i));
     }
+    // One build at a time for this file: a page and the background job asking for the same preview at once
+    // used to write into the same folder at the same time. The second one finds it made.
+    let file_lock = sprite_lock(&prefix);
+    let _one = file_lock.lock().await;
     let _p = THUMB_JOBS.acquire().await;
     // Made while waiting (another request for the same file), or a growing
     // file's preview refreshed in the last few seconds: use that.
@@ -4193,6 +4207,8 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
     // Files that failed: (tries, when).
     let mut failed: std::collections::HashMap<String, (u32, std::time::Instant)> = std::collections::HashMap::new();
     let mut last_sweep: Option<std::time::Instant> = None;
+    // How long between looks for older footage without a preview: short while there is a backlog to get through.
+    let mut sweep_every = std::time::Duration::from_secs(600);
     loop {
         let mut built = 0usize;
         // Switched off (Settings → Recording & storage): nothing is made.
@@ -4215,7 +4231,7 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                     .is_none_or(|(n, at)| (!old || *n < 3) && at.elapsed() >= std::time::Duration::from_secs((300u64 << (*n - 1).min(6)).min(6 * 3600)))
             };
             let recent: Vec<PreviewTodo> = missing_previews(&m, day_ago, now + chrono::Duration::minutes(5)).into_iter().filter(|t| force || retry_ok(&failed, t, false)).collect();
-            let sweep = force || recent.is_empty() && last_sweep.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(600));
+            let sweep = force || recent.is_empty() && last_sweep.is_none_or(|t| t.elapsed() >= sweep_every);
             let mut older: Vec<PreviewTodo> = if sweep {
                 last_sweep = Some(std::time::Instant::now());
                 missing_previews(&m, now - chrono::Duration::days(3650), day_ago).into_iter().filter(|t| force || retry_ok(&failed, t, true)).collect()
@@ -4224,8 +4240,11 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
             };
             // A batch at a time: new footage shouldn't wait behind a long backlog.
             let backlog = older.len();
+            if sweep {
+                sweep_every = std::time::Duration::from_secs(if backlog > 60 { 90 } else { 600 });
+            }
             if !force {
-                older.truncate(30);
+                older.truncate(60);
             }
             for (part, list, title) in
                 [(0, recent, "Time-lapse previews (last 24 hours)".to_string()), (1, older, format!("Time-lapse previews — catching up on older footage ({backlog} missing)"))]
@@ -4244,8 +4263,8 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                         crate::load::wait_for_cpu(90, std::time::Duration::from_secs(60)).await;
                     } else if !force {
                         // Older footage only while the computer is quiet.
-                        crate::load::wait_for_cpu(70, std::time::Duration::from_secs(600)).await;
-                        if crate::load::cpu() > 85 {
+                        crate::load::wait_for_cpu(82, std::time::Duration::from_secs(120)).await;
+                        if crate::load::cpu() > 94 {
                             break;
                         }
                     }
@@ -4253,10 +4272,11 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                     // Someone watching recordings: their video comes first
                     // (making previews reads the recordings too — on a NAS
                     // or a hard drive both would crawl).
-                    let mut waited = 0;
-                    while crate::vstore::watching() && waited < 600 {
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        waited += 2;
+                    // The newest footage (the 24 hours, and the files still being recorded) is never held up: someone
+                    // scrubbing there needs exactly those. Older footage is made at a gentler pace while someone is
+                    // watching (a pause between files, not minutes of waiting, so the backlog does get made).
+                    if part != 0 && crate::vstore::watching() {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     }
                     j.step(format!(
                         "{} — {} {}–{}",
@@ -6445,6 +6465,18 @@ async fn users_delete(State(m): App, Path(name): Path<String>, user: axum::Exten
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn one_preview_is_built_by_one_request_at_a_time() {
+        let p = std::path::Path::new("/x/.thumbs/cam_2026-11-19_10-00-00.mp4.sprite");
+        let (a, b) = (sprite_lock(p), sprite_lock(p));
+        assert!(Arc::ptr_eq(&a, &b), "the same file: the same lock");
+        let guard = a.lock().await;
+        assert!(b.try_lock().is_err(), "the second request waits");
+        drop(guard);
+        assert!(b.try_lock().is_ok());
+        assert!(!Arc::ptr_eq(&a, &sprite_lock(std::path::Path::new("/x/.thumbs/other.sprite"))));
+    }
+
     #[test]
     fn status_changes_are_sent_as_small_patches_that_rebuild_the_whole() {
         use serde_json::json;
