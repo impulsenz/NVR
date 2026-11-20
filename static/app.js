@@ -5480,7 +5480,7 @@ function buildTimelineVideos() {
     // Two players per camera: one plays while the next file loads in the
     // other, so moving from file to file doesn't blank the picture.
     el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video><video playsinline muted class="vid" data-hls style="position:absolute;inset:0;visibility:hidden"></video>
-      <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div>
+      <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div><div class="deep-load" hidden><i class="spinner"></i><span>Loading from deep storage…</span></div>
       ${tlOverlay(c)}`;
     el.querySelectorAll('.fs-go').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(el); });
     el.querySelector('.tl-snd').onclick = (e) => {
@@ -5731,6 +5731,18 @@ function tlHls(el, c, s, force) {
   if (nextClip) tlPreload(el, c, segMs(nextClip)._a + 50);
   return true;
 }
+// Footage in deep storage (a NAS, a slow drive) takes a while to open: its
+// camera shows a spinner until the video has a picture to play. (No percentage:
+// the browser only knows how much is buffered, not how much of the file there is.)
+setInterval(() => {
+  if (page !== 'recordings' || document.hidden) return;
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    const box = el.querySelector('.deep-load'); if (!box) continue;
+    const c = tl.data.find(x => x.camera === el.dataset.cam), seg = c && tl.T != null && segAt(c, tl.T), v = activeVideo(el);
+    const loading = !v || el._pending != null || v.readyState < 3 || v.seeking;
+    box.hidden = !(seg && seg.archived && loading);
+  }
+}, 300);
 const activeVideo = (el) => el._mode === 'hls' ? el._hlsV : el._vids[el._active];
 // Make player `i` the active one, showing it once it has a picture (the
 // other one keeps showing its last picture meanwhile).
