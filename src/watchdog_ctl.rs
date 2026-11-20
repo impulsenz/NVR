@@ -145,6 +145,11 @@ pub fn command(data: &Path, cmd: &str) -> Result<()> {
     let d = dir(data).join("commands");
     std::fs::create_dir_all(&d)?;
     std::fs::write(d.join(format!("{}-{cmd}", chrono::Local::now().format("%Y%m%d%H%M%S%3f"))), cmd)?;
+    // Stopped by you: GAZE doesn't start it again by itself (until you start it).
+    if cmd == "stop" {
+        let _ = std::fs::write(dir(data).join("stopped-on-purpose"), chrono::Local::now().to_rfc3339());
+        tracing::info!("watchdog: stopped on request (GAZE won't start it again until you do)");
+    }
     Ok(())
 }
 
@@ -152,6 +157,53 @@ fn log_tail(data: &Path, lines: usize) -> Vec<String> {
     let t = std::fs::read_to_string(dir(data).join("watchdog.log")).unwrap_or_default();
     let all: Vec<&str> = t.lines().collect();
     all[all.len().saturating_sub(lines)..].iter().map(|s| s.to_string()).collect()
+}
+
+/// "Don't ask me again": the page stops offering to install the watchdog.
+pub fn dont_ask(data: &Path) {
+    let _ = std::fs::write(data.join("watchdog-dont-ask"), chrono::Local::now().to_rfc3339());
+    tracing::info!("watchdog: the offer to install it won't be shown again (Settings → Watchdog still installs it)");
+}
+
+/// What GAZE knows about keeping the watchdog running, for the title bar and the log.
+#[derive(Default)]
+struct Auto {
+    /// When the watchdog was last seen running, and when it was first noticed missing.
+    down_since: Option<std::time::Instant>,
+    /// Attempts to start it since it went down, the last one, and why it failed.
+    attempts: u32,
+    last_try: Option<std::time::Instant>,
+    error: Option<String>,
+}
+static AUTO: std::sync::Mutex<Auto> = std::sync::Mutex::new(Auto { down_since: None, attempts: 0, last_try: None, error: None });
+
+/// For the title bar: is the watchdog installed, and running? (read from its status file at most every 2 s)
+pub fn summary(data: &Path) -> Value {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Value)>> = std::sync::Mutex::new(None);
+    if let Some((at, v)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        && at.elapsed() < Duration::from_secs(2)
+    {
+        return v.clone();
+    }
+    let on_purpose = dir(data).join("stopped-on-purpose").exists();
+    let installed = installed(data);
+    let ask_install = cfg!(windows) && !installed && !data.join("watchdog-dont-ask").exists();
+    let running = installed && alive(&status(data));
+    let a = AUTO.lock().unwrap_or_else(|e| e.into_inner());
+    let v = json!({
+        "supported": cfg!(windows),
+        "installed": installed,
+        // The page offers to install it (a box with Install / No, and "don't ask me again").
+        "ask_install": ask_install,
+        "running": running,
+        "stopped_on_purpose": on_purpose,
+        "down_seconds": (!running).then(|| a.down_since.map(|t| t.elapsed().as_secs())).flatten(),
+        "attempts": a.attempts,
+        "error": a.error,
+    });
+    drop(a);
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), v.clone()));
+    v
 }
 
 /// Everything Settings → Watchdog shows.
@@ -232,6 +284,7 @@ async fn run_exe_for(exe: &Path, args: &[&str], secs: u64) -> Result<String> {
 
 /// Start the watchdog now (detached: it carries on when GAZE closes).
 pub fn start(data: &Path) -> Result<()> {
+    let _ = std::fs::remove_file(dir(data).join("stopped-on-purpose"));
     let exe = exe_path(data);
     if !exe.exists() {
         bail!("the watchdog isn't installed");
@@ -302,11 +355,66 @@ pub async fn uninstall(mgr: &Manager) -> Result<()> {
 /// Keeps the watchdog's address for GAZE (and GAZE's program) up to date
 /// when GAZE's web port changes, and tidies after an update.
 pub async fn run(mgr: Arc<Manager>) {
-    let mut tick = tokio::time::interval(Duration::from_secs(60));
+    let mut tick = tokio::time::interval(Duration::from_secs(15));
+    let mut n = 0u64;
+    let mut was_running: Option<bool> = None;
     loop {
         tick.tick().await;
+        n += 1;
         let data = std::path::absolute(&mgr.data_dir).unwrap_or(mgr.data_dir.clone());
         if !installed(&data) {
+            was_running = None;
+            *AUTO.lock().unwrap_or_else(|e| e.into_inner()) = Auto::default();
+            continue;
+        }
+        // Is it running? Said in the log when that changes, and started again when it isn't (unless you stopped it).
+        let running = alive(&status(&data));
+        let on_purpose = dir(&data).join("stopped-on-purpose").exists();
+        {
+            let mut a = AUTO.lock().unwrap_or_else(|e| e.into_inner());
+            if running {
+                if was_running == Some(false) {
+                    tracing::info!("watchdog: running again{}", if a.attempts > 0 { format!(" (after {} attempt{} to start it)", a.attempts, if a.attempts == 1 { "" } else { "s" }) } else { String::new() });
+                }
+                *a = Auto::default();
+            } else if was_running != Some(false) || a.down_since.is_none() {
+                a.down_since.get_or_insert_with(std::time::Instant::now);
+                if was_running == Some(true) {
+                    tracing::warn!("watchdog: it has stopped — no sign of life from it for 20 seconds{}", if on_purpose { " (stopped on request)" } else { "" });
+                } else if was_running.is_none() {
+                    tracing::warn!("watchdog: it isn't running{}", if on_purpose { " (stopped on request)" } else { "" });
+                }
+            }
+        }
+        was_running = Some(running);
+        if !running && !on_purpose {
+            // After a minute without it, and then at most every 2 minutes (three tries; then only the title bar's button).
+            let try_now = {
+                let a = AUTO.lock().unwrap_or_else(|e| e.into_inner());
+                a.down_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(45)) && a.attempts < 3 && a.last_try.is_none_or(|t| t.elapsed() >= Duration::from_secs(120))
+            };
+            if try_now {
+                let attempt = {
+                    let mut a = AUTO.lock().unwrap_or_else(|e| e.into_inner());
+                    a.attempts += 1;
+                    a.last_try = Some(std::time::Instant::now());
+                    a.attempts
+                };
+                tracing::warn!("watchdog: not running — GAZE is starting it (attempt {attempt} of 3)");
+                match start(&data) {
+                    Ok(()) => {
+                        AUTO.lock().unwrap_or_else(|e| e.into_inner()).error = None;
+                        tracing::info!("watchdog: start requested — waiting for it to report in");
+                    }
+                    Err(e) => {
+                        AUTO.lock().unwrap_or_else(|x| x.into_inner()).error = Some(format!("{e:#}"));
+                        tracing::warn!("watchdog: could not start it: {e:#}{}", if attempt >= 3 { " — GAZE won't try again by itself; click the Watchdog button at the top to start it" } else { "" });
+                    }
+                }
+            }
+        }
+        // Once a minute: keep its address for GAZE up to date, and tidy after an update.
+        if n % 4 != 1 {
             continue;
         }
         let _ = std::fs::remove_file(dir(&data).join("GAZE-Watchdog.old.exe"));

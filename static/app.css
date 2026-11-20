@@ -1789,9 +1789,10 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .pl-wend { fill: var(--panel); stroke: var(--text); stroke-width: calc(1.5 * var(--u, 1)); }
 .pl-wend.on { fill: var(--amber); }
 .pl-link { stroke: var(--muted); stroke-width: calc(1.5 * var(--u, 1)); stroke-dasharray: 3 5; opacity: .7; }
-.pl-cam circle { fill: var(--panel); stroke: var(--accent); stroke-width: calc(2 * var(--u, 1)); cursor: pointer; }
-.pl-cam.sel circle { fill: var(--accent); }
-.pl-ico { pointer-events: none; }
+.pl-cam circle { cursor: pointer; }
+.pl-cam .pl-hit { fill: transparent; stroke: none; }
+.pl-cam .pl-dotcam { fill: var(--accent); stroke: var(--panel); stroke-width: calc(1.5 * var(--u, 1)); }
+.pl-cam.sel .pl-dotcam { stroke: var(--text); stroke-width: calc(2 * var(--u, 1)); }
 .pl-path { fill: none; stroke: var(--accent); stroke-width: calc(5 * var(--u, 1)); stroke-linecap: round; stroke-linejoin: round; }
 .pl-path.faint { stroke: var(--muted); stroke-width: calc(2.5 * var(--u, 1)); opacity: .5; }
 .pl-path.hop { stroke-width: calc(3 * var(--u, 1)); stroke-dasharray: 2 9; opacity: .9; }
@@ -1997,3 +1998,11 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .rc-desc { padding: 6px 8px 8px; font-size: 12px; line-height: 1.35; color: var(--muted); }
 .rc-why { display: block; margin-top: 3px; }
 .rc-why i { font-style: normal; font-size: 11px; background: var(--accent2); border: 1px solid var(--accent); color: var(--text); border-radius: 9px; padding: 0 7px; margin-right: 4px; }
+
+.heat-hint { margin: 0 0 12px; border-left: 3px solid var(--amber); }
+
+/* The watchdog's state in the title bar */
+.wd-chip { border: 1px solid var(--border); cursor: default; }
+.wd-chip.ok { color: var(--green); }
+.wd-chip.bad { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+.wd-ask { width: min(540px, calc(100vw - 16px)); }

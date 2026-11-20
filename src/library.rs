@@ -124,6 +124,20 @@ fn in_tod(t: DateTime<Local>, tod: Option<(NaiveTime, NaiveTime)>) -> bool {
     }
 }
 
+/// Was an alert going on at some time of day inside `tod`? (Not only starting in it: an alert that
+/// began a minute before the hour and went on into it is part of that hour.)
+fn event_in_tod(start: DateTime<Local>, end: DateTime<Local>, tod: Option<(NaiveTime, NaiveTime)>) -> bool {
+    let Some((a, _)) = tod else { return true };
+    if in_tod(start, tod) || in_tod(end, tod) {
+        return true;
+    }
+    // The window opens while the alert is on (that day or the next).
+    [start.date_naive(), start.date_naive() + chrono::Duration::days(1)]
+        .iter()
+        .filter_map(|d| d.and_time(a).and_local_timezone(Local).earliest())
+        .any(|w| w >= start && w <= end)
+}
+
 fn event_matches(e: &Event, types: &HashSet<String>) -> bool {
     if types.is_empty() {
         return true;
@@ -253,7 +267,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             }
         }
         for e in rt.events.between(q.from, q.to) {
-            if !in_tod(e.start, q.tod) || !event_matches(&e, &q.types) {
+            if !event_in_tod(e.start, e.end, q.tod) || !event_matches(&e, &q.types) {
                 continue;
             }
             if let Some(want) = q.seen
@@ -794,4 +808,24 @@ pub fn space_use(rt: &CameraRuntime) -> SpaceUse {
         }
     }
     u
+}
+
+#[cfg(test)]
+mod tod_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn an_alert_going_on_during_an_hour_is_part_of_that_hour() {
+        let t = |h, m, sec| Local.with_ymd_and_hms(2026, 11, 20, h, m, sec).unwrap();
+        // "17:00 to 17:59" (the end counts to the end of that minute: web.rs adds 59 s).
+        let tod = Some((NaiveTime::from_hms_opt(17, 0, 0).unwrap(), NaiveTime::from_hms_opt(17, 59, 59).unwrap()));
+        assert!(event_in_tod(t(17, 10, 0), t(17, 11, 0), tod), "inside it");
+        assert!(event_in_tod(t(17, 59, 30), t(18, 0, 30), tod), "starts in its last minute");
+        assert!(event_in_tod(t(16, 58, 0), t(17, 3, 0), tod), "began before and went on into it");
+        assert!(event_in_tod(t(16, 30, 0), t(18, 30, 0), tod), "covers all of it");
+        assert!(!event_in_tod(t(16, 10, 0), t(16, 40, 0), tod), "an hour before");
+        assert!(!event_in_tod(t(18, 10, 0), t(18, 20, 0), tod), "an hour after");
+        assert!(event_in_tod(t(3, 0, 0), t(3, 1, 0), None), "no window: everything");
+    }
 }

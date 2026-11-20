@@ -360,17 +360,44 @@ const MODE_TEXT = {continuous: 'HD 24/7', continuous_plus_events: 'HD 24/7 plus 
 // ======================================================================
 // Live video over one WebSocket
 // ======================================================================
+// Apply what changed (see json_patch in web.rs): objects key by key; a list of things with an `id` by
+// its order (`~ids`) and the ones that changed (`~set`); anything else is replaced.
+function applyPatch(t, p) {
+  if (p === null || typeof p !== 'object' || Array.isArray(p)) return p;
+  if (p['~ids']) {
+    const old = new Map((Array.isArray(t) ? t : []).map(o => [o.id, o]));
+    return p['~ids'].map(id => { const set = p['~set'] && p['~set'][id], base = old.get(id); return base ? (set ? applyPatch(base, set) : base) : set; });
+  }
+  const out = t && typeof t === 'object' && !Array.isArray(t) ? {...t} : {};
+  for (const k of Object.keys(p)) out[k] = applyPatch(out[k], p[k]);
+  return out;
+}
 const Live = {
   ws: null, wanted: [], imgs: new Map(), mseCount: new Map(), urls: new Map(), stats: new Map(), connected: false,
   key: (camId, q) => camId + '|' + q,
   connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}${location.pathname.replace(/[^/]*$/, '')}api/live/ws`);
+    const ws = new WebSocket(`${proto}//${location.host}${location.pathname.replace(/[^/]*$/, '')}api/live/ws?device=${deviceKind()}`);
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => { this.connected = true; this.send(); };
-    ws.onclose = () => { this.connected = false; setTimeout(() => this.connect(), 2000); };
-    ws.onmessage = (ev) => this.onFrame(ev.data);
+    ws.onclose = () => { this.connected = false; this.statusRaw = null; setTimeout(() => this.connect(), 2000); };
+    ws.onmessage = (ev) => typeof ev.data === 'string' ? this.onStatus(ev.data) : this.onFrame(ev.data);
     this.ws = ws;
+  },
+  // The page's status arrives on this socket too: whole once, then only what changed (see json_patch in web.rs).
+  statusRaw: null, statusAt: 0, statusUiAt: 0,
+  statusFresh() { return !!this.statusRaw && Date.now() - this.statusAt < 4000; },
+  onStatus(text) {
+    let m; try { m = JSON.parse(text); } catch (_) { return; }
+    if (m.status) this.statusRaw = m.status;
+    else if (m.patch && this.statusRaw) this.statusRaw = applyPatch(this.statusRaw, m.patch);
+    else return;
+    this.statusAt = Date.now();
+    const st = this.statusRaw;
+    if (typeof hwPaint === 'function') hwPaint(st);
+    // The rest of the page follows at most every 2 s (as when it asked), at once when something that matters changed.
+    const big = m.status || (m.patch && ['alerts_unseen', 'sirens', 'boot', 'update', 'downloads', 'safe_mode', 'storage_unreachable', 'cameras', 'dashboard', 'display'].some(k => k in m.patch && k !== 'cameras')) || Date.now() - this.statusUiAt > 1900;
+    if (big) { this.statusUiAt = Date.now(); refreshStatus(structuredClone(st)); }
   },
   onFrame(buf) {
     const b = new Uint8Array(buf);
@@ -1458,7 +1485,8 @@ function drawPlanSvg() {
   for (const c of p.cameras) {
     // The icon is as big as the map makes it (it grows when you zoom in), times the plan's icon size and this camera's.
     const R0 = 13 * (p.icon_scale || 1) * (c.size || 1), [x, y] = XY([c.x, c.y]);
-    h += `<g class="pl-cam ${planUI.cam === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><circle r="${R0}" cx="${x}" cy="${y}"/><text x="${x}" y="${y + R0 * 0.35}" text-anchor="middle" class="pl-ico" style="font-size:${R0}px">📹</text>
+    // A small blue dot (half the size the old icon circle had); the larger clear circle is only there to click on.
+    h += `<g class="pl-cam ${planUI.cam === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><circle class="pl-hit" r="${R0}" cx="${x}" cy="${y}"/><circle class="pl-dotcam" r="${R0 / 2}" cx="${x}" cy="${y}"/>
       <title>${esc(camName(c.id))}</title></g>`;  // (the name shows on hover only: written out it flooded the map)
     if (planUI.edit && planUI.cam === c.id) { const R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6) * 0.8, a = c.rotation_deg * Math.PI / 180; h += `<circle class="pl-handle" r="${9 * u}" cx="${x + R * Math.sin(a)}" cy="${y - R * Math.cos(a)}"/>`; }
   }
@@ -1981,8 +2009,58 @@ function dropStillWhenShown(v) {
 }
 
 let bootSeen = null, reloadingForBoot = false, serverWasDown = false;
-async function refreshStatus() {
-  try { status = await api('api/status?device=' + deviceKind()); } catch (e) {
+// ---------- The watchdog: its state in the title bar, and the offer to install it ----------
+// Installed: a chip says it is running (green) or down (red; click to start it: GAZE also tries by itself
+// and writes it in the log). Not installed: once per visit a box offers to install it (and to stop asking).
+let wdAsked = false;
+function paintWatchdog(w) {
+  const chip = $('wd-chip'); if (!chip) return;
+  if (!w || !w.installed) { chip.hidden = true; if (w && w.ask_install && !wdAsked && isAdmin()) { wdAsked = true; askInstallWatchdog(); } return; }
+  chip.hidden = false;
+  const admin = isAdmin();
+  chip.classList.toggle('ok', !!w.running); chip.classList.toggle('bad', !w.running);
+  chip.textContent = w.running ? '🛡' : (w.stopped_on_purpose ? '🛡 Watchdog stopped' : '🛡 Watchdog down');   // (short: the title bar is crowded)
+  chip.title = w.running ? 'The watchdog is running: it opens GAZE again if GAZE stops. Settings → Watchdog.'
+    : `The watchdog isn't running, so nobody is watching GAZE.${w.stopped_on_purpose ? ' It was stopped on request.' : w.attempts ? ` GAZE tried to start it ${w.attempts} time${w.attempts === 1 ? '' : 's'}${w.error ? ': ' + w.error : ''}.` : ' GAZE will try to start it.'}${admin ? ' Click to start it now.' : ''}`;
+  chip.style.cursor = !w.running && admin ? 'pointer' : 'default';
+  chip.onclick = async () => {
+    if (w.running) { if (admin) location.hash = '#settings/watchdog'; return; }
+    if (!admin) return;
+    chip.disabled = true; chip.textContent = '🛡 Starting…';
+    try { await api('api/watchdog/start', {method: 'POST'}); toast('Starting the watchdog…'); } catch (e) { toast(e.message, true); }
+    chip.disabled = false; refreshStatus();
+  };
+}
+function askInstallWatchdog() {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'ev-pick wd-ask';
+  dlg.innerHTML = `<form method="dialog"><div class="head"><h2>🛡 Install the Watchdog?</h2></div>
+    <div class="body"><p style="margin-top:0">The <b>GAZE Watchdog</b> is a small separate program that watches GAZE and <b>opens it again</b> if it crashes or stops answering — and opens GAZE after the computer restarts. It is optional and made for GAZE only.</p>
+      <div class="ev-pick-list"><label class="check"><input type="radio" name="wdm" value="login" checked> When I sign in to Windows <span class="muted small">(recommended, no administrator rights)</span></label>
+        <label class="check"><input type="radio" name="wdm" value="service"> As a Windows service <span class="muted small">(starts with the computer; Windows asks permission once)</span></label></div>
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="wda-never"> Don't ask me again</label>
+      <div class="err" id="wda-err" hidden style="margin-top:8px"></div></div>
+    <div class="foot"><button type="button" id="wda-no">No thanks</button><button class="primary" id="wda-go">⇩ Install</button></div></form>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  const never = async () => { if (dlg.querySelector('#wda-never').checked) await api('api/watchdog/dont-ask', {method: 'POST'}).catch(() => {}); };
+  dlg.querySelector('#wda-no').onclick = async () => { await never(); close(); };
+  dlg.addEventListener('cancel', async (e) => { e.preventDefault(); await never(); close(); });
+  dlg.querySelector('form').onsubmit = async (e) => {
+    e.preventDefault();
+    const go = dlg.querySelector('#wda-go'), er = dlg.querySelector('#wda-err');
+    go.disabled = true; go.textContent = 'Installing…'; er.hidden = true;
+    try {
+      const r = await api('api/watchdog/install', {method: 'POST', json: {mode: dlg.querySelector('input[name=wdm]:checked').value}});
+      toast(r.message || 'Watchdog installed'); close(); refreshStatus();
+    } catch (err) { er.hidden = false; er.textContent = err.message; go.disabled = false; go.textContent = '⇩ Install'; }
+  };
+  dlg.showModal();
+}
+async function refreshStatus(pushed) {
+  // (`pushed`: the status the live socket just brought; otherwise it is asked for.)
+  if (pushed) status = pushed;
+  else try { status = await api('api/status?device=' + deviceKind()); } catch (e) {
     // GAZE not answering (restarting): when it answers again — even if this
     // page's sign-in didn't survive the restart — the page reloads.
     if (!reloadingForBoot) {
@@ -2038,6 +2116,7 @@ async function refreshStatus() {
   }
   showUpdateBar(status.update);
   paintUpdBtn(status.update);
+  paintWatchdog(status.watchdog);
   alertsChanged();
   const gb = $('g-banner');
   if (status.safe_mode) {
@@ -4333,7 +4412,7 @@ function resetAlertFilters() {
   rec.cameras = new Set(); rec.prevCameras = null; rec.backView = null;
   rec.from = last24From(); rec.to = endOfDay(new Date()); rec.todFrom = ''; rec.todTo = ''; rec.today = false; rec.last24 = true;
   rec.types = new Set(DEFAULT_TYPES); saveTypes();
-  rec.seen = ''; rec.who = '';
+  rec.seen = ''; rec.who = ''; rec.fromHeat = null;
   if ($('f-seen')) $('f-seen').value = '';
   if ($('f-who')) $('f-who').value = '';
 }
@@ -4681,6 +4760,24 @@ function renderRecordings() {
     box.appendChild(card);
   });
   $('rec-collapse').textContent = keys.some(k => !recFolded.has(k.key)) ? '− All' : '+ All';
+  heatEmptyHint();
+}
+// Opened from the heat map and nothing here: the heat map counts everything the AI saw or that moved,
+// and an alert is only made for some of it (a size, a time, a kind that is watched for), so say so.
+function heatEmptyHint() {
+  const old = document.getElementById('heat-hint'); if (old) old.remove();
+  if (!rec.fromHeat || rec.items.length || rec.describe) return;
+  const h = rec.fromHeat;
+  const d = document.createElement('div'); d.id = 'heat-hint'; d.className = 'card heat-hint';
+  d.innerHTML = `<b>No alerts here.</b> <span class="muted">The heat map counts everything the AI saw or that moved${h.hour != null ? ` around ${String(h.hour).padStart(2, '0')}:00` : ''}, and an alert is only made for some of it (big enough, long enough, a kind that is watched for, outside the ignored areas).</span>
+    <div class="row" style="margin-top:8px"><button type="button" class="small primary" data-w="kinds">Show every kind</button>${h.hour != null ? '<button type="button" class="small" data-w="day">Show the whole day</button>' : ''}<button type="button" class="small" data-w="all">Both</button></div>`;
+  $('rec-cards').before(d);
+  d.querySelectorAll('[data-w]').forEach(b => b.onclick = () => {
+    const w = b.dataset.w;
+    if (w === 'kinds' || w === 'all') rec.types = new Set();
+    if (w === 'day' || w === 'all') { rec.todFrom = ''; rec.todTo = ''; }
+    rec.fromHeat = null; renderFilters(); loadRecordings();
+  });
 }
 // The people recognized in an alert, named on its picture.
 function whoTag(e) {
@@ -10052,7 +10149,8 @@ async function boot() {
   if (!started) {
     started = true;
     Live.connect();
-    setInterval(refreshStatus, 2000);
+    // Asked for only while the live socket isn't bringing it.
+    setInterval(() => { if (!Live.statusFresh()) refreshStatus(); }, 2000);
   } else Live.ws && Live.ws.close();
   settings = null;
   await refreshStatus();
@@ -10559,6 +10657,9 @@ function heatToAlerts(camId, hour) {
   const k = heat.kind;
   const types = k === 'people' ? ['person'] : k === 'vehicles' ? ['vehicle'] : k === 'pets' ? ['dog', 'cat'] : k === 'objects' ? ['person', 'vehicle', 'dog', 'cat'] : k.startsWith('label:') ? [k.slice(6)] : [];   // motion: every kind
   const p2 = (n) => String(n).padStart(2, '0');
+  // (A description search left over from before would hide most of them: it goes.)
+  rec.describe = null; if ($('ds-q')) $('ds-q').value = ''; if ($('ds-clear')) $('ds-clear').hidden = true;
+  rec.fromHeat = {camera: camId, hour};
   Object.assign(rec, {cameras: new Set([camId]), types: new Set(types), seen: '', who: '', backView: null, prevCameras: null, today: false,
     todFrom: hour == null ? '' : p2(hour) + ':00', todTo: hour == null ? '' : p2(hour) + ':59'});
   if (heat.days <= 1) { rec.from = last24From(); rec.last24 = true; }
@@ -11148,7 +11249,9 @@ applyDataSaver();
     busy = true;
     try { paint(await api('api/monitor/now')); } catch (_) {} finally { busy = false; }
   };
-  setInterval(tick, 1000); setTimeout(tick, 500);
+  window.hwPaint = (st) => { if (!bar || !st || !st.monitor) return; bar.hidden = !me || wall; document.body.classList.toggle('has-hw-bar', !bar.hidden); if (!me || document.hidden) return; paint({...st.monitor, disk_free: st.disk ? st.disk.free : null, disk_total: st.disk ? st.disk.total : null}); };
+  // Asked for only while the live socket isn't bringing the status (which has these numbers in it).
+  setInterval(() => { if (!Live.statusFresh()) tick(); }, 1000); setTimeout(tick, 500);
   // Full screen: up near the bottom edge, away again when the mouse leaves.
   let hideT = null;
   $('live-grid').addEventListener('pointermove', (e) => {

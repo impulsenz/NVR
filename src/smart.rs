@@ -248,11 +248,31 @@ async fn install_windows() -> Result<()> {
     tokio::fs::rename(&part, &file).await?;
     job.step("Running the installer (it may ask for administrator permission)");
     // /S: no questions asked. Installs to C:\Program Files\smartmontools.
-    let run = tokio::time::timeout(Duration::from_secs(240), crate::load::cmd(&file).arg("/S").kill_on_drop(true).status()).await;
+    let mut run = tokio::time::timeout(Duration::from_secs(240), crate::load::cmd(&file).arg("/S").kill_on_drop(true).status()).await;
+    // Windows refuses to start an installer that needs administrator rights from a program that isn't
+    // running as one (error 740): ask the user for permission instead (the prompt appears on this computer's screen).
+    if matches!(&run, Ok(Err(e)) if e.raw_os_error() == Some(740)) {
+        let script = format!("Start-Process -FilePath '{}' -ArgumentList '/S' -Verb RunAs -Wait", file.display().to_string().replace('\'', "''"));
+        run = tokio::time::timeout(
+            Duration::from_secs(300),
+            crate::load::cmd("powershell").args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script]).kill_on_drop(true).output(),
+        )
+        .await
+        .map(|r| {
+            r.and_then(|o| {
+                if o.status.success() {
+                    Ok(o.status)
+                } else {
+                    // (Declining the permission prompt ends here too.)
+                    Err(std::io::Error::other(String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("permission was not given").to_string()))
+                }
+            })
+        });
+    }
     let _ = std::fs::remove_file(&file);
     match run {
         Err(_) => anyhow::bail!("the installer didn't finish (it may be waiting for administrator permission on the screen of this computer)"),
-        Ok(Err(e)) => anyhow::bail!("the installer couldn't start: {e}"),
+        Ok(Err(e)) => anyhow::bail!("the installer couldn't run: {e} — if you declined the permission prompt, press Install again and allow it"),
         Ok(Ok(_)) => {}
     }
     if smartctl(&["--version"]).await.map(|t| t.contains("smartctl")).unwrap_or(false) {

@@ -148,6 +148,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/watchdog/install", post(watchdog_install))
         .route("/api/watchdog/uninstall", post(watchdog_uninstall))
         .route("/api/watchdog/start", post(watchdog_start))
+        .route("/api/watchdog/dont-ask", post(watchdog_dont_ask))
         .route("/api/watchdog/command", post(watchdog_command))
         .route("/api/archive", get(archive_overview))
         .route("/api/archive/run", post(archive_run))
@@ -395,8 +396,32 @@ async fn status(
     user: Option<axum::Extension<CurrentUser>>,
     Query(dq): Query<DeviceQuery>,
 ) -> Response {
+    Json(status_value(&m, &user, &dq.device).await).into_response()
+}
+
+/// Free and total space of the recordings drive, asked of the disk at most every 10 seconds (on a
+/// network drive each question is a trip to the NAS; the stats bar used to cause one a second).
+async fn disk_cached(dir: PathBuf) -> Option<(u64, u64)> {
+    type Cached = Option<(Instant, PathBuf, Option<(u64, u64)>)>;
+    static DISK: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
+    if let Some((at, d, v)) = DISK.locked().as_ref()
+        && *d == dir
+        && at.elapsed() < Duration::from_secs(10)
+    {
+        return *v;
+    }
+    let d2 = dir.clone();
+    let v = tokio::task::spawn_blocking(move || crate::sysmon::disk_space(&d2)).await.ok().flatten();
+    *DISK.locked() = Some((Instant::now(), dir, v));
+    v
+}
+
+/// What the page needs to know about the system right now. Sent whole by `GET /api/status`, and
+/// as changes (`json_patch`) over the live WebSocket.
+async fn status_value(m: &Arc<Manager>, user: &Option<axum::Extension<CurrentUser>>, device: &str) -> serde_json::Value {
     let cfg = m.config();
-    let vis = visible(&user);
+    let vis = visible(user);
+    let disk = disk_cached(cfg.storage.dir.clone()).await;
     let cameras: Vec<_> = m
         .cameras()
         .iter()
@@ -446,7 +471,7 @@ async fn status(
     let (warnings, errors) =
         logs::buffer().problems_since(Local::now() - chrono::Duration::hours(1));
     let upd = crate::update::status();
-    Json(json!({
+    json!({
         "name": cfg.server.name,
         "version": env!("CARGO_PKG_VERSION"),
         // Different on every start of GAZE: open pages reload when it changes.
@@ -456,7 +481,7 @@ async fn status(
         "live": cfg.live,
         // The user's own layout for this kind of device (else the shared one).
         "mode": { "current": cfg.modes.current, "effective": cfg.modes.effective(crate::notify::is_night(&cfg.notify, Local::now())), "modes": cfg.modes },
-        "dashboard": user.as_ref().and_then(|u| m.users.layout(&u.0.0.username, device_kind(&dq.device))).unwrap_or(cfg.dashboard.clone()),
+        "dashboard": user.as_ref().and_then(|u| m.users.layout(&u.0.0.username, device_kind(device))).unwrap_or(cfg.dashboard.clone()),
         "me": user.as_ref().map(|u| crate::users::Me { username: u.0.0.username.clone(), role: u.0.0.role, two_step: u.0.0.two_step(), cameras: u.0.0.cameras.clone() }),
         "cameras": cameras,
         "ai": m.ai.get().status(),
@@ -485,8 +510,61 @@ async fn status(
         "new_cameras": if user.as_ref().is_some_and(|u| u.0.0.role == crate::users::Role::Admin) { m.new_cameras.locked().len() } else { 0 },
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
-    }))
-    .into_response()
+        "disk": disk.map(|(free, total)| json!({"free": free, "total": total})),
+        // The watchdog (Windows): in the title bar, red with a button to start it when it is down.
+        "watchdog": crate::watchdog_ctl::summary(&std::path::absolute(&m.data_dir).unwrap_or(m.data_dir.clone())),
+    })
+}
+
+/// What changed from `old` to `new`, for the page to apply (None: nothing). Objects: only the keys that
+/// changed (a key that went away becomes null); a list of things with an `id` (the cameras): `~ids` (the
+/// order) and `~set` (each one that changed, as a patch, or whole when new); anything else that changed: whole.
+fn json_patch(old: &serde_json::Value, new: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::{Map, Value};
+    match (old, new) {
+        (Value::Object(a), Value::Object(b)) => {
+            let mut out = Map::new();
+            for (k, v) in b {
+                match a.get(k) {
+                    Some(o) => {
+                        if let Some(p) = json_patch(o, v) {
+                            out.insert(k.clone(), p);
+                        }
+                    }
+                    None => {
+                        out.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            for k in a.keys().filter(|k| !b.contains_key(*k)) {
+                out.insert(k.clone(), Value::Null);
+            }
+            (!out.is_empty()).then_some(Value::Object(out))
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            let ids = |v: &Vec<Value>| -> Option<Vec<String>> { v.iter().map(|x| x.get("id")?.as_str().map(String::from)).collect() };
+            match (ids(a), ids(b)) {
+                (Some(ia), Some(ib)) if !ib.is_empty() => {
+                    let mut set = Map::new();
+                    for (id, nv) in ib.iter().zip(b) {
+                        match ia.iter().position(|x| x == id).map(|i| &a[i]) {
+                            Some(ov) => {
+                                if let Some(p) = json_patch(ov, nv) {
+                                    set.insert(id.clone(), p);
+                                }
+                            }
+                            None => {
+                                set.insert(id.clone(), nv.clone());
+                            }
+                        }
+                    }
+                    (ia != ib || !set.is_empty()).then(|| json!({ "~ids": ib, "~set": set }))
+                }
+                _ => (old != new).then(|| new.clone()),
+            }
+        }
+        _ => (old != new).then(|| new.clone()),
+    }
 }
 
 async fn system(State(m): App) -> Response {
@@ -556,8 +634,7 @@ async fn monitor(State(m): App, Query(q): Query<MonitorQuery>) -> Response {
 async fn monitor_now(State(m): App) -> Response {
     // With the recordings drive's free space, for the hardware bar.
     let mut v = serde_json::to_value(m.monitor.current()).unwrap_or_default();
-    let dir = m.config().storage.dir.clone();
-    if let Ok(Some((free, total))) = tokio::task::spawn_blocking(move || crate::sysmon::disk_space(&dir)).await {
+    if let Some((free, total)) = disk_cached(m.config().storage.dir.clone()).await {
         v["disk_free"] = json!(free);
         v["disk_total"] = json!(total);
     }
@@ -2765,7 +2842,9 @@ async fn search(
         s.as_deref()
             .and_then(|x| NaiveTime::parse_from_str(x, "%H:%M").ok())
     };
-    let tod = match (t(&q.tod_from), t(&q.tod_to)) {
+    // ("to 17:59" means up to the end of that minute.)
+    let tod_to = t(&q.tod_to).map(|x| x + chrono::Duration::seconds(59));
+    let tod = match (t(&q.tod_from), tod_to) {
         (Some(a), Some(b)) => Some((a, b)),
         (Some(a), None) => Some((a, NaiveTime::from_hms_opt(23, 59, 59).unwrap())),
         (None, Some(b)) => Some((NaiveTime::MIN, b)),
@@ -3441,6 +3520,11 @@ async fn watchdog_uninstall(State(m): App) -> Response {
         Ok(()) => Json(json!({"ok": true})).into_response(),
         Err(e) => bad(e),
     }
+}
+
+async fn watchdog_dont_ask(State(m): App) -> Response {
+    crate::watchdog_ctl::dont_ask(&wd_data(&m));
+    Json(json!({"ok": true})).into_response()
 }
 
 async fn watchdog_start(State(m): App) -> Response {
@@ -5501,10 +5585,11 @@ async fn snapshot(State(m): App, Path(id): Path<String>) -> Response {
 async fn live_ws(
     State(m): App,
     user: Option<axum::Extension<CurrentUser>>,
+    Query(dq): Query<DeviceQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
     let vis = visible(&user);
-    ws.on_upgrade(move |socket| live_socket(socket, m, vis))
+    ws.on_upgrade(move |socket| live_socket(socket, m, vis, user, dq.device))
 }
 
 /// Send a made-up alert to a webhook, to try it.
@@ -6391,11 +6476,28 @@ struct WsMsg {
     subs: Vec<WsSub>,
 }
 
-async fn live_socket(mut socket: WebSocket, m: Arc<Manager>, vis: Option<Vec<String>>) {
+async fn live_socket(mut socket: WebSocket, m: Arc<Manager>, vis: Option<Vec<String>>, user: Option<axum::Extension<CurrentUser>>, device: String) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(16);
     let mut tasks: HashMap<(String, u8), (WsSub, tokio::task::JoinHandle<()>)> = HashMap::new();
+    // The page's status, once a second: whole the first time, then only what changed.
+    let mut status_tick = tokio::time::interval(Duration::from_secs(1));
+    status_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last: Option<serde_json::Value> = None;
     loop {
         tokio::select! {
+            _ = status_tick.tick() => {
+                let now = status_value(&m, &user, &device).await;
+                let text = match &last {
+                    None => Some(json!({ "status": now }).to_string()),
+                    Some(old) => json_patch(old, &now).map(|p| json!({ "patch": p }).to_string()),
+                };
+                last = Some(now);
+                if let Some(t) = text
+                    && socket.send(Message::Text(t.into())).await.is_err()
+                {
+                    break;
+                }
+            }
             msg = socket.recv() => {
                 let Some(Ok(msg)) = msg else { break };
                 let Message::Text(text) = msg else { continue };
@@ -7106,6 +7208,61 @@ async fn users_delete(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn status_changes_are_sent_as_small_patches_that_rebuild_the_whole() {
+        use serde_json::json;
+        // The page applies a patch like this (applyPatch in app.js): objects by key, lists with an id by id.
+        fn apply(t: &serde_json::Value, p: &serde_json::Value) -> serde_json::Value {
+            use serde_json::Value;
+            if let Some(ids) = p.get("~ids").and_then(|x| x.as_array()) {
+                let old: Vec<Value> = t.as_array().cloned().unwrap_or_default();
+                return Value::Array(
+                    ids.iter()
+                        .map(|id| {
+                            let id = id.as_str().unwrap();
+                            let set = p["~set"].get(id);
+                            match old.iter().find(|o| o["id"] == id) {
+                                Some(b) => set.map(|s| apply(b, s)).unwrap_or(b.clone()),
+                                None => set.cloned().unwrap_or(Value::Null),
+                            }
+                        })
+                        .collect(),
+                );
+            }
+            match (t, p) {
+                (_, Value::Object(po)) => {
+                    let mut out = if let Value::Object(to) = t { to.clone() } else { Default::default() };
+                    for (k, v) in po {
+                        let cur = out.get(k).cloned().unwrap_or(Value::Null);
+                        out.insert(k.clone(), apply(&cur, v));
+                    }
+                    Value::Object(out)
+                }
+                _ => p.clone(),
+            }
+        }
+        let a = json!({"name": "GAZE", "uptime": 1, "cameras": [{"id": "a", "fps": 5, "rec": {"state": "recording"}}, {"id": "b", "fps": 5}], "tags": ["x"], "gone": 1});
+        let b = json!({"name": "GAZE", "uptime": 2, "cameras": [{"id": "a", "fps": 6, "rec": {"state": "recording"}}, {"id": "b", "fps": 5}, {"id": "c", "fps": 1}], "tags": ["x", "y"]});
+        let p = json_patch(&a, &b).expect("something changed");
+        // Only what changed is in it: not the name, not camera b.
+        assert!(p.get("name").is_none() && p["cameras"]["~set"].get("b").is_none(), "{p}");
+        assert_eq!(p["cameras"]["~set"]["a"], json!({"fps": 6}));
+        assert_eq!(p["cameras"]["~set"]["c"], json!({"id": "c", "fps": 1}), "a new camera whole");
+        let rebuilt = apply(&a, &p);
+        // (A key that went away comes back as null.)
+        assert_eq!(rebuilt["cameras"], b["cameras"]);
+        assert_eq!(rebuilt["tags"], b["tags"]);
+        assert_eq!(rebuilt["uptime"], 2);
+        assert_eq!(rebuilt["gone"], serde_json::Value::Null);
+        assert!(json_patch(&b, &b).is_none(), "nothing changed: nothing sent");
+        // A camera going away and the order changing.
+        let c = json!({"cameras": [{"id": "c", "fps": 1}, {"id": "a", "fps": 6}]});
+        let moved = apply(&b, &json_patch(&b, &json!({"cameras": c["cameras"]})).unwrap());
+        let ids: Vec<&str> = moved["cameras"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["c", "a"], "the new order, and b is gone");
+        assert_eq!(moved["cameras"][1]["fps"], 6);
+    }
+
 
     #[test]
     fn camera_ids_are_found_in_every_camera_path() {
