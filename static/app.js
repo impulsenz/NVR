@@ -3464,24 +3464,24 @@ function evCat(e) {
 // picture. Pictures too close to fit side by side are stacked into one with
 // a count; clicking it shows them all to choose from. `groups` collects the
 // alerts of each picture (for the click).
-function evMarks(events, pct, attrs = '', cam = '', lanePx = 800, groups = []) {
+function evMarks(events, pct, attrs = '', cam = '', lanePx = 800, groups = [], thumbW = 52) {
   let out = '';
   for (const e of events) {
     const a = pct(new Date(e.start).getTime()), b = pct(new Date(e.end).getTime());
     if (b < 0 || a > 100) continue;
     const x = Math.max(0, a);
     const tip = e.labels.length ? e.labels.map(l => `${l.label} ${Math.round(l.score * 100)}%`).join(', ') : 'motion';
-    out += `<div class="ev cat-${evCat(e)}" style="left:${x}%;width:${Math.max(0.25, Math.min(100, b) - x)}%" title="${esc(tip)} · ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" ${attrs}></div>`;
+    out += `<div class="ev cat-${evCat(e)}" style="left:${x}%;width:${Math.max(0.25, Math.min(100, b) - x)}%" title="${esc(tip)} · ${fmtTime(e.start)} — click to watch" data-t="${new Date(e.start).getTime()}" ${e._cam ? `data-cam="${esc(e._cam)}"` : attrs}></div>`;
   }
   // Pictures of AI alerts, grouped where they'd overlap (a picture is ~50 px).
-  const step = 52 / Math.max(200, lanePx) * 100;
+  const step = thumbW / Math.max(200, lanePx) * 100;
   let group = null;
   const flush = () => {
     if (!group) return;
-    const e0 = group.evs[0], x = group.x, n = group.evs.length, gi = groups.push({cam, evs: group.evs}) - 1;
+    const e0 = group.evs[0], x = group.x, n = group.evs.length, gi = groups.push({cam: e0._cam || cam, evs: group.evs}) - 1;
     const shift = x > 96 ? 'transform:translateX(-100%)' : '';
     out += `<div class="evt cat-${evCat(e0)}" data-g="${gi}" style="left:${x}%;${shift}" title="${n > 1 ? n + ' alerts — click to see them all' : esc(e0.labels.map(l => l.label).join(', ')) + ' · ' + fmtTime(e0.start) + ' — click to watch'}">`
-      + `<img loading="lazy" src="media/${enc(cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
+      + `<img loading="lazy" src="media/${enc(e0._cam || cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
     group = null;
   };
   for (const e of events.filter(e => e.labels.length && e.thumb).sort((p, q) => new Date(p.start) - new Date(q.start))) {
@@ -5882,7 +5882,7 @@ function tlSolo(camId) {
     el.classList.toggle('solo', el.dataset.cam === tl.solo);
     const b = el.querySelector('.solo-off'); if (b) b.hidden = el.dataset.cam !== tl.solo;
   });
-  $('tl').querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
+  $('tl').querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', !r.classList.contains('merged') && tl.solo === (tl.data[i] || {}).camera));
   layoutSoon(); drawVTimeline();
 }
 function jumpTo(T) { tlLeaveLive(); tl.T = T; if (T < tl.winStart || T > tl.winStart + tl.zoom * 1000) centerWindow(); drawTimeline(); tlSync(true); }
@@ -5903,7 +5903,28 @@ function drawTimeline() {
   tl.groups = [];
   let rows = '';
   // In full screen: only the camera shown (more room for the picture).
-  for (const c of tl.data.filter(x => !tl.onlyCam || x.camera === tl.onlyCam)) {
+  const shownCams = tl.data.filter(x => !tl.onlyCam || x.camera === tl.onlyCam);
+  // Merged (the default): every camera's footage and alerts in ONE line, with
+  // bigger alert pictures; the pictures above get the room the lines took.
+  const mergedNow = tlMerged() && !tl.solo && shownCams.length > 1;
+  if (mergedNow) {
+    const pieces = [], evs = [];
+    let recOn = false;
+    for (const c of shownCams) {
+      const shown = c.segments.filter(tlShows), lastRec = shown.filter(x => x.kind !== 'clip').slice(-1)[0];
+      for (const s of shown) {
+        const live = s === lastRec && isGrowing(s);
+        const a = Math.max(0, pct(new Date(s.start).getTime())), b = Math.min(100, pct(live ? Date.now() : new Date(s.end).getTime()));
+        if (b > 0 && a < 100 && b > a) pieces.push({a, b, cls: (streamOf(s) === 'main' ? 'clip' : 'rec') + (s.archived ? ' arch' : ''), live});
+      }
+      for (const e of c.events) evs.push({...e, _cam: c.camera});
+      const st = cam(c.camera); if (st && st.recorder && st.recorder.state === 'recording') recOn = true;
+    }
+    const nEv = evs.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
+    const lane = solidBars(pieces, 15000 / span * 100, 'div', 'seg') + evMarks(evs, pct, '', '', lanePx, tl.groups, 100);
+    rows = `<div class="tl-row merged"><span class="label"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">All cameras</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</span><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}<div class="tl-buf"></div></div></div></div>`;
+  }
+  for (const c of mergedNow ? [] : shownCams) {
     let lane = '';
     // The newest recording, still being made, reaches up to now (and shows
     // it's still being recorded).
@@ -5932,8 +5953,8 @@ function drawTimeline() {
     : tl.inT != null || tl.outT != null ? `<div class="tl-sel tl-sel1 ${tl.inT != null ? 'only-in' : 'only-out'}" style="left:calc(var(--tl-label) + (100% - var(--tl-label)) * ${pct(tl.inT ?? tl.outT) / 100});width:0" title="${tl.inT != null ? 'Clip start' : 'Clip end'}"><div class="tl-h1"></div></div>` : '';
   box.innerHTML = `<div class="tl-axis">${axis}</div>${rows}${sel}<div class="tl-head" id="tl-head"><em></em></div><div class="tl-hover" id="tl-hover" hidden><em></em></div>`;
   declutterAxis(box.querySelector('.tl-axis'));
-  box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', tl.solo === (tl.data[i] || {}).camera));
-  box.querySelectorAll('.tl-row .label').forEach(b => {
+  box.querySelectorAll('.tl-row').forEach((r, i) => r.classList.toggle('solo', !r.classList.contains('merged') && tl.solo === (tl.data[i] || {}).camera));
+  box.querySelectorAll('.tl-row .label[data-cam]').forEach(b => {
     b.onpointerdown = (e) => e.stopPropagation();
     b.onclick = (e) => { e.stopPropagation(); tlOnlyCamera(b.dataset.cam); };
   });
@@ -6424,12 +6445,11 @@ function applyTlOrient() {
   $('rec-timeline').classList.toggle('vert', v);
   $('vtl').hidden = !v;
   $('tl-orient').textContent = store.get('tl-vertical', false) === true ? '⇄ Horizontal' : '⇅ Vertical';
-  $('tl-vmerge').hidden = !v;
   $('tl-vmerge').textContent = tlMerged() ? '▥ By camera' : '▮ Merge cameras';
   layoutSoon();
   if (v && tl.winStart != null) drawVTimeline();
 }
-$('tl-vmerge').onclick = () => { store.set('tl-vmerge', !tlMerged()); applyTlOrient(); drawVTimeline(); };
+$('tl-vmerge').onclick = () => { store.set('tl-merge', !tlMerged()); applyTlOrient(); if (tl.winStart != null) drawTimeline(); };
 $('tl-orient').onclick = () => { store.set('tl-vertical', store.get('tl-vertical', false) !== true); applyTlOrient(); };
 window.addEventListener('resize', () => { applyTlOrient(); });
 // Bars down a lane: footage runs of one kind joined when close; what is
@@ -6443,7 +6463,8 @@ function vBars(pieces, gap) {
   return runs.map(r => `<div class="vseg ${r.cls}" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></div>`).join('')
     + pieces.filter(x => x.live).map(r => `<div class="vseg ${r.cls} live" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%" title="Recording now"></div>`).join('');
 }
-const tlMerged = () => store.get('tl-vmerge', false) === true;
+// Merged is the default (its own key, so an old choice of by camera doesn't keep the old default).
+const tlMerged = () => store.get('tl-merge', true) !== false;
 function drawVTimeline() {
   const box = $('vtl'); if (!box || box.hidden || tl.winStart == null) return;
   const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
@@ -6451,9 +6472,11 @@ function drawVTimeline() {
   const merged = tlMerged() || cams.length < 2;
   const lanes = merged ? [{camera: '', name: 'All cameras', list: cams}] : cams.map(c => ({camera: c.camera, name: c.name, list: [c]}));
   // Width: time scale, a lane for each camera, and a column for alert pictures.
-  const LW = lanes.length > 10 ? 18 : lanes.length > 6 ? 24 : 30, THUMB = 92;
+  // (Merged: one wide line and big alert pictures; by camera: a narrow line each.)
+  const LW = merged ? 40 : lanes.length > 10 ? 18 : lanes.length > 6 ? 24 : 30, THUMB = merged ? 156 : 92, TW = THUMB - 10, TH = Math.round(TW * 9 / 16);
+  box.style.setProperty('--vt-w', TW + 'px'); box.style.setProperty('--vt-h', TH + 'px');
   const wantW = 58 + lanes.length * (LW + 4) + 10 + THUMB;
-  $('rec-timeline').style.setProperty('--vtl-w', Math.min(Math.max(wantW, 190), 460) + 'px');
+  $('rec-timeline').style.setProperty('--vtl-w', Math.min(Math.max(wantW, 190), 480) + 'px');
   const HEAD = 84, H = Math.max(200, box.clientHeight - HEAD - 28);
   const gap = 15000 / span * 100;
   // Time scale: bands, gridlines, minor ticks and labels.
@@ -6510,7 +6533,7 @@ function drawVTimeline() {
     g = null;
   };
   for (const t of thumbs) {
-    if (g && (t.y - g.y) / 100 * H < 52) { g.evs.push(t.e); continue; }
+    if (g && (t.y - g.y) / 100 * H < TH + 4) { g.evs.push(t.e); continue; }
     flush(); g = {y: t.y, evs: [t.e]};
   }
   flush();

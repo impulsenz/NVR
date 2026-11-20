@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings: the timeline shows all cameras as one line by default, along the bottom and down the side.** The nine lines under the pictures were replaced by one (with the footage of every camera and its alert pictures, bigger), so the camera pictures get the room and are as big as the screen allows. Down the side, the one line and its alert pictures are much bigger (about 146 px wide instead of 62). "▥ By camera" brings back a line for each camera, in either position (the choice is remembered; people who had chosen a layout before get the new default once).
+
 ## 1.7.6 — November 2026
 - **Faces: new photos also name the faces already seen in alerts.** Adding a photo of a person, or confirming a face in an alert, already made GAZE recognise them better from then on (every photo adds a faceprint to that person, and a face matches if it is close to any of them). Now the last 30 days of alerts are also looked at again with the new data (in the background, with no AI run: the faceprints are stored): a face that was "unknown" can become that person. Faces someone confirmed or corrected are never changed.
 - **The blue line under the timeline now means "in this browser's memory".** A time-lapse the server has made but that hasn't been downloaded yet shows as a fainter line (legend: "on the server (loading)"), and turns solid blue once its pictures have arrived, so solid blue is instant to scrub.
