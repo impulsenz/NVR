@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.11 — November 2026
 - **Time-lapse previews keep working on older footage.**
   - **They move with the footage.** When a recording moved to deep storage its previews were deleted, so every moved file was decoded again from the NAS (the traffic and lag on older footage). They are now copied next to it, and deleted from the local disk only after that.
   - **They are built while you watch.** The background job used to wait up to 10 minutes per file whenever anyone was playing or scrubbing. The newest footage is never held up now, and older footage goes at a gentler pace instead of stopping. The catch-up looks again every 90 seconds while there is a backlog (60 files at a time, was 30 every 10 minutes), and runs unless the computer is really busy (above 82% it waits, above 94% it stops for now; it was 70% and 85%).
