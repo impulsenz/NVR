@@ -10895,7 +10895,7 @@ async function renderLongLapse(body) {
     const all = (settings.longlapse || []);
     const mine = () => ({id: e.id || '', camera: val('ll-cam'), time: val('ll-time') || '12:00', enabled: chk('ll-on')});
     if (admin) {
-      $('ll-save').onclick = async () => { close(); await save(isNew ? [...all, mine()] : all.map(r => r.id === e.id ? {...r, ...mine()} : r), isNew ? 'Camera added' : 'Time-lapse saved'); };
+      $('ll-save').onclick = async () => { const m = mine(); close(); await save(isNew ? [...all, m] : all.map(r => r.id === e.id ? {...r, ...m} : r), isNew ? 'Camera added' : 'Time-lapse saved'); };
       if (!isNew) {
         $('ll-now').onclick = async () => { try { await api(`api/longlapse/${enc(e.id)}/capture`, {method: 'POST', json: {}}); toast('Picture taken'); close(); renderLongLapse(body); } catch (err) { toast(err.message, true); } };
         $('ll-del').onclick = async () => { if (!confirm('Stop this time-lapse? The pictures already taken stay on disk.')) return; close(); await save(all.filter(r => r.id !== e.id), 'Removed'); };
