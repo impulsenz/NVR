@@ -125,6 +125,38 @@ static WANT: Mutex<(String, String)> = Mutex::new((String::new(), String::new())
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Why the GPU runtime couldn't be loaded (tried again later).
 static RUNTIME_ERR: Mutex<Option<String>> = Mutex::new(None);
+/// When Windows last reset the graphics card under a running model ("device
+/// removed / suspended", e.g. a driver timeout). That model can't be used
+/// again, so everything runs on the processor for a while, then the GPU is
+/// tried again.
+static GPU_LOST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static GPU_LOST_NOTE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+const GPU_RETRY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Is the GPU to be used now (not right after it was reset)?
+fn gpu_ok() -> bool {
+    GPU_LOST.locked().is_none_or(|t| t.elapsed() > GPU_RETRY)
+}
+
+/// Does this error say the graphics card was reset or removed?
+fn device_lost(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    ["887a0005", "887a0006", "887a0007", "device instance has been suspended", "device removed", "getdeviceremovedreason", "dxgi_error_device"]
+        .iter()
+        .any(|k| m.contains(k))
+}
+
+fn mark_gpu_lost(why: &str) {
+    let mut l = GPU_LOST.locked();
+    if l.is_some_and(|t| t.elapsed() < GPU_RETRY) {
+        return;
+    }
+    *l = Some(std::time::Instant::now());
+    drop(l);
+    warn!("AI: the graphics card was reset ({why}); the AI runs on the processor for 30 minutes, then tries the GPU again");
+    GPU_LOST_NOTE.notify_one();
+}
+
 /// The GPU runtime is wanted (at start-up, or the settings were changed to GPU).
 pub static GPU_WANTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
@@ -137,6 +169,18 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
         }
         // Tried and failed (e.g. no internet): try again in an hour, or when asked.
         tokio::select! {
+            _ = GPU_LOST_NOTE.notified() => {
+                // Models on the reset GPU are dead: load them again (now on
+                // the processor), and once more on the GPU after the pause.
+                mgr.reload_models();
+                let m = mgr.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(GPU_RETRY + std::time::Duration::from_secs(5)).await;
+                    if gpu_ok() {
+                        m.reload_models();
+                    }
+                });
+            }
             _ = GPU_WANTED.notified() => {}
             _ = tokio::time::sleep(std::time::Duration::from_secs(3600)) => {}
         }
@@ -177,6 +221,9 @@ pub fn use_gpu() -> bool {
 pub fn status() -> String {
     if !use_gpu() {
         return "CPU (chosen in the settings)".into();
+    }
+    if !gpu_ok() {
+        return "CPU — the graphics card was reset by Windows (driver timeout); the GPU is tried again later".into();
     }
     if let Some(s) = STATUS.locked().clone() {
         return s;
@@ -247,8 +294,8 @@ impl Net {
     /// models check this and load again.
     pub fn misplaced(&self) -> bool {
         match self {
-            Net::Cpu(_) => use_gpu() && RUNTIME.get().is_some() && RUNTIME_ERR.locked().is_none(),
-            Net::Gpu(_) => !use_gpu(),
+            Net::Cpu(_) => use_gpu() && gpu_ok() && RUNTIME.get().is_some() && RUNTIME_ERR.locked().is_none(),
+            Net::Gpu(_) => !use_gpu() || !gpu_ok(),
         }
     }
 
@@ -261,7 +308,16 @@ impl Net {
     pub fn run(&self, input: Input) -> Result<Vec<Vec<f32>>> {
         match self {
             Net::Cpu(plan) => run_tract(plan, input),
-            Net::Gpu(s) => run_ort(&mut s.locked(), input),
+            Net::Gpu(s) => {
+                let r = run_ort(&mut s.locked(), input);
+                if let Err(e) = &r {
+                    let t = format!("{e:#}");
+                    if device_lost(&t) {
+                        mark_gpu_lost(&t);
+                    }
+                }
+                r
+            }
         }
     }
 }
@@ -319,6 +375,7 @@ fn run_ort(s: &mut ort::session::Session, input: Input) -> Result<Vec<Vec<f32>>>
 /// processor with `cpu` (tract).
 pub fn load(path: &Path, what: &str, cpu: impl FnOnce() -> Result<Plan>) -> Result<Net> {
     if use_gpu()
+        && gpu_ok()
         && let Some(env) = RUNTIME.get()
     {
         match gpu_session(env, path) {
@@ -342,6 +399,8 @@ pub fn load(path: &Path, what: &str, cpu: impl FnOnce() -> Result<Plan>) -> Resu
     }
     let why = if !use_gpu() {
         "processor chosen in the settings".to_string()
+    } else if !gpu_ok() {
+        "the graphics card was reset by Windows; the GPU is tried again later".to_string()
     } else {
         match RUNTIME_ERR.locked().clone() {
             Some(e) => format!("the GPU can't be used: {e}"),
@@ -616,6 +675,12 @@ fn preload_directml(ort_dll: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_reset_graphics_card_is_recognised() {
+        assert!(super::device_lost("ExecutionProvider.cpp(952) Exception(49555) tid(861c) 887A0005 The GPU device instance has been suspended. Use GetDeviceRemovedReason to determine the appropriate action."));
+        assert!(!super::device_lost("unexpected kind of model output"));
+    }
+
     use super::*;
 
     fn tract_plan(path: &Path, fact: Option<(&[usize], bool)>) -> Result<Plan> {
