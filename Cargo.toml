@@ -1,6 +1,6 @@
 [package]
 name = "nvr"
-version = "1.7.8"
+version = "1.7.9"
 edition = "2024"
 description = "GAZE — network video recorder for IP cameras"
 default-run = "nvr"
