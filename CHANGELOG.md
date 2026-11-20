@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.7 — November 2026
 - **Heat map: one camera open fits the page.** Its picture is as big as the space below the controls allows (no scrolling down; the details beside it scroll on their own), the controls take less height there, and a "← All cameras" button at the top goes back to every camera.
 - **Heat map: an "Edit camera" button** next to "Ignore areas…" on every camera.
 - **Heat map: only people, vehicles, cats and dogs.** "What the AI saw" lists only those four, "Everything the AI sees" counts only them, and the Animals / Other objects buttons and the specific-object menu are gone (Cats and Dogs buttons instead). Other things the AI recognises are still logged, and still explain movement for "Unexplained motion".
