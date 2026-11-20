@@ -238,6 +238,57 @@ async fn faces_in(
 /// Two faceprints this similar are the same person (looser than naming).
 const SAME_PERSON: f32 = 0.5;
 
+/// The alert's notes after its faces were named: who was recognised, and
+/// whether a face is still unknown.
+pub fn face_notes(e: &mut Event) {
+    let names: Vec<String> = e.faces.iter().filter_map(|f| f.name.clone()).collect();
+    e.notes.retain(|n| n.strip_prefix("Recognized ").is_none_or(|who| names.iter().any(|x| x == who)));
+    for n in &names {
+        let note = format!("Recognized {n}");
+        if !e.notes.contains(&note) {
+            e.notes.push(note);
+        }
+    }
+    let unknown = e.faces.iter().any(|f| f.name.is_none());
+    e.notes.retain(|n| n != "Unknown face");
+    if unknown {
+        e.notes.push("Unknown face".into());
+    }
+}
+
+/// Name an alert's faces again with what GAZE knows now (a person has new
+/// photos). Faces someone confirmed or corrected are left alone. Returns
+/// whether anything changed.
+pub fn rematch(e: &mut Event, known: &crate::known::KnownStore) -> bool {
+    let mut changed = false;
+    for f in e.faces.iter_mut().filter(|f| !f.confirmed) {
+        let name = known.match_face(&crate::known::unpack(&f.print)).map(|(n, _)| n);
+        if name != f.name {
+            f.name = name;
+            changed = true;
+        }
+    }
+    if changed {
+        face_notes(e);
+    }
+    changed
+}
+
+/// `rematch` for the alerts of the last `days` days. Returns how many changed.
+pub fn recheck_recent(mgr: &Manager, days: i64) -> usize {
+    let now = chrono::Local::now();
+    let mut n = 0;
+    for c in mgr.cameras() {
+        for mut e in c.events.between(now - chrono::Duration::days(days), now) {
+            if !e.faces.is_empty() && rematch(&mut e, &mgr.known) {
+                c.events.save(e);
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 async fn identify(
     mgr: &Manager,
     rt: &CameraRuntime,
@@ -653,5 +704,46 @@ pub async fn run(mgr: Arc<Manager>) {
         }
         mgr.recog.unload_if_idle();
         tokio::time::sleep(Duration::from_secs(15)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::FaceSeen;
+
+    fn print(seed: f32) -> Vec<f32> {
+        crate::recog::normalize((0..128).map(|i| (i as f32 * seed).sin()).collect())
+    }
+
+    fn face(p: &[f32], name: Option<&str>, confirmed: bool) -> FaceSeen {
+        FaceSeen { file: "f.jpg".into(), print: crate::known::pack(p), name: name.map(String::from), confirmed }
+    }
+
+    #[test]
+    fn a_new_photo_names_the_faces_already_seen_in_alerts_but_never_overrules_a_person() {
+        let dir = std::env::temp_dir().join(format!("nvr-rematch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let known = crate::known::KnownStore::open(&dir);
+        let mum = known.create("person", "Mum", vec![]).unwrap();
+        let (a, b) = (print(0.37), print(1.91));
+        let mut e: Event = serde_json::from_value(serde_json::json!({"id": "e", "camera": "c", "start": chrono::Local::now(), "end": chrono::Local::now()})).unwrap();
+        // Mum's face, not known yet; a stranger; a face someone said was "Gran".
+        e.faces = vec![face(&a, None, false), face(&b, None, false), face(&a, Some("Gran"), true)];
+        face_notes(&mut e);
+        assert!(e.notes.contains(&"Unknown face".to_string()));
+        assert!(!rematch(&mut e, &known), "nobody is known yet");
+        // A photo of Mum is added: her face in the alert is named, the stranger is not,
+        // and the face a person confirmed as Gran stays Gran.
+        known.add(&mum, Some(&a), None, None).unwrap();
+        assert!(rematch(&mut e, &known));
+        assert_eq!(e.faces[0].name.as_deref(), Some("Mum"));
+        assert_eq!(e.faces[1].name, None);
+        assert_eq!(e.faces[2].name.as_deref(), Some("Gran"));
+        assert!(e.notes.contains(&"Recognized Mum".to_string()));
+        assert!(e.notes.contains(&"Unknown face".to_string()), "the stranger is still unknown");
+        assert!(!rematch(&mut e, &known), "nothing more to change");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

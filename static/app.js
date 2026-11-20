@@ -860,7 +860,7 @@ function legendHtml(kind, data) {
   const cats = new Set(evs.map(evCat));
   for (const [k, t] of [['person', 'People'], ['vehicle', 'Vehicles'], ['animal', 'Animals'], ['package', 'Packages'], ['other', 'Other'], ['motion', 'Motion only']])
     if (cats.has(k)) bars.push([`<i class="lg-bar ev cat-${k}"></i>`, t]);
-  if (TIMELAPSE) bars.push(['<i class="lg-bar tlr"></i>', 'Time-lapse ready']);
+  if (TIMELAPSE) bars.push(['<i class="lg-bar tlr"></i>', 'Time-lapse in memory (instant)'], ['<i class="lg-bar tls"></i>', 'Time-lapse on the server (loading)']);
   // (The strip under the footage: what's in the browser already.)
   bars.push(['<i class="lg-bar loaded" title="Footage already loaded into this browser: ahead of the playhead it plays without waiting; behind it, what was just played"></i>', 'Loaded']);
   return bars.map(([i, t]) => `<span>${i}${t}</span>`).join('')
@@ -3591,7 +3591,7 @@ const camTl = {
         if (!had || had.state !== 'ready') { this.pv.set(sg.url, {state: 'loading'}); this.paintStrip(); }
         const sp = await previewReady(id, sg);
         if (gen !== this.pfGen) break;
-        if (sp) this.pv.set(sg.url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
+        if (sp) pvAdd(this.pv, sg.url, sp);
         else { missing++; if (!had || had.state !== 'ready') this.pv.set(sg.url, {state: isGrowing(sg) || (tl.sprites.get(sg.url) || {}).tries < 3 ? 'wait' : 'none'}); }
         this.paintStrip();
       }
@@ -6729,7 +6729,7 @@ async function knownPreviews(cam, segs, pv) {
     const sp = r[kindOf(sg) + '/' + sg.name]; if (!sp) continue;
     preloadSprite(sp);
     tl.sprites.set(sg.url, {at: Date.now(), done: true, ok: sp, p: Promise.resolve(sp), tries: 0});
-    pv.set(sg.url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
+    pvAdd(pv, sg.url, sp);
   }
 }
 function spriteFailed(entry) {
@@ -6790,6 +6790,28 @@ function paintPreviewStrips() {
   }
   paintVStrips();
 }
+// The blue line means "this part of the time-lapse is in this browser's
+// memory: scrubbing it is instant". A preview the server has made but that
+// hasn't arrived yet is a fainter line ('server'); it becomes solid once its
+// pictures have been downloaded (only the first pages of each file are
+// fetched ahead of time, see SPRITE_AHEAD_PAGES).
+function inMemory(sp) {
+  for (let p = 0; p < Math.min(sp.info.pages, SPRITE_AHEAD_PAGES); p++) { const im = spritePages.get(sp.url + p); if (!(im && im.complete && im.naturalWidth)) return false; }
+  return true;
+}
+const serverPending = [];
+function pvEntry(sp) { return {state: inMemory(sp) ? 'ready' : 'server', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval, sp}; }
+function pvAdd(pv, url, sp) { const e = pvEntry(sp); pv.set(url, e); if (e.state === 'server') serverPending.push([pv, url, sp]); }
+setInterval(() => {
+  if (!serverPending.length) return;
+  let any = false;
+  for (let i = serverPending.length - 1; i >= 0; i--) {
+    const [pv, url, sp] = serverPending[i], cur = pv.get(url);
+    if (!cur || cur.state !== 'server' || cur.sp !== sp) { serverPending.splice(i, 1); continue; }
+    if (inMemory(sp)) { pv.set(url, {...cur, state: 'ready', at: Date.now()}); serverPending.splice(i, 1); any = true; }
+  }
+  if (any) stripsSoon();
+}, 500);
 // A file's time-lapse showed while scrubbing: its part of the blue line
 // fills in now, not only after letting go.
 let stripsQueued = false;
@@ -6798,7 +6820,7 @@ function markPreviewReady(url, sp) {
   tl.pv = tl.pv || new Map();
   const had = tl.pv.get(url);
   if (had && had.state === 'ready') return;
-  tl.pv.set(url, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
+  pvAdd(tl.pv, url, sp);
   stripsSoon();
 }
 // While the timeline slides along (dragging past its end): what's already
@@ -6848,7 +6870,7 @@ async function prefetchSprites() {
       if (!had || had.state !== 'ready') { tl.pv.set(key, {state: 'loading'}); paintPreviewStrips(); }
       const sp = await previewReady(job.cam, job.sg), ok = !!sp;
       if (gen !== tl.pfGen) break;
-      if (ok) tl.pv.set(key, {state: 'ready', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval});
+      if (ok) pvAdd(tl.pv, key, sp);
       else if (!had || had.state !== 'ready') { missing++; tl.pv.set(key, {state: isGrowing(job.sg) || (tl.sprites.get(key) || {}).tries < 3 ? 'wait' : 'none'}); }
       else missing++;
       paintPreviewStrips();
@@ -10812,7 +10834,8 @@ applyDataSaver();
 // Hardware bar: network in and out, CPU, GPU, memory and free space on the
 // recordings drive, along the bottom of every page (and in full screen, in
 // a drawer that slides up when the mouse comes near the bottom and hides
-// when it moves away). Read every 2 s while the page is on screen.
+// when it moves away). Read every second while the page is on screen (the
+// server samples once a second, so that is as fresh as it gets).
 // ======================================================================
 (function hardwareBar() {
   const bar = $('hw-bar'), drawer = $('hw-drawer');
@@ -10836,7 +10859,7 @@ applyDataSaver();
     busy = true;
     try { paint(await api('api/monitor/now')); } catch (_) {} finally { busy = false; }
   };
-  setInterval(tick, 2000); setTimeout(tick, 500);
+  setInterval(tick, 1000); setTimeout(tick, 500);
   // Full screen: up near the bottom edge, away again when the mouse leaves.
   let hideT = null;
   $('live-grid').addEventListener('pointermove', (e) => {

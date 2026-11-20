@@ -1,6 +1,9 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Faces: new photos also name the faces already seen in alerts.** Adding a photo of a person, or confirming a face in an alert, already made GAZE recognise them better from then on (every photo adds a faceprint to that person, and a face matches if it is close to any of them). Now the last 30 days of alerts are also looked at again with the new data (in the background, with no AI run: the faceprints are stored): a face that was "unknown" can become that person. Faces someone confirmed or corrected are never changed.
+- **The blue line under the timeline now means "in this browser's memory".** A time-lapse the server has made but that hasn't been downloaded yet shows as a fainter line (legend: "on the server (loading)"), and turns solid blue once its pictures have arrived, so solid blue is instant to scrub.
+- **The bottom bar (network, CPU, GPU, memory, storage) refreshes every second** (it was every 2 s).
 - **Settings → Cameras: clicking a camera opens its settings** (the picture, name or details), not its live feed. The "▶ Live" button still opens the feed.
 - **Export setup can include the Evidence Locker.** A new option (off by default, shows how many cases and how much space) adds every case with its notes, videos and pictures to the backup. Importing puts back the cases that aren't here and leaves existing ones exactly as they are. Backups are now written to a file and streamed, and imports are streamed too, so a large locker no longer has to fit in memory.
 - **Floor plan: no camera names written on the map.** Each camera's name was drawn under its icon and flooded the plan with text; it now shows only when you hover over the icon.

@@ -1180,6 +1180,7 @@ async fn known_photo(State(m): App, Path(id): Path<String>, body: Bytes) -> Resp
             }
             let print = m.recog.faceprint(&img, face).await?;
             m.known.add(&id, Some(&print), None, Some(&body))?;
+            recheck_faces_soon(&m);
             anyhow::Ok(json!({ "ok": true, "message": format!("Learned {}'s face", k.name) }))
         } else {
             let plates = m.recog.plates(&img).await.unwrap_or_default();
@@ -1199,6 +1200,19 @@ async fn known_photo(State(m): App, Path(id): Path<String>, body: Bytes) -> Resp
         Ok(v) => Json(v).into_response(),
         Err(e) => bad(e),
     }
+}
+
+/// A person has new faceprints: name the faces of the last 30 days of alerts
+/// again (in the background; no AI is run, the faceprints are already stored).
+/// Faces someone confirmed or corrected are never changed.
+fn recheck_faces_soon(m: &Arc<Manager>) {
+    let m = m.clone();
+    tokio::task::spawn_blocking(move || {
+        let n = crate::identify::recheck_recent(&m, 30);
+        if n > 0 {
+            tracing::info!("faces: {n} alert(s) named again with what GAZE knows now");
+        }
+    });
 }
 
 async fn known_photo_get(
@@ -1272,22 +1286,7 @@ async fn known_learn(
         f.confirmed = true;
         f.name = new_name.clone();
         // The alert's notes: who was recognised, and whether a face is unknown.
-        let names: Vec<String> = e.faces.iter().filter_map(|f| f.name.clone()).collect();
-        e.notes.retain(|n| {
-            n.strip_prefix("Recognized ")
-                .is_none_or(|who| names.iter().any(|x| x == who))
-        });
-        for n in &names {
-            let note = format!("Recognized {n}");
-            if !e.notes.contains(&note) {
-                e.notes.push(note);
-            }
-        }
-        let unknown = e.faces.iter().any(|f| f.name.is_none());
-        e.notes.retain(|n| n != "Unknown face");
-        if unknown {
-            e.notes.push("Unknown face".into());
-        }
+        crate::identify::face_notes(&mut e);
         let notes = e.notes.clone();
         c.events.save(e);
         anyhow::Ok((
@@ -1308,6 +1307,8 @@ async fn known_learn(
     })();
     match res {
         Ok((notes, message)) => {
+            // The person has more to be recognised by now: older alerts are looked at again.
+            recheck_faces_soon(&m);
             Json(json!({ "ok": true, "message": message, "notes": notes })).into_response()
         }
         Err(e) => bad(e),
