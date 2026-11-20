@@ -352,6 +352,8 @@ pub struct Config {
     pub tts: TtsConfig,
     /// The daily summary video (synopsis.rs): which objects, and when one is made for you.
     pub summary: SummaryConfig,
+    /// Long-term time-lapse (longlapse.rs): one picture a day per entry.
+    pub longlapse: Vec<LongLapse>,
     pub cameras: Vec<CameraConfig>,
 }
 
@@ -706,6 +708,25 @@ pub struct DigestConfig {
 impl Default for DigestConfig {
     fn default() -> Self {
         Self { enabled: false, time: "08:00".into(), when_quiet: true, picture: true }
+    }
+}
+
+/// One long-term time-lapse (longlapse.rs): a camera and the time of day its
+/// daily picture is taken.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct LongLapse {
+    /// Names the folder the pictures are kept in; made when the entry is added.
+    pub id: String,
+    pub camera: String,
+    /// HH:MM, local time.
+    pub time: String,
+    pub enabled: bool,
+}
+
+impl Default for LongLapse {
+    fn default() -> Self {
+        Self { id: String::new(), camera: String::new(), time: "12:00".into(), enabled: true }
     }
 }
 

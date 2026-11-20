@@ -207,6 +207,7 @@ pub struct SettingsUpdate {
     pub cloud: Option<CloudConfig>,
     pub notify: Option<crate::config::NotifyConfig>,
     pub summary: Option<crate::config::SummaryConfig>,
+    pub longlapse: Option<Vec<crate::config::LongLapse>>,
     pub update: Option<crate::config::UpdateConfig>,
     pub streaming: Option<crate::config::StreamingConfig>,
     pub mqtt: Option<crate::config::MqttConfig>,
@@ -780,6 +781,24 @@ impl Manager {
                 anyhow::bail!("daily summary: choose at least one kind of object to show");
             }
             cfg.summary = s;
+        }
+        if let Some(mut list) = up.longlapse {
+            let mut seen = std::collections::HashSet::new();
+            for (i, e) in list.iter_mut().enumerate() {
+                e.time = e.time.trim().to_string();
+                if chrono::NaiveTime::parse_from_str(&e.time, "%H:%M").is_err() {
+                    anyhow::bail!("long-term time-lapse time: write it as HH:MM, e.g. 12:00");
+                }
+                if !cfg.cameras.iter().any(|c| c.id == e.camera) {
+                    anyhow::bail!("long-term time-lapse: choose a camera");
+                }
+                // A new entry gets its folder name here; an existing one keeps it.
+                if crate::longlapse::dir(&self.data_dir, &e.id).is_none() || !seen.insert(e.id.clone()) {
+                    e.id = format!("ll-{}-{}", chrono::Utc::now().timestamp(), i);
+                    seen.insert(e.id.clone());
+                }
+            }
+            cfg.longlapse = list;
         }
         if let Some(mut r) = up.remotes {
             for x in &mut r {

@@ -39,6 +39,7 @@ mod live;
 mod livemux;
 mod load;
 mod logs;
+mod longlapse;
 mod mail;
 mod manager;
 mod mp4fix;
@@ -421,6 +422,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     tokio::spawn(talkmix::run(mgr.clone()));
     tokio::spawn(notify::run(mgr.clone()));
     tokio::spawn(health::run(mgr.clone()));
+    tokio::spawn(longlapse::run(mgr.clone()));
     tokio::spawn(mqtt::run(mgr.clone()));
     tokio::spawn(states::run(mgr.clone()));
     tokio::spawn(smart::run(mgr.clone()));

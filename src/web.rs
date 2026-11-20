@@ -243,6 +243,12 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/overview.mjpeg", get(overview_mjpeg))
         .route("/api/overview/key", get(overview_key).post(overview_key_renew))
         .route("/snapshot/{id}", get(snapshot))
+        .route("/api/longlapse", get(longlapse_list))
+        .route("/api/longlapse/{id}/capture", post(longlapse_capture))
+        .route("/api/longlapse/{id}/video", post(longlapse_video))
+        .route("/api/longlapse/{id}/pic/{name}", get(longlapse_pic).delete(longlapse_delete_pic))
+        .route("/api/longlapse/{id}/thumb/{name}", get(longlapse_thumb))
+        .route("/api/longlapse/{id}/videos/{name}", get(longlapse_video_file).delete(longlapse_delete_video))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(mgr.clone(), remote_footage))
         .layer(middleware::from_fn(slow_requests))
@@ -4947,6 +4953,162 @@ async fn live_frame(State(m): App, Path(id): Path<String>, Query(q): Query<Quali
     match c.live(q.q).frame().await {
         Ok(jpg) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-cache, no-store")], jpg).into_response(),
         Err(e) => err(StatusCode::SERVICE_UNAVAILABLE, format!("{e:#}")),
+    }
+}
+
+// ---------- long-term time-lapse (longlapse.rs) ----------
+
+/// The entry an id names, when the account may see its camera.
+fn longlapse_entry(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, id: &str) -> Result<crate::config::LongLapse, Response> {
+    let e = m.config().longlapse.into_iter().find(|e| e.id == id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such time-lapse"))?;
+    match camera_denied(user, &e.camera) {
+        Some(r) => Err(r),
+        None => Ok(e),
+    }
+}
+
+async fn longlapse_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
+    let vis = visible(&user);
+    let out: Vec<_> = m
+        .config()
+        .longlapse
+        .into_iter()
+        .filter(|e| vis.as_ref().is_none_or(|v| v.contains(&e.camera)))
+        .map(|e| {
+            let pics = crate::longlapse::pictures(&m.data_dir, &e.id);
+            let st = crate::longlapse::state(&e.id);
+            json!({
+                "entry": e,
+                "pictures": pics,
+                "videos": crate::longlapse::videos(&m.data_dir, &e.id),
+                "making": crate::longlapse::making(&e.id),
+                "last_ok": st.last_ok,
+                "error": st.error,
+            })
+        })
+        .collect();
+    Json(out).into_response()
+}
+
+async fn longlapse_capture(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>) -> Response {
+    let e = match longlapse_entry(&m, &user, &id) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    match crate::longlapse::capture(&m, &e).await {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct LongLapseVideoReq {
+    #[serde(default = "ll_fps")]
+    fps: u32,
+    #[serde(default)]
+    from: Option<chrono::NaiveDate>,
+    #[serde(default)]
+    to: Option<chrono::NaiveDate>,
+}
+fn ll_fps() -> u32 {
+    10
+}
+
+/// Makes the video in the background (it can take minutes); the list shows it when done.
+async fn longlapse_video(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Json(r): Json<LongLapseVideoReq>) -> Response {
+    let e = match longlapse_entry(&m, &user, &id) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    if crate::longlapse::making(&e.id).is_some() {
+        return err(StatusCode::CONFLICT, "a video of this time-lapse is already being made");
+    }
+    if crate::longlapse::pictures(&m.data_dir, &e.id).len() < 2 {
+        return err(StatusCode::BAD_REQUEST, "a video needs at least two pictures: wait for a second day, or take one now");
+    }
+    let mgr = m.clone();
+    tokio::spawn(async move {
+        let opts = crate::longlapse::VideoOpts { fps: r.fps, from: r.from, to: r.to };
+        if let Err(err) = crate::longlapse::make_video(&mgr, &e.id, opts).await {
+            tracing::warn!("long-term time-lapse video: {err:#}");
+            crate::longlapse::note_error(&e.id, format!("{err:#}"));
+        }
+    });
+    (StatusCode::ACCEPTED, Json(json!({ "ok": true }))).into_response()
+}
+
+/// A file of an entry (`sub` is "" or "videos"), only if the name is one of ours.
+fn longlapse_path(m: &Manager, id: &str, sub: &str, name: &str) -> Option<PathBuf> {
+    let ok = if sub.is_empty() { crate::longlapse::date_of(name).is_some() } else { crate::longlapse::is_video_name(name) };
+    if !ok {
+        return None;
+    }
+    let mut d = crate::longlapse::dir(&m.data_dir, id)?;
+    if !sub.is_empty() {
+        d.push(sub);
+    }
+    Some(d.join(name))
+}
+
+async fn longlapse_pic(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+    if let Err(r) = longlapse_entry(&m, &user, &id) {
+        return r;
+    }
+    match longlapse_path(&m, &id, "", &name).filter(|p| p.is_file()) {
+        Some(p) => serve_file(p, req, Some(format!("{id}-{name}")), false).await,
+        None => err(StatusCode::NOT_FOUND, "no such picture"),
+    }
+}
+
+async fn longlapse_thumb(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+    if let Err(r) = longlapse_entry(&m, &user, &id) {
+        return r;
+    }
+    let Some(full) = longlapse_path(&m, &id, "", &name).filter(|p| p.is_file()) else { return err(StatusCode::NOT_FOUND, "no such picture") };
+    let dir = full.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    match tokio::task::spawn_blocking(move || crate::longlapse::thumbnail(&dir, &name)).await {
+        Ok(Ok(p)) => serve_file(p, req, None, false).await,
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn longlapse_video_file(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+    if let Err(r) = longlapse_entry(&m, &user, &id) {
+        return r;
+    }
+    match longlapse_path(&m, &id, "videos", &name).filter(|p| p.is_file()) {
+        Some(p) => serve_file(p, req, Some(format!("{id}-{name}")), false).await,
+        None => err(StatusCode::NOT_FOUND, "no such video"),
+    }
+}
+
+async fn longlapse_delete_pic(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>) -> Response {
+    if let Err(r) = longlapse_entry(&m, &user, &id) {
+        return r;
+    }
+    match longlapse_path(&m, &id, "", &name) {
+        Some(p) => {
+            let _ = std::fs::remove_file(p.parent().unwrap_or(&p).join("thumbs").join(&name));
+            match std::fs::remove_file(&p) {
+                Ok(_) => Json(json!({ "ok": true })).into_response(),
+                Err(e) => err(StatusCode::NOT_FOUND, e),
+            }
+        }
+        None => err(StatusCode::NOT_FOUND, "no such picture"),
+    }
+}
+
+async fn longlapse_delete_video(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, name)): Path<(String, String)>) -> Response {
+    if let Err(r) = longlapse_entry(&m, &user, &id) {
+        return r;
+    }
+    match longlapse_path(&m, &id, "videos", &name) {
+        Some(p) => match std::fs::remove_file(&p) {
+            Ok(_) => Json(json!({ "ok": true })).into_response(),
+            Err(e) => err(StatusCode::NOT_FOUND, e),
+        },
+        None => err(StatusCode::NOT_FOUND, "no such video"),
     }
 }
 
