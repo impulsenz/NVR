@@ -3774,7 +3774,7 @@ function timeMarks(a, span, pct) {
     const cls = midnight ? 'day' : d.getMinutes() === 0 ? 'hr' : '';
     // Labels near either end stay inside the timeline.
     const x = pct(t), shift = x < 6 ? 'translateX(0)' : x > 94 ? 'translateX(-100%)' : '';
-    axis += `<i class="mj" style="left:${x}%"></i><span class="${cls}" style="left:${x}%;${shift ? 'transform:' + shift : ''}">${step >= 86400000 ? fmtDay(d) : hm + (midnight ? ' ' + fmtDay(d) : '')}</span>`;
+    axis += `<i class="mj ${d.getMinutes() === 0 ? 'hr' : ''}" style="left:${x}%"></i><span class="${cls}" style="left:${x}%;${shift ? 'transform:' + shift : ''}">${step >= 86400000 ? fmtDay(d) : hm + (midnight ? ' ' + fmtDay(d) : '')}</span>`;
     grid += `<i class="${midnight ? 'day' : ''}" style="left:${pct(t)}%"></i>`;
   }
   // "Now": one small mark on the scale (the rows show it by the recording
@@ -6164,7 +6164,11 @@ $('tl-quality').value = tl.quality;
 // Scrubbing shows the time-lapse pictures (the video itself when time-lapse
 // is switched off).
 $('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-quality', tl.quality); drawTimeline(); tlSync(true); };
-$('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
+// + / − step the zoom (the hidden list holds the choices): in = a shorter stretch of time.
+const tlZoomStep = (d) => { const z = $('tl-zoom'), i = Math.min(z.options.length - 1, Math.max(0, z.selectedIndex + d)); if (i === z.selectedIndex) return; z.selectedIndex = i; z.dispatchEvent(new Event('change')); paintTlZoomBtns(); };
+function paintTlZoomBtns() { const z = $('tl-zoom'); $('tl-zout').disabled = z.selectedIndex <= 0; $('tl-zin').disabled = z.selectedIndex >= z.options.length - 1; }
+$('tl-zin').onclick = () => tlZoomStep(1); $('tl-zout').onclick = () => tlZoomStep(-1);
+$('tl-zoom').onchange = (e) => { paintTlZoomBtns(); tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
 $('tl-left').onclick = () => { tl.winStart = Math.max(tlMinStart(), tl.winStart - tl.zoom * 500); drawTimeline(); prefetchSprites(); tlExtendBack(); };
 $('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 // One frame back or forward on every camera (pauses playback).
@@ -6276,6 +6280,8 @@ function drawTimeline() {
   const pct = (t) => ((t - W0) / span * 100);
   paintQualityChoice();
   const {axis, grid} = timeMarks(W0, span, pct);
+  paintTlZoomBtns();
+  box.classList.toggle('nolabel', tlMerged() && !tl.solo && shownCams.length > 1);
   const lw = parseFloat(getComputedStyle(box).getPropertyValue('--tl-label')), lanePx = box.clientWidth - (isNaN(lw) ? 160 : lw);
   tl.groups = [];
   let rows = '';
@@ -6914,7 +6920,7 @@ function drawVTimeline() {
   const geom = vtlGeom(), LW = geom.LW;
   const TW = Math.max(60, Math.min(420, box.clientWidth - (58 + lanes.length * (LW + 4) + 8) - 12)), TH = Math.round(TW * 9 / 16);
   box.style.setProperty('--vt-w', TW + 'px'); box.style.setProperty('--vt-h', TH + 'px');
-  const HEAD = 84, H = Math.max(200, box.clientHeight - HEAD - 28);
+  const HEAD = merged ? 0 : 84, H = Math.max(200, box.clientHeight - HEAD - 28);
   const gap = 15000 / span * 100;
   // Time scale: bands, gridlines, minor ticks and labels.
   const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map(x => x * 1000);
@@ -6931,7 +6937,7 @@ function drawVTimeline() {
     const major = Math.abs(t % step) < 1 || (step >= 86400000 && midnight);
     if (!major) { axis += `<i class="vmn" style="top:${y}%"></i>`; continue; }
     const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-    axis += `<i class="vmj ${midnight ? 'day' : ''}" style="top:${y}%"></i><span class="${d.getMinutes() === 0 ? 'hr' : ''} ${midnight ? 'day' : ''}" style="top:${y}%">${step >= 86400000 ? fmtDay(d) : hm}${midnight && step < 86400000 ? `<small>${fmtDay(d)}</small>` : ''}</span>`;
+    axis += `<i class="vmj ${midnight ? 'day' : ''} ${d.getMinutes() === 0 ? 'hr' : ''}" style="top:${y}%"></i><span class="${d.getMinutes() === 0 ? 'hr' : ''} ${midnight ? 'day' : ''}" style="top:${y}%">${step >= 86400000 ? fmtDay(d) : hm}${midnight && step < 86400000 ? `<small>${fmtDay(d)}</small>` : ''}</span>`;
     grid += `<i class="vgl ${midnight ? 'day' : ''}" style="top:${y}%"></i>`;
   }
   tl.vgroups = [];
@@ -6982,7 +6988,7 @@ function drawVTimeline() {
   // The alert pictures already on screen are kept and moved (a new picture element for every frame of a
   // slide flashed and had to be decoded again), instead of being rebuilt with the rest.
   const keep = new Map([...box.querySelectorAll('.vevt[data-k]')].map(x => [x.dataset.k, x]));
-  box.innerHTML = `<div class="vheads" style="height:${HEAD}px">${heads}</div>
+  box.innerHTML = `<div class="vheads" style="height:${HEAD}px" ${merged ? 'hidden' : ''}>${heads}</div>
     <div class="vbar" id="vbar" style="top:${HEAD}px"><div class="vgrid" style="left:58px;width:${lanesW}px">${grid}</div><div class="vax">${axis}</div>${laneHtml}${sel}
       <div class="vevs" style="left:${58 + lanesW + 8}px">${thumbHtml}</div>
       ${nowP >= 0 && nowP <= 100 ? `<div class="vnow" style="top:${nowP}%;width:${lanesW + 12}px" title="Now"><em>NOW</em></div>` : ''}

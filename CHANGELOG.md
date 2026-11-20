@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings timeline:** zoom is now + / − buttons where the list was (horizontal and vertical); the "All cameras" label and red dot are gone from the merged line, which takes the room; the "drag across the timeline" hint is removed; hours on the time scale are bold and slightly bigger, with a bolder tick.
+
 ## 1.7.19 — November 2026
 - **Long-term time-lapse:** add several cameras at once, each at several times of day (tick cameras, add times or use the 06:00 / 09:00 / 12:00 / 15:00 / 18:00 buttons). Pairs that already exist are skipped.
 

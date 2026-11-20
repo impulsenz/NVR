@@ -239,8 +239,8 @@
         <select id="tl-quality" title="Which stream to watch: the timeline shows only the footage recorded in it. Main stream (HD) is full quality; alerts you click always play in HD."><option value="sub">Sub-stream</option><option value="main">Main stream</option></select>
         <span class="timecode" id="tl-time"></span>
         <span class="spacer"></span>
-        <span class="muted">Zoom</span>
-        <select id="tl-zoom"><option value="86400">24 h</option><option value="21600">6 h</option><option value="3600" selected>1 h</option><option value="900">15 min</option><option value="300">5 min</option></select>
+        <span class="tl-zoom-btns"><button type="button" id="tl-zout" title="Zoom out: see more time">−</button><button type="button" id="tl-zin" title="Zoom in: see less time, in more detail">+</button></span>
+        <select id="tl-zoom" hidden><option value="86400">24 h</option><option value="21600">6 h</option><option value="3600" selected>1 h</option><option value="900">15 min</option><option value="300">5 min</option></select>
         <button id="tl-left">◀</button><button id="tl-right">▶</button>
         <button id="tl-vmerge" title="Show all the cameras as one line (the default), or each as its own line">▮ Merge cameras</button>
         <label class="muted tl-layout-l" title="How the camera pictures are arranged: Auto picks the layout that makes them as big as the screen allows">Layout <select id="tl-layout"><option value="auto">Auto (best fit)</option><option value="1">1 across</option><option value="2">2 across</option><option value="3">3 across</option><option value="4">4 across</option><option value="5">5 across</option><option value="6">6 across</option></select></label>
@@ -251,7 +251,6 @@
       </div>
       <div class="tl" id="tl"></div>
       <div class="legend" data-legend="tl"></div>
-      <div class="hint">Drag across the timeline to scrub: every camera shows a quick preview of that moment. Release to play from there.</div>
     </div>
   </section>
 
