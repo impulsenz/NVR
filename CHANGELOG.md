@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.20 — November 2026
 - **Recordings timeline:** zoom is now + / − buttons where the list was (horizontal and vertical); the "All cameras" label and red dot are gone from the merged line, which takes the room; the "drag across the timeline" hint is removed; hours on the time scale are bold and slightly bigger, with a bolder tick.
 
 ## 1.7.19 — November 2026
