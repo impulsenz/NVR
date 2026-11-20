@@ -5717,7 +5717,8 @@ function hlsFor(el, cam) {
   if (el._h) return el._h;
   // Small holes in what's loaded (some cameras' recordings have them) are
   // stepped over by the player itself, quickly, instead of waiting.
-  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: AHEAD_SECS, maxMaxBufferLength: AHEAD_SECS, maxBufferSize: 150e6, backBufferLength: 10, maxBufferHole: 2,
+  const ahead0 = tl.speed >= 16 ? 48 : tl.speed >= 8 ? 32 : AHEAD_SECS;
+  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: ahead0, maxMaxBufferLength: ahead0, maxBufferSize: 150e6, backBufferLength: 10, maxBufferHole: 2,
     highBufferWatchdogPeriod: 1, nudgeMaxRetry: 10, nudgeOffset: 0.2,
     startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 2, levelLoadingMaxRetry: 2, manifestLoadingTimeOut: 60000, levelLoadingTimeOut: 60000});
   hls.attachMedia(el._hlsV);
@@ -5865,7 +5866,8 @@ setInterval(() => {
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     const box = el.querySelector('.deep-load'); if (!box) continue;
     const c = tl.data.find(x => x.camera === el.dataset.cam), seg = c && tl.T != null && segAt(c, tl.T), v = activeVideo(el);
-    const loading = !v || el._pending != null || v.readyState < 3 || v.seeking;
+    // (Paused with a picture already on screen is loaded: a paused player often sits at "enough for this frame", not "enough to keep playing".)
+    const loading = !v || el._pending != null || v.seeking || v.readyState < (v.paused ? 2 : 3);
     // Not while the timeline is being dragged: it goes away as you move and comes back when you stop on a moment.
     // Footage moved to deep storage: a plain loading spinner; "from deep storage" only when that is a NAS.
     box.hidden = !(seg && seg.archived && loading && !tl.dragging);
@@ -6204,7 +6206,18 @@ function tlPlay(on) {
 }
 function tlStop() { tlLeaveLive(); if (tl.playing) tlPlay(false); document.querySelectorAll('#tl-videos video').forEach(v => v.pause()); }
 $('tl-play').onclick = () => tlPlay(!tl.playing);
-$('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlSync(false); tlApplySound(); };
+// How far ahead footage is fetched follows the playing speed: the normal 20 s is
+// only 1-2 s of real time at 8-16×, so fast playback starved. Only the fast speeds
+// get more (32 s / 48 s), and it goes back to 20 s at normal speed, so nothing
+// else is held in memory for long.
+function tlTuneBuffer() {
+  const ahead = tl.speed >= 16 ? 48 : tl.speed >= 8 ? 32 : AHEAD_SECS;
+  for (const el of document.querySelectorAll('#tl-videos .surface')) {
+    const c = el._h && el._h.hls && el._h.hls.config;
+    if (c) { c.maxBufferLength = ahead; c.maxMaxBufferLength = ahead; }
+  }
+}
+$('tl-speed').onchange = (e) => { tl.speed = +e.target.value; tlTuneBuffer(); tlSync(false); tlApplySound(); };
 $('tl-quality').value = tl.quality;
 // Scrubbing shows the time-lapse pictures (the video itself when time-lapse
 // is switched off).
@@ -6213,7 +6226,7 @@ $('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-q
 const tlZoomStep = (d) => { const z = $('tl-zoom'), i = Math.min(z.options.length - 1, Math.max(0, z.selectedIndex + d)); if (i === z.selectedIndex) return; z.selectedIndex = i; z.dispatchEvent(new Event('change')); paintTlZoomBtns(); };
 function paintTlZoomBtns() { const z = $('tl-zoom'); $('tl-zout').disabled = z.selectedIndex <= 0; $('tl-zin').disabled = z.selectedIndex >= z.options.length - 1; }
 $('tl-zin').onclick = () => tlZoomStep(1); $('tl-zout').onclick = () => tlZoomStep(-1);
-$('tl-zoom').onchange = (e) => { paintTlZoomBtns(); tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
+$('tl-zoom').onchange = (e) => { paintTlZoomBtns(); tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); tlExtendBack(); };
 $('tl-left').onclick = () => { tl.winStart = Math.max(tlMinStart(), tl.winStart - tl.zoom * 500); drawTimeline(); prefetchSprites(); tlExtendBack(); };
 $('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 // One frame back or forward on every camera (pauses playback).
@@ -6485,6 +6498,16 @@ function paintLoaded() {
     // keep up shows the time-lapse at that moment meanwhile (blue).
     const sp = el.querySelector('.sprite');
     if (tl.dragging) continue;
+    // Fast playback outrunning the download (less than about a second and a half of real time buffered): the time-lapse
+    // stands in at once, instead of waiting for the video to stop and complain.
+    if (tl.playing && tl.speed >= 4 && has) {
+      const vv = activeVideo(el);
+      if (vv && !vv.paused && vv.buffered && vv.buffered.length) {
+        let ahead = 0; for (let k = 0; k < vv.buffered.length; k++) if (vv.buffered.start(k) <= vv.currentTime + 0.3 && vv.buffered.end(k) > vv.currentTime) ahead = vv.buffered.end(k) - vv.currentTime;
+        if (ahead < tl.speed * 1.5) el._starve = Date.now(); else if (el._starve && Date.now() - el._starve > 1200) el._starve = 0;
+        if (el._starve && Date.now() - el._starve < 1200) el.classList.add('stalled'); else if (el.classList.contains('stalled') && vv.readyState >= 3 && ahead >= tl.speed * 1.5) el.classList.remove('stalled');
+      }
+    }
     if (el.classList.contains('stalled') && has && tl.playing) {
       previewOne(el, tl.T);
       continue;
@@ -7298,7 +7321,8 @@ async function prefetchSprites() {
   await Promise.all(tl.data.map(c => scrubLoad(c.camera, a, b)));
   if (gen !== tl.pfGen) return;
   paintPreviewStrips();
-  for (const c of tl.data) scrubWarm(c.camera, a, b, tl.T ?? (a + b) / 2);
+  // (Zoomed out past a day: pictures are fetched as they are hovered, not all warmed.)
+  if (tl.zoom <= 86400) for (const c of tl.data) scrubWarm(c.camera, a, b, tl.T ?? (a + b) / 2);
 }
 // What the server has made so far is asked for again every 15 s while a timeline is shown (the newest hour keeps growing).
 setInterval(() => {

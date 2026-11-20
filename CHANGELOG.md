@@ -1,6 +1,10 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.23 — November 2026
+- **Timeline zoom out:** 48 hours and 7 days are added to the zoom steps (older footage is loaded as you zoom out).
+- **Evidence Locker export:** videos the browser can't play (H.265) now get a browser copy whichever way the export is started, and a conversion that fails says why in the System log (it used to be silent, leaving the review page with black videos).
+- **Fast playback on the timeline:** the buffer ahead follows the playing speed (20 s normally, 32 s at 8×, 48 s at 16×, back to 20 s at normal speed), so it no longer starves when fast-forwarding; a camera whose video is about to run out at 4× or faster shows its time-lapse picture at once instead of waiting, and goes back to video when it has caught up.
+- **Paused footage no longer shows "loading":** a paused player sitting on a finished picture counted as still loading.
 - **Recordings:** the loading spinner on footage from deep storage has no text any more.
 - **Evidence Locker export:** the ZIP is built before the browser gets the file (videos the browser can't play are converted first), which took minutes with nothing on screen, so "Export" looked dead. The dialog now stays open saying it is preparing, closes when the download starts, and shows an error if it fails.
 

@@ -3791,9 +3791,19 @@ async fn cases_zip(
                         "+faststart",
                     ])
                     .arg(&dst)
-                    .status()
-                    .await
-                    .is_ok_and(|s| s.success());
+                    .output()
+                    .await;
+                let ok = match &ok {
+                    Ok(o) if o.status.success() => true,
+                    Ok(o) => {
+                        tracing::warn!("Evidence Locker export: converting {file}: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("ffmpeg failed"));
+                        false
+                    }
+                    Err(e) => {
+                        tracing::warn!("Evidence Locker export: converting {file}: {e}");
+                        false
+                    }
+                };
                 if ok {
                     prep.web.insert((cid, file), dst.clone());
                     made.push(dst);
@@ -3836,7 +3846,7 @@ async fn cases_zip(
 async fn cases_export(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, req: Request) -> Response {
     let Some(c) = crate::cases::get(&id) else { return err(StatusCode::NOT_FOUND, "no such case") };
     let name = c.name.clone();
-    cases_zip(&m, &user, vec![c], name, req, None, false).await
+    cases_zip(&m, &user, vec![c], name, req, None, true).await
 }
 
 async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUser>>, req: Request) -> Response {
@@ -3844,7 +3854,7 @@ async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUse
     if all.is_empty() {
         return err(StatusCode::NOT_FOUND, "no cases to export");
     }
-    cases_zip(&m, &user, all, "Evidence Locker".into(), req, None, false).await
+    cases_zip(&m, &user, all, "Evidence Locker".into(), req, None, true).await
 }
 
 /// The export form's fields: the password the ZIP is locked with (the page posts a form, so the browser streams
