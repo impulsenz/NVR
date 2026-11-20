@@ -1,6 +1,7 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Heat map: one camera open fits the page.** Its picture is as big as the space below the controls allows (no scrolling down; the details beside it scroll on their own), the controls take less height there, and a "← All cameras" button at the top goes back to every camera.
 - **Heat map: an "Edit camera" button** next to "Ignore areas…" on every camera.
 - **Heat map: only people, vehicles, cats and dogs.** "What the AI saw" lists only those four, "Everything the AI sees" counts only them, and the Animals / Other objects buttons and the specific-object menu are gone (Cats and Dogs buttons instead). Other things the AI recognises are still logged, and still explain movement for "Unexplained motion".
 - **Recordings: the timeline shows all cameras as one line by default, along the bottom and down the side.** The nine lines under the pictures were replaced by one (with the footage of every camera and its alert pictures, bigger), so the camera pictures get the room and are as big as the screen allows. Down the side, the one line and its alert pictures are much bigger (about 146 px wide instead of 62). "▥ By camera" brings back a line for each camera, in either position (the choice is remembered; people who had chosen a layout before get the new default once).

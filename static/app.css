@@ -1866,6 +1866,9 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 /* Heat map page: a soft colour ramp over each camera's picture */
 #heat-root { --heat-min: 340px; --heat-op: .85; }
 .heat-ctl { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+/* One camera open: the controls take less height, so its picture can be bigger */
+.heat-ctl.compact { flex-direction: row; flex-wrap: wrap; gap: 8px 28px; padding: 8px 14px; }
+.heat-ctl.compact .heat-lab { width: auto; }
 .heat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .heat-lab { width: 150px; flex: none; color: var(--muted); font-size: 12.5px; }
 .heat-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
@@ -1894,9 +1897,9 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .heat-hours i { flex: 1; min-height: 1px; background: var(--heat-2); border-radius: 2px 2px 0 0; opacity: .8; }
 .heat-hours i.peak { background: var(--heat-5); opacity: 1; }
 .hh-ax { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
-.heat-detail { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
-.heat-detail .heat-card { max-width: calc((100vh - 120px) * 16 / 9); }
-.heat-side { display: flex; flex-direction: column; gap: 10px; }
+.heat-detail { display: grid; grid-template-columns: max-content 300px; justify-content: start; gap: 14px; align-items: start; }
+.heat-detail .heat-card { max-width: 100%; }
+.heat-side { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
 .heat-side h3 { margin: 0 0 8px; font-size: 13.5px; }
 .heat-bar { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 8px; margin-bottom: 4px; text-align: left; overflow: hidden; background: var(--panel2); }
 .heat-bar i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--heat-3); }

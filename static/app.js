@@ -10305,6 +10305,18 @@ function drawHeat(cv, h, kind) {
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(small, 0, 0, cv.width, cv.height);   // bilinear scaling; the page's CSS blurs it a little more
 }
+// One camera open: its picture is as big as fits below the controls, so the page doesn't scroll
+// (the details beside it scroll on their own if they are taller).
+function fitHeatDetail() {
+  const card = document.querySelector('#heat-root .heat-detail .heat-card'); if (!card) return;
+  const side = document.querySelector('#heat-root .heat-side'), stage = card.querySelector('.heat-stage'), head = card.querySelector('.heat-head');
+  card.style.width = ''; if (side) side.style.maxHeight = '';
+  const top = stage.getBoundingClientRect().top + window.scrollY, reserve = 96;   // the key under it and the bar at the bottom
+  const room = Math.max(160, window.innerHeight - top - reserve), wide = card.parentElement.clientWidth - (side ? side.offsetWidth + 14 : 0);
+  card.style.width = Math.max(240, Math.min(wide, room * 16 / 9)) + 'px';
+  if (side) side.style.maxHeight = (room + head.offsetHeight) + 'px';
+}
+window.addEventListener('resize', () => { if (page === 'heat') fitHeatDetail(); });
 const heatHour = (h) => String(h).padStart(2, '0') + ':00';
 // 24 bars, one per hour of the day, for the kind shown (the busiest one marked).
 function heatHours(hourly, big) {
@@ -10337,7 +10349,7 @@ function renderHeat() {
     return chips.join('');
   };
   const stage = (c) => `<div class="heat-stage"><img alt="" src="live/${enc(c.camera)}/frame.jpg?t=${Date.now()}" onerror="this.style.visibility='hidden'"><canvas class="heat-cv" data-i="${esc(c.camera)}"></canvas>${heat.mask && c.has_ignore ? `<canvas class="heat-mask" width="${MASK_W}" height="${MASK_H}" data-m="${esc(c.camera)}"></canvas>` : ''}${c.heat.detections ? '' : `<div class="heat-empty">${c.heat.ignored_share > 0 && !heat.incl ? 'Everything logged here was inside an ignored area.<br>Tick “Include areas ignored in the Motion settings” to see it.' : 'Nothing logged for this yet.'}</div>`}</div>`;
-  const actions = (c) => `${isAdmin() ? `<button type="button" class="small" data-ign="${esc(c.camera)}" title="Open this camera’s Motion settings to paint areas to ignore">Ignore areas…</button><button type="button" class="small" data-edit="${esc(c.camera)}" title="Open this camera’s settings">Edit camera</button>` : ''}${heat.cam ? '<a class="btn small" href="#heat">All cameras</a>' : `<a class="btn small" href="#heat/${enc(c.camera)}">Open</a>`}`;
+  const actions = (c) => `${isAdmin() ? `<button type="button" class="small" data-ign="${esc(c.camera)}" title="Open this camera’s Motion settings to paint areas to ignore">Ignore areas…</button><button type="button" class="small" data-edit="${esc(c.camera)}" title="Open this camera’s settings">Edit camera</button>` : ''}${heat.cam ? '' : `<a class="btn small" href="#heat/${enc(c.camera)}">Open</a>`}`;
   const card = (c) => `<article class="heat-card ${c.heat.detections ? '' : 'quiet'}" data-cam="${esc(c.camera)}">
       <div class="heat-head"><b>${esc(c.name)}</b><span class="spacer"></span>${actions(c)}</div>
       ${stage(c)}
@@ -10354,9 +10366,9 @@ function renderHeat() {
   };
   root.style.setProperty('--heat-min', size[2] + 'px');
   root.style.setProperty('--heat-op', (heat.op / 100).toFixed(2));
-  root.innerHTML = `<div class="plan-bar"><h2 style="margin:0">Heat map</h2><span class="muted small">Where things happen on each camera</span><span class="spacer"></span>
+  root.innerHTML = `<div class="plan-bar">${heat.cam ? '<a class="btn" href="#heat" title="Back to every camera">← All cameras</a>' : ''}<h2 style="margin:0">Heat map</h2><span class="muted small">Where things happen on each camera</span><span class="spacer"></span>
       <div class="seg" id="ht-days">${[[1, '24 hours'], [7, '7 days'], [30, '30 days']].map(([v, t]) => `<button type="button" class="small ${heat.days === v ? 'on' : ''}" data-d="${v}">${t}</button>`).join('')}</div></div>
-    <div class="card heat-ctl">
+    <div class="card heat-ctl ${heat.cam ? 'compact' : ''}">
       <div class="heat-row"><span class="heat-lab">Movement</span><div class="seg">${HEAT_KINDS.slice(0, 2).map(kindBtn).join('')}</div></div>
       <div class="heat-row"><span class="heat-lab">What the AI saw</span><div class="seg">${HEAT_KINDS.slice(2).map(kindBtn).join('')}</div></div>
       ${camChips}
@@ -10367,7 +10379,7 @@ function renderHeat() {
         <label class="heat-slide small">Strength <input type="range" id="ht-op" min="30" max="100" value="${heat.op}"></label>
         ${heat.cam ? '' : `<div class="seg" id="ht-size" title="Size of the pictures">${HEAT_SIZES.map(([k, t]) => `<button type="button" class="small ${heat.size === k ? 'on' : ''}" data-s="${k}">${t}</button>`).join('')}</div>`}</div></div>
     </div>
-    ${kindInfo ? `<p class="muted small" style="margin:8px 0 0">${esc(kindInfo)}</p>` : ''}
+    ${kindInfo && !heat.cam ? `<p class="muted small" style="margin:8px 0 0">${esc(kindInfo)}</p>` : ''}
     <p class="muted small" style="margin:6px 0 12px">${summary}${note}</p>
     ${!all.length ? '<div class="card muted">No cameras to show.</div>' : !shown.length ? '<div class="card muted">All cameras are switched off above: choose at least one.</div>'
       : heat.cam ? detail(shown[0]) : `<div class="heat-grid">${shown.map(card).join('')}</div>`}
@@ -10377,6 +10389,7 @@ function renderHeat() {
     const mk = root.querySelector(`.heat-mask[data-m="${CSS.escape(c.camera)}"]`);
     if (mk) { const cells = decodeMask(c.mask), x = mk.getContext('2d'), [r, g, b] = heatPalette()[4]; x.fillStyle = `rgba(${r}, ${g}, ${b}, 0.30)`; cells.forEach((on, i) => { if (on) x.fillRect(i % MASK_W, Math.floor(i / MASK_W), 1, 1); }); }
   }
+  fitHeatDetail();
   const reload = () => { stopHeat(); loadHeat(); };
   root.querySelectorAll('.heat-ctl [data-k]').forEach(b => b.onclick = () => { heat.kind = b.dataset.k; store.set('heat-kind', heat.kind); reload(); });
   root.querySelectorAll('#ht-days [data-d]').forEach(b => b.onclick = () => { heat.days = +b.dataset.d; store.set('heat-days', heat.days); reload(); });
