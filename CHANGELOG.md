@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.24 — November 2026
 - **Recordings feeds:** the coloured edge (recorded / HD / time-lapse) is there as soon as the page opens, taken from the footage at the playhead, instead of only after the first picture; it is half as thick; each feed has a soft drop shadow (lighter for the day theme, deeper for night).
 
 ## 1.7.23 — November 2026
