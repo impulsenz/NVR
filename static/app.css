@@ -1772,8 +1772,8 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .pl-det[open] > summary { margin-bottom: 10px; }
 .pl-cone { stroke: none; }
 .pl-gs { stop-color: var(--accent); }
-.pl-edge { stroke-width: calc(2 * var(--u, 1)); stroke-linecap: round; }
-.pl-edge.sel { stroke-width: calc(3 * var(--u, 1)); }
+.pl-edge { stroke-width: calc(1 * var(--u, 1)); stroke-linecap: round; }
+.pl-edge.sel { stroke-width: calc(1.5 * var(--u, 1)); }
 .pl-wall { stroke: var(--text); stroke-width: calc(4 * var(--u, 1)); stroke-linecap: round; }
 .pl-wall.prev { stroke: var(--amber); stroke-dasharray: 6 5; opacity: .9; }
 .pl-wend { fill: var(--panel); stroke: var(--text); stroke-width: calc(1.5 * var(--u, 1)); }
@@ -1936,8 +1936,10 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .dr-install code { background: var(--panel3); padding: 1px 6px; border-radius: 4px; }
 
 /* Controls on a live tile: pan / tilt / zoom, siren, say something */
-.tile-ctl { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 6; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: calc(100% - 16px); opacity: 0; pointer-events: none; transition: opacity .15s; }
-.tile:hover .tile-ctl, .tile-ctl:focus-within { opacity: 1; pointer-events: auto; }
+.tile-ctl { position: absolute; left: 50%; bottom: clamp(8px, 16%, 70px); transform: translateX(-50%); z-index: 6; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: calc(100% - 16px); opacity: 0; pointer-events: none; transition: opacity .15s; }
+.tile:hover .tile-ctl, .tile-ctl:focus-within, .tile-ctl.drag { opacity: 1; pointer-events: auto; }
+.tile-ctl .tc-grip { align-self: center; cursor: grab; color: rgba(255,255,255,.75); background: rgba(10, 12, 16, .78); border-radius: 8px; padding: 6px 7px; font-size: 14px; line-height: 1; touch-action: none; user-select: none; }
+.tile-ctl.drag .tc-grip { cursor: grabbing; }
 @media (hover: none) { .tile-ctl { opacity: 1; pointer-events: auto; } }
 .tile-ctl > div { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 10px; background: rgba(10, 12, 16, .78); backdrop-filter: blur(4px); }
 .tile-ctl button, .tile-ctl select, .tile-ctl input { font-size: 12px; padding: 3px 7px; min-height: 0; background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.22); border-radius: 6px; }

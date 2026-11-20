@@ -888,7 +888,7 @@ function wireTileControls(el, c) {
   const phrases = (status && status.say_phrases) || [];
   const box = document.createElement('div');
   box.className = 'tile-ctl';
-  box.innerHTML = `${canPtz ? `<div class="tc-ptz"><button type="button" data-ptz="-1,0,0" title="Pan left">◀</button><span class="tc-ud"><button type="button" data-ptz="0,1,0" title="Tilt up">▲</button><button type="button" data-ptz="0,-1,0" title="Tilt down">▼</button></span><button type="button" data-ptz="1,0,0" title="Pan right">▶</button>
+  box.innerHTML = `<div class="tc-grip" title="Drag to move these controls (double-click to put them back)">⠿</div>${canPtz ? `<div class="tc-ptz"><button type="button" data-ptz="-1,0,0" title="Pan left">◀</button><span class="tc-ud"><button type="button" data-ptz="0,1,0" title="Tilt up">▲</button><button type="button" data-ptz="0,-1,0" title="Tilt down">▼</button></span><button type="button" data-ptz="1,0,0" title="Pan right">▶</button>
         <button type="button" data-ptz="0,0,1" title="Zoom in">＋</button><button type="button" data-ptz="0,0,-1" title="Zoom out">－</button>
         <select class="tc-presets" title="Go to a saved position"><option value="">Presets…</option></select></div>` : ''}
     ${canSay ? `<div class="tc-say"><button type="button" class="tc-siren siren-btn" title="Sound a loud siren with spoken warnings through the camera's speaker">🚨 Siren</button>
@@ -896,6 +896,30 @@ function wireTileControls(el, c) {
         <button type="button" class="tc-send primary" title="Say it through the camera's speaker">🔊</button>
         ${phrases.length ? `<select class="tc-phr" title="Ready phrases"><option value="">Phrases…</option>${phrases.map(t => `<option>${esc(t)}</option>`).join('')}</select>` : ''}</div>` : ''}`;
   el.appendChild(box);
+  // Dragged by the grip to wherever suits (the resource bar slides up from the bottom edge, so they start
+  // above it); the place is kept for each camera, on this device, as a fraction of the tile.
+  const place = () => {
+    const pos = (store.get('tile-ctl-pos', {}) || {})[c.id];
+    if (!pos) { box.style.left = box.style.top = box.style.bottom = box.style.transform = ''; return; }
+    const W = el.clientWidth, H = el.clientHeight, bw = box.offsetWidth, bh = box.offsetHeight;
+    const cx = Math.min(Math.max(pos[0] * W, bw / 2 + 4), Math.max(bw / 2 + 4, W - bw / 2 - 4)), cy = Math.min(Math.max(pos[1] * H, bh / 2 + 4), Math.max(bh / 2 + 4, H - bh / 2 - 4));
+    Object.assign(box.style, {left: cx + 'px', top: cy + 'px', bottom: 'auto', transform: 'translate(-50%, -50%)'});
+  };
+  const grip = box.querySelector('.tc-grip');
+  grip.onpointerdown = (e) => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId); box.classList.add('drag');
+    const move = (m) => {
+      const r = el.getBoundingClientRect();
+      const all = store.get('tile-ctl-pos', {}) || {};
+      all[c.id] = [Math.min(1, Math.max(0, (m.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (m.clientY - r.top) / r.height))];
+      store.set('tile-ctl-pos', all); place();
+    };
+    const up = () => { grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up); box.classList.remove('drag'); };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+  };
+  grip.ondblclick = () => { const all = store.get('tile-ctl-pos', {}) || {}; delete all[c.id]; store.set('tile-ctl-pos', all); place(); };
+  if (window.ResizeObserver) new ResizeObserver(place).observe(el);
+  place();
   // The tile itself must not take these clicks (it opens the camera, or goes full screen).
   for (const ev of ['click', 'dblclick', 'pointerdown', 'wheel']) box.addEventListener(ev, (e) => e.stopPropagation());
   const err = (e) => toast(e.message, true);
