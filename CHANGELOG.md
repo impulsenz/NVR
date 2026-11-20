@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.5 — November 2026
 - **Scrubbing the timeline: fewer stalls.** Only the first two time-lapse pages of each file are loaded ahead of time (1.7.3), so dragging into a later page froze the picture on every camera until its ~3 MB arrived (often, with a short picture interval such as 5 s). While you drag, the pages next to the one shown are now fetched at once, both ways and two ahead in the direction you're moving.
 - **AI keeps working when Windows resets the graphics card.** After a driver timeout ("The GPU device instance has been suspended", 887A0005) the AI model on the GPU is dead and every picture failed until GAZE was restarted. GAZE now notices, loads the AI models again on the processor, and tries the GPU again after 30 minutes. Settings → Tasks shows why the models are on the CPU. Recording was never affected.
 - **Releases are Windows only.** The Linux program is no longer built or attached, and the Linux check workflow (`linux.yml`) is gone. The Linux source and `docs/LINUX.md` are still in the repository.
