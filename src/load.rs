@@ -13,10 +13,7 @@ static GPU: AtomicU32 = AtomicU32::new(0);
 
 pub fn update(cpu: f32, gpu: Option<f32>) {
     CPU.store(cpu.round() as u32, Ordering::Relaxed);
-    GPU.store(
-        gpu.map(|g| g.round() as u32 + 1).unwrap_or(0),
-        Ordering::Relaxed,
-    );
+    GPU.store(gpu.map(|g| g.round() as u32 + 1).unwrap_or(0), Ordering::Relaxed);
 }
 
 pub fn cpu() -> u32 {
@@ -53,11 +50,7 @@ pub fn gpu_too_busy(what: &str) -> bool {
     let busy = balance() && gpu().is_some_and(|g| g >= 85) && cpu() < 75;
     if busy {
         MOVED.fetch_add(1, Ordering::Relaxed);
-        tracing::info!(
-            "load balancing: GPU at {}%, {what} runs on the CPU (CPU {}%)",
-            gpu().unwrap_or(0),
-            cpu()
-        );
+        tracing::info!("load balancing: GPU at {}%, {what} runs on the CPU (CPU {}%)", gpu().unwrap_or(0), cpu());
     }
     busy
 }
@@ -80,10 +73,7 @@ impl BackToGpu {
             return false;
         }
         self.since = None;
-        tracing::info!(
-            "load balancing: GPU quiet ({}%), {what} moves back to the GPU",
-            gpu().unwrap_or(0)
-        );
+        tracing::info!("load balancing: GPU quiet ({}%), {what} moves back to the GPU", gpu().unwrap_or(0));
         true
     }
 }

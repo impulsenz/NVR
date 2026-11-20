@@ -125,12 +125,7 @@ impl Monitor {
     pub fn new(data_dir: &std::path::Path) -> Self {
         let file = data_dir.join("system-history.csv");
         let minutes = load_history(&file);
-        Self {
-            fine: Mutex::new(VecDeque::new()),
-            minutes: Mutex::new(minutes),
-            current: Mutex::new(Current::default()),
-            file,
-        }
+        Self { fine: Mutex::new(VecDeque::new()), minutes: Mutex::new(minutes), current: Mutex::new(Current::default()), file }
     }
 
     pub fn current(&self) -> Current {
@@ -167,13 +162,7 @@ impl Monitor {
             Vec::new()
         };
         let until = fine.first().map(|p| p.t).unwrap_or(i64::MAX);
-        let mut raw: Vec<Point> = self
-            .minutes
-            .locked()
-            .iter()
-            .filter(|p| p.t >= from && p.t < until)
-            .copied()
-            .collect();
+        let mut raw: Vec<Point> = self.minutes.locked().iter().filter(|p| p.t >= from && p.t < until).copied().collect();
         raw.extend(fine);
         bucketize(&raw, from, now, points, 60)
     }
@@ -267,18 +256,12 @@ impl Monitor {
             crate::load::update(s.cpu, s.gpu);
             *self.current.locked() = Current {
                 sample: s,
-                cpu_name: sys
-                    .cpus()
-                    .first()
-                    .map(|c| c.brand().trim().to_string())
-                    .unwrap_or_default(),
+                cpu_name: sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default(),
                 cores,
                 ram_used: sys.used_memory(),
                 ram_total: total,
                 nvr_ram_used: nvr_mem,
-                gpu_name: card_name
-                    .clone()
-                    .or_else(|| last_gpu.as_ref().and_then(|g| g.name.clone())),
+                gpu_name: card_name.clone().or_else(|| last_gpu.as_ref().and_then(|g| g.name.clone())),
                 gpu_temp: last_gpu.as_ref().and_then(|g| g.temp),
                 gpu_source: (source != GpuSource::None).then(|| format!("{source:?}")),
                 moved_to_cpu: crate::load::moved_to_cpu(),
@@ -328,11 +311,7 @@ impl Monitor {
             p.net_in,
             p.net_out
         );
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.file)
-        {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.file) {
             let _ = f.write_all(line.as_bytes());
         }
         // Keep the file from growing forever: rewrite it once a day.
@@ -458,20 +437,7 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
             let t = from + (i as i64 + 1) * width;
             if c.is_empty() {
                 let zero = has_gpu.then_some(0.0);
-                return Point {
-                    t,
-                    cpu: 0.0,
-                    cpu_max: 0.0,
-                    nvr_cpu: 0.0,
-                    ram: 0.0,
-                    nvr_ram: 0.0,
-                    gpu: zero,
-                    gpu_max: zero,
-                    gpu_mem: zero,
-                    net_in: 0.0,
-                    net_out: 0.0,
-                    gap: true,
-                };
+                return Point { t, cpu: 0.0, cpu_max: 0.0, nvr_cpu: 0.0, ram: 0.0, nvr_ram: 0.0, gpu: zero, gpu_max: zero, gpu_mem: zero, net_in: 0.0, net_out: 0.0, gap: true };
             }
             let k = c.len() as f32;
             let gpus: Vec<f32> = c.iter().filter_map(|p| p.gpu).collect();
@@ -482,9 +448,7 @@ fn bucketize(raw: &[Point], from: i64, now: i64, points: usize, step: i64) -> Ve
                 nvr_cpu: c.iter().map(|p| p.nvr_cpu).sum::<f32>() / k,
                 ram: c.iter().map(|p| p.ram).sum::<f32>() / k,
                 nvr_ram: c.iter().map(|p| p.nvr_ram).sum::<f32>() / k,
-                gpu: (!gpus.is_empty())
-                    .then(|| gpus.iter().sum::<f32>() / gpus.len() as f32)
-                    .or(has_gpu.then_some(0.0)),
+                gpu: (!gpus.is_empty()).then(|| gpus.iter().sum::<f32>() / gpus.len() as f32).or(has_gpu.then_some(0.0)),
                 gpu_max: c.iter().filter_map(|p| p.gpu_max).reduce(f32::max),
                 gpu_mem: c.iter().filter_map(|p| p.gpu_mem).reduce(f32::max),
                 net_in: c.iter().map(|p| p.net_in).sum::<f32>() / k,
@@ -513,13 +477,7 @@ fn stream(cmd: &'static str, args: Vec<String>, restart_every: Option<Duration>)
     tokio::spawn(async move {
         use tokio::io::AsyncBufReadExt;
         loop {
-            let child = crate::load::cmd(cmd)
-                .args(&args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn();
+            let child = crate::load::cmd(cmd).args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn();
             let Ok(mut child) = child else {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 continue;
@@ -571,32 +529,15 @@ static STREAMS: std::sync::OnceLock<Mutex<std::collections::HashMap<&'static str
 
 fn named_stream(name: &'static str, cmd: &'static str, args: &[&str], restart_every: Option<Duration>) -> StreamRef {
     let mut m = STREAMS.get_or_init(Default::default).locked();
-    m.entry(name)
-        .or_insert_with(|| stream(cmd, args.iter().map(|a| a.to_string()).collect(), restart_every))
-        .clone()
+    m.entry(name).or_insert_with(|| stream(cmd, args.iter().map(|a| a.to_string()).collect(), restart_every)).clone()
 }
 
 async fn run_cmd(cmd: &str, args: &[&str], secs: u64) -> Option<String> {
-    let out = tokio::time::timeout(
-        Duration::from_secs(secs),
-        crate::load::cmd(cmd)
-            .args(args)
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let out = tokio::time::timeout(Duration::from_secs(secs), crate::load::cmd(cmd).args(args).stdin(Stdio::null()).kill_on_drop(true).output()).await.ok()?.ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-const NVSMI_ARGS: &[&str] = &[
-    "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
-    "--format=csv,noheader,nounits",
-];
+const NVSMI_ARGS: &[&str] = &["--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"];
 
 async fn detect_gpu() -> GpuSource {
     if run_cmd("nvidia-smi", NVSMI_ARGS, 10).await.is_some() {
@@ -619,12 +560,7 @@ async fn read_gpu(source: GpuSource) -> Option<GpuReading> {
             let st = named_stream("nvsmi", "nvidia-smi", &a, None);
             parse_nvidia_smi(&latest(&st)?)
         }
-        GpuSource::Sysfs => sysfs_busy().map(|util| GpuReading {
-            util,
-            mem: None,
-            name: Some("GPU".into()),
-            temp: None,
-        }),
+        GpuSource::Sysfs => sysfs_busy().map(|util| GpuReading { util, mem: None, name: Some("GPU".into()), temp: None }),
         GpuSource::WindowsCounters => {
             // (Restarted every minute: programs that started using the
             // graphics card since are counted from then.)
@@ -647,21 +583,13 @@ fn parse_nvidia_smi(text: &str) -> Option<GpuReading> {
         (Some(u), Some(t)) if t > 0.0 => Some(u * 100.0 / t),
         _ => None,
     };
-    Some(GpuReading {
-        util: num(1)?,
-        mem,
-        name: f.first().map(|s| s.to_string()),
-        temp: num(4),
-    })
+    Some(GpuReading { util: num(1)?, mem, name: f.first().map(|s| s.to_string()), temp: num(4) })
 }
 
 /// AMD (and some Intel) GPUs on Linux expose a busy percentage.
 fn sysfs_busy() -> Option<f32> {
     let rd = std::fs::read_dir("/sys/class/drm").ok()?;
-    rd.flatten()
-        .filter_map(|e| std::fs::read_to_string(e.path().join("device/gpu_busy_percent")).ok())
-        .filter_map(|s| s.trim().parse::<f32>().ok())
-        .reduce(f32::max)
+    rd.flatten().filter_map(|e| std::fs::read_to_string(e.path().join("device/gpu_busy_percent")).ok()).filter_map(|s| s.trim().parse::<f32>().ok()).reduce(f32::max)
 }
 
 /// Windows: total CPU as Task Manager shows it ("% Processor Utility"),
@@ -735,28 +663,14 @@ async fn cpu_utility() -> Option<f32> {
 /// The value of a one-counter `typeperf -sc 1` output.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_single_counter(text: &str) -> Option<f32> {
-    let data = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with('"'))
-        .nth(1)?;
-    data.rsplit("\",\"")
-        .next()?
-        .trim_matches('"')
-        .trim()
-        .parse()
-        .ok()
+    let data = text.lines().map(str::trim).filter(|l| l.starts_with('"')).nth(1)?;
+    data.rsplit("\",\"").next()?.trim_matches('"').trim().parse().ok()
 }
 
 /// The graphics card's name on Windows (any vendor).
 #[cfg(windows)]
 pub async fn windows_gpu_name() -> Option<String> {
-    let text = run_cmd(
-        "powershell",
-        &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join ' + '"],
-        20,
-    )
-    .await?;
+    let text = run_cmd("powershell", &["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join ' + '"], 20).await?;
     let n = text.trim().to_string();
     (!n.is_empty()).then_some(n)
 }
@@ -764,30 +678,16 @@ pub async fn windows_gpu_name() -> Option<String> {
 /// Windows "GPU Engine" performance counters (works for any GPU vendor):
 /// utilisation of the busiest engine type, as Task Manager shows it.
 async fn read_windows_counters() -> Option<GpuReading> {
-    let text = run_cmd(
-        "typeperf",
-        &["\\GPU Engine(*)\\Utilization Percentage", "-sc", "1"],
-        15,
-    )
-    .await?;
+    let text = run_cmd("typeperf", &["\\GPU Engine(*)\\Utilization Percentage", "-sc", "1"], 15).await?;
     let util = parse_typeperf(&text)?;
-    Some(GpuReading {
-        util,
-        mem: None,
-        name: Some("GPU".into()),
-        temp: None,
-    })
+    Some(GpuReading { util, mem: None, name: Some("GPU".into()), temp: None })
 }
 
 fn parse_typeperf(text: &str) -> Option<f32> {
     let mut lines = text.lines().map(str::trim).filter(|l| l.starts_with('"'));
     let header = lines.next()?;
     let data = lines.next()?;
-    let split = |l: &str| {
-        l.split("\",\"")
-            .map(|s| s.trim_matches('"').to_string())
-            .collect::<Vec<_>>()
-    };
+    let split = |l: &str| l.split("\",\"").map(|s| s.trim_matches('"').to_string()).collect::<Vec<_>>();
     let (h, d) = (split(header), split(data));
     // One counter per process and engine: add up the processes using each
     // engine ("luid_…_phys_…_eng_N_engtype_X"), then the busiest engine is
@@ -801,19 +701,11 @@ fn parse_typeperf(text: &str) -> Option<f32> {
         };
         let inst = inst.split(')').next().unwrap_or(inst);
         // Drop the process part ("pid_1234_").
-        let engine = inst
-            .split_once("_luid_")
-            .map(|(_, e)| e)
-            .unwrap_or(inst)
-            .to_string();
+        let engine = inst.split_once("_luid_").map(|(_, e)| e).unwrap_or(inst).to_string();
         let v: f32 = val.trim().parse().unwrap_or(0.0);
         *per_engine.entry(engine).or_default() += v;
     }
-    per_engine
-        .values()
-        .copied()
-        .reduce(f32::max)
-        .map(|v| v.min(100.0))
+    per_engine.values().copied().reduce(f32::max).map(|v| v.min(100.0))
 }
 
 /// Free and total bytes of the disk holding `path` (works for network shares too).

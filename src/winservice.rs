@@ -48,11 +48,7 @@ pub fn parse_args() -> (Mode, PathBuf, Option<PathBuf>) {
             _ => {}
         }
     }
-    (
-        mode,
-        config.unwrap_or_else(|| PathBuf::from("nvr.toml")),
-        dir,
-    )
+    (mode, config.unwrap_or_else(|| PathBuf::from("nvr.toml")), dir)
 }
 
 #[cfg(windows)]
@@ -75,15 +71,9 @@ mod win {
     use windows_sys::Win32::Foundation::{CloseHandle, NO_ERROR};
     use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, REG_MULTI_SZ, RegSetKeyValueW};
     use windows_sys::Win32::System::Services::*;
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, INFINITE, WaitForSingleObject,
-    };
-    use windows_sys::Win32::UI::Shell::{
-        SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW, SW_HIDE,
-    };
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+    use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW, SW_HIDE};
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()
@@ -92,17 +82,7 @@ mod win {
     fn msg(text: &str, error: bool) {
         let (t, c) = (w(text), w("GAZE"));
         unsafe {
-            MessageBoxW(
-                null_mut(),
-                t.as_ptr(),
-                c.as_ptr(),
-                MB_OK
-                    | if error {
-                        MB_ICONERROR
-                    } else {
-                        MB_ICONINFORMATION
-                    },
-            );
+            MessageBoxW(null_mut(), t.as_ptr(), c.as_ptr(), MB_OK | if error { MB_ICONERROR } else { MB_ICONINFORMATION });
         }
     }
 
@@ -134,9 +114,7 @@ mod win {
 
     /// Is GAZE set up as a Windows service?
     pub fn installed() -> bool {
-        manager(SC_MANAGER_CONNECT)
-            .and_then(|m| service(&m, SERVICE_QUERY_STATUS))
-            .is_some()
+        manager(SC_MANAGER_CONNECT).and_then(|m| service(&m, SERVICE_QUERY_STATUS)).is_some()
     }
 
     fn wait_state(s: &Handle, want: u32, max: Duration) -> bool {
@@ -184,23 +162,14 @@ mod win {
         let config = std::path::absolute(config).unwrap_or(config.to_path_buf());
         // The normal GAZE is stopping: wait until its web address is free.
         let t = Instant::now();
-        while std::net::TcpListener::bind(listen).is_err() && t.elapsed() < Duration::from_secs(90)
-        {
+        while std::net::TcpListener::bind(listen).is_err() && t.elapsed() < Duration::from_secs(90) {
             std::thread::sleep(Duration::from_millis(500));
         }
         let Some(scm) = manager(SC_MANAGER_ALL_ACCESS) else {
-            msg(
-                "GAZE could not set itself up as a Windows service: no permission.",
-                true,
-            );
+            msg("GAZE could not set itself up as a Windows service: no permission.", true);
             return 1;
         };
-        let cmd = w(&format!(
-            "\"{}\" --service \"{}\" --dir \"{}\"",
-            exe.display(),
-            config.display(),
-            dir.display()
-        ));
+        let cmd = w(&format!("\"{}\" --service \"{}\" --dir \"{}\"", exe.display(), config.display(), dir.display()));
         let (n, display) = (w(NAME), w("GAZE NVR"));
         let mut s = service(&scm, SERVICE_ALL_ACCESS);
         if s.is_none() {
@@ -222,45 +191,19 @@ mod win {
                 )
             };
             if h.is_null() {
-                msg(
-                    &format!(
-                        "GAZE could not create its Windows service ({}).",
-                        std::io::Error::last_os_error()
-                    ),
-                    true,
-                );
+                msg(&format!("GAZE could not create its Windows service ({}).", std::io::Error::last_os_error()), true);
                 return 1;
             }
             s = Some(Handle(h));
         }
         let s = s.unwrap();
         unsafe {
-            let mut d = w(
-                "GAZE network video recorder: records your cameras and serves the GAZE web page.",
-            );
-            let desc = SERVICE_DESCRIPTIONW {
-                lpDescription: d.as_mut_ptr(),
-            };
-            ChangeServiceConfig2W(
-                s.0,
-                SERVICE_CONFIG_DESCRIPTION,
-                &desc as *const _ as *const c_void,
-            );
+            let mut d = w("GAZE network video recorder: records your cameras and serves the GAZE web page.");
+            let desc = SERVICE_DESCRIPTIONW { lpDescription: d.as_mut_ptr() };
+            ChangeServiceConfig2W(s.0, SERVICE_CONFIG_DESCRIPTION, &desc as *const _ as *const c_void);
             // Restart after a crash: 5 s, 5 s, then 1 min; forget after a day.
-            let mut actions = [
-                SC_ACTION {
-                    Type: SC_ACTION_RESTART,
-                    Delay: 5000,
-                },
-                SC_ACTION {
-                    Type: SC_ACTION_RESTART,
-                    Delay: 5000,
-                },
-                SC_ACTION {
-                    Type: SC_ACTION_RESTART,
-                    Delay: 60000,
-                },
-            ];
+            let mut actions =
+                [SC_ACTION { Type: SC_ACTION_RESTART, Delay: 5000 }, SC_ACTION { Type: SC_ACTION_RESTART, Delay: 5000 }, SC_ACTION { Type: SC_ACTION_RESTART, Delay: 60000 }];
             let fail = SERVICE_FAILURE_ACTIONSW {
                 dwResetPeriod: 86400,
                 lpRebootMsg: null_mut(),
@@ -268,11 +211,7 @@ mod win {
                 cActions: actions.len() as u32,
                 lpsaActions: actions.as_mut_ptr(),
             };
-            ChangeServiceConfig2W(
-                s.0,
-                SERVICE_CONFIG_FAILURE_ACTIONS,
-                &fail as *const _ as *const c_void,
-            );
+            ChangeServiceConfig2W(s.0, SERVICE_CONFIG_FAILURE_ACTIONS, &fail as *const _ as *const c_void);
             // The service runs as the system account: give it this user's
             // PATH so ffmpeg (and nvidia-smi, rclone) are found.
             if let Ok(path) = std::env::var("PATH") {
@@ -280,23 +219,10 @@ mod win {
                 let name = w("Environment");
                 let mut data: Vec<u16> = format!("PATH={path}").encode_utf16().collect();
                 data.extend([0, 0]);
-                RegSetKeyValueW(
-                    HKEY_LOCAL_MACHINE,
-                    key.as_ptr(),
-                    name.as_ptr(),
-                    REG_MULTI_SZ,
-                    data.as_ptr() as *const c_void,
-                    (data.len() * 2) as u32,
-                );
+                RegSetKeyValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), name.as_ptr(), REG_MULTI_SZ, data.as_ptr() as *const c_void, (data.len() * 2) as u32);
             }
             if state(&s) != SERVICE_RUNNING && StartServiceW(s.0, 0, null()) == 0 {
-                msg(
-                    &format!(
-                        "The GAZE service was created but did not start ({}). See the log file in nvr-data.",
-                        std::io::Error::last_os_error()
-                    ),
-                    true,
-                );
+                msg(&format!("The GAZE service was created but did not start ({}). See the log file in nvr-data.", std::io::Error::last_os_error()), true);
                 return 1;
             }
         }
@@ -319,13 +245,7 @@ mod win {
         };
         stop(&s);
         if unsafe { DeleteService(s.0) } == 0 {
-            msg(
-                &format!(
-                    "GAZE could not remove its Windows service ({}).",
-                    std::io::Error::last_os_error()
-                ),
-                true,
-            );
+            msg(&format!("GAZE could not remove its Windows service ({}).", std::io::Error::last_os_error()), true);
             return 1;
         }
         0
@@ -341,13 +261,7 @@ mod win {
         };
         stop(&s);
         if unsafe { StartServiceW(s.0, 0, null()) } == 0 {
-            msg(
-                &format!(
-                    "The GAZE service did not start ({}).",
-                    std::io::Error::last_os_error()
-                ),
-                true,
-            );
+            msg(&format!("The GAZE service did not start ({}).", std::io::Error::last_os_error()), true);
             return 1;
         }
         0
@@ -367,11 +281,7 @@ mod win {
         let st = SERVICE_STATUS {
             dwServiceType: SERVICE_WIN32_OWN_PROCESS,
             dwCurrentState: state,
-            dwControlsAccepted: if state == SERVICE_RUNNING {
-                SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN
-            } else {
-                0
-            },
+            dwControlsAccepted: if state == SERVICE_RUNNING { SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN } else { 0 },
             dwWin32ExitCode: NO_ERROR,
             dwServiceSpecificExitCode: 0,
             dwCheckPoint: 0,
@@ -380,12 +290,7 @@ mod win {
         unsafe { SetServiceStatus(h, &st) };
     }
 
-    unsafe extern "system" fn handler(
-        control: u32,
-        _t: u32,
-        _d: *mut c_void,
-        _c: *mut c_void,
-    ) -> u32 {
+    unsafe extern "system" fn handler(control: u32, _t: u32, _d: *mut c_void, _c: *mut c_void) -> u32 {
         match control {
             SERVICE_CONTROL_STOP | SERVICE_CONTROL_SHUTDOWN => {
                 report(SERVICE_STOP_PENDING, 30_000);
@@ -412,22 +317,11 @@ mod win {
 
     /// Hand this process to the Windows service manager: `run` is GAZE
     /// (returns when it has stopped), `stop` asks it to stop.
-    pub fn run_service(
-        run: impl Fn() + Send + Sync + 'static,
-        stop: impl Fn() + Send + Sync + 'static,
-    ) -> bool {
+    pub fn run_service(run: impl Fn() + Send + Sync + 'static, stop: impl Fn() + Send + Sync + 'static) -> bool {
         let _ = RUN.set((Box::new(run), Box::new(stop)));
         let mut n = w(NAME);
-        let table = [
-            SERVICE_TABLE_ENTRYW {
-                lpServiceName: n.as_mut_ptr(),
-                lpServiceProc: Some(service_main),
-            },
-            SERVICE_TABLE_ENTRYW {
-                lpServiceName: null_mut(),
-                lpServiceProc: None,
-            },
-        ];
+        let table =
+            [SERVICE_TABLE_ENTRYW { lpServiceName: n.as_mut_ptr(), lpServiceProc: Some(service_main) }, SERVICE_TABLE_ENTRYW { lpServiceName: null_mut(), lpServiceProc: None }];
         unsafe { StartServiceCtrlDispatcherW(table.as_ptr()) != 0 }
     }
 }

@@ -14,8 +14,8 @@
 //! can't keep up (a slow phone connection) is dropped and reconnects, rather
 //! than holding video in memory or slowing the others down.
 
-use crate::sync::MutexExt;
 use crate::relay::Relay;
+use crate::sync::MutexExt;
 use bytes::{Bytes, BytesMut};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -389,7 +389,12 @@ mod tests {
         assert!(matches!(&got[0], Piece::Init(b) if b.len() == 12 + 11));
         assert!(matches!(&got[1], Piece::Fragment { keyframe: true, .. }));
         assert!(matches!(&got[2], Piece::Fragment { keyframe: false, .. }));
-        let total: usize = got.iter().map(|p| match p { Piece::Init(b) | Piece::Fragment { data: b, .. } => b.len() }).sum();
+        let total: usize = got
+            .iter()
+            .map(|p| match p {
+                Piece::Init(b) | Piece::Fragment { data: b, .. } => b.len(),
+            })
+            .sum();
         assert_eq!(total, stream.len());
     }
 

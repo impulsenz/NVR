@@ -54,13 +54,8 @@ mod win {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
     use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::System::Registry::{
-        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
-    };
-    use windows_sys::Win32::UI::Shell::{
-        NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
-        Shell_NotifyIconW, ShellExecuteW,
-    };
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW};
+    use windows_sys::Win32::UI::Shell::{NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW, ShellExecuteW};
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
     const WM_TRAY: u32 = WM_APP + 1;
@@ -111,10 +106,7 @@ mod win {
         if autostart_on() {
             set_autostart(true);
         }
-        std::thread::Builder::new()
-            .name("tray".into())
-            .spawn(|| unsafe { run() })
-            .ok();
+        std::thread::Builder::new().name("tray".into()).spawn(|| unsafe { run() }).ok();
     }
 
     /// Take the icon away (GAZE is stopping).
@@ -142,14 +134,7 @@ mod win {
     fn open(target: &str) {
         let (op, t) = (w("open"), w(target));
         unsafe {
-            ShellExecuteW(
-                null_mut(),
-                op.as_ptr(),
-                t.as_ptr(),
-                null(),
-                null(),
-                SW_SHOWNORMAL,
-            );
+            ShellExecuteW(null_mut(), op.as_ptr(), t.as_ptr(), null(), null(), SW_SHOWNORMAL);
         }
     }
 
@@ -167,32 +152,11 @@ mod win {
         d.uCallbackMessage = WM_TRAY;
         d.hIcon = ICON.load(Ordering::SeqCst);
         let companion = INFO.get().is_some_and(|(i, _)| i.companion);
-        copy(
-            &mut d.szTip,
-            if companion {
-                "GAZE — running as a Windows service"
-            } else {
-                "GAZE — recording your cameras"
-            },
-        );
+        copy(&mut d.szTip, if companion { "GAZE — running as a Windows service" } else { "GAZE — recording your cameras" });
         if greet {
             d.uFlags |= NIF_INFO;
-            copy(
-                &mut d.szInfoTitle,
-                if companion {
-                    "GAZE runs as a Windows service"
-                } else {
-                    "GAZE is running"
-                },
-            );
-            copy(
-                &mut d.szInfo,
-                if companion {
-                    "It starts with the computer. Click this icon to open GAZE."
-                } else {
-                    "Click this icon to open GAZE. Right-click for more."
-                },
-            );
+            copy(&mut d.szInfoTitle, if companion { "GAZE runs as a Windows service" } else { "GAZE is running" });
+            copy(&mut d.szInfo, if companion { "It starts with the computer. Click this icon to open GAZE." } else { "Click this icon to open GAZE. Right-click for more." });
         }
         unsafe { Shell_NotifyIconW(NIM_ADD, &d) };
     }
@@ -200,17 +164,7 @@ mod win {
     fn autostart_on() -> bool {
         let (k, v) = (w(RUN_KEY), w("GAZE"));
         let mut len = 0u32;
-        unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                k.as_ptr(),
-                v.as_ptr(),
-                RRF_RT_REG_SZ,
-                null_mut(),
-                null_mut(),
-                &mut len,
-            ) == 0
-        }
+        unsafe { RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr(), RRF_RT_REG_SZ, null_mut(), null_mut(), &mut len) == 0 }
     }
 
     fn set_autostart(on: bool) {
@@ -227,14 +181,7 @@ mod win {
                     dir.push('.');
                 }
                 let cmd = w(&format!("\"{}\" --dir \"{}\" \"{}\"", exe.display(), dir, cfg.display()));
-                RegSetKeyValueW(
-                    HKEY_CURRENT_USER,
-                    k.as_ptr(),
-                    v.as_ptr(),
-                    REG_SZ,
-                    cmd.as_ptr() as *const c_void,
-                    (cmd.len() * 2) as u32,
-                );
+                RegSetKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr(), REG_SZ, cmd.as_ptr() as *const c_void, (cmd.len() * 2) as u32);
             } else {
                 RegDeleteKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr());
             }
@@ -258,24 +205,12 @@ mod win {
             AppendMenuW(m, MF_SEPARATOR, 0, null());
             if info.companion {
                 add(ID_SERVICE, "Running as a Windows service", MF_CHECKED);
-                add(
-                    ID_AUTOSTART,
-                    "Show this icon when I sign in",
-                    if autostart_on() { MF_CHECKED } else { 0 },
-                );
+                add(ID_AUTOSTART, "Show this icon when I sign in", if autostart_on() { MF_CHECKED } else { 0 });
                 add(ID_RESTART, "Restart GAZE", 0);
                 add(ID_QUIT, "Hide this icon", 0);
             } else {
-                add(
-                    ID_SERVICE,
-                    "Run as a Windows service (starts with the computer)…",
-                    0,
-                );
-                add(
-                    ID_AUTOSTART,
-                    "Start when I sign in",
-                    if autostart_on() { MF_CHECKED } else { 0 },
-                );
+                add(ID_SERVICE, "Run as a Windows service (starts with the computer)…", 0);
+                add(ID_AUTOSTART, "Start when I sign in", if autostart_on() { MF_CHECKED } else { 0 });
                 add(ID_RESTART, "Restart GAZE", 0);
                 add(ID_QUIT, "Quit GAZE", 0);
             }
@@ -284,15 +219,7 @@ mod win {
             GetCursorPos(&mut p);
             // Needed so the menu closes when clicking elsewhere.
             SetForegroundWindow(hwnd);
-            let id = TrackPopupMenu(
-                m,
-                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-                p.x,
-                p.y,
-                0,
-                hwnd,
-                null(),
-            ) as usize;
+            let id = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, p.x, p.y, 0, hwnd, null()) as usize;
             DestroyMenu(m);
             match id {
                 ID_OPEN => open(&info.url),
@@ -310,24 +237,13 @@ mod win {
                     ) {
                         let cfg = std::path::absolute(&info.config).unwrap_or(info.config.clone());
                         let dir = std::env::current_dir().unwrap_or_default();
-                        match crate::winservice::elevate(
-                            &format!(
-                                "--install-service \"{}\" --dir \"{}\"",
-                                cfg.display(),
-                                dir.display()
-                            ),
-                            false,
-                        ) {
+                        match crate::winservice::elevate(&format!("--install-service \"{}\" --dir \"{}\"", cfg.display(), dir.display()), false) {
                             Some(_) => {
                                 // The icon comes back at sign-in.
                                 set_autostart(true);
                                 on_quit(Action::BecomeService);
                             }
-                            None => tell(
-                                hwnd,
-                                "Nothing was changed: Windows didn't give permission.",
-                                "GAZE",
-                            ),
+                            None => tell(hwnd, "Nothing was changed: Windows didn't give permission.", "GAZE"),
                         }
                     }
                 }
@@ -344,47 +260,24 @@ mod win {
                                 on_quit(Action::Quit);
                             }
                             Some(_) => {}
-                            None => tell(
-                                hwnd,
-                                "Nothing was changed: Windows didn't give permission.",
-                                "GAZE",
-                            ),
+                            None => tell(hwnd, "Nothing was changed: Windows didn't give permission.", "GAZE"),
                         }
                     }
                 }
                 ID_RESTART if info.companion => {
                     if crate::winservice::elevate("--restart-service", true).is_none() {
-                        tell(
-                            hwnd,
-                            "GAZE was not restarted: Windows didn't give permission.",
-                            "GAZE",
-                        );
+                        tell(hwnd, "GAZE was not restarted: Windows didn't give permission.", "GAZE");
                     }
                 }
                 ID_RESTART => on_quit(Action::Restart),
                 ID_QUIT if info.companion => {
-                    if ask(
-                        hwnd,
-                        "Hide this icon?\n\nGAZE keeps recording in the background (it runs as a Windows service). Start nvr.exe to bring the icon back.",
-                        "GAZE",
-                    ) {
+                    if ask(hwnd, "Hide this icon?\n\nGAZE keeps recording in the background (it runs as a Windows service). Start nvr.exe to bring the icon back.", "GAZE") {
                         on_quit(Action::Quit);
                     }
                 }
                 ID_QUIT => {
-                    let (t, c) = (
-                        w(
-                            "Stop GAZE?\n\nCameras will not be recorded until GAZE is started again.",
-                        ),
-                        w("Quit GAZE"),
-                    );
-                    if MessageBoxW(
-                        hwnd,
-                        t.as_ptr(),
-                        c.as_ptr(),
-                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
-                    ) == IDYES
-                    {
+                    let (t, c) = (w("Stop GAZE?\n\nCameras will not be recorded until GAZE is started again."), w("Quit GAZE"));
+                    if MessageBoxW(hwnd, t.as_ptr(), c.as_ptr(), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES {
                         on_quit(Action::Quit);
                     }
                 }
@@ -448,35 +341,14 @@ mod win {
             let tc = w("TaskbarCreated");
             TASKBAR_CREATED.store(RegisterWindowMessageW(tc.as_ptr()), Ordering::SeqCst);
             let title = w("GAZE");
-            let hwnd = CreateWindowExW(
-                0,
-                class.as_ptr(),
-                title.as_ptr(),
-                0,
-                0,
-                0,
-                0,
-                0,
-                null_mut(),
-                null_mut(),
-                inst,
-                null(),
-            );
+            let hwnd = CreateWindowExW(0, class.as_ptr(), title.as_ptr(), 0, 0, 0, 0, 0, null_mut(), null_mut(), inst, null());
             if hwnd.is_null() {
                 return;
             }
             HWND_.store(hwnd, Ordering::SeqCst);
             let png = include_bytes!("../static/tray.png");
             let size = GetSystemMetrics(SM_CXSMICON).max(16);
-            let icon = CreateIconFromResourceEx(
-                png.as_ptr(),
-                png.len() as u32,
-                1,
-                0x0003_0000,
-                size,
-                size,
-                LR_DEFAULTCOLOR,
-            );
+            let icon = CreateIconFromResourceEx(png.as_ptr(), png.len() as u32, 1, 0x0003_0000, size, size, LR_DEFAULTCOLOR);
             ICON.store(icon, Ordering::SeqCst);
             add_icon(hwnd, true);
             let mut msg: MSG = std::mem::zeroed();

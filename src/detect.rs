@@ -6,7 +6,6 @@
 //! `ai_interval` seconds). Activity is grouped into events, saved with a
 //! thumbnail, and (in event-recording modes) turned into full-quality clips.
 
-use crate::sync::MutexExt;
 use crate::ai::{AiError, AiHandle, Detection};
 use crate::buffer::EventBuffer;
 use crate::config::{CameraConfig, redact};
@@ -14,6 +13,7 @@ use crate::events::{Event, EventStore, Label, SeenBox};
 use crate::ffmpeg;
 use crate::imgutil::Frame;
 use crate::manager::RuntimeEnv;
+use crate::sync::MutexExt;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as CDuration, Local};
 use serde::Serialize;
@@ -122,41 +122,25 @@ mod tint_tests {
                 rgb.extend(f(x, y));
             }
         }
-        Frame {
-            width: w as u32,
-            height: h as u32,
-            rgb: Arc::new(rgb),
-        }
+        Frame { width: w as u32, height: h as u32, rgb: Arc::new(rgb) }
     }
 
     #[test]
     fn broken_colours_but_not_a_red_van() {
         // A grey driveway with a white wall.
         let scene = |x: usize, y: usize| {
-            if y < 30 {
-                [230, 230, 230]
-            } else {
-                [110 + (x % 7) as u8, 110, 112]
-            }
+            if y < 30 { [230, 230, 230] } else { [110 + (x % 7) as u8, 110, 112] }
         };
         let mut t = TintCheck::default();
         for _ in 0..5 {
             assert!(!t.check(&frame(scene)));
         }
         // A red van covering the left 40%: a real object.
-        assert!(!t.check(&frame(|x, y| if x < 64 && y > 20 {
-            [200, 40, 35]
-        } else {
-            scene(x, y)
-        })));
+        assert!(!t.check(&frame(|x, y| if x < 64 && y > 20 { [200, 40, 35] } else { scene(x, y) })));
         // Same brightness, colours wrong everywhere (pink / green): broken.
         assert!(t.check(&frame(|x, y| {
             let [r, g, b] = scene(x, y);
-            [
-                r.saturating_add(25),
-                g.saturating_sub(30),
-                b.saturating_add(25),
-            ]
+            [r.saturating_add(25), g.saturating_sub(30), b.saturating_add(25)]
         })));
         // The normal picture again is fine.
         assert!(!t.check(&frame(scene)));
@@ -363,10 +347,7 @@ const HD_GAP: Duration = Duration::from_millis(500);
 async fn hd_frame(relay: &crate::relay::Relay, ffmpeg: &str) -> anyhow::Result<Frame> {
     let _connect = relay.subscribe();
     let info = relay.wait_info(Duration::from_secs(10)).await;
-    let (sw, sh) = info
-        .and_then(|i| Some((i.width?, i.height?)))
-        .map(|(w, h)| relay.rotated(w, h))
-        .ok_or_else(|| anyhow::anyhow!("main stream size not known"))?;
+    let (sw, sh) = info.and_then(|i| Some((i.width?, i.height?))).map(|(w, h)| relay.rotated(w, h)).ok_or_else(|| anyhow::anyhow!("main stream size not known"))?;
     let w = sw.clamp(2, 1920) & !1;
     let h = ((w as f32 * sh as f32 / sw.max(1) as f32).round() as u32).max(2) & !1;
     let rgb = crate::relay::grab_rgb_live(relay, ffmpeg, w, h).await?;
@@ -443,9 +424,7 @@ impl Detector {
             relay,
             zones: Mutex::new(crate::zones::ZoneWatch::default()),
             quiet: Mutex::new(None),
-            parked: Mutex::new(crate::stationary::Stationary::open(Some(
-                store.dir().join("parked.json"),
-            ))),
+            parked: Mutex::new(crate::stationary::Stationary::open(Some(store.dir().join("parked.json")))),
             relay_main,
             rejected: Mutex::new(Vec::new()),
             external: Mutex::new(Vec::new()),
@@ -480,10 +459,7 @@ impl Detector {
         // Holding a subscription makes the relay connect.
         let _connect = self.relay.subscribe();
         let info = self.relay.wait_info(Duration::from_secs(30)).await;
-        let (sw, sh) = info
-            .and_then(|i| Some((i.width?, i.height?)))
-            .map(|(w, h)| self.relay.rotated(w, h))
-            .unwrap_or((16, 9));
+        let (sw, sh) = info.and_then(|i| Some((i.width?, i.height?))).map(|(w, h)| self.relay.rotated(w, h)).unwrap_or((16, 9));
         let w = ANALYSIS_WIDTH.min(sw.max(2)) & !1;
         let h = (((w as f32 * sh as f32 / sw.max(1) as f32).round() as u32).max(2)) & !1;
         (w, h)
@@ -498,10 +474,7 @@ impl Detector {
         let mut active: Option<Active> = None;
         loop {
             let started = Instant::now();
-            let res = self
-                .clone()
-                .run_once(&mut use_gpu, gpu_failed, &cancel, &mut active)
-                .await;
+            let res = self.clone().run_once(&mut use_gpu, gpu_failed, &cancel, &mut active).await;
             if cancel.is_cancelled() {
                 if let Some(a) = active.take() {
                     self.finish(a);
@@ -518,10 +491,7 @@ impl Detector {
             if started.elapsed() < Duration::from_secs(15) {
                 failures += 1;
                 if use_gpu && failures >= 2 {
-                    warn!(
-                        "[{}] detection: GPU decoding failed, using CPU",
-                        self.cam.name
-                    );
+                    warn!("[{}] detection: GPU decoding failed, using CPU", self.cam.name);
                     use_gpu = false;
                     gpu_failed = true;
                 }
@@ -536,21 +506,12 @@ impl Detector {
         }
     }
 
-    async fn run_once(
-        self: Arc<Self>,
-        use_gpu_now: &mut bool,
-        gpu_failed: bool,
-        cancel: &CancellationToken,
-        active: &mut Option<Active>,
-    ) -> Result<()> {
+    async fn run_once(self: Arc<Self>, use_gpu_now: &mut bool, gpu_failed: bool, cancel: &CancellationToken, active: &mut Option<Active>) -> Result<()> {
         let use_gpu = *use_gpu_now;
         self.status.locked().gpu_decoding = use_gpu;
         // Automatic CPU/GPU choice (when a GPU is set up but sub-streams are
         // not forced onto it): move when one side is overloaded for a while.
-        let auto = crate::load::balance()
-            && self.env.hardware.hwaccel != "none"
-            && !self.env.hardware.gpu_substreams
-            && !gpu_failed;
+        let auto = crate::load::balance() && self.env.hardware.hwaccel != "none" && !self.env.hardware.gpu_substreams && !gpu_failed;
         let mut strain_since: Option<Instant> = None;
         let d = &self.cam.detect;
         let (w, h) = self.frame_size().await;
@@ -563,16 +524,7 @@ impl Detector {
         }
         let mut child = cmd
             .args(self.relay.input_args())
-            .args([
-                "-an",
-                "-vf",
-                &format!("fps={},scale={w}:{h}", d.fps),
-                "-pix_fmt",
-                "rgb24",
-                "-f",
-                "rawvideo",
-                "pipe:1",
-            ])
+            .args(["-an", "-vf", &format!("fps={},scale={w}:{h}", d.fps), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -581,11 +533,7 @@ impl Detector {
             .context("starting ffmpeg for detection")?;
         let mut stdout = child.stdout.take().context("no stdout")?;
         let stop_feed = CancellationToken::new();
-        let _feed = crate::relay::feed(
-            self.relay.subscribe(),
-            child.stdin.take().context("no stdin")?,
-            stop_feed.clone(),
-        );
+        let _feed = crate::relay::feed(self.relay.subscribe(), child.stdin.take().context("no stdin")?, stop_feed.clone());
         let _stop_on_exit = stop_feed.drop_guard();
         // When the decoder reports a damaged frame (lost packets), frames
         // are smeared until the next keyframe: don't use them.
@@ -621,10 +569,7 @@ impl Detector {
             s.running = true;
             s.error = None;
         }
-        info!(
-            "[{}] detection: started ({}×{} at {} fps)",
-            self.cam.name, w, h, d.fps
-        );
+        info!("[{}] detection: started ({}×{} at {} fps)", self.cam.name, w, h, d.fps);
 
         let frame_len = (w * h * 3) as usize;
         let mut motion = MotionDetector::new(w, h, MotionSettings::from(d));
@@ -688,11 +633,7 @@ impl Detector {
             if !self.cam.privacy.is_empty() {
                 self.cam.paint_privacy(&mut buf, w, h);
             }
-            let frame = Frame {
-                width: w,
-                height: h,
-                rgb: Arc::new(buf),
-            };
+            let frame = Frame { width: w, height: h, rgb: Arc::new(buf) };
             // The live grid gets every frame right away.
             *self.latest.locked() = Some(frame.clone());
             self.frames.send_replace(Some(frame.clone()));
@@ -704,8 +645,7 @@ impl Detector {
             pending.push_back((frame, Instant::now()));
             fps_count += 1;
             if fps_since.elapsed() >= Duration::from_secs(5) {
-                self.status.locked().fps =
-                    fps_count as f32 / fps_since.elapsed().as_secs_f32();
+                self.status.locked().fps = fps_count as f32 / fps_since.elapsed().as_secs_f32();
                 fps_count = 0;
                 fps_since = Instant::now();
             }
@@ -713,14 +653,9 @@ impl Detector {
             // Frames are analysed a moment after they arrive: the decoder
             // reports damage on a separate channel, sometimes after the
             // broken frame itself has come out.
-            while pending
-                .front()
-                .is_some_and(|(_, at)| at.elapsed() >= ANALYSIS_DELAY)
-            {
+            while pending.front().is_some_and(|(_, at)| at.elapsed() >= ANALYSIS_DELAY) {
                 let (frame, at) = pending.pop_front().unwrap();
-                let damaged = damaged_at
-                    .locked()
-                    .is_some_and(|t| t + Duration::from_millis(1500) >= at);
+                let damaged = damaged_at.locked().is_some_and(|t| t + Duration::from_millis(1500) >= at);
                 if damaged {
                     // Keep the event alive but don't learn from or save broken
                     // frames; start the motion background afresh afterwards.
@@ -830,40 +765,23 @@ impl Detector {
                 // Object recognition only while motion is happening: no motion,
                 // nothing is sent to the AI.
                 let ai = self.ai.get();
-                if d.ai
-                    && ai.enabled()
-                    && !ai_busy
-                    && (moving || look_anyway)
-                    && last_ai.elapsed().as_secs_f64() >= d.ai_interval * crate::load::ai_slowdown()
-                {
+                if d.ai && ai.enabled() && !ai_busy && (moving || look_anyway) && last_ai.elapsed().as_secs_f64() >= d.ai_interval * crate::load::ai_slowdown() {
                     ai_busy = true;
                     last_ai = Instant::now();
                     let tx = ai_tx.clone();
                     let f = frame.clone();
                     // Where the motion is, for a closer look if the whole
                     // picture shows nothing (small or far-away objects).
-                    let near = m
-                        .as_ref()
-                        .and_then(|m| m.objects.first())
-                        .map(|o| (o.x, o.y, o.w, o.h));
+                    let near = m.as_ref().and_then(|m| m.objects.first()).map(|o| (o.x, o.y, o.w, o.h));
                     let (want, min_conf) = (d.objects.clone(), d.min_confidence);
                     tokio::spawn(async move {
                         let mut res = ai.detect(&f).await;
                         if let Ok(dets) = &mut res
-                            && !dets
-                                .iter()
-                                .any(|x| x.score >= min_conf && want.contains(&x.label))
-                            && let Some((crop, [ox, oy, sw, sh])) =
-                                near.and_then(|n| zoom_on(&f, n))
+                            && !dets.iter().any(|x| x.score >= min_conf && want.contains(&x.label))
+                            && let Some((crop, [ox, oy, sw, sh])) = near.and_then(|n| zoom_on(&f, n))
                             && let Ok(more) = ai.detect(&crop).await
                         {
-                            dets.extend(more.into_iter().map(|x| Detection {
-                                x: ox + x.x * sw,
-                                y: oy + x.y * sh,
-                                w: x.w * sw,
-                                h: x.h * sh,
-                                ..x
-                            }));
+                            dets.extend(more.into_iter().map(|x| Detection { x: ox + x.x * sw, y: oy + x.y * sh, w: x.w * sw, h: x.h * sh, ..x }));
                         }
                         let _ = tx.send((f, res)).await;
                     });
@@ -874,23 +792,14 @@ impl Detector {
     }
 
     fn new_event(&self, now: DateTime<Local>) -> Active {
-        let id = format!(
-            "ev-{}-{:03}",
-            now.format("%Y%m%d-%H%M%S"),
-            now.timestamp_subsec_millis()
-        );
+        let id = format!("ev-{}-{:03}", now.format("%Y%m%d-%H%M%S"), now.timestamp_subsec_millis());
         if let Some(b) = &self.buffer {
             b.hold(&id, now);
         }
         // How the "item left or taken" areas looked before the activity.
         // Only a recent quiet picture is a fair "before" (one from long ago
         // differs anyway: light, shadows, day and night).
-        let quiet = self
-            .quiet
-            .locked()
-            .clone()
-            .filter(|(_, at)| at.elapsed() < Duration::from_secs(120))
-            .map(|(f, _)| f);
+        let quiet = self.quiet.locked().clone().filter(|(_, at)| at.elapsed() < Duration::from_secs(120)).map(|(f, _)| f);
         let zone_before: Vec<(Watched, Vec<f32>, Frame)> = quiet
             .map(|f| {
                 self.watched_areas()
@@ -943,34 +852,17 @@ impl Detector {
         }
     }
 
-    fn on_motion(
-        &self,
-        active: &mut Option<Active>,
-        now: DateTime<Local>,
-        frame: &Frame,
-        bbox: (f32, f32, f32, f32),
-        fraction: f32,
-    ) {
+    fn on_motion(&self, active: &mut Option<Active>, now: DateTime<Local>, frame: &Frame, bbox: (f32, f32, f32, f32), fraction: f32) {
         let a = active.get_or_insert_with(|| self.new_event(now));
         a.event.motion = true;
         // With "objects" as the trigger, motion only keeps a pending event open.
         a.last_activity = now;
         // Until the AI recognizes something, the thumbnail is the frame with
         // the most motion so far.
-        if a.thumb_score <= 0.0
-            && fraction > a.motion_best * 1.2
-            && a.thumb_at.elapsed() > Duration::from_millis(800)
-        {
+        if a.thumb_score <= 0.0 && fraction > a.motion_best * 1.2 && a.thumb_at.elapsed() > Duration::from_millis(800) {
             a.motion_best = fraction;
             let (x, y, w, h) = bbox;
-            let boxes = vec![SeenBox {
-                label: "motion".into(),
-                score: 0.0,
-                x,
-                y,
-                w,
-                h,
-            }];
+            let boxes = vec![SeenBox { label: "motion".into(), score: 0.0, x, y, w, h }];
             self.save_thumb(a, frame, bbox, 0.0, boxes);
         }
         // "Check motion with AI first": the AI looks at the frames of the
@@ -979,10 +871,8 @@ impl Detector {
         // never does (and is dropped when it ends, see finish()).
         let d = &self.cam.detect;
         // (Ignore pets works the same way, for dogs and cats.)
-        let wait_for_ai = (d.ignore_animals || d.ignore_pets)
-            && d.ai
-            && self.ai.get().enabled()
-            && (a.animal_seen || (a.ai_looks < 2 && a.began.elapsed() < Duration::from_secs(4)));
+        let wait_for_ai =
+            (d.ignore_animals || d.ignore_pets) && d.ai && self.ai.get().enabled() && (a.animal_seen || (a.ai_looks < 2 && a.began.elapsed() < Duration::from_secs(4)));
         if d.alert_on_motion() && !a.qualified && !wait_for_ai {
             a.qualified = true;
             info!(target: "event", "[{}] motion detected", self.cam.name);
@@ -991,13 +881,7 @@ impl Detector {
         }
     }
 
-    fn handle_ai(
-        &self,
-        frame: Frame,
-        res: Result<Vec<Detection>, AiError>,
-        active: &mut Option<Active>,
-        hd_tx: &mpsc::Sender<HdResult>,
-    ) {
+    fn handle_ai(&self, frame: Frame, res: Result<Vec<Detection>, AiError>, active: &mut Option<Active>, hd_tx: &mpsc::Sender<HdResult>) {
         let d = &self.cam.detect;
         let dets = match res {
             Ok(d) => {
@@ -1037,11 +921,7 @@ impl Detector {
                 keep
             });
         }
-        let mut hits: Vec<Detection> = best
-            .iter()
-            .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label))
-            .cloned()
-            .collect();
+        let mut hits: Vec<Detection> = best.iter().filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label)).cloned().collect();
         {
             let mut s = self.status.locked();
             s.seen_now = hits.iter().map(|x| SeenBox { label: x.label.clone(), score: x.score, x: x.x, y: x.y, w: x.w, h: x.h }).collect();
@@ -1061,10 +941,7 @@ impl Detector {
             });
             if animal && !a.animal_seen {
                 a.animal_seen = true;
-                tracing::debug!(
-                    "[{}] an animal that isn't watched for is moving: no motion alert",
-                    self.cam.name
-                );
+                tracing::debug!("[{}] an animal that isn't watched for is moving: no motion alert", self.cam.name);
             }
         }
         // Parked vehicles don't alert until they move.
@@ -1073,24 +950,10 @@ impl Detector {
             // enough to alert: a parked car that comes and goes around the
             // minimum confidence would otherwise be forgotten and alert again.
             let kinds = &d.parked_objects;
-            let mut others: Vec<Detection> = hits
-                .into_iter()
-                .filter(|h| !kinds.contains(&h.label))
-                .collect();
-            let candidates: Vec<Detection> = best
-                .iter()
-                .filter(|x| x.score >= 0.3 && kinds.contains(&x.label))
-                .cloned()
-                .collect();
-            let (keep, notes) = self.parked.locked().filter(
-                candidates,
-                kinds,
-                Duration::from_secs(d.parked_seconds.max(10) as u64),
-            );
-            others.extend(
-                keep.into_iter()
-                    .filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label)),
-            );
+            let mut others: Vec<Detection> = hits.into_iter().filter(|h| !kinds.contains(&h.label)).collect();
+            let candidates: Vec<Detection> = best.iter().filter(|x| x.score >= 0.3 && kinds.contains(&x.label)).cloned().collect();
+            let (keep, notes) = self.parked.locked().filter(candidates, kinds, Duration::from_secs(d.parked_seconds.max(10) as u64));
+            others.extend(keep.into_iter().filter(|x| x.score >= d.min_confidence && d.objects.contains(&x.label)));
             hits = others;
             let parked = self.parked.locked().parked();
             self.status.locked().parked = parked;
@@ -1105,34 +968,19 @@ impl Detector {
         }
         // ...and across the pictures of this alert.
         if let Some(a) = active.as_mut() {
-            a.seen
-                .retain(|(_, t)| t.elapsed() < Duration::from_secs(15));
-            hits.retain(|h| {
-                !a.seen.iter().any(|(s, _)| {
-                    s.label != h.label && s.score > h.score && crate::ai::same_object(s, h)
-                })
-            });
+            a.seen.retain(|(_, t)| t.elapsed() < Duration::from_secs(15));
+            hits.retain(|h| !a.seen.iter().any(|(s, _)| s.label != h.label && s.score > h.score && crate::ai::same_object(s, h)));
             for h in &hits {
                 // A more confident answer for something already labelled
                 // differently: that earlier label was wrong.
-                let wrong: Vec<String> = a
-                    .seen
-                    .iter()
-                    .filter(|(s, _)| {
-                        s.label != h.label && s.score < h.score && crate::ai::same_object(s, h)
-                    })
-                    .map(|(s, _)| s.label.clone())
-                    .collect();
+                let wrong: Vec<String> =
+                    a.seen.iter().filter(|(s, _)| s.label != h.label && s.score < h.score && crate::ai::same_object(s, h)).map(|(s, _)| s.label.clone()).collect();
                 for w in wrong {
-                    let elsewhere = a
-                        .seen
-                        .iter()
-                        .any(|(s, _)| s.label == w && !crate::ai::same_object(s, h));
+                    let elsewhere = a.seen.iter().any(|(s, _)| s.label == w && !crate::ai::same_object(s, h));
                     if !elsewhere {
                         a.event.labels.retain(|l| l.label != w);
                     }
-                    a.seen
-                        .retain(|(s, _)| !(s.label == w && crate::ai::same_object(s, h)));
+                    a.seen.retain(|(s, _)| !(s.label == w && crate::ai::same_object(s, h)));
                 }
             }
         }
@@ -1184,12 +1032,7 @@ impl Detector {
                     l.score = l.score.max(h.score);
                 }
                 None => {
-                    a.event.labels.push(Label {
-                        label: h.label.clone(),
-                        score: h.score,
-                        color,
-                        hd: None,
-                    });
+                    a.event.labels.push(Label { label: h.label.clone(), score: h.score, color, hd: None });
                     new_labels.push(format!("{} {:.0}%", h.label, h.score * 100.0));
                     hd_checks.push((h.label.clone(), [h.x, h.y, h.w, h.h]));
                     changed = true;
@@ -1197,32 +1040,11 @@ impl Detector {
             }
         }
         a.event.labels.sort_by(|x, y| y.score.total_cmp(&x.score));
-        let best = hits
-            .iter()
-            .max_by(|x, y| x.score.total_cmp(&y.score))
-            .unwrap();
+        let best = hits.iter().max_by(|x, y| x.score.total_cmp(&y.score)).unwrap();
         // AI pictures always win over motion pictures; then the most confident one.
-        if best.score > a.thumb_score + 0.05
-            && (a.thumb_score <= 0.0 || a.thumb_at.elapsed() > Duration::from_secs(1))
-        {
-            let boxes = hits
-                .iter()
-                .map(|h| SeenBox {
-                    label: h.label.clone(),
-                    score: h.score,
-                    x: h.x,
-                    y: h.y,
-                    w: h.w,
-                    h: h.h,
-                })
-                .collect();
-            self.save_thumb(
-                a,
-                &frame,
-                (best.x, best.y, best.w, best.h),
-                best.score,
-                boxes,
-            );
+        if best.score > a.thumb_score + 0.05 && (a.thumb_score <= 0.0 || a.thumb_at.elapsed() > Duration::from_secs(1)) {
+            let boxes = hits.iter().map(|h| SeenBox { label: h.label.clone(), score: h.score, x: h.x, y: h.y, w: h.w, h: h.h }).collect();
+            self.save_thumb(a, &frame, (best.x, best.y, best.w, best.h), best.score, boxes);
             changed = true;
         }
         if !new_labels.is_empty() {
@@ -1393,14 +1215,7 @@ impl Detector {
         }
     }
 
-    fn save_thumb(
-        &self,
-        a: &mut Active,
-        frame: &Frame,
-        (x, y, w, h): (f32, f32, f32, f32),
-        score: f32,
-        boxes: Vec<SeenBox>,
-    ) {
+    fn save_thumb(&self, a: &mut Active, frame: &Frame, (x, y, w, h): (f32, f32, f32, f32), score: f32, boxes: Vec<SeenBox>) {
         // The whole picture; for a recognized object the page zooms into
         // `focus` (the card keeps its size).
         let crop = frame.fit(640);
@@ -1492,15 +1307,11 @@ impl Detector {
         // watched for), with nothing watched for seen: not kept as an alert.
         // (A person or anything else alerted on, seen with it, keeps the
         // alert: it then has labels.)
-        if (d.ignore_animals || d.ignore_pets)
-            && a.animal_seen
-            && a.event.labels.is_empty()
-            && a.event.items.is_empty()
-            && a.qualified {
-                info!(target: "event", "[{}] motion was an animal that isn't watched for: alert dropped", self.cam.name);
-                self.store.delete(&a.event.id);
-                a.qualified = false;
-            }
+        if (d.ignore_animals || d.ignore_pets) && a.animal_seen && a.event.labels.is_empty() && a.event.items.is_empty() && a.qualified {
+            info!(target: "event", "[{}] motion was an animal that isn't watched for: alert dropped", self.cam.name);
+            self.store.delete(&a.event.id);
+            a.qualified = false;
+        }
         if !a.qualified {
             if let Some(b) = &self.buffer {
                 b.release(&a.event.id);
@@ -1522,17 +1333,11 @@ impl Detector {
                 if !a.touched.get(zi).copied().unwrap_or(false) {
                     continue;
                 }
-                let change = crate::zones::area_change(
-                    before,
-                    &z.signature(&now),
-                );
+                let change = crate::zones::area_change(before, &z.signature(&now));
                 // Still different, and the same as a minute ago (it stayed:
                 // not something that came and went or moved on).
                 let stayed = match &a.item_hold {
-                    Some((_, sigs)) => sigs
-                        .get(zi)
-                        .and_then(|x| x.as_ref())
-                        .is_some_and(|then| crate::zones::area_change(then, &z.signature(&now)) < 0.08),
+                    Some((_, sigs)) => sigs.get(zi).and_then(|x| x.as_ref()).is_some_and(|then| crate::zones::area_change(then, &z.signature(&now)) < 0.08),
                     None => true,
                 };
                 if change > 0.12 && !stayed {
@@ -1542,47 +1347,25 @@ impl Detector {
                     // Keep both pictures: smart search tells a delivered
                     // parcel from one picked up (or a moved bin).
                     let dir = self.store.dir();
-                    let (bn, an) = (
-                        format!("{}-z{zi}-before.jpg", a.event.id),
-                        format!("{}-z{zi}-after.jpg", a.event.id),
-                    );
-                    if let (Ok(b), Ok(af)) =
-                        (before_pic.jpeg(85), z.picture(&now).jpeg(85))
+                    let (bn, an) = (format!("{}-z{zi}-before.jpg", a.event.id), format!("{}-z{zi}-after.jpg", a.event.id));
+                    if let (Ok(b), Ok(af)) = (before_pic.jpeg(85), z.picture(&now).jpeg(85))
                         && std::fs::write(dir.join(&bn), b).is_ok()
                         && std::fs::write(dir.join(&an), af).is_ok()
                     {
-                        a.event.items.push(crate::events::ItemChange {
-                            zone: z.name.clone(),
-                            before: bn,
-                            after: an,
-                            checked: false,
-                        });
+                        a.event.items.push(crate::events::ItemChange { zone: z.name.clone(), before: bn, after: an, checked: false });
                     }
-                    let note = if person {
-                        format!("Item left or taken in {} (possible delivery)", z.name)
-                    } else {
-                        format!("Item left or taken in {}", z.name)
-                    };
+                    let note = if person { format!("Item left or taken in {} (possible delivery)", z.name) } else { format!("Item left or taken in {}", z.name) };
                     info!(target: "event", "[{}] {note} ({:.0}% of the area changed)", self.cam.name, change * 100.0);
                     a.event.notes.push(note);
                     if !a.event.labels.iter().any(|l| l.label == "package") {
-                        a.event.labels.push(Label {
-                            label: "package".into(),
-                            score: 1.0,
-                            color: None,
-                            hd: None,
-                        });
+                        a.event.labels.push(Label { label: "package".into(), score: 1.0, color: None, hd: None });
                     }
                 }
             }
         }
         self.store.save_detected(a.event.clone());
         if let Some(b) = &self.buffer {
-            b.finish(
-                &a.event.id,
-                a.event.start - CDuration::seconds(d.pre_seconds as i64),
-                a.event.end + CDuration::seconds(d.post_seconds as i64),
-            );
+            b.finish(&a.event.id, a.event.start - CDuration::seconds(d.pre_seconds as i64), a.event.end + CDuration::seconds(d.post_seconds as i64));
         }
     }
 }
@@ -1621,9 +1404,7 @@ impl Watched {
     fn reaches(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
         let (mx, my) = (w * 0.1, h * 0.1);
         let (x0, y0, x1, y1) = (x - mx, y - my, x + w + mx, y + h + my);
-        (0..=12).any(|i| {
-            (0..=12).any(|j| self.contains([x0 + (x1 - x0) * i as f32 / 12.0, y0 + (y1 - y0) * j as f32 / 12.0]))
-        })
+        (0..=12).any(|i| (0..=12).any(|j| self.contains([x0 + (x1 - x0) * i as f32 / 12.0, y0 + (y1 - y0) * j as f32 / 12.0])))
     }
     /// What the area looks like, for comparing before and after.
     fn signature(&self, f: &Frame) -> Vec<f32> {
@@ -1659,10 +1440,7 @@ impl Detector {
         if d.packages
             && let Some(cells) = crate::config::decode_mask(&d.package_mask).filter(|m| m.iter().any(|x| *x))
         {
-            v.push(Watched {
-                name: "the package spot".into(),
-                cells,
-            });
+            v.push(Watched { name: "the package spot".into(), cells });
         }
         v
     }
@@ -1712,17 +1490,8 @@ fn zoom_on(f: &Frame, (x, y, w, h): (f32, f32, f32, f32)) -> Option<(Frame, [f32
     let x0 = (cx - side / 2.0).clamp(0.0, fw - side);
     let y0 = (cy - side / 2.0).clamp(0.0, fh - side);
     let crop = crate::recog::crop(f, x0, y0, side, side);
-    Some((
-        crop.clone(),
-        [
-            x0 / fw,
-            y0 / fh,
-            crop.width as f32 / fw,
-            crop.height as f32 / fh,
-        ],
-    ))
+    Some((crop.clone(), [x0 / fw, y0 / fh, crop.width as f32 / fw, crop.height as f32 / fh]))
 }
-
 
 /// A moving object found in a frame.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -1812,21 +1581,7 @@ impl MotionDetector {
         };
         let scale = 640.0 / w as f32;
         let masked = ignore.iter().any(|x| *x);
-        Self {
-            masked,
-            w,
-            h,
-            src_w: src_w as usize,
-            bg: vec![0.0; w * h],
-            frames: 0,
-            s,
-            cell_px: scale * scale,
-            ignore,
-            since: None,
-            start: (0.0, 0.0),
-            gap: 0,
-            triggered: false,
-        }
+        Self { masked, w, h, src_w: src_w as usize, bg: vec![0.0; w * h], frames: 0, s, cell_px: scale * scale, ignore, since: None, start: (0.0, 0.0), gap: 0, triggered: false }
     }
 
     fn grey(&self, rgb: &[u8]) -> Vec<f32> {
@@ -1837,9 +1592,7 @@ impl MotionDetector {
                 for dy in 0..4 {
                     for dx in 0..4 {
                         let i = ((y * 4 + dy) * self.src_w + x * 4 + dx) * 3;
-                        sum += 0.299 * rgb[i] as f32
-                            + 0.587 * rgb[i + 1] as f32
-                            + 0.114 * rgb[i + 2] as f32;
+                        sum += 0.299 * rgb[i] as f32 + 0.587 * rgb[i + 1] as f32 + 0.114 * rgb[i + 2] as f32;
                     }
                 }
                 g[y * self.w + x] = sum / 16.0;
@@ -1885,13 +1638,7 @@ impl MotionDetector {
         if fraction > 0.65 {
             self.bg = g;
             self.reset();
-            return Some(MotionResult {
-                moving: false,
-                objects: vec![],
-                biggest: 0,
-                fraction,
-                raw: vec![],
-            });
+            return Some(MotionResult { moving: false, objects: vec![], biggest: 0, fraction, raw: vec![] });
         }
         let alpha = if self.frames < 10 { 0.5 } else { 0.1 };
         for (b, v) in self.bg.iter_mut().zip(g.iter()) {
@@ -1922,12 +1669,8 @@ impl MotionDetector {
                 self.start = c;
             }
             let lasted = now.duration_since(self.since.unwrap()) >= self.s.make_time;
-            let (dx, dy) = (
-                (c.0 - self.start.0) * 640.0,
-                (c.1 - self.start.1) * 640.0 * h as f32 / w as f32,
-            );
-            let travelled =
-                self.s.min_travel_px <= 0.0 || (dx * dx + dy * dy).sqrt() >= self.s.min_travel_px;
+            let (dx, dy) = ((c.0 - self.start.0) * 640.0, (c.1 - self.start.1) * 640.0 * h as f32 / w as f32);
+            let travelled = self.s.min_travel_px <= 0.0 || (dx * dx + dy * dy).sqrt() >= self.s.min_travel_px;
             if lasted && travelled {
                 self.triggered = true;
             }
@@ -1938,13 +1681,7 @@ impl MotionDetector {
                 self.reset();
             }
         }
-        Some(MotionResult {
-            moving: self.triggered && !objects.is_empty(),
-            objects,
-            biggest,
-            fraction,
-            raw,
-        })
+        Some(MotionResult { moving: self.triggered && !objects.is_empty(), objects, biggest, fraction, raw })
     }
 
     fn reset(&mut self) {
@@ -2052,13 +1789,7 @@ mod tests {
     }
 
     fn settings(min_object_px: u32, make_ms: u64, travel: f32) -> MotionSettings {
-        MotionSettings {
-            min_contrast: 24.0,
-            min_object_px,
-            make_time: Duration::from_millis(make_ms),
-            min_travel_px: travel,
-            mask: None,
-        }
+        MotionSettings { min_contrast: 24.0, min_object_px, make_time: Duration::from_millis(make_ms), min_travel_px: travel, mask: None }
     }
 
     #[test]
@@ -2069,31 +1800,17 @@ mod tests {
         for i in 0..12 {
             m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
         }
-        let r = m
-            .feed_at(
-                &frame(640, 360, Some((100, 100, 40))),
-                t + Duration::from_secs(3),
-            )
-            .unwrap();
+        let r = m.feed_at(&frame(640, 360, Some((100, 100, 40))), t + Duration::from_secs(3)).unwrap();
         assert!(r.moving);
         assert_eq!(r.objects.len(), 1);
-        assert!(
-            (1400..=1800).contains(&r.objects[0].size),
-            "size {}",
-            r.objects[0].size
-        );
+        assert!((1400..=1800).contains(&r.objects[0].size), "size {}", r.objects[0].size);
         assert!((r.objects[0].x - 100.0 / 640.0).abs() < 0.02);
         // An 8×8 speck (64 px) is reported as the biggest change but is not an object.
         let mut m = MotionDetector::new(640, 360, settings(1000, 0, 0.0));
         for i in 0..12 {
             m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
         }
-        let r = m
-            .feed_at(
-                &frame(640, 360, Some((300, 200, 8))),
-                t + Duration::from_secs(3),
-            )
-            .unwrap();
+        let r = m.feed_at(&frame(640, 360, Some((300, 200, 8))), t + Duration::from_secs(3)).unwrap();
         assert!(!r.moving && r.objects.is_empty() && r.biggest > 0);
     }
 
@@ -2108,12 +1825,7 @@ mod tests {
         // Object appears and moves 30 px per 200 ms.
         let mut first_trigger = None;
         for i in 0..12u32 {
-            let r = m
-                .feed_at(
-                    &frame(640, 360, Some((50 + i * 30, 100, 40))),
-                    t + Duration::from_millis(i as u64 * 200),
-                )
-                .unwrap();
+            let r = m.feed_at(&frame(640, 360, Some((50 + i * 30, 100, 40))), t + Duration::from_millis(i as u64 * 200)).unwrap();
             if r.moving && first_trigger.is_none() {
                 first_trigger = Some(i);
             }
@@ -2141,11 +1853,7 @@ mod tests {
 
     #[test]
     fn zooms_on_small_motion_only() {
-        let f = Frame {
-            width: 640,
-            height: 360,
-            rgb: std::sync::Arc::new(vec![0; 640 * 360 * 3]),
-        };
+        let f = Frame { width: 640, height: 360, rgb: std::sync::Arc::new(vec![0; 640 * 360 * 3]) };
         let (c, [x, y, w, h]) = super::zoom_on(&f, (0.9, 0.9, 0.05, 0.08)).unwrap();
         assert!(c.width >= 126 && c.width == c.height);
         assert!(x + w <= 1.0001 && y + h <= 1.0001 && x > 0.5 && y > 0.3);
@@ -2169,8 +1877,7 @@ mod tests {
             for y in 0..h {
                 for x in 0..w {
                     let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
-                    let on = (parcel && (0.15..0.25).contains(&fx) && (0.75..0.85).contains(&fy))
-                        || (beside && (0.4..0.6).contains(&fx) && (0.75..0.85).contains(&fy));
+                    let on = (parcel && (0.15..0.25).contains(&fx) && (0.75..0.85).contains(&fy)) || (beside && (0.4..0.6).contains(&fx) && (0.75..0.85).contains(&fy));
                     if on {
                         let i = ((y * w + x) * 3) as usize;
                         rgb[i..i + 3].copy_from_slice(&[200, 150, 90]);
@@ -2245,32 +1952,14 @@ mod tests {
         for i in 0..12 {
             m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
         }
-        assert!(
-            !m.feed_at(
-                &frame(640, 360, Some((100, 100, 60))),
-                t + Duration::from_secs(3)
-            )
-            .unwrap()
-            .moving
-        );
-        assert!(
-            m.feed_at(
-                &frame(640, 360, Some((450, 100, 60))),
-                t + Duration::from_secs(4)
-            )
-            .unwrap()
-            .moving
-        );
+        assert!(!m.feed_at(&frame(640, 360, Some((100, 100, 60))), t + Duration::from_secs(3)).unwrap().moving);
+        assert!(m.feed_at(&frame(640, 360, Some((450, 100, 60))), t + Duration::from_secs(4)).unwrap().moving);
         // Whole picture brightens (lights on): no motion.
         let mut m = MotionDetector::new(640, 360, settings(500, 0, 0.0));
         for i in 0..12 {
             m.feed_at(&frame(640, 360, None), t + Duration::from_millis(i * 200));
         }
         let bright = vec![200u8; 640 * 360 * 3];
-        assert!(
-            !m.feed_at(&bright, t + Duration::from_secs(3))
-                .unwrap()
-                .moving
-        );
+        assert!(!m.feed_at(&bright, t + Duration::from_secs(3)).unwrap().moving);
     }
 }

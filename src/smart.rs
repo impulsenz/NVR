@@ -177,11 +177,8 @@ pub async fn scan() -> Overview {
         Ok(t) => t,
         Err(e) => {
             let missing = e.root_cause().to_string().to_lowercase().contains("no such file") || e.root_cause().to_string().to_lowercase().contains("cannot find");
-            o.note = if missing {
-                "smartctl isn't installed. smartmontools is the free, standard program that reads a drive's own health report.".into()
-            } else {
-                format!("{e:#}")
-            };
+            o.note =
+                if missing { "smartctl isn't installed. smartmontools is the free, standard program that reads a drive's own health report.".into() } else { format!("{e:#}") };
             return o;
         }
     };
@@ -278,7 +275,9 @@ async fn install_windows() -> Result<()> {
     if smartctl(&["--version"]).await.map(|t| t.contains("smartctl")).unwrap_or(false) {
         Ok(())
     } else {
-        anyhow::bail!("the installer ran but smartctl isn't there: it needs administrator rights. Run GAZE as administrator, or install smartmontools from smartmontools.org yourself")
+        anyhow::bail!(
+            "the installer ran but smartctl isn't there: it needs administrator rights. Run GAZE as administrator, or install smartmontools from smartmontools.org yourself"
+        )
     }
 }
 

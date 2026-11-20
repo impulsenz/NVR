@@ -18,9 +18,25 @@ const ASSET: &str = "GAZE-Watchdog.exe";
 
 /// The settings the watchdog understands (anything else is dropped).
 const KEYS: &[&str] = &[
-    "enabled", "gaze_exe", "gaze_args", "launch", "service_name", "check_url", "auto_url", "check_interval_s", "timeout_s",
-    "failures_before_restart", "startup_grace_s", "restart_delay_s", "leave_closed_on_quit", "max_restarts", "within_minutes",
-    "cooldown_minutes", "kill_timeout_s", "auto_update", "update_check_hours",
+    "enabled",
+    "gaze_exe",
+    "gaze_args",
+    "launch",
+    "service_name",
+    "check_url",
+    "auto_url",
+    "check_interval_s",
+    "timeout_s",
+    "failures_before_restart",
+    "startup_grace_s",
+    "restart_delay_s",
+    "leave_closed_on_quit",
+    "max_restarts",
+    "within_minutes",
+    "cooldown_minutes",
+    "kill_timeout_s",
+    "auto_update",
+    "update_check_hours",
 ];
 
 pub fn dir(data: &Path) -> PathBuf {
@@ -81,7 +97,18 @@ fn defaults(mgr: &Manager) -> Map<String, Value> {
     m.insert("service_name".into(), json!("GAZE"));
     m.insert("check_url".into(), json!(check_url(&cfg.server.listen)));
     m.insert("auto_url".into(), json!(true));
-    for (k, v) in [("check_interval_s", 10), ("timeout_s", 8), ("failures_before_restart", 3), ("startup_grace_s", 120), ("restart_delay_s", 10), ("max_restarts", 5), ("within_minutes", 15), ("cooldown_minutes", 10), ("kill_timeout_s", 20), ("update_check_hours", 12)] {
+    for (k, v) in [
+        ("check_interval_s", 10),
+        ("timeout_s", 8),
+        ("failures_before_restart", 3),
+        ("startup_grace_s", 120),
+        ("restart_delay_s", 10),
+        ("max_restarts", 5),
+        ("within_minutes", 15),
+        ("cooldown_minutes", 10),
+        ("kill_timeout_s", 20),
+        ("update_check_hours", 12),
+    ] {
         m.insert(k.into(), json!(v));
     }
     m.insert("leave_closed_on_quit".into(), json!(false));
@@ -374,7 +401,10 @@ pub async fn run(mgr: Arc<Manager>) {
             let mut a = AUTO.lock().unwrap_or_else(|e| e.into_inner());
             if running {
                 if was_running == Some(false) {
-                    tracing::info!("watchdog: running again{}", if a.attempts > 0 { format!(" (after {} attempt{} to start it)", a.attempts, if a.attempts == 1 { "" } else { "s" }) } else { String::new() });
+                    tracing::info!(
+                        "watchdog: running again{}",
+                        if a.attempts > 0 { format!(" (after {} attempt{} to start it)", a.attempts, if a.attempts == 1 { "" } else { "s" }) } else { String::new() }
+                    );
                 }
                 *a = Auto::default();
             } else if was_running != Some(false) || a.down_since.is_none() {
@@ -408,7 +438,10 @@ pub async fn run(mgr: Arc<Manager>) {
                     }
                     Err(e) => {
                         AUTO.lock().unwrap_or_else(|x| x.into_inner()).error = Some(format!("{e:#}"));
-                        tracing::warn!("watchdog: could not start it: {e:#}{}", if attempt >= 3 { " — GAZE won't try again by itself; click the Watchdog button at the top to start it" } else { "" });
+                        tracing::warn!(
+                            "watchdog: could not start it: {e:#}{}",
+                            if attempt >= 3 { " — GAZE won't try again by itself; click the Watchdog button at the top to start it" } else { "" }
+                        );
                     }
                 }
             }

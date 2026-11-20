@@ -27,9 +27,7 @@ pub fn inside(poly: &[[f32; 2]], p: [f32; 2]) -> bool {
     let mut j = n - 1;
     for i in 0..n {
         let (a, b) = (poly[i], poly[j]);
-        if (a[1] > p[1]) != (b[1] > p[1])
-            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
-        {
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
             c = !c;
         }
         j = i;
@@ -119,11 +117,8 @@ impl ZoneWatch {
     pub fn check(&mut self, zones: &[ZoneConfig], dets: Vec<Detection>) -> ZoneReport {
         let now = Instant::now();
         let mut r = ZoneReport::default();
-        self.tracks
-            .retain(|t| now.duration_since(t.seen) < Duration::from_secs(20));
-        let required: Vec<usize> = (0..zones.len())
-            .filter(|&i| zones[i].kind == "area" && zones[i].required)
-            .collect();
+        self.tracks.retain(|t| now.duration_since(t.seen) < Duration::from_secs(20));
+        let required: Vec<usize> = (0..zones.len()).filter(|&i| zones[i].kind == "area" && zones[i].required).collect();
         for d in dets {
             let p = foot(&d);
             // The same object as before: same label, nearest within reach.
@@ -139,14 +134,7 @@ impl ZoneWatch {
             let ti = match ti {
                 Some(i) => i,
                 None => {
-                    self.tracks.push(Track {
-                        label: d.label.clone(),
-                        pos: p,
-                        seen: now,
-                        entered: vec![None; zones.len()],
-                        told: vec![],
-                        speeds: vec![Vec::new(); zones.len()],
-                    });
+                    self.tracks.push(Track { label: d.label.clone(), pos: p, seen: now, entered: vec![None; zones.len()], told: vec![], speeds: vec![Vec::new(); zones.len()] });
                     self.tracks.len() - 1
                 }
             };
@@ -173,11 +161,7 @@ impl ZoneWatch {
                         let key = format!("cross:{}", z.name);
                         if ok && !t.told.contains(&key) {
                             t.told.push(key);
-                            r.notes.push(format!(
-                                "{name} crossed {} ({})",
-                                z.name,
-                                if dir { "A→B" } else { "B→A" }
-                            ));
+                            r.notes.push(format!("{name} crossed {} ({})", z.name, if dir { "A→B" } else { "B→A" }));
                             if !r.zones.contains(&z.name) {
                                 r.zones.push(z.name.clone());
                             }
@@ -221,16 +205,11 @@ impl ZoneWatch {
                     t.told.push(key);
                     r.notes.push(format!("{name} in {}", z.name));
                 }
-                if z.loiter_seconds > 0
-                    && now.duration_since(since).as_secs() >= z.loiter_seconds as u64
-                {
+                if z.loiter_seconds > 0 && now.duration_since(since).as_secs() >= z.loiter_seconds as u64 {
                     let key = format!("loiter:{}", z.name);
                     if !t.told.contains(&key) {
                         t.told.push(key);
-                        r.notes.push(format!(
-                            "{name} loitering in {} ({} s+)",
-                            z.name, z.loiter_seconds
-                        ));
+                        r.notes.push(format!("{name} loitering in {} ({} s+)", z.name, z.loiter_seconds));
                     }
                 }
             }
@@ -246,28 +225,18 @@ impl ZoneWatch {
 
 fn cap(s: &str) -> String {
     let mut c = s.chars();
-    c.next()
-        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
-        .unwrap_or_default()
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
-
 
 /// Item left / taken: a small grey picture of an area, compared before and
 /// after an alert: the points of its box
 /// (x0, y0, x1, y1; 0..1 of the picture) that are in the area.
-pub fn area_signature_by(
-    f: &crate::imgutil::Frame,
-    (x0, y0, x1, y1): (f32, f32, f32, f32),
-    contains: impl Fn([f32; 2]) -> bool,
-) -> Vec<f32> {
+pub fn area_signature_by(f: &crate::imgutil::Frame, (x0, y0, x1, y1): (f32, f32, f32, f32), contains: impl Fn([f32; 2]) -> bool) -> Vec<f32> {
     const N: usize = 32;
     let mut out = Vec::new();
     for gy in 0..N {
         for gx in 0..N {
-            let p = [
-                x0 + (x1 - x0) * (gx as f32 + 0.5) / N as f32,
-                y0 + (y1 - y0) * (gy as f32 + 0.5) / N as f32,
-            ];
+            let p = [x0 + (x1 - x0) * (gx as f32 + 0.5) / N as f32, y0 + (y1 - y0) * (gy as f32 + 0.5) / N as f32];
             if !contains(p) {
                 continue;
             }
@@ -288,12 +257,7 @@ pub fn area_change(before: &[f32], after: &[f32]) -> f32 {
     }
     let n = before.len() as f32;
     let shift = after.iter().sum::<f32>() / n - before.iter().sum::<f32>() / n;
-    before
-        .iter()
-        .zip(after)
-        .filter(|(b, a)| (*a - *b - shift).abs() > 28.0)
-        .count() as f32
-        / n
+    before.iter().zip(after).filter(|(b, a)| (*a - *b - shift).abs() > 28.0).count() as f32 / n
 }
 
 #[cfg(test)]
@@ -301,23 +265,11 @@ mod tests {
     use super::*;
 
     fn det(label: &str, cx: f32, foot_y: f32) -> Detection {
-        Detection {
-            label: label.into(),
-            score: 0.9,
-            x: cx - 0.05,
-            y: foot_y - 0.2,
-            w: 0.1,
-            h: 0.2,
-        }
+        Detection { label: label.into(), score: 0.9, x: cx - 0.05, y: foot_y - 0.2, w: 0.1, h: 0.2 }
     }
 
     fn zone(name: &str, kind: &str, points: Vec<[f32; 2]>) -> ZoneConfig {
-        ZoneConfig {
-            name: name.into(),
-            kind: kind.into(),
-            points,
-            ..Default::default()
-        }
+        ZoneConfig { name: name.into(), kind: kind.into(), points, ..Default::default() }
     }
 
     #[test]
@@ -332,11 +284,7 @@ mod tests {
 
     #[test]
     fn areas_lines_and_required() {
-        let porch = zone(
-            "Porch",
-            "area",
-            vec![[0.5, 0.5], [1.0, 0.5], [1.0, 1.0], [0.5, 1.0]],
-        );
+        let porch = zone("Porch", "area", vec![[0.5, 0.5], [1.0, 0.5], [1.0, 1.0], [0.5, 1.0]]);
         assert!(inside(&porch.points, [0.7, 0.8]));
         assert!(!inside(&porch.points, [0.2, 0.8]));
         let mut gate = zone("Gate", "line", vec![[0.4, 0.0], [0.4, 1.0]]);
@@ -346,16 +294,8 @@ mod tests {
         let r = w.check(&zones, vec![det("person", 0.3, 0.8)]);
         assert!(r.notes.is_empty(), "{:?}", r.notes);
         let r = w.check(&zones, vec![det("person", 0.6, 0.8)]);
-        assert!(
-            r.notes.iter().any(|n| n.starts_with("Person crossed Gate")),
-            "{:?}",
-            r.notes
-        );
-        assert!(
-            r.notes.iter().any(|n| n == "Person in Porch"),
-            "{:?}",
-            r.notes
-        );
+        assert!(r.notes.iter().any(|n| n.starts_with("Person crossed Gate")), "{:?}", r.notes);
+        assert!(r.notes.iter().any(|n| n == "Person in Porch"), "{:?}", r.notes);
         // Required area: objects outside it don't alert.
         let mut req = porch;
         req.required = true;
@@ -379,20 +319,10 @@ mod tests {
                     }
                 }
             }
-            crate::imgutil::Frame {
-                width: w,
-                height: h,
-                rgb: std::sync::Arc::new(rgb),
-            }
+            crate::imgutil::Frame { width: w, height: h, rgb: std::sync::Arc::new(rgb) }
         };
         let before = area_signature_by(&mk(60, false), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p));
-        assert!(
-            area_change(&before, &area_signature_by(&mk(80, false), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p))) < 0.05,
-            "brightness change ignored"
-        );
-        assert!(
-            area_change(&before, &area_signature_by(&mk(60, true), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p))) > 0.15,
-            "parcel noticed"
-        );
+        assert!(area_change(&before, &area_signature_by(&mk(80, false), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p))) < 0.05, "brightness change ignored");
+        assert!(area_change(&before, &area_signature_by(&mk(60, true), (0.0, 0.0, 1.0, 1.0), |p| inside(&poly, p))) > 0.15, "parcel noticed");
     }
 }

@@ -22,18 +22,12 @@ pub struct Seen {
 impl Seen {
     pub fn open(data_dir: &std::path::Path) -> Self {
         let file = data_dir.join("alerts-seen.json");
-        let st = std::fs::read(&file)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_else(|| State {
-                // First start: earlier alerts count as viewed.
-                before: Some(Local::now()),
-                ids: HashSet::new(),
-            });
-        let s = Self {
-            file,
-            st: Mutex::new(st),
-        };
+        let st = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| State {
+            // First start: earlier alerts count as viewed.
+            before: Some(Local::now()),
+            ids: HashSet::new(),
+        });
+        let s = Self { file, st: Mutex::new(st) };
         s.save();
         s
     }

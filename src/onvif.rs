@@ -6,8 +6,8 @@
 //! profile token), ContinuousMove / Stop, and presets.
 //! Authentication is WS-Security UsernameToken with a password digest.
 
-use crate::sync::MutexExt;
 use crate::config::{CameraConfig, PtzConfig};
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use serde::Serialize;
@@ -35,30 +35,13 @@ impl Target {
     /// From the PTZ settings, filling blanks from the camera's stream URL.
     pub fn from(cam: &CameraConfig, ptz: &PtzConfig) -> Result<Self> {
         let parsed = parse_url(&cam.url);
-        let host = if ptz.host.trim().is_empty() {
-            parsed.as_ref().map(|p| p.0.clone()).unwrap_or_default()
-        } else {
-            ptz.host.trim().to_string()
-        };
+        let host = if ptz.host.trim().is_empty() { parsed.as_ref().map(|p| p.0.clone()).unwrap_or_default() } else { ptz.host.trim().to_string() };
         if host.is_empty() {
             bail!("enter the camera's address for PTZ");
         }
-        let user = if ptz.username.is_empty() {
-            parsed.as_ref().map(|p| p.1.clone()).unwrap_or_default()
-        } else {
-            ptz.username.clone()
-        };
-        let pass = if ptz.password.is_empty() {
-            parsed.as_ref().map(|p| p.2.clone()).unwrap_or_default()
-        } else {
-            ptz.password.clone()
-        };
-        Ok(Self {
-            host,
-            port: ptz.port,
-            user,
-            pass,
-        })
+        let user = if ptz.username.is_empty() { parsed.as_ref().map(|p| p.1.clone()).unwrap_or_default() } else { ptz.username.clone() };
+        let pass = if ptz.password.is_empty() { parsed.as_ref().map(|p| p.2.clone()).unwrap_or_default() } else { ptz.password.clone() };
+        Ok(Self { host, port: ptz.port, user, pass })
     }
 
     pub(crate) fn device_url(&self) -> String {
@@ -74,15 +57,7 @@ fn parse_url(url: &str) -> Option<(String, String, String)> {
         Some((a, h)) => (Some(a), h),
         None => (None, authority),
     };
-    let host = if hostport.starts_with('[') {
-        hostport
-            .split(']')
-            .next()?
-            .trim_start_matches('[')
-            .to_string()
-    } else {
-        hostport.split(':').next()?.to_string()
-    };
+    let host = if hostport.starts_with('[') { hostport.split(']').next()?.trim_start_matches('[').to_string() } else { hostport.split(':').next()?.to_string() };
     let (user, pass) = match auth {
         Some(a) => {
             let (u, p) = a.split_once(':').unwrap_or((a, ""));
@@ -113,11 +88,7 @@ fn pct_decode(s: &str) -> String {
 }
 
 pub(crate) fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -143,12 +114,7 @@ pub fn security_header(user: &str, pass: &str, nonce: &[u8], created: &str) -> S
 
 fn new_nonce() -> Vec<u8> {
     let mut h = Sha1::new();
-    h.update(
-        chrono::Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or(0)
-            .to_le_bytes(),
-    );
+    h.update(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0).to_le_bytes());
     h.update(NONCE_COUNTER.fetch_add(1, Ordering::SeqCst).to_le_bytes());
     h.update(std::process::id().to_le_bytes());
     h.finalize()[..16].to_vec()
@@ -230,27 +196,13 @@ pub struct Onvif {
 
 impl Default for Onvif {
     fn default() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(8))
-                .build()
-                .unwrap_or_default(),
-            cache: Mutex::new(Discovered::default()),
-        }
+        Self { client: reqwest::Client::builder().timeout(Duration::from_secs(8)).build().unwrap_or_default(), cache: Mutex::new(Discovered::default()) }
     }
 }
 
 impl Onvif {
-    pub(crate) async fn call(
-        &self,
-        t: &Target,
-        url: &str,
-        action: &str,
-        body: &str,
-    ) -> Result<String> {
-        let created = chrono::Utc::now()
-            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-            .to_string();
+    pub(crate) async fn call(&self, t: &Target, url: &str, action: &str, body: &str) -> Result<String> {
+        let created = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
         let header = security_header(&t.user, &t.pass, &new_nonce(), &created);
         let env = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tt="http://www.onvif.org/ver10/schema">{header}<s:Body>{body}</s:Body></s:Envelope>"#
@@ -258,10 +210,7 @@ impl Onvif {
         let resp = self
             .client
             .post(url)
-            .header(
-                "Content-Type",
-                format!("application/soap+xml; charset=utf-8; action=\"{action}\""),
-            )
+            .header("Content-Type", format!("application/soap+xml; charset=utf-8; action=\"{action}\""))
             .body(env)
             .send()
             .await
@@ -269,16 +218,9 @@ impl Onvif {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            let reason = tag_text(&text, "Text")
-                .or_else(|| tag_text(&text, "Reason"))
-                .unwrap_or_else(|| status.to_string());
-            if status.as_u16() == 401
-                || reason.to_lowercase().contains("not authorized")
-                || reason.to_lowercase().contains("sender not authorized")
-            {
-                bail!(
-                    "the camera refused the login ({reason}). Check the user name and password, and that the camera's clock is correct"
-                );
+            let reason = tag_text(&text, "Text").or_else(|| tag_text(&text, "Reason")).unwrap_or_else(|| status.to_string());
+            if status.as_u16() == 401 || reason.to_lowercase().contains("not authorized") || reason.to_lowercase().contains("sender not authorized") {
+                bail!("the camera refused the login ({reason}). Check the user name and password, and that the camera's clock is correct");
             }
             bail!("camera replied: {reason}");
         }
@@ -302,37 +244,19 @@ impl Onvif {
             )
             .await?;
         let media = capability_xaddr(&caps, "Media").unwrap_or_else(|| t.device_url());
-        let ptz = capability_xaddr(&caps, "PTZ")
-            .ok_or_else(|| anyhow!("this camera does not report PTZ support over ONVIF"))?;
+        let ptz = capability_xaddr(&caps, "PTZ").ok_or_else(|| anyhow!("this camera does not report PTZ support over ONVIF"))?;
         // Cameras sometimes report their internal address; keep their path but use the address we reach them on.
         let fix = |u: &str| -> String {
-            match u
-                .split_once("://")
-                .and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string()))
-            {
+            match u.split_once("://").and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string())) {
                 Some(path) => format!("http://{}:{}{}", t.host, t.port, path),
                 None => u.to_string(),
             }
         };
         let (media, ptz) = (fix(&media), fix(&ptz));
-        let profiles = self
-            .call(
-                t,
-                &media,
-                "http://www.onvif.org/ver10/media/wsdl/GetProfiles",
-                r#"<GetProfiles xmlns="http://www.onvif.org/ver10/media/wsdl"/>"#,
-            )
-            .await?;
+        let profiles = self.call(t, &media, "http://www.onvif.org/ver10/media/wsdl/GetProfiles", r#"<GetProfiles xmlns="http://www.onvif.org/ver10/media/wsdl"/>"#).await?;
         let tokens = attr_values(&profiles, "Profiles", "token");
-        let profile = tokens
-            .first()
-            .cloned()
-            .ok_or_else(|| anyhow!("the camera has no media profiles"))?;
-        let d = Discovered {
-            target: Some(t.clone()),
-            ptz,
-            profile,
-        };
+        let profile = tokens.first().cloned().ok_or_else(|| anyhow!("the camera has no media profiles"))?;
+        let d = Discovered { target: Some(t.clone()), ptz, profile };
         *self.cache.locked() = d.clone();
         Ok(d)
     }
@@ -347,41 +271,22 @@ impl Onvif {
             tilt.clamp(-1.0, 1.0),
             zoom.clamp(-1.0, 1.0)
         );
-        self.call(
-            t,
-            &d.ptz,
-            "http://www.onvif.org/ver20/ptz/wsdl/ContinuousMove",
-            &body,
-        )
-        .await?;
+        self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/ContinuousMove", &body).await?;
         Ok(())
     }
 
     pub async fn stop(&self, t: &Target) -> Result<()> {
         let d = self.discover(t).await?;
-        let body = format!(
-            r#"<Stop xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken><PanTilt>true</PanTilt><Zoom>true</Zoom></Stop>"#,
-            xml_escape(&d.profile)
-        );
-        self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/Stop", &body)
-            .await?;
+        let body =
+            format!(r#"<Stop xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken><PanTilt>true</PanTilt><Zoom>true</Zoom></Stop>"#, xml_escape(&d.profile));
+        self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/Stop", &body).await?;
         Ok(())
     }
 
     pub async fn presets(&self, t: &Target) -> Result<Vec<Preset>> {
         let d = self.discover(t).await?;
-        let body = format!(
-            r#"<GetPresets xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GetPresets>"#,
-            xml_escape(&d.profile)
-        );
-        let xml = self
-            .call(
-                t,
-                &d.ptz,
-                "http://www.onvif.org/ver20/ptz/wsdl/GetPresets",
-                &body,
-            )
-            .await?;
+        let body = format!(r#"<GetPresets xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GetPresets>"#, xml_escape(&d.profile));
+        let xml = self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/GetPresets", &body).await?;
         Ok(parse_presets(&xml))
     }
 
@@ -392,13 +297,7 @@ impl Onvif {
             xml_escape(&d.profile),
             xml_escape(token)
         );
-        self.call(
-            t,
-            &d.ptz,
-            "http://www.onvif.org/ver20/ptz/wsdl/GotoPreset",
-            &body,
-        )
-        .await?;
+        self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/GotoPreset", &body).await?;
         Ok(())
     }
 
@@ -406,10 +305,7 @@ impl Onvif {
     /// doesn't it say (None)?
     pub async fn moving(&self, t: &Target) -> Option<bool> {
         let d = self.discover(t).await.ok()?;
-        let body = format!(
-            r#"<GetStatus xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GetStatus>"#,
-            xml_escape(&d.profile)
-        );
+        let body = format!(r#"<GetStatus xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GetStatus>"#, xml_escape(&d.profile));
         let xml = self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/GetStatus", &body).await.ok()?;
         let i = xml.find("MoveStatus")?;
         let rest = &xml[i..];
@@ -425,10 +321,7 @@ impl Onvif {
     /// Back to the camera's home position.
     pub async fn home(&self, t: &Target) -> Result<()> {
         let d = self.discover(t).await?;
-        let body = format!(
-            r#"<GotoHomePosition xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GotoHomePosition>"#,
-            xml_escape(&d.profile)
-        );
+        let body = format!(r#"<GotoHomePosition xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>{}</ProfileToken></GotoHomePosition>"#, xml_escape(&d.profile));
         self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/GotoHomePosition", &body).await?;
         Ok(())
     }
@@ -453,13 +346,7 @@ impl Onvif {
             xml_escape(&d.profile),
             xml_escape(name)
         );
-        self.call(
-            t,
-            &d.ptz,
-            "http://www.onvif.org/ver20/ptz/wsdl/SetPreset",
-            &body,
-        )
-        .await?;
+        self.call(t, &d.ptz, "http://www.onvif.org/ver20/ptz/wsdl/SetPreset", &body).await?;
         Ok(())
     }
 }
@@ -476,28 +363,12 @@ pub fn parse_presets(xml: &str) -> Vec<Preset> {
             None => break,
         };
         let tag = &rest[lt..tag_end];
-        let token = attr_values(
-            &format!("{tag}>"),
-            tag[1..]
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .rsplit(':')
-                .next()
-                .unwrap_or(""),
-            "token",
-        )
-        .into_iter()
-        .next();
+        let token = attr_values(&format!("{tag}>"), tag[1..].split_whitespace().next().unwrap_or("").rsplit(':').next().unwrap_or(""), "token").into_iter().next();
         let after = &rest[tag_end..];
         let close = after.find("Preset>").unwrap_or(after.len());
         let name = tag_text(&after[..close], "Name").unwrap_or_default();
         if let Some(token) = token {
-            let name = if name.is_empty() {
-                format!("Preset {token}")
-            } else {
-                name
-            };
+            let name = if name.is_empty() { format!("Preset {token}") } else { name };
             out.push(Preset { token, name });
         }
         rest = &rest[tag_end..];
@@ -530,70 +401,22 @@ mod tests {
             <tt:Device><tt:XAddr>http://10.0.0.5/onvif/device_service</tt:XAddr></tt:Device>
             <tt:Media><tt:XAddr>http://10.0.0.5/onvif/Media</tt:XAddr></tt:Media>
             <tt:PTZ><tt:XAddr>http://10.0.0.5/onvif/PTZ</tt:XAddr></tt:PTZ></tds:Capabilities></tds:GetCapabilitiesResponse></s:Body></s:Envelope>"#;
-        assert_eq!(
-            capability_xaddr(caps, "PTZ").as_deref(),
-            Some("http://10.0.0.5/onvif/PTZ")
-        );
-        assert_eq!(
-            capability_xaddr(caps, "Media").as_deref(),
-            Some("http://10.0.0.5/onvif/Media")
-        );
+        assert_eq!(capability_xaddr(caps, "PTZ").as_deref(), Some("http://10.0.0.5/onvif/PTZ"));
+        assert_eq!(capability_xaddr(caps, "Media").as_deref(), Some("http://10.0.0.5/onvif/Media"));
         let profiles = r#"<trt:GetProfilesResponse><trt:Profiles fixed="true" token="Profile_1"><tt:Name>main</tt:Name></trt:Profiles><trt:Profiles token="Profile_2"/></trt:GetProfilesResponse>"#;
-        assert_eq!(
-            attr_values(profiles, "Profiles", "token"),
-            ["Profile_1", "Profile_2"]
-        );
+        assert_eq!(attr_values(profiles, "Profiles", "token"), ["Profile_1", "Profile_2"]);
         let presets = r#"<tptz:GetPresetsResponse><tptz:Preset token="1"><tt:Name>Gate</tt:Name><tt:PTZPosition/></tptz:Preset><tptz:Preset token="2"><tt:Name>Drive</tt:Name></tptz:Preset></tptz:GetPresetsResponse>"#;
-        assert_eq!(
-            parse_presets(presets),
-            vec![
-                Preset {
-                    token: "1".into(),
-                    name: "Gate".into()
-                },
-                Preset {
-                    token: "2".into(),
-                    name: "Drive".into()
-                }
-            ]
-        );
+        assert_eq!(parse_presets(presets), vec![Preset { token: "1".into(), name: "Gate".into() }, Preset { token: "2".into(), name: "Drive".into() }]);
         let fault = r#"<s:Fault><s:Reason><s:Text xml:lang="en">Sender not Authorized</s:Text></s:Reason></s:Fault>"#;
-        assert_eq!(
-            tag_text(fault, "Text").as_deref(),
-            Some("Sender not Authorized")
-        );
+        assert_eq!(tag_text(fault, "Text").as_deref(), Some("Sender not Authorized"));
     }
 
     #[test]
     fn target_from_stream_url() {
-        let cam = CameraConfig {
-            url: "rtsp://admin:p%40ss@192.168.1.64:554/Streaming/Channels/101".into(),
-            ..Default::default()
-        };
+        let cam = CameraConfig { url: "rtsp://admin:p%40ss@192.168.1.64:554/Streaming/Channels/101".into(), ..Default::default() };
         let t = Target::from(&cam, &PtzConfig::default()).unwrap();
-        assert_eq!(
-            t,
-            Target {
-                host: "192.168.1.64".into(),
-                port: 80,
-                user: "admin".into(),
-                pass: "p@ss".into()
-            }
-        );
-        let t = Target::from(
-            &cam,
-            &PtzConfig {
-                host: "10.0.0.9".into(),
-                port: 2020,
-                username: "u".into(),
-                password: "p".into(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            (t.host.as_str(), t.port, t.user.as_str()),
-            ("10.0.0.9", 2020, "u")
-        );
+        assert_eq!(t, Target { host: "192.168.1.64".into(), port: 80, user: "admin".into(), pass: "p@ss".into() });
+        let t = Target::from(&cam, &PtzConfig { host: "10.0.0.9".into(), port: 2020, username: "u".into(), password: "p".into(), ..Default::default() }).unwrap();
+        assert_eq!((t.host.as_str(), t.port, t.user.as_str()), ("10.0.0.9", 2020, "u"));
     }
 }

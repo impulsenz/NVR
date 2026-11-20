@@ -4,7 +4,7 @@
 //! in alerts). A **vehicle** has number plates and photos. Kept in
 //! `nvr-data/known.json`, photos in `nvr-data/known/<id>/`.
 
-use crate::sync::{RwLockExt};
+use crate::sync::RwLockExt;
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -50,19 +50,13 @@ pub struct KnownStore {
 /// Unit vector ↔ compact text (one signed byte per number).
 pub fn pack(v: &[f32]) -> String {
     use base64::Engine;
-    let b: Vec<u8> = v
-        .iter()
-        .map(|x| ((x * 127.0).round().clamp(-127.0, 127.0) as i8) as u8)
-        .collect();
+    let b: Vec<u8> = v.iter().map(|x| ((x * 127.0).round().clamp(-127.0, 127.0) as i8) as u8).collect();
     base64::engine::general_purpose::STANDARD.encode(b)
 }
 
 pub fn unpack(s: &str) -> Vec<f32> {
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s)
-        .map(|b| b.into_iter().map(|x| x as i8 as f32 / 127.0).collect())
-        .unwrap_or_default()
+    base64::engine::general_purpose::STANDARD.decode(s).map(|b| b.into_iter().map(|x| x as i8 as f32 / 127.0).collect()).unwrap_or_default()
 }
 
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -81,15 +75,8 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 impl KnownStore {
     pub fn open(data_dir: &Path) -> Self {
         let file = data_dir.join("known.json");
-        let items = std::fs::read(&file)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        Self {
-            file,
-            dir: data_dir.join("known"),
-            items: RwLock::new(items),
-        }
+        let items = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        Self { file, dir: data_dir.join("known"), items: RwLock::new(items) }
     }
 
     fn save(&self) -> Result<()> {
@@ -129,9 +116,7 @@ impl KnownStore {
                     continue;
                 }
                 let dir = self.dir.join(&k.id);
-                k.photos.retain(|p| {
-                    ok(p) && photo(&k.id, p).is_some_and(|b| std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(p), b)).is_ok())
-                });
+                k.photos.retain(|p| ok(p) && photo(&k.id, p).is_some_and(|b| std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(p), b)).is_ok()));
                 items.retain(|x| x.id != k.id);
                 items.push(k);
                 n += 1;
@@ -145,23 +130,12 @@ impl KnownStore {
         self.items
             .reader()
             .iter()
-            .map(|k| KnownInfo {
-                id: k.id.clone(),
-                kind: k.kind.clone(),
-                name: k.name.clone(),
-                plates: k.plates.clone(),
-                faces: k.faces.len(),
-                photos: k.photos.clone(),
-            })
+            .map(|k| KnownInfo { id: k.id.clone(), kind: k.kind.clone(), name: k.name.clone(), plates: k.plates.clone(), faces: k.faces.len(), photos: k.photos.clone() })
             .collect()
     }
 
     pub fn get(&self, id: &str) -> Option<Known> {
-        self.items
-            .reader()
-            .iter()
-            .find(|k| k.id == id)
-            .cloned()
+        self.items.reader().iter().find(|k| k.id == id).cloned()
     }
 
     pub fn create(&self, kind: &str, name: &str, plates: Vec<String>) -> Result<String> {
@@ -172,11 +146,7 @@ impl KnownStore {
         if kind != "person" && kind != "vehicle" {
             bail!("unknown kind");
         }
-        let base: String = name
-            .to_lowercase()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
+        let base: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
         let mut id = base.trim_matches('-').to_string();
         if id.is_empty() {
             id = "known".into();
@@ -189,13 +159,7 @@ impl KnownStore {
                 id = format!("{root}-{n}");
                 n += 1;
             }
-            items.push(Known {
-                id: id.clone(),
-                kind: kind.into(),
-                name: name.into(),
-                plates: clean_plates(plates),
-                ..Default::default()
-            });
+            items.push(Known { id: id.clone(), kind: kind.into(), name: name.into(), plates: clean_plates(plates), ..Default::default() });
         }
         self.save()?;
         Ok(id)
@@ -204,10 +168,7 @@ impl KnownStore {
     pub fn update(&self, id: &str, name: Option<&str>, plates: Option<Vec<String>>) -> Result<()> {
         {
             let mut items = self.items.writer();
-            let k = items
-                .iter_mut()
-                .find(|k| k.id == id)
-                .ok_or_else(|| anyhow!("not found"))?;
+            let k = items.iter_mut().find(|k| k.id == id).ok_or_else(|| anyhow!("not found"))?;
             if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
                 k.name = n.into();
             }
@@ -225,19 +186,10 @@ impl KnownStore {
     }
 
     /// Teach: add a faceprint / plate / photo.
-    pub fn add(
-        &self,
-        id: &str,
-        face: Option<&[f32]>,
-        plate: Option<&str>,
-        photo: Option<&[u8]>,
-    ) -> Result<()> {
+    pub fn add(&self, id: &str, face: Option<&[f32]>, plate: Option<&str>, photo: Option<&[u8]>) -> Result<()> {
         {
             let mut items = self.items.writer();
-            let k = items
-                .iter_mut()
-                .find(|k| k.id == id)
-                .ok_or_else(|| anyhow!("not found"))?;
+            let k = items.iter_mut().find(|k| k.id == id).ok_or_else(|| anyhow!("not found"))?;
             if let Some(f) = face {
                 k.faces.push(pack(f));
             }
@@ -252,16 +204,7 @@ impl KnownStore {
             if let Some(bytes) = photo {
                 let dir = self.dir.join(&k.id);
                 std::fs::create_dir_all(&dir)?;
-                let name = format!(
-                    "{}.jpg",
-                    k.photos.len()
-                        + 1
-                        + k.photos
-                            .iter()
-                            .filter_map(|p| p.trim_end_matches(".jpg").parse::<usize>().ok())
-                            .max()
-                            .unwrap_or(0)
-                );
+                let name = format!("{}.jpg", k.photos.len() + 1 + k.photos.iter().filter_map(|p| p.trim_end_matches(".jpg").parse::<usize>().ok()).max().unwrap_or(0));
                 std::fs::write(dir.join(&name), bytes)?;
                 k.photos.push(name);
             }
@@ -275,10 +218,7 @@ impl KnownStore {
     pub fn not_this(&self, name: &str, print: &[f32]) -> Result<()> {
         {
             let mut items = self.items.writer();
-            let Some(k) = items
-                .iter_mut()
-                .find(|k| k.kind == "person" && k.name == name)
-            else {
+            let Some(k) = items.iter_mut().find(|k| k.kind == "person" && k.name == name) else {
                 return Ok(());
             };
             k.faces.retain(|f| cosine(&unpack(f), print) < 0.9);
@@ -297,18 +237,10 @@ impl KnownStore {
             .iter()
             .filter(|k| k.kind == "person")
             .filter_map(|k| {
-                let best = k
-                    .faces
-                    .iter()
-                    .map(|f| cosine(&unpack(f), print))
-                    .fold(f32::MIN, f32::max);
+                let best = k.faces.iter().map(|f| cosine(&unpack(f), print)).fold(f32::MIN, f32::max);
                 // Corrected before: this looks more like a face that was
                 // wrongly taken for them than like them.
-                let wrong = k
-                    .not_faces
-                    .iter()
-                    .map(|f| cosine(&unpack(f), print))
-                    .fold(f32::MIN, f32::max);
+                let wrong = k.not_faces.iter().map(|f| cosine(&unpack(f), print)).fold(f32::MIN, f32::max);
                 (best >= crate::recog::FACE_MATCH && wrong < best).then(|| (k.name.clone(), best))
             })
             .max_by(|a, b| a.1.total_cmp(&b.1))
@@ -316,37 +248,17 @@ impl KnownStore {
 
     /// The known vehicle with this plate.
     pub fn match_plate(&self, plate: &str) -> Option<String> {
-        self.items
-            .reader()
-            .iter()
-            .filter(|k| k.kind == "vehicle")
-            .find(|k| {
-                k.plates
-                    .iter()
-                    .any(|p| crate::recog::plate_matches(p, plate))
-            })
-            .map(|k| k.name.clone())
+        self.items.reader().iter().filter(|k| k.kind == "vehicle").find(|k| k.plates.iter().any(|p| crate::recog::plate_matches(p, plate))).map(|k| k.name.clone())
     }
 
     pub fn photo_path(&self, id: &str, name: &str) -> Option<PathBuf> {
         let k = self.get(id)?;
-        k.photos
-            .iter()
-            .any(|p| p == name)
-            .then(|| self.dir.join(id).join(name))
+        k.photos.iter().any(|p| p == name).then(|| self.dir.join(id).join(name))
     }
 }
 
 fn clean_plates(p: Vec<String>) -> Vec<String> {
-    p.into_iter()
-        .map(|s| {
-            s.chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .map(|c| c.to_ascii_uppercase())
-                .collect::<String>()
-        })
-        .filter(|s| s.len() >= 2)
-        .collect()
+    p.into_iter().map(|s| s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect::<String>()).filter(|s| s.len() >= 2).collect()
 }
 
 #[cfg(test)]
@@ -359,15 +271,10 @@ mod tests {
         let s = KnownStore::open(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mum = s.create("person", "Mum", vec![]).unwrap();
-        let mum_face: Vec<f32> =
-            crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
+        let mum_face: Vec<f32> = crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
         s.add(&mum, Some(&mum_face), None, None).unwrap();
         // A visitor who looks a bit like Mum: taken for her.
-        let visitor: Vec<f32> = crate::recog::normalize(
-            (0..128)
-                .map(|i| (i as f32 * 0.37).sin() + 0.6 * (i as f32 * 2.3).cos())
-                .collect(),
-        );
+        let visitor: Vec<f32> = crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin() + 0.6 * (i as f32 * 2.3).cos()).collect());
         assert_eq!(s.match_face(&visitor).map(|x| x.0).as_deref(), Some("Mum"));
         // "Not Mum": no longer taken for her; Mum herself still is.
         s.not_this("Mum", &visitor).unwrap();
@@ -386,15 +293,11 @@ mod tests {
         let s = KnownStore::open(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mum = s.create("person", "Mum", vec![]).unwrap();
-        let car = s
-            .create("vehicle", "Dad's car", vec!["abc 123".into()])
-            .unwrap();
-        let face: Vec<f32> =
-            crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
+        let car = s.create("vehicle", "Dad's car", vec!["abc 123".into()]).unwrap();
+        let face: Vec<f32> = crate::recog::normalize((0..128).map(|i| (i as f32 * 0.37).sin()).collect());
         s.add(&mum, Some(&face), None, Some(b"jpg")).unwrap();
         assert_eq!(s.match_face(&face).unwrap().0, "Mum");
-        let other: Vec<f32> =
-            crate::recog::normalize((0..128).map(|i| (i as f32 * 1.91).cos()).collect());
+        let other: Vec<f32> = crate::recog::normalize((0..128).map(|i| (i as f32 * 1.91).cos()).collect());
         assert!(s.match_face(&other).is_none());
         assert_eq!(s.match_plate("ABC123").as_deref(), Some("Dad's car"));
         assert_eq!(s.match_plate("A8C123").as_deref(), Some("Dad's car"));

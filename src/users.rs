@@ -12,8 +12,8 @@
 //! sign in). Repeated wrong passwords lock out the user name and the
 //! address they come from, for longer each time.
 
-use crate::sync::{MutexExt, RwLockExt};
 use crate::config::DashboardConfig;
+use crate::sync::{MutexExt, RwLockExt};
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -210,10 +210,7 @@ fn lockout(n: u32) -> Duration {
 
 fn digest(token: &str) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(token.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Only the owner may read these files (passwords hashes, sessions).
@@ -237,19 +234,12 @@ fn dummy_hash() -> &'static str {
 fn hash(password: &str) -> Result<String> {
     use argon2::password_hash::{PasswordHasher, SaltString};
     let salt = SaltString::generate(&mut rand_core::OsRng);
-    Ok(argon2::Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow!("{e}"))?
-        .to_string())
+    Ok(argon2::Argon2::default().hash_password(password.as_bytes(), &salt).map_err(|e| anyhow!("{e}"))?.to_string())
 }
 
 fn verify(password: &str, hash: &str) -> bool {
     use argon2::password_hash::{PasswordHash, PasswordVerifier};
-    PasswordHash::new(hash).is_ok_and(|h| {
-        argon2::Argon2::default()
-            .verify_password(password.as_bytes(), &h)
-            .is_ok()
-    })
+    PasswordHash::new(hash).is_ok_and(|h| argon2::Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
 }
 
 fn token() -> String {
@@ -283,23 +273,10 @@ impl Users {
         let sessions_file = data_dir.join("sessions.json");
         private(&file);
         private(&sessions_file);
-        let users: Vec<User> = std::fs::read(&file)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        let mut sessions: HashMap<String, Session> = std::fs::read(&sessions_file)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        sessions
-            .retain(|_, s| s.expires > Utc::now() && users.iter().any(|u| u.username == s.user));
-        Self {
-            file,
-            sessions_file,
-            users: RwLock::new(users),
-            sessions: Mutex::new(sessions),
-            failures: Mutex::default(),
-        }
+        let users: Vec<User> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut sessions: HashMap<String, Session> = std::fs::read(&sessions_file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        sessions.retain(|_, s| s.expires > Utc::now() && users.iter().any(|u| u.username == s.user));
+        Self { file, sessions_file, users: RwLock::new(users), sessions: Mutex::new(sessions), failures: Mutex::default() }
     }
 
     fn save(&self) -> Result<()> {
@@ -399,10 +376,7 @@ impl Users {
                 tokens: Vec::new(),
             });
             let _ = self.save();
-            tracing::info!(
-                "the login from the settings is now the admin account \"{}\"",
-                username.trim()
-            );
+            tracing::info!("the login from the settings is now the admin account \"{}\"", username.trim());
         }
     }
 
@@ -411,27 +385,13 @@ impl Users {
         Ok(self.new_session(&name, true))
     }
 
-    pub fn create(
-        &self,
-        username: &str,
-        password: &str,
-        role: Role,
-        cameras: Vec<String>,
-    ) -> Result<()> {
-        self.add(username, password, role, cameras, false)
-            .map(|_| ())
+    pub fn create(&self, username: &str, password: &str, role: Role, cameras: Vec<String>) -> Result<()> {
+        self.add(username, password, role, cameras, false).map(|_| ())
     }
 
     /// `first`: only while there are no accounts (first-time setup; checked
     /// under the same lock, so two visitors can't both become admin).
-    fn add(
-        &self,
-        username: &str,
-        password: &str,
-        role: Role,
-        cameras: Vec<String>,
-        first: bool,
-    ) -> Result<String> {
+    fn add(&self, username: &str, password: &str, role: Role, cameras: Vec<String>, first: bool) -> Result<String> {
         let name = check_name(username)?;
         check_password(password)?;
         let h = hash(password)?;
@@ -459,23 +419,14 @@ impl Users {
         Ok(name)
     }
 
-    pub fn update(
-        &self,
-        username: &str,
-        role: Option<Role>,
-        cameras: Option<Vec<String>>,
-        password: Option<&str>,
-    ) -> Result<()> {
+    pub fn update(&self, username: &str, role: Option<Role>, cameras: Option<Vec<String>>, password: Option<&str>) -> Result<()> {
         if let Some(p) = password {
             check_password(p)?;
         }
         {
             let mut all = self.users.writer();
             let admins = all.iter().filter(|u| u.role == Role::Admin).count();
-            let u = all
-                .iter_mut()
-                .find(|u| u.username == username)
-                .ok_or_else(|| anyhow!("no such user"))?;
+            let u = all.iter_mut().find(|u| u.username == username).ok_or_else(|| anyhow!("no such user"))?;
             if let Some(r) = role {
                 if u.role == Role::Admin && r != Role::Admin && admins <= 1 {
                     bail!("there must be at least one admin");
@@ -491,9 +442,7 @@ impl Users {
         }
         if password.is_some() {
             // Signed in elsewhere with the old password: signed out.
-            self.sessions
-                .locked()
-                .retain(|_, s| s.user != username);
+            self.sessions.locked().retain(|_, s| s.user != username);
             self.save_sessions();
         }
         self.save()
@@ -503,45 +452,24 @@ impl Users {
         {
             let mut all = self.users.writer();
             let admins = all.iter().filter(|u| u.role == Role::Admin).count();
-            let u = all
-                .iter()
-                .find(|u| u.username == username)
-                .ok_or_else(|| anyhow!("no such user"))?;
+            let u = all.iter().find(|u| u.username == username).ok_or_else(|| anyhow!("no such user"))?;
             if u.role == Role::Admin && admins <= 1 {
                 bail!("the last admin can't be deleted");
             }
             all.retain(|u| u.username != username);
         }
-        self.sessions
-            .locked()
-            .retain(|_, s| s.user != username);
+        self.sessions.locked().retain(|_, s| s.user != username);
         self.save_sessions();
         self.save()
     }
 
     pub fn list(&self) -> Vec<Me> {
-        self.users
-            .reader()
-            .iter()
-            .map(|u| Me {
-                username: u.username.clone(),
-                role: u.role,
-                cameras: u.cameras.clone(),
-                two_step: u.totp.is_some(),
-            })
-            .collect()
+        self.users.reader().iter().map(|u| Me { username: u.username.clone(), role: u.role, cameras: u.cameras.clone(), two_step: u.totp.is_some() }).collect()
     }
 
     /// Sign in from address `from`. Slow on purpose (Argon2): call from a
     /// blocking thread.
-    pub fn login(
-        &self,
-        username: &str,
-        password: &str,
-        code: Option<&str>,
-        remember: bool,
-        from: &str,
-    ) -> Result<String> {
+    pub fn login(&self, username: &str, password: &str, code: Option<&str>, remember: bool, from: &str) -> Result<String> {
         let name = self.check(username, password, from)?;
         if self.has_two_step(&name) {
             let code = code.map(str::trim).filter(|c| !c.is_empty());
@@ -653,30 +581,19 @@ impl Users {
     /// The user's name (as stored) if the password is right. Counts wrong
     /// passwords against the user name and the address.
     pub fn check(&self, username: &str, password: &str, from: &str) -> Result<String> {
-        let keys = [
-            format!("user:{}", username.trim().to_lowercase()),
-            format!("ip:{}", ip_bucket(from)),
-        ];
+        let keys = [format!("user:{}", username.trim().to_lowercase()), format!("ip:{}", ip_bucket(from))];
         {
             let f = self.failures.locked();
             for k in &keys {
                 if let Some((n, at)) = f.get(k) {
                     let wait = lockout(*n) - (Utc::now() - *at);
                     if wait > Duration::zero() {
-                        bail!(
-                            "too many failed attempts — wait {} seconds and try again",
-                            wait.num_seconds().max(1)
-                        );
+                        bail!("too many failed attempts — wait {} seconds and try again", wait.num_seconds().max(1));
                     }
                 }
             }
         }
-        let user = self
-            .users
-            .reader()
-            .iter()
-            .find(|u| u.username.eq_ignore_ascii_case(username.trim()))
-            .map(|u| (u.username.clone(), u.hash.clone()));
+        let user = self.users.reader().iter().find(|u| u.username.eq_ignore_ascii_case(username.trim())).map(|u| (u.username.clone(), u.hash.clone()));
         // Always check a hash, so unknown names aren't faster.
         let ok = match &user {
             Some((_, h)) => verify(password, h),
@@ -710,14 +627,7 @@ impl Users {
         {
             let mut s = self.sessions.locked();
             s.retain(|_, x| x.expires > Utc::now());
-            s.insert(
-                digest(&t),
-                Session {
-                    user: user.to_string(),
-                    expires: Utc::now() + Duration::days(days),
-                    last_seen: Utc::now(),
-                },
-            );
+            s.insert(digest(&t), Session { user: user.to_string(), expires: Utc::now() + Duration::days(days), last_seen: Utc::now() });
         }
         self.save_sessions();
         t
@@ -756,7 +666,10 @@ impl Users {
     }
 
     pub fn tokens(&self, user: &str) -> Vec<serde_json::Value> {
-        self.users.reader().iter().find(|u| u.username == user)
+        self.users
+            .reader()
+            .iter()
+            .find(|u| u.username == user)
             .map(|u| u.tokens.iter().map(|t| serde_json::json!({"id": t.id, "name": t.name, "created": t.created})).collect())
             .unwrap_or_default()
     }
@@ -798,28 +711,17 @@ impl Users {
             }
             user
         };
-        self.users
-            .reader()
-            .iter()
-            .find(|u| u.username == name)
-            .cloned()
+        self.users.reader().iter().find(|u| u.username == name).cloned()
     }
 
     pub fn layout(&self, username: &str, device: &str) -> Option<DashboardConfig> {
-        self.users
-            .reader()
-            .iter()
-            .find(|u| u.username == username)
-            .and_then(|u| u.layouts.get(device).cloned())
+        self.users.reader().iter().find(|u| u.username == username).and_then(|u| u.layouts.get(device).cloned())
     }
 
     pub fn set_layout(&self, username: &str, device: &str, d: DashboardConfig) -> Result<()> {
         {
             let mut all = self.users.writer();
-            let u = all
-                .iter_mut()
-                .find(|u| u.username == username)
-                .ok_or_else(|| anyhow!("no such user"))?;
+            let u = all.iter_mut().find(|u| u.username == username).ok_or_else(|| anyhow!("no such user"))?;
             u.layouts.insert(device.to_string(), d);
         }
         self.save()
@@ -873,15 +775,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let u = Users::open(&dir);
         assert!(u.setup_needed());
-        assert!(
-            u.setup("Boss", "short").is_err(),
-            "passwords need 8 characters"
-        );
+        assert!(u.setup("Boss", "short").is_err(), "passwords need 8 characters");
         let t = u.setup("Boss", "secret12").unwrap();
         assert_eq!(u.session_user(&t).unwrap().role, Role::Admin);
         assert!(u.setup("x", "secret12").is_err());
-        u.create("kid", "secret23", Role::Viewer, vec!["front".into()])
-            .unwrap();
+        u.create("kid", "secret23", Role::Viewer, vec!["front".into()]).unwrap();
         assert!(u.login("kid", "nope", None, false, "1.2.3.4").is_err());
         let t2 = u.login("KID", "secret23", None, false, "1.2.3.4").unwrap();
         let kid = u.session_user(&t2).unwrap();
@@ -924,27 +822,12 @@ mod tests {
         let u = Users::open(&dir);
         u.setup("admin", "right-pass").unwrap();
         for _ in 0..FREE_TRIES {
-            assert!(
-                u.check("admin", "wrong", "9.9.9.9")
-                    .unwrap_err()
-                    .to_string()
-                    .contains("wrong")
-            );
+            assert!(u.check("admin", "wrong", "9.9.9.9").unwrap_err().to_string().contains("wrong"));
         }
         // Locked: even the right password is refused for now…
-        assert!(
-            u.check("admin", "right-pass", "9.9.9.9")
-                .unwrap_err()
-                .to_string()
-                .contains("wait")
-        );
+        assert!(u.check("admin", "right-pass", "9.9.9.9").unwrap_err().to_string().contains("wait"));
         // …and the address is locked for other names too.
-        assert!(
-            u.check("someone", "x", "9.9.9.9")
-                .unwrap_err()
-                .to_string()
-                .contains("wait")
-        );
+        assert!(u.check("someone", "x", "9.9.9.9").unwrap_err().to_string().contains("wait"));
         assert_eq!(lockout(5), Duration::seconds(30));
         assert_eq!(lockout(7), Duration::seconds(120));
         assert_eq!(lockout(50), Duration::seconds(900));

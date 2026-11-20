@@ -81,12 +81,7 @@ pub fn choices() -> Vec<&'static str> {
 
 /// Is a CUDA 12 + cuDNN 9 installation findable on this computer?
 fn cuda_libraries_present() -> bool {
-    let mut dirs: Vec<PathBuf> = std::env::var("LD_LIBRARY_PATH")
-        .unwrap_or_default()
-        .split(':')
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .collect();
+    let mut dirs: Vec<PathBuf> = std::env::var("LD_LIBRARY_PATH").unwrap_or_default().split(':').filter(|d| !d.is_empty()).map(PathBuf::from).collect();
     for d in ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/usr/local/cuda/lib64", "/usr/local/cuda/targets/x86_64-linux/lib", "/lib/x86_64-linux-gnu"] {
         dirs.push(PathBuf::from(d));
     }
@@ -141,9 +136,7 @@ fn gpu_ok() -> bool {
 /// Does this error say the graphics card was reset or removed?
 fn device_lost(msg: &str) -> bool {
     let m = msg.to_lowercase();
-    ["887a0005", "887a0006", "887a0007", "device instance has been suspended", "device removed", "getdeviceremovedreason", "dxgi_error_device"]
-        .iter()
-        .any(|k| m.contains(k))
+    ["887a0005", "887a0006", "887a0007", "device instance has been suspended", "device removed", "getdeviceremovedreason", "dxgi_error_device"].iter().any(|k| m.contains(k))
 }
 
 fn mark_gpu_lost(why: &str) {
@@ -262,22 +255,13 @@ pub enum Data {
 
 impl Input {
     pub fn f32(shape: &[usize], data: Vec<f32>) -> Self {
-        Self {
-            shape: shape.to_vec(),
-            data: Data::F32(data),
-        }
+        Self { shape: shape.to_vec(), data: Data::F32(data) }
     }
     pub fn i64(shape: &[usize], data: Vec<i64>) -> Self {
-        Self {
-            shape: shape.to_vec(),
-            data: Data::I64(data),
-        }
+        Self { shape: shape.to_vec(), data: Data::I64(data) }
     }
     pub fn u8(shape: &[usize], data: Vec<u8>) -> Self {
-        Self {
-            shape: shape.to_vec(),
-            data: Data::U8(data),
-        }
+        Self { shape: shape.to_vec(), data: Data::U8(data) }
     }
 }
 
@@ -331,17 +315,7 @@ fn run_tract(plan: &Plan, input: Input) -> Result<Vec<Vec<f32>>> {
     }
     .map_err(|e| anyhow!("{e}"))?;
     let out = plan.run(tvec!(t.into())).map_err(|e| anyhow!("{e}"))?;
-    out.iter()
-        .map(|o| {
-            Ok(o.cast_to::<f32>()
-                .map_err(|e| anyhow!("{e}"))?
-                .to_plain_array_view::<f32>()
-                .map_err(|e| anyhow!("{e}"))?
-                .iter()
-                .copied()
-                .collect())
-        })
-        .collect()
+    out.iter().map(|o| Ok(o.cast_to::<f32>().map_err(|e| anyhow!("{e}"))?.to_plain_array_view::<f32>().map_err(|e| anyhow!("{e}"))?.iter().copied().collect())).collect()
 }
 
 fn run_ort(s: &mut ort::session::Session, input: Input) -> Result<Vec<Vec<f32>>> {
@@ -388,11 +362,7 @@ pub fn load(path: &Path, what: &str, cpu: impl FnOnce() -> Result<Plan>) -> Resu
                 let label = LOADED.get().map(|a| a.label()).unwrap_or_default();
                 warn!("AI: {what} can't run on the {label} ({e:#}); using the processor");
                 note(format!("{label}, but {what} runs on the CPU: {e:#}"));
-                record(
-                    what,
-                    false,
-                    format!("the GPU couldn't run this model: {e:#}"),
-                );
+                record(what, false, format!("the GPU couldn't run this model: {e:#}"));
                 return Ok(Net::Cpu(cpu()?));
             }
         }
@@ -404,10 +374,7 @@ pub fn load(path: &Path, what: &str, cpu: impl FnOnce() -> Result<Plan>) -> Resu
     } else {
         match RUNTIME_ERR.locked().clone() {
             Some(e) => format!("the GPU can't be used: {e}"),
-            None => {
-                "the GPU runtime wasn't ready yet when it loaded (it moves to the GPU once ready)"
-                    .into()
-            }
+            None => "the GPU runtime wasn't ready yet when it loaded (it moves to the GPU once ready)".into(),
         }
     };
     record(what, false, why);
@@ -427,11 +394,7 @@ static PLACED: Mutex<Vec<Placed>> = Mutex::new(Vec::new());
 fn record(what: &str, gpu: bool, why: String) {
     let mut p = PLACED.locked();
     p.retain(|x| x.what != what);
-    p.push(Placed {
-        what: what.to_string(),
-        gpu,
-        why,
-    });
+    p.push(Placed { what: what.to_string(), gpu, why });
 }
 
 /// Models loaded so far and where they run.
@@ -445,9 +408,7 @@ fn gpu_session(env: &ort::environment::Environment, path: &Path) -> Result<ort::
     fn e<T: std::fmt::Display>(x: T) -> anyhow::Error {
         anyhow!("{x}")
     }
-    let builder = Session::builder(env)?
-        .with_optimization_level(GraphOptimizationLevel::Level3)
-        .map_err(e)?;
+    let builder = Session::builder(env)?.with_optimization_level(GraphOptimizationLevel::Level3).map_err(e)?;
     // Testing on a computer without the hardware: GAZE_ORT_CPU=1 runs the
     // same path on ONNX Runtime's processor backend.
     let mut builder = if std::env::var_os("GAZE_ORT_CPU").is_some() {
@@ -462,9 +423,7 @@ fn gpu_session(env: &ort::environment::Environment, path: &Path) -> Result<ort::
                 .map_err(e)?
                 .with_execution_providers([ort::ep::DirectML::default().build().error_on_failure()])
                 .map_err(e)?,
-            Accel::Cuda => builder
-                .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
-                .map_err(e)?,
+            Accel::Cuda => builder.with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()]).map_err(e)?,
             Accel::OpenVino => {
                 let mut ep = ort::ep::OpenVINO::default().with_device_type(openvino_device());
                 if let Some(d) = DATA_DIR.get() {
@@ -494,10 +453,7 @@ pub async fn prepare(data_dir: &Path) -> bool {
         let env = tokio::task::spawn_blocking(move || -> Result<ort::environment::Environment> {
             #[cfg(windows)]
             preload_directml(&lib2)?;
-            Ok(ort::init_from(&lib2)
-                .map_err(|e| anyhow!("{e}"))?
-                .with_name("GAZE")
-                .build()?)
+            Ok(ort::init_from(&lib2).map_err(|e| anyhow!("{e}"))?.with_name("GAZE").build()?)
         })
         .await??;
         anyhow::Ok((env, accel))
@@ -600,9 +556,7 @@ async fn directml_files(data_dir: &Path) -> Result<PathBuf> {
     if !cfg!(all(windows, target_arch = "x86_64")) {
         bail!("DirectML is only available on Windows (64-bit)");
     }
-    let dir = data_dir
-        .join("runtime")
-        .join(format!("onnxruntime-dml-{ORT_VERSION}"));
+    let dir = data_dir.join("runtime").join(format!("onnxruntime-dml-{ORT_VERSION}"));
     let ort_dll = dir.join("onnxruntime.dll");
     let dml_dll = dir.join("DirectML.dll");
     if ort_dll.exists() && dml_dll.exists() {
@@ -610,20 +564,8 @@ async fn directml_files(data_dir: &Path) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(&dir)?;
     for (pkg, ver, inside, out, sha) in [
-        (
-            "microsoft.ml.onnxruntime.directml",
-            ORT_VERSION,
-            "runtimes/win-x64/native/onnxruntime.dll",
-            &ort_dll,
-            ORT_DML_SHA256,
-        ),
-        (
-            "microsoft.ai.directml",
-            DML_VERSION,
-            "bin/x64-win/DirectML.dll",
-            &dml_dll,
-            DML_SHA256,
-        ),
+        ("microsoft.ml.onnxruntime.directml", ORT_VERSION, "runtimes/win-x64/native/onnxruntime.dll", &ort_dll, ORT_DML_SHA256),
+        ("microsoft.ai.directml", DML_VERSION, "bin/x64-win/DirectML.dll", &dml_dll, DML_SHA256),
     ] {
         if out.exists() {
             continue;
@@ -642,11 +584,8 @@ async fn directml_files(data_dir: &Path) -> Result<PathBuf> {
 
 /// One file out of a NuGet package (a zip).
 fn extract(zip_path: &Path, inside: &str, out: &Path) -> Result<()> {
-    let mut z = zip::ZipArchive::new(std::fs::File::open(zip_path)?)
-        .context("reading the downloaded package")?;
-    let mut f = z
-        .by_name(inside)
-        .with_context(|| format!("{inside} is not in the package"))?;
+    let mut z = zip::ZipArchive::new(std::fs::File::open(zip_path)?).context("reading the downloaded package")?;
+    let mut f = z.by_name(inside).with_context(|| format!("{inside} is not in the package"))?;
     let tmp = out.with_extension("part");
     let mut w = std::fs::File::create(&tmp)?;
     std::io::copy(&mut f, &mut w)?;
@@ -664,11 +603,7 @@ fn preload_directml(ort_dll: &Path) -> Result<()> {
     let w: Vec<u16> = dml.as_os_str().encode_wide().chain(Some(0)).collect();
     let h = unsafe { windows_sys::Win32::System::LibraryLoader::LoadLibraryW(w.as_ptr()) };
     if h.is_null() {
-        bail!(
-            "could not load {}: {}",
-            dml.display(),
-            std::io::Error::last_os_error()
-        );
+        bail!("could not load {}: {}", dml.display(), std::io::Error::last_os_error());
     }
     Ok(())
 }
@@ -677,7 +612,9 @@ fn preload_directml(ort_dll: &Path) -> Result<()> {
 mod tests {
     #[test]
     fn a_reset_graphics_card_is_recognised() {
-        assert!(super::device_lost("ExecutionProvider.cpp(952) Exception(49555) tid(861c) 887A0005 The GPU device instance has been suspended. Use GetDeviceRemovedReason to determine the appropriate action."));
+        assert!(super::device_lost(
+            "ExecutionProvider.cpp(952) Exception(49555) tid(861c) 887A0005 The GPU device instance has been suspended. Use GetDeviceRemovedReason to determine the appropriate action."
+        ));
         assert!(!super::device_lost("unexpected kind of model output"));
     }
 
@@ -685,23 +622,11 @@ mod tests {
 
     fn tract_plan(path: &Path, fact: Option<(&[usize], bool)>) -> Result<Plan> {
         use tract_onnx::prelude::*;
-        let mut m = tract_onnx::onnx()
-            .with_ignore_value_info(true)
-            .with_ignore_output_shapes(true)
-            .model_for_path(path)
-            .map_err(|e| anyhow!("{e}"))?;
+        let mut m = tract_onnx::onnx().with_ignore_value_info(true).with_ignore_output_shapes(true).model_for_path(path).map_err(|e| anyhow!("{e}"))?;
         if let Some((shape, bytes)) = fact {
-            m = if bytes {
-                m.with_input_fact(0, u8::fact(shape).into())
-            } else {
-                m.with_input_fact(0, f32::fact(shape).into())
-            }
-            .map_err(|e| anyhow!("{e}"))?;
+            m = if bytes { m.with_input_fact(0, u8::fact(shape).into()) } else { m.with_input_fact(0, f32::fact(shape).into()) }.map_err(|e| anyhow!("{e}"))?;
         }
-        m.into_optimized()
-            .map_err(|e| anyhow!("{e}"))?
-            .into_runnable()
-            .map_err(|e| anyhow!("{e}"))
+        m.into_optimized().map_err(|e| anyhow!("{e}"))?.into_runnable().map_err(|e| anyhow!("{e}"))
     }
 
     fn both(path: &Path, fact: Option<(&[usize], bool)>) -> (Net, Net) {
@@ -718,11 +643,7 @@ mod tests {
         assert_eq!(a.len(), b.len(), "{what}: number of outputs");
         for (x, y) in a.iter().zip(b) {
             assert_eq!(x.len(), y.len(), "{what}: output size");
-            let worst = x
-                .iter()
-                .zip(y)
-                .map(|(p, q)| (p - q).abs() / (1.0 + q.abs()))
-                .fold(0f32, f32::max);
+            let worst = x.iter().zip(y).map(|(p, q)| (p - q).abs() / (1.0 + q.abs())).fold(0f32, f32::max);
             assert!(worst < 2e-3, "{what}: outputs differ by {worst}");
         }
         eprintln!("{what}: {} output(s) match", a.len());
@@ -738,10 +659,7 @@ mod tests {
         // downloads that runtime as GAZE would and tests it, instead of a
         // library given by GAZE_ORT_DYLIB.
         let accel = std::env::var("GAZE_TEST_ACCEL").ok();
-        let (true, Ok(dir)) = (
-            accel.is_some() || std::env::var_os("GAZE_ORT_DYLIB").is_some(),
-            std::env::var("NVR_TEST_MODELS"),
-        ) else {
+        let (true, Ok(dir)) = (accel.is_some() || std::env::var_os("GAZE_ORT_DYLIB").is_some(), std::env::var("NVR_TEST_MODELS")) else {
             return;
         };
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -750,36 +668,14 @@ mod tests {
         }
         let dir = PathBuf::from(dir);
         assert!(prepare(&dir).await, "runtime: {}", status());
-        let pic: Vec<f32> = (0..3 * 416 * 416)
-            .map(|i| ((i * 37) % 255) as f32)
-            .collect();
-        let (g, c) = both(
-            &dir.join("yolox_tiny.onnx"),
-            Some((&[1, 3, 416, 416], false)),
-        );
-        close(
-            &g.run(Input::f32(&[1, 3, 416, 416], pic.clone())).unwrap(),
-            &c.run(Input::f32(&[1, 3, 416, 416], pic)).unwrap(),
-            "object detection",
-        );
-        let face: Vec<f32> = (0..3 * 640 * 640)
-            .map(|i| ((i * 13) % 255) as f32)
-            .collect();
+        let pic: Vec<f32> = (0..3 * 416 * 416).map(|i| ((i * 37) % 255) as f32).collect();
+        let (g, c) = both(&dir.join("yolox_tiny.onnx"), Some((&[1, 3, 416, 416], false)));
+        close(&g.run(Input::f32(&[1, 3, 416, 416], pic.clone())).unwrap(), &c.run(Input::f32(&[1, 3, 416, 416], pic)).unwrap(), "object detection");
+        let face: Vec<f32> = (0..3 * 640 * 640).map(|i| ((i * 13) % 255) as f32).collect();
         let (g, c) = both(&dir.join("face-yunet-2023mar.onnx"), None);
-        close(
-            &g.run(Input::f32(&[1, 3, 640, 640], face.clone())).unwrap(),
-            &c.run(Input::f32(&[1, 3, 640, 640], face)).unwrap(),
-            "faces",
-        );
+        close(&g.run(Input::f32(&[1, 3, 640, 640], face.clone())).unwrap(), &c.run(Input::f32(&[1, 3, 640, 640], face)).unwrap(), "faces");
         let plate: Vec<u8> = (0..64 * 128 * 3).map(|i| (i % 251) as u8).collect();
-        let (g, c) = both(
-            &dir.join("plate-ocr-cct-xs-global.onnx"),
-            Some((&[1, 64, 128, 3], true)),
-        );
-        close(
-            &g.run(Input::u8(&[1, 64, 128, 3], plate.clone())).unwrap(),
-            &c.run(Input::u8(&[1, 64, 128, 3], plate)).unwrap(),
-            "number plates",
-        );
+        let (g, c) = both(&dir.join("plate-ocr-cct-xs-global.onnx"), Some((&[1, 64, 128, 3], true)));
+        close(&g.run(Input::u8(&[1, 64, 128, 3], plate.clone())).unwrap(), &c.run(Input::u8(&[1, 64, 128, 3], plate)).unwrap(), "number plates");
     }
 }

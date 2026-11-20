@@ -125,10 +125,7 @@ pub fn boxes(f: &Frame, marks: &[Mark]) -> Frame {
     let scale = (w / 400).clamp(2, 5);
     for m in marks {
         let (x, y) = ((m.x * w as f32) as i32, (m.y * h as f32) as i32);
-        let (bw, bh) = (
-            ((m.w * w as f32) as i32).max(2 * t),
-            ((m.h * h as f32) as i32).max(2 * t),
-        );
+        let (bw, bh) = (((m.w * w as f32) as i32).max(2 * t), ((m.h * h as f32) as i32).max(2 * t));
         c.rect(x, y, bw, bh, t, GREEN);
         // The tag sits above the box, or inside it at the top edge.
         let tw = text_width(m.label, scale) + 4 * scale;
@@ -138,11 +135,7 @@ pub fn boxes(f: &Frame, marks: &[Mark]) -> Frame {
         c.fill(tx, ty, tw, th, GREEN);
         c.text(tx + 2 * scale, ty + 2 * scale, m.label, scale, DARK);
     }
-    Frame {
-        width: f.width,
-        height: f.height,
-        rgb: Arc::new(px),
-    }
+    Frame { width: f.width, height: f.height, rgb: Arc::new(px) }
 }
 
 #[cfg(test)]
@@ -151,21 +144,8 @@ mod tests {
 
     #[test]
     fn draws_a_tagged_box() {
-        let f = Frame {
-            width: 640,
-            height: 360,
-            rgb: Arc::new(vec![0; 640 * 360 * 3]),
-        };
-        let out = boxes(
-            &f,
-            &[Mark {
-                x: 0.25,
-                y: 0.5,
-                w: 0.25,
-                h: 0.4,
-                label: "PERSON 92%",
-            }],
-        );
+        let f = Frame { width: 640, height: 360, rgb: Arc::new(vec![0; 640 * 360 * 3]) };
+        let out = boxes(&f, &[Mark { x: 0.25, y: 0.5, w: 0.25, h: 0.4, label: "PERSON 92%" }]);
         let at = |x: u32, y: u32| {
             let i = ((y * 640 + x) * 3) as usize;
             [out.rgb[i], out.rgb[i + 1], out.rgb[i + 2]]
@@ -173,10 +153,7 @@ mod tests {
         assert_eq!(at(160, 250), [46, 204, 113], "box edge");
         assert_eq!(at(240, 300), [0, 0, 0], "inside untouched");
         // The tag above the box has green and dark (text) pixels.
-        let tag: Vec<[u8; 3]> = (160..260)
-            .flat_map(|x| (158..180).map(move |y| (x, y)))
-            .map(|(x, y)| at(x, y))
-            .collect();
+        let tag: Vec<[u8; 3]> = (160..260).flat_map(|x| (158..180).map(move |y| (x, y))).map(|(x, y)| at(x, y)).collect();
         assert!(tag.contains(&[46, 204, 113]) && tag.contains(&[10, 20, 14]));
     }
 }

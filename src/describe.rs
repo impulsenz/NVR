@@ -191,7 +191,8 @@ fn capital(s: &str) -> String {
 /// an alert's description would have. `None`: not something descriptions know.
 pub fn known_term(w: &str) -> Option<&'static [&'static str]> {
     Some(match w {
-        "person" | "people" | "man" | "men" | "woman" | "women" | "someone" | "somebody" | "guy" | "human" | "child" | "kid" | "boy" | "girl" | "visitor" | "intruder" | "burglar" | "pedestrian" => &["person"],
+        "person" | "people" | "man" | "men" | "woman" | "women" | "someone" | "somebody" | "guy" | "human" | "child" | "kid" | "boy" | "girl" | "visitor" | "intruder"
+        | "burglar" | "pedestrian" => &["person"],
         "car" | "cars" | "truck" | "trucks" | "van" | "vans" | "bus" | "motorbike" | "motorcycle" | "vehicle" | "vehicles" | "ute" | "suv" | "lorry" => &["vehicle"],
         "dog" | "dogs" | "puppy" => &["dog"],
         "cat" | "cats" | "kitten" => &["cat"],
@@ -218,7 +219,10 @@ pub fn known_term(w: &str) -> Option<&'static [&'static str]> {
 }
 
 /// Words in a question that say nothing about what is in the picture.
-const FILLER: [&str; 24] = ["a", "an", "the", "of", "in", "at", "on", "with", "and", "photo", "picture", "image", "some", "any", "is", "are", "was", "there", "that", "has", "having", "wearing", "near", "by"];
+const FILLER: [&str; 24] = [
+    "a", "an", "the", "of", "in", "at", "on", "with", "and", "photo", "picture", "image", "some", "any", "is", "are", "was", "there", "that", "has", "having", "wearing", "near",
+    "by",
+];
 
 /// How a question fits an alert's description words: (known terms, how many
 /// of them the alert has, the other words that only the picture can judge,

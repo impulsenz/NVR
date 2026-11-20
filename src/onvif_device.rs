@@ -75,12 +75,7 @@ fn set_text(xml: &str, name: &str, value: &str) -> String {
             && !tag.ends_with('/')
             && let Some(c) = xml[end + 1..].find("</")
         {
-            return format!(
-                "{}{}{}",
-                &xml[..end + 1],
-                xml_escape(value),
-                &xml[end + 1 + c..]
-            );
+            return format!("{}{}{}", &xml[..end + 1], xml_escape(value), &xml[end + 1 + c..]);
         }
         pos = end + 1;
     }
@@ -99,23 +94,17 @@ fn namespaces(xml: &str) -> String {
             if let Some(q) = v.find('"')
                 && !prefix.contains(|c: char| c.is_whitespace() || c == '>')
             {
-                seen.entry(prefix.to_string())
-                    .or_insert_with(|| v[..q].to_string());
+                seen.entry(prefix.to_string()).or_insert_with(|| v[..q].to_string());
             }
         }
         rest = r;
     }
-    seen.iter()
-        .map(|(p, u)| format!(r#" xmlns:{p}="{u}""#))
-        .collect()
+    seen.iter().map(|(p, u)| format!(r#" xmlns:{p}="{u}""#)).collect()
 }
 
 fn fix_xaddr(t: &Target, u: &str) -> String {
     // Cameras sometimes report an internal address: keep the path, use ours.
-    match u
-        .split_once("://")
-        .and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string()))
-    {
+    match u.split_once("://").and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string())) {
         Some(path) => format!("http://{}:{}{}", t.host, t.port, path),
         None => u.to_string(),
     }
@@ -236,33 +225,15 @@ struct Services {
 
 impl Onvif {
     async fn dev(&self, t: &Target, op: &str, inner: &str) -> Result<String> {
-        self.call(
-            t,
-            &t.device_url(),
-            &format!("{DEVICE}/{op}"),
-            &format!(r#"<{op} xmlns="{DEVICE}">{inner}</{op}>"#),
-        )
-        .await
+        self.call(t, &t.device_url(), &format!("{DEVICE}/{op}"), &format!(r#"<{op} xmlns="{DEVICE}">{inner}</{op}>"#)).await
     }
 
     async fn services(&self, t: &Target) -> Result<Services> {
-        let caps = self
-            .dev(t, "GetCapabilities", "<Category>All</Category>")
-            .await?;
-        let mut s = Services {
-            media1: capability_xaddr(&caps, "Media").map(|u| fix_xaddr(t, &u)),
-            media2: None,
-            imaging: capability_xaddr(&caps, "Imaging").map(|u| fix_xaddr(t, &u)),
-        };
+        let caps = self.dev(t, "GetCapabilities", "<Category>All</Category>").await?;
+        let mut s =
+            Services { media1: capability_xaddr(&caps, "Media").map(|u| fix_xaddr(t, &u)), media2: None, imaging: capability_xaddr(&caps, "Imaging").map(|u| fix_xaddr(t, &u)) };
         // Media 2 (needed for H.265 settings) is only listed by GetServices.
-        if let Ok(sv) = self
-            .dev(
-                t,
-                "GetServices",
-                "<IncludeCapability>false</IncludeCapability>",
-            )
-            .await
-        {
+        if let Ok(sv) = self.dev(t, "GetServices", "<IncludeCapability>false</IncludeCapability>").await {
             for (_, inner) in elements(&sv, "Service") {
                 let ns = text(inner, "Namespace");
                 let x = text(inner, "XAddr");
@@ -325,53 +296,19 @@ impl Onvif {
 
     async fn network(&self, t: &Target) -> Result<Network> {
         let x = self.dev(t, "GetNetworkInterfaces", "").await?;
-        let (tag, nic) = elements(&x, "NetworkInterfaces")
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("the camera reported no network interface"))?;
-        let ipv4 = elements(nic, "IPv4")
-            .into_iter()
-            .next()
-            .map(|e| e.1)
-            .unwrap_or("");
+        let (tag, nic) = elements(&x, "NetworkInterfaces").into_iter().next().ok_or_else(|| anyhow!("the camera reported no network interface"))?;
+        let ipv4 = elements(nic, "IPv4").into_iter().next().map(|e| e.1).unwrap_or("");
         let dhcp = text(ipv4, "DHCP") == "true";
-        let pick = |sec: &str| {
-            elements(ipv4, sec).into_iter().next().map(|(_, v)| {
-                (
-                    text(v, "Address"),
-                    num(v, "PrefixLength").unwrap_or(24.0) as u8,
-                )
-            })
-        };
-        let (ip, prefix) = if dhcp {
-            pick("FromDHCP").or_else(|| pick("Manual"))
-        } else {
-            pick("Manual").or_else(|| pick("FromDHCP"))
-        }
-        .unwrap_or_default();
-        let mut n = Network {
-            token: attr(tag, "token").unwrap_or_default(),
-            mac: text(nic, "HwAddress"),
-            dhcp,
-            ip,
-            prefix,
-            ..Default::default()
-        };
+        let pick = |sec: &str| elements(ipv4, sec).into_iter().next().map(|(_, v)| (text(v, "Address"), num(v, "PrefixLength").unwrap_or(24.0) as u8));
+        let (ip, prefix) = if dhcp { pick("FromDHCP").or_else(|| pick("Manual")) } else { pick("Manual").or_else(|| pick("FromDHCP")) }.unwrap_or_default();
+        let mut n = Network { token: attr(tag, "token").unwrap_or_default(), mac: text(nic, "HwAddress"), dhcp, ip, prefix, ..Default::default() };
         if let Ok(g) = self.dev(t, "GetNetworkDefaultGateway", "").await {
             n.gateway = text(&g, "IPv4Address");
         }
         if let Ok(d) = self.dev(t, "GetDNS", "").await {
             n.dns_dhcp = text(&d, "FromDHCP") == "true";
-            let sec = if n.dns_dhcp {
-                "DNSFromDHCP"
-            } else {
-                "DNSManual"
-            };
-            n.dns = elements(&d, sec)
-                .into_iter()
-                .map(|(_, v)| text(v, "IPv4Address"))
-                .filter(|v| !v.is_empty())
-                .collect();
+            let sec = if n.dns_dhcp { "DNSFromDHCP" } else { "DNSManual" };
+            n.dns = elements(&d, sec).into_iter().map(|(_, v)| text(v, "IPv4Address")).filter(|v| !v.is_empty()).collect();
         }
         if let Ok(h) = self.dev(t, "GetHostname", "").await {
             n.hostname = text(&h, "Name");
@@ -383,16 +320,9 @@ impl Onvif {
     /// restart for them to apply.
     pub async fn set_network(&self, t: &Target, n: &Network) -> Result<bool> {
         let cur = self.network(t).await?;
-        let token = if n.token.is_empty() {
-            cur.token.clone()
-        } else {
-            n.token.clone()
-        };
+        let token = if n.token.is_empty() { cur.token.clone() } else { n.token.clone() };
         if !n.dhcp {
-            let ip: std::net::Ipv4Addr =
-                n.ip.trim()
-                    .parse()
-                    .map_err(|_| anyhow!("“{}” is not a valid IP address", n.ip))?;
+            let ip: std::net::Ipv4Addr = n.ip.trim().parse().map_err(|_| anyhow!("“{}” is not a valid IP address", n.ip))?;
             if !(1..=32).contains(&n.prefix) {
                 bail!("the subnet prefix must be between 1 and 32");
             }
@@ -402,13 +332,7 @@ impl Onvif {
         }
         // Host name, DNS and gateway first: changing the address may cut us off.
         if !n.hostname.trim().is_empty() && n.hostname.trim() != cur.hostname {
-            self.dev(
-                t,
-                "SetHostname",
-                &format!("<Name>{}</Name>", xml_escape(n.hostname.trim())),
-            )
-            .await
-            .map_err(|e| anyhow!("host name: {e:#}"))?;
+            self.dev(t, "SetHostname", &format!("<Name>{}</Name>", xml_escape(n.hostname.trim()))).await.map_err(|e| anyhow!("host name: {e:#}"))?;
         }
         if !n.dhcp {
             let dns: String = n
@@ -419,21 +343,10 @@ impl Onvif {
                 .map(|d| format!("<DNSManual><tt:Type>IPv4</tt:Type><tt:IPv4Address>{}</tt:IPv4Address></DNSManual>", xml_escape(d)))
                 .collect();
             if !dns.is_empty() {
-                self.dev(t, "SetDNS", &format!("<FromDHCP>false</FromDHCP>{dns}"))
-                    .await
-                    .map_err(|e| anyhow!("DNS: {e:#}"))?;
+                self.dev(t, "SetDNS", &format!("<FromDHCP>false</FromDHCP>{dns}")).await.map_err(|e| anyhow!("DNS: {e:#}"))?;
             }
             if !n.gateway.trim().is_empty() && n.gateway.trim() != cur.gateway {
-                self.dev(
-                    t,
-                    "SetNetworkDefaultGateway",
-                    &format!(
-                        "<IPv4Address>{}</IPv4Address>",
-                        xml_escape(n.gateway.trim())
-                    ),
-                )
-                .await
-                .map_err(|e| anyhow!("gateway: {e:#}"))?;
+                self.dev(t, "SetNetworkDefaultGateway", &format!("<IPv4Address>{}</IPv4Address>", xml_escape(n.gateway.trim()))).await.map_err(|e| anyhow!("gateway: {e:#}"))?;
             }
         }
         if n.dhcp == cur.dhcp && (n.dhcp || (n.ip.trim() == cur.ip && n.prefix == cur.prefix)) {
@@ -452,10 +365,7 @@ impl Onvif {
             .dev(
                 t,
                 "SetNetworkInterfaces",
-                &format!(
-                    "<InterfaceToken>{}</InterfaceToken><NetworkInterface><tt:Enabled>true</tt:Enabled><tt:IPv4>{ipv4}</tt:IPv4></NetworkInterface>",
-                    xml_escape(&token)
-                ),
+                &format!("<InterfaceToken>{}</InterfaceToken><NetworkInterface><tt:Enabled>true</tt:Enabled><tt:IPv4>{ipv4}</tt:IPv4></NetworkInterface>", xml_escape(&token)),
             )
             .await
             .map_err(|e| anyhow!("IP address: {e:#}"))?;
@@ -464,42 +374,19 @@ impl Onvif {
 
     async fn time(&self, t: &Target) -> Result<TimeSettings> {
         let x = self.dev(t, "GetSystemDateAndTime", "").await?;
-        let mut s = TimeSettings {
-            mode: text(&x, "DateTimeType"),
-            tz: elements(&x, "TimeZone")
-                .first()
-                .map(|e| text(e.1, "TZ"))
-                .unwrap_or_default(),
-            ..Default::default()
-        };
+        let mut s = TimeSettings { mode: text(&x, "DateTimeType"), tz: elements(&x, "TimeZone").first().map(|e| text(e.1, "TZ")).unwrap_or_default(), ..Default::default() };
         if let Some((_, u)) = elements(&x, "UTCDateTime").first() {
             let n = |k: &str| num(u, k).unwrap_or(0.0) as u32;
-            s.utc = Some(format!(
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                n("Year"),
-                n("Month"),
-                n("Day"),
-                n("Hour"),
-                n("Minute"),
-                n("Second")
-            ));
+            s.utc = Some(format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", n("Year"), n("Month"), n("Day"), n("Hour"), n("Minute"), n("Second")));
         }
         if let Ok(n) = self.dev(t, "GetNTP", "").await {
             s.ntp_dhcp = text(&n, "FromDHCP") == "true";
-            let sec = if s.ntp_dhcp {
-                "NTPFromDHCP"
-            } else {
-                "NTPManual"
-            };
+            let sec = if s.ntp_dhcp { "NTPFromDHCP" } else { "NTPManual" };
             s.ntp = elements(&n, sec)
                 .into_iter()
                 .map(|(_, v)| {
                     let d = text(v, "DNSname");
-                    if d.is_empty() {
-                        text(v, "IPv4Address")
-                    } else {
-                        d
-                    }
+                    if d.is_empty() { text(v, "IPv4Address") } else { d }
                 })
                 .filter(|v| !v.is_empty())
                 .collect();
@@ -508,19 +395,9 @@ impl Onvif {
     }
 
     /// Time server, time zone, and optionally set the clock to `now` (UTC).
-    pub async fn set_time(
-        &self,
-        t: &Target,
-        s: &TimeSettings,
-        now: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<()> {
+    pub async fn set_time(&self, t: &Target, s: &TimeSettings, now: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {
         use chrono::{Datelike, Timelike};
-        let servers: Vec<&str> = s
-            .ntp
-            .iter()
-            .map(|x| x.trim())
-            .filter(|x| !x.is_empty())
-            .collect();
+        let servers: Vec<&str> = s.ntp.iter().map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
         if !s.ntp_dhcp && !servers.is_empty() {
             let body: String = servers
                 .iter()
@@ -532,28 +409,13 @@ impl Onvif {
                     }
                 })
                 .collect();
-            self.dev(t, "SetNTP", &format!("<FromDHCP>false</FromDHCP>{body}"))
-                .await
-                .map_err(|e| anyhow!("time server: {e:#}"))?;
+            self.dev(t, "SetNTP", &format!("<FromDHCP>false</FromDHCP>{body}")).await.map_err(|e| anyhow!("time server: {e:#}"))?;
         } else if s.ntp_dhcp {
-            self.dev(t, "SetNTP", "<FromDHCP>true</FromDHCP>")
-                .await
-                .map_err(|e| anyhow!("time server: {e:#}"))?;
+            self.dev(t, "SetNTP", "<FromDHCP>true</FromDHCP>").await.map_err(|e| anyhow!("time server: {e:#}"))?;
         }
         let manual = now.is_some();
-        let mode = if manual || s.mode == "Manual" {
-            "Manual"
-        } else {
-            "NTP"
-        };
-        let tz = if s.tz.trim().is_empty() {
-            String::new()
-        } else {
-            format!(
-                "<TimeZone><tt:TZ>{}</tt:TZ></TimeZone>",
-                xml_escape(s.tz.trim())
-            )
-        };
+        let mode = if manual || s.mode == "Manual" { "Manual" } else { "NTP" };
+        let tz = if s.tz.trim().is_empty() { String::new() } else { format!("<TimeZone><tt:TZ>{}</tt:TZ></TimeZone>", xml_escape(s.tz.trim())) };
         let clock = now
             .map(|d| {
                 format!(
@@ -562,18 +424,12 @@ impl Onvif {
                 )
             })
             .unwrap_or_default();
-        self.dev(
-            t,
-            "SetSystemDateAndTime",
-            &format!("<DateTimeType>{mode}</DateTimeType><DaylightSavings>false</DaylightSavings>{tz}{clock}"),
-        )
-        .await
-        .map_err(|e| anyhow!("date & time: {e:#}"))?;
+        self.dev(t, "SetSystemDateAndTime", &format!("<DateTimeType>{mode}</DateTimeType><DaylightSavings>false</DaylightSavings>{tz}{clock}"))
+            .await
+            .map_err(|e| anyhow!("date & time: {e:#}"))?;
         // Back to the time server after setting the clock, if one is set.
         if manual && s.mode == "NTP" {
-            let _ = self
-                .dev(t, "SetSystemDateAndTime", &format!("<DateTimeType>NTP</DateTimeType><DaylightSavings>false</DaylightSavings>{tz}"))
-                .await;
+            let _ = self.dev(t, "SetSystemDateAndTime", &format!("<DateTimeType>NTP</DateTimeType><DaylightSavings>false</DaylightSavings>{tz}")).await;
         }
         Ok(())
     }
@@ -582,12 +438,7 @@ impl Onvif {
     pub async fn device_info(&self, t: &Target) -> Result<DeviceInfo> {
         let x = self.dev(t, "GetDeviceInformation", "").await?;
         let text = |n: &str| tag_text(&x, n).unwrap_or_default();
-        Ok(DeviceInfo {
-            manufacturer: text("Manufacturer"),
-            model: text("Model"),
-            firmware: text("FirmwareVersion"),
-            ..Default::default()
-        })
+        Ok(DeviceInfo { manufacturer: text("Manufacturer"), model: text("Model"), firmware: text("FirmwareVersion"), ..Default::default() })
     }
 
     pub async fn reboot(&self, t: &Target) -> Result<String> {
@@ -604,22 +455,12 @@ impl Onvif {
         {
             return Ok(v);
         }
-        let m1 = sv
-            .media1
-            .as_ref()
-            .ok_or_else(|| anyhow!("the camera has no ONVIF media service"))?;
+        let m1 = sv.media1.as_ref().ok_or_else(|| anyhow!("the camera has no ONVIF media service"))?;
         self.video_media1(t, m1).await
     }
 
     async fn video_media2(&self, t: &Target, url: &str) -> Result<Vec<VideoStream>> {
-        let x = self
-            .call(
-                t,
-                url,
-                &format!("{MEDIA2}/GetVideoEncoderConfigurations"),
-                &format!(r#"<GetVideoEncoderConfigurations xmlns="{MEDIA2}"/>"#),
-            )
-            .await?;
+        let x = self.call(t, url, &format!("{MEDIA2}/GetVideoEncoderConfigurations"), &format!(r#"<GetVideoEncoderConfigurations xmlns="{MEDIA2}"/>"#)).await?;
         let mut out = Vec::new();
         for (tag, c) in elements(&x, "Configurations") {
             let token = attr(tag, "token").unwrap_or_default();
@@ -631,9 +472,7 @@ impl Onvif {
                 height: num(c, "Height").unwrap_or(0.0) as u32,
                 fps: num(c, "FrameRateLimit").unwrap_or(0.0),
                 bitrate: num(c, "BitrateLimit").unwrap_or(0.0) as u32,
-                gov: attr(tag, "GovLength")
-                    .and_then(|g| g.parse().ok())
-                    .unwrap_or(0),
+                gov: attr(tag, "GovLength").and_then(|g| g.parse().ok()).unwrap_or(0),
                 service: "media2".into(),
                 ..Default::default()
             };
@@ -642,7 +481,10 @@ impl Onvif {
                     t,
                     url,
                     &format!("{MEDIA2}/GetVideoEncoderConfigurationOptions"),
-                    &format!(r#"<GetVideoEncoderConfigurationOptions xmlns="{MEDIA2}"><ConfigurationToken>{}</ConfigurationToken></GetVideoEncoderConfigurationOptions>"#, xml_escape(&token)),
+                    &format!(
+                        r#"<GetVideoEncoderConfigurationOptions xmlns="{MEDIA2}"><ConfigurationToken>{}</ConfigurationToken></GetVideoEncoderConfigurationOptions>"#,
+                        xml_escape(&token)
+                    ),
                 )
                 .await
             {
@@ -676,14 +518,7 @@ impl Onvif {
     }
 
     async fn video_media1(&self, t: &Target, url: &str) -> Result<Vec<VideoStream>> {
-        let x = self
-            .call(
-                t,
-                url,
-                &format!("{MEDIA1}/GetVideoEncoderConfigurations"),
-                &format!(r#"<GetVideoEncoderConfigurations xmlns="{MEDIA1}"/>"#),
-            )
-            .await?;
+        let x = self.call(t, url, &format!("{MEDIA1}/GetVideoEncoderConfigurations"), &format!(r#"<GetVideoEncoderConfigurations xmlns="{MEDIA1}"/>"#)).await?;
         let mut out = Vec::new();
         for (tag, c) in elements(&x, "Configurations") {
             let token = attr(tag, "token").unwrap_or_default();
@@ -706,7 +541,10 @@ impl Onvif {
                     t,
                     url,
                     &format!("{MEDIA1}/GetVideoEncoderConfigurationOptions"),
-                    &format!(r#"<GetVideoEncoderConfigurationOptions xmlns="{MEDIA1}"><ConfigurationToken>{}</ConfigurationToken></GetVideoEncoderConfigurationOptions>"#, xml_escape(&token)),
+                    &format!(
+                        r#"<GetVideoEncoderConfigurationOptions xmlns="{MEDIA1}"><ConfigurationToken>{}</ConfigurationToken></GetVideoEncoderConfigurationOptions>"#,
+                        xml_escape(&token)
+                    ),
                 )
                 .await
             {
@@ -736,25 +574,11 @@ impl Onvif {
     pub async fn set_video(&self, t: &Target, ch: &VideoChange) -> Result<()> {
         let sv = self.services(t).await?;
         let (url, ns) = match (&sv.media2, &sv.media1) {
-            (Some(m2), _)
-                if self
-                    .video_media2(t, m2)
-                    .await
-                    .is_ok_and(|v| v.iter().any(|x| x.token == ch.token)) =>
-            {
-                (m2.clone(), MEDIA2)
-            }
+            (Some(m2), _) if self.video_media2(t, m2).await.is_ok_and(|v| v.iter().any(|x| x.token == ch.token)) => (m2.clone(), MEDIA2),
             (_, Some(m1)) => (m1.clone(), MEDIA1),
             _ => bail!("the camera has no ONVIF media service"),
         };
-        let x = self
-            .call(
-                t,
-                &url,
-                &format!("{ns}/GetVideoEncoderConfigurations"),
-                &format!(r#"<GetVideoEncoderConfigurations xmlns="{ns}"/>"#),
-            )
-            .await?;
+        let x = self.call(t, &url, &format!("{ns}/GetVideoEncoderConfigurations"), &format!(r#"<GetVideoEncoderConfigurations xmlns="{ns}"/>"#)).await?;
         let (tag, inner) = elements(&x, "Configurations")
             .into_iter()
             .find(|(tag, _)| attr(tag, "token").as_deref() == Some(ch.token.as_str()))
@@ -772,14 +596,7 @@ impl Onvif {
             c = set_text(&c, "Encoding", &ch.encoding);
         }
         // Attributes of the configuration (token, GovLength, Profile …).
-        let mut attrs: String = tag
-            .split_whitespace()
-            .skip(1)
-            .filter(|a| !a.starts_with("xmlns"))
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim_end_matches('/')
-            .to_string();
+        let mut attrs: String = tag.split_whitespace().skip(1).filter(|a| !a.starts_with("xmlns")).collect::<Vec<_>>().join(" ").trim_end_matches('/').to_string();
         if ch.gov > 0 {
             if ns == MEDIA2 {
                 if attrs.contains("GovLength=\"") {
@@ -796,19 +613,9 @@ impl Onvif {
         let body = format!(
             r#"<SetVideoEncoderConfiguration xmlns="{ns}"><Configuration {attrs}{nss}>{c}</Configuration>{persist}</SetVideoEncoderConfiguration>"#,
             nss = namespaces(&x),
-            persist = if ns == MEDIA1 {
-                "<ForcePersistence>true</ForcePersistence>"
-            } else {
-                ""
-            }
+            persist = if ns == MEDIA1 { "<ForcePersistence>true</ForcePersistence>" } else { "" }
         );
-        self.call(
-            t,
-            &url,
-            &format!("{ns}/SetVideoEncoderConfiguration"),
-            &body,
-        )
-        .await?;
+        self.call(t, &url, &format!("{ns}/SetVideoEncoderConfiguration"), &body).await?;
         Ok(())
     }
 
@@ -816,27 +623,13 @@ impl Onvif {
 
     async fn source_token(&self, t: &Target, sv: &Services) -> Result<String> {
         if let Some(m1) = &sv.media1
-            && let Ok(x) = self
-                .call(
-                    t,
-                    m1,
-                    &format!("{MEDIA1}/GetVideoSources"),
-                    &format!(r#"<GetVideoSources xmlns="{MEDIA1}"/>"#),
-                )
-                .await
+            && let Ok(x) = self.call(t, m1, &format!("{MEDIA1}/GetVideoSources"), &format!(r#"<GetVideoSources xmlns="{MEDIA1}"/>"#)).await
             && let Some(tok) = attr_values(&x, "VideoSources", "token").into_iter().next()
         {
             return Ok(tok);
         }
         if let Some(m2) = &sv.media2
-            && let Ok(x) = self
-                .call(
-                    t,
-                    m2,
-                    &format!("{MEDIA2}/GetVideoSourceConfigurations"),
-                    &format!(r#"<GetVideoSourceConfigurations xmlns="{MEDIA2}"/>"#),
-                )
-                .await
+            && let Ok(x) = self.call(t, m2, &format!("{MEDIA2}/GetVideoSourceConfigurations"), &format!(r#"<GetVideoSourceConfigurations xmlns="{MEDIA2}"/>"#)).await
         {
             let s = text(&x, "SourceToken");
             if !s.is_empty() {
@@ -847,18 +640,17 @@ impl Onvif {
     }
 
     async fn imaging(&self, t: &Target, sv: &Services) -> Result<Imaging> {
-        let url = sv
-            .imaging
-            .as_ref()
-            .ok_or_else(|| anyhow!("the camera has no ONVIF picture (imaging) settings"))?;
+        let url = sv.imaging.as_ref().ok_or_else(|| anyhow!("the camera has no ONVIF picture (imaging) settings"))?;
         let source = self.source_token(t, sv).await?;
         let x = self
-            .call(t, url, &format!("{IMAGING}/GetImagingSettings"), &format!(r#"<GetImagingSettings xmlns="{IMAGING}"><VideoSourceToken>{}</VideoSourceToken></GetImagingSettings>"#, xml_escape(&source)))
+            .call(
+                t,
+                url,
+                &format!("{IMAGING}/GetImagingSettings"),
+                &format!(r#"<GetImagingSettings xmlns="{IMAGING}"><VideoSourceToken>{}</VideoSourceToken></GetImagingSettings>"#, xml_escape(&source)),
+            )
             .await?;
-        let settings = elements(&x, "ImagingSettings")
-            .first()
-            .map(|e| e.1)
-            .unwrap_or(&x);
+        let settings = elements(&x, "ImagingSettings").first().map(|e| e.1).unwrap_or(&x);
         let mut im = Imaging {
             source: source.clone(),
             brightness: num(settings, "Brightness"),
@@ -886,10 +678,7 @@ impl Onvif {
 
     pub async fn set_imaging(&self, t: &Target, ch: &ImagingChange) -> Result<()> {
         let sv = self.services(t).await?;
-        let url = sv
-            .imaging
-            .clone()
-            .ok_or_else(|| anyhow!("the camera has no ONVIF picture (imaging) settings"))?;
+        let url = sv.imaging.clone().ok_or_else(|| anyhow!("the camera has no ONVIF picture (imaging) settings"))?;
         let source = self.source_token(t, &sv).await?;
         // Schema order matters: Brightness, ColorSaturation, Contrast, IrCutFilter, Sharpness.
         let mut s = String::new();
@@ -926,10 +715,7 @@ mod tests {
         assert_eq!(attr(e[0].0, "token").as_deref(), Some("eth0"));
         let m = elements(e[0].1, "Manual");
         assert_eq!(text(m[0].1, "Address"), "192.168.1.64");
-        assert_eq!(
-            set_text("<a><tt:Width>640</tt:Width></a>", "Width", "1280"),
-            "<a><tt:Width>1280</tt:Width></a>"
-        );
+        assert_eq!(set_text("<a><tt:Width>640</tt:Width></a>", "Width", "1280"), "<a><tt:Width>1280</tt:Width></a>");
         assert!(namespaces(x).contains(r#"xmlns:tt="http://www.onvif.org/ver10/schema""#));
     }
 }

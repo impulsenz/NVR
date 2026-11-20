@@ -3,9 +3,9 @@
 //! through when the service takes it (H.264), so it costs almost nothing;
 //! sound is added (silent if the camera has none: YouTube needs a soundtrack).
 
-use crate::sync::MutexExt;
 use crate::config::CameraConfig;
 use crate::manager::Manager;
+use crate::sync::MutexExt;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -57,13 +57,7 @@ async fn stream(mgr: &Arc<Manager>, cam: &CameraConfig) -> anyhow::Result<()> {
     if !has_audio {
         cmd.arg("-shortest");
     }
-    let mut child = cmd
-        .args(["-f", "flv", cam.stream_url.trim()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
+    let mut child = cmd.args(["-f", "flv", cam.stream_url.trim()]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
     let stop = tokio_util::sync::CancellationToken::new();
     let _feed = crate::relay::feed(relay.subscribe(), child.stdin.take().unwrap(), stop.clone());
     let _stop = stop.drop_guard();
@@ -75,9 +69,13 @@ async fn stream(mgr: &Arc<Manager>, cam: &CameraConfig) -> anyhow::Result<()> {
         use tokio::io::AsyncReadExt;
         let mut b = vec![0u8; 4096];
         while let Ok(n) = stderr.read(&mut b).await {
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             err.push_str(&String::from_utf8_lossy(&b[..n]));
-            if err.len() > 2000 { err = err[err.len() - 1000..].to_string(); }
+            if err.len() > 2000 {
+                err = err[err.len() - 1000..].to_string();
+            }
         }
     };
     // Until it ends, or the settings change.

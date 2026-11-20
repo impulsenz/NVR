@@ -82,11 +82,7 @@ pub fn check(path: &Path) -> std::io::Result<Check> {
     if !media {
         return Ok(Check::Empty);
     }
-    Ok(if good == len {
-        Check::Ok
-    } else {
-        Check::Truncated { good_len: good }
-    })
+    Ok(if good == len { Check::Ok } else { Check::Truncated { good_len: good } })
 }
 
 /// Repair a file if needed. Returns true if it was changed.
@@ -99,11 +95,7 @@ pub fn repair(path: &Path) -> bool {
                 f.sync_all()
             }) {
                 Ok(()) => {
-                    info!(
-                        "repaired {} (removed {} incomplete bytes at the end)",
-                        path.display(),
-                        len - good_len
-                    );
+                    info!("repaired {} (removed {} incomplete bytes at the end)", path.display(), len - good_len);
                     true
                 }
                 Err(e) => {
@@ -154,12 +146,7 @@ pub fn commit(part: &Path, dest: &Path) -> std::io::Result<()> {
 pub fn repair_dir(dir: &Path, hours: u64) -> usize {
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(hours * 3600);
     let mut fixed = 0;
-    let mut dirs = vec![
-        dir.to_path_buf(),
-        dir.join("events"),
-        dir.join(".buffer"),
-        dir.join("timeline"),
-    ];
+    let mut dirs = vec![dir.to_path_buf(), dir.join("events"), dir.join(".buffer"), dir.join("timeline")];
     while let Some(d) = dirs.pop() {
         let Ok(rd) = std::fs::read_dir(&d) else {
             continue;
@@ -207,12 +194,7 @@ pub fn repair_recent(dir: &Path, prefix: &str, minutes: u64) -> usize {
     rd.flatten()
         .filter(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            name.starts_with(prefix)
-                && name.ends_with(".mp4")
-                && e.metadata()
-                    .and_then(|m| m.modified())
-                    .map(|t| t >= cutoff)
-                    .unwrap_or(false)
+            name.starts_with(prefix) && name.ends_with(".mp4") && e.metadata().and_then(|m| m.modified()).map(|t| t >= cutoff).unwrap_or(false)
         })
         .filter(|e| repair(&e.path()))
         .count()
@@ -234,13 +216,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nvr-mp4-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("a.mp4");
-        let mut good = [
-            bx(b"ftyp", 16),
-            bx(b"moov", 100),
-            bx(b"moof", 50),
-            bx(b"mdat", 1000),
-        ]
-        .concat();
+        let mut good = [bx(b"ftyp", 16), bx(b"moov", 100), bx(b"moof", 50), bx(b"mdat", 1000)].concat();
         let good_len = good.len() as u64;
         // A complete moof without its mdat, then a cut-off mdat.
         good.extend(bx(b"moof", 50));
@@ -265,8 +241,12 @@ mod tests {
         let header = [bx(b"ftyp", 16), bx(b"moov", 100)].concat();
         // The header alone; the header and a piece's index with no data; the
         // header and junk: all hold no video.
-        for (name, data) in [("a.mp4", header.clone()), ("b.mp4", [header.clone(), bx(b"moof", 50)].concat()), ("c.mp4", [header.clone(), vec![0u8; 40]].concat()),
-                             ("d.mp4", [header.clone(), bx(b"moof", 50), bx(b"mdat", 1000)[..300].to_vec()].concat())] {
+        for (name, data) in [
+            ("a.mp4", header.clone()),
+            ("b.mp4", [header.clone(), bx(b"moof", 50)].concat()),
+            ("c.mp4", [header.clone(), vec![0u8; 40]].concat()),
+            ("d.mp4", [header.clone(), bx(b"moof", 50), bx(b"mdat", 1000)[..300].to_vec()].concat()),
+        ] {
             let p = dir.join(name);
             std::fs::write(&p, data).unwrap();
             assert_eq!(check(&p).unwrap(), Check::Empty, "{name}");
@@ -306,13 +286,36 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let whole = dir.join("whole.mp4");
         // 12 s of video, a keyframe every second (25 fps), so 12 pieces.
-        let made = ff(&["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-t", "12", "-c:v", "libx264", "-g", "25", "-keyint_min", "25", "-sc_threshold", "0", "-pix_fmt", "yuv420p",
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof", whole.to_str().unwrap()]).unwrap();
+        let made = ff(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=25",
+            "-t",
+            "12",
+            "-c:v",
+            "libx264",
+            "-g",
+            "25",
+            "-keyint_min",
+            "25",
+            "-sc_threshold",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+frag_keyframe+empty_moov+default_base_moof",
+            whole.to_str().unwrap(),
+        ])
+        .unwrap();
         assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
         assert_eq!(check(&whole).unwrap(), Check::Ok);
         let bytes = std::fs::read(&whole).unwrap();
         let frames = |p: &Path| -> Option<u64> {
-            let o = Command::new("ffprobe").args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", p.to_str().unwrap()]).output().ok()?;
+            let o = Command::new("ffprobe")
+                .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", p.to_str().unwrap()])
+                .output()
+                .ok()?;
             String::from_utf8_lossy(&o.stdout).trim().parse().ok()
         };
         assert_eq!(frames(&whole), Some(300));
@@ -391,4 +394,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

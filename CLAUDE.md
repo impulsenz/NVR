@@ -40,7 +40,8 @@ stop that. Background: `docs/AUDIT-2026-11.md`, `docs/ARCHITECTURE.md`,
 
 ```bash
 cargo test                      # GAZE (130 tests) and the watchdog (11)
-cargo clippy --all-targets      # currently 29 style warnings, no correctness lints
+cargo fmt                       # formatting (rustfmt.toml); CI runs `cargo fmt --check`
+cargo clippy --all-targets      # currently no warnings: keep it that way
 cargo audit                     # dependency advisories (0 vulnerabilities)
 node --check static/app.js      # the page has no build step
 python3 tools/audit/config_usage.py     # dead-setting scan

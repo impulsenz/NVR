@@ -70,7 +70,10 @@ pub async fn run(mgr: Arc<Manager>) {
                     info!(target: "health", "[{}] offline for {} — telling", c.name, mins(now - since));
                     out.push(Message {
                         title: format!("{} is offline", c.name),
-                        body: format!("GAZE can't reach this camera ({}). Nothing is being recorded from it. Check its power and network.", st.error.clone().unwrap_or_else(|| "no answer".into())),
+                        body: format!(
+                            "GAZE can't reach this camera ({}). Nothing is being recorded from it. Check its power and network.",
+                            st.error.clone().unwrap_or_else(|| "no answer".into())
+                        ),
                         tags: "warning,camera",
                         priority: 4,
                         click: None,
@@ -80,18 +83,18 @@ pub async fn run(mgr: Arc<Manager>) {
                 }
             } else if st.state == RelayState::Connected
                 && let Some(since) = w.since.take()
-                    && std::mem::take(&mut w.told)
-                {
-                    out.push(Message {
-                        title: format!("{} is back online", c.name),
-                        body: format!("Offline for {}.", mins(now - since)),
-                        tags: "white_check_mark,camera",
-                        priority: 3,
-                        click: None,
-                        picture: None,
-                        actions: None,
-                    });
-                }
+                && std::mem::take(&mut w.told)
+            {
+                out.push(Message {
+                    title: format!("{} is back online", c.name),
+                    body: format!("Offline for {}.", mins(now - since)),
+                    tags: "white_check_mark,camera",
+                    priority: 3,
+                    click: None,
+                    picture: None,
+                    actions: None,
+                });
+            }
             // Not recording while it should be (and the camera itself is fine).
             let w = not_rec.entry(c.id.clone()).or_default();
             let failing = !down
@@ -129,12 +132,7 @@ pub async fn run(mgr: Arc<Manager>) {
         // The recordings drive: free space below what's to be kept free (the
         // oldest recordings can't be cleared fast enough), or under 2 GB.
         let usage = mgr.usage();
-        let low: Vec<_> = usage
-            .locations
-            .iter()
-            .filter(|l| l.total_bytes > 0)
-            .filter(|l| drive_low(cfg.storage.min_free_gb, l))
-            .collect();
+        let low: Vec<_> = usage.locations.iter().filter(|l| l.total_bytes > 0).filter(|l| drive_low(cfg.storage.min_free_gb, l)).collect();
         if !low.is_empty() && disk_told.is_none_or(|t| now - t >= DISK_EVERY) {
             disk_told = Some(now);
             let l = low[0];

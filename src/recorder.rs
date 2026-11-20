@@ -2,10 +2,10 @@
 //! process that writes fixed-length MP4 files, restarting it if it dies or
 //! stalls, and falling back from GPU to CPU if hardware encoding fails.
 
-use crate::sync::MutexExt;
 use crate::config::{CameraConfig, mask_url, redact};
 use crate::ffmpeg;
 use crate::manager::RuntimeEnv;
+use crate::sync::MutexExt;
 use chrono::{DateTime, Local};
 use serde::Serialize;
 use std::process::Stdio;
@@ -81,12 +81,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn new(
-        cam: CameraConfig,
-        spec: RecSpec,
-        env: Arc<RuntimeEnv>,
-        cancel: CancellationToken,
-    ) -> Arc<Self> {
+    pub fn new(cam: CameraConfig, spec: RecSpec, env: Arc<RuntimeEnv>, cancel: CancellationToken) -> Arc<Self> {
         let use_gpu = cam.reencode() && env.hardware.uses_gpu();
         Arc::new(Self {
             cam,
@@ -162,20 +157,11 @@ impl Recorder {
         let env = &self.env;
         let spec = &self.spec;
         std::fs::create_dir_all(&spec.dir)?;
-        let pattern = spec
-            .dir
-            .join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", spec.prefix));
+        let pattern = spec.dir.join(format!("{}_%Y-%m-%d_%H-%M-%S.mp4", spec.prefix));
 
         let mut cmd = crate::load::cmd(&env.ffmpeg_path);
         // Input comes from the shared camera connection via stdin.
-        cmd.args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostats",
-            "-progress",
-            "pipe:1",
-        ]);
+        cmd.args(["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"]);
 
         let mut gpu_desc = None;
         let mut out_args = vec!["-c:v".to_string(), "copy".to_string()];
@@ -185,8 +171,7 @@ impl Recorder {
         }
         if cam.reencode() {
             let hw = &env.hardware;
-            let use_gpu = use_gpu
-                && !crate::load::gpu_too_busy(&format!("{} recording conversion", cam.name));
+            let use_gpu = use_gpu && !crate::load::gpu_too_busy(&format!("{} recording conversion", cam.name));
             let (encoder, keep) = if use_gpu {
                 // Privacy boxes are drawn on frames in memory: not on the GPU.
                 (hw.resolved_encoder(), ffmpeg::full_gpu_pipeline(hw) && cam.privacy.is_empty())
@@ -210,9 +195,7 @@ impl Recorder {
                 out_args.extend(["-vf".to_string(), f]);
             }
         }
-        cmd.args(["-fflags", "+genpts"])
-            .args(self.spec.relay.input_args())
-            .args(["-map", "0:v:0"]);
+        cmd.args(["-fflags", "+genpts"]).args(self.spec.relay.input_args()).args(["-map", "0:v:0"]);
         if cam.record_audio {
             // Sound kept as it comes when it's AAC; otherwise (G.711, G.726 …,
             // common on cameras) made AAC — light work — so the recordings
@@ -228,18 +211,10 @@ impl Recorder {
             cmd.arg("-an");
         }
         cmd.args(out_args)
-            .args([
-                "-f",
-                "segment",
-                "-segment_time",
-                &spec.segment_seconds.to_string(),
-            ])
+            .args(["-f", "segment", "-segment_time", &spec.segment_seconds.to_string()])
             .args(["-segment_atclocktime", "1", "-segment_format", "mp4"])
             // Fragmented MP4: files stay playable even if power is lost mid-recording.
-            .args([
-                "-segment_format_options",
-                "movflags=+frag_keyframe+empty_moov+default_base_moof",
-            ])
+            .args(["-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof"])
             .args(["-reset_timestamps", "1", "-strftime", "1"])
             .arg(pattern)
             .stdin(Stdio::piped())
@@ -314,9 +289,7 @@ impl Recorder {
             });
             // Feed the camera stream in; closing it makes ffmpeg finish its file.
             let stop_feed = CancellationToken::new();
-            let _feeder = child.stdin.take().map(|stdin| {
-                crate::relay::feed(self.spec.relay.subscribe(), stdin, stop_feed.clone())
-            });
+            let _feeder = child.stdin.take().map(|stdin| crate::relay::feed(self.spec.relay.subscribe(), stdin, stop_feed.clone()));
             let started = Instant::now();
             self.inner.locked().last_progress = Instant::now();
             if let Some(stdout) = child.stdout.take() {
@@ -369,10 +342,7 @@ impl Recorder {
             // The file it was writing may end mid-way: make it playable.
             {
                 let (dir, prefix) = (self.spec.dir.clone(), self.spec.prefix.clone());
-                let _ = tokio::task::spawn_blocking(move || {
-                    crate::mp4fix::repair_recent(&dir, &prefix, 30)
-                })
-                .await;
+                let _ = tokio::task::spawn_blocking(move || crate::mp4fix::repair_recent(&dir, &prefix, 30)).await;
             }
 
             // GPU fallback: two failures in a row before any video was
@@ -486,10 +456,7 @@ enum Exit {
 async fn graceful_stop(child: &mut Child, stop_feed: &CancellationToken) {
     // End of input: ffmpeg writes out the rest of the file and exits.
     stop_feed.cancel();
-    if tokio::time::timeout(Duration::from_secs(5), child.wait())
-        .await
-        .is_err()
-    {
+    if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
         let _ = child.kill().await;
     }
 }

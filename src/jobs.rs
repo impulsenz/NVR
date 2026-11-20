@@ -173,7 +173,7 @@ impl Job {
             }
         }
     }
-        pub fn done_one(&self) {
+    pub fn done_one(&self) {
         self.with(|j| j.done += 1);
     }
     /// Waiting for the computer to have spare capacity.
@@ -220,16 +220,7 @@ impl Drop for Job {
 /// Running jobs first, then the most recently finished.
 pub fn list() -> Vec<JobInfo> {
     let mut v = JOBS.locked().clone();
-    v.sort_by(|a, b| {
-        a.finished
-            .is_some()
-            .cmp(&b.finished.is_some())
-            .then_with(|| {
-                b.finished
-                    .unwrap_or(b.started)
-                    .cmp(&a.finished.unwrap_or(a.started))
-            })
-    });
+    v.sort_by(|a, b| a.finished.is_some().cmp(&b.finished.is_some()).then_with(|| b.finished.unwrap_or(b.started).cmp(&a.finished.unwrap_or(a.started))));
     v
 }
 
@@ -247,10 +238,7 @@ pub fn check_complete(tmp: &std::path::Path, got: u64, total: u64) -> anyhow::Re
 /// For downloads: give up when nothing arrives for a minute, however long
 /// the whole file takes on a slow connection.
 pub fn download_client() -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .read_timeout(std::time::Duration::from_secs(60))
-        .build()
+    reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(30)).read_timeout(std::time::Duration::from_secs(60)).build()
 }
 
 /// SHA-256 of a file, read a piece at a time.
@@ -295,12 +283,7 @@ pub fn verify_sha256(path: &std::path::Path, what: &str, want: &str) -> anyhow::
 }
 
 /// Download a file, showing it as a task with progress.
-pub async fn download(
-    what: &str,
-    url: &str,
-    path: &std::path::Path,
-    min_bytes: u64,
-) -> anyhow::Result<()> {
+pub async fn download(what: &str, url: &str, path: &std::path::Path, min_bytes: u64) -> anyhow::Result<()> {
     let job = start("download", format!("Downloading {what}"));
     job.step(url.rsplit('/').next().unwrap_or(url).to_string());
     let res = async {
@@ -385,13 +368,7 @@ mod tests {
             j
         });
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        let st = || {
-            super::list()
-                .into_iter()
-                .find(|x| x.id == id)
-                .unwrap()
-                .state
-        };
+        let st = || super::list().into_iter().find(|x| x.id == id).unwrap().state;
         assert_eq!(st(), "paused");
         assert!(!t.is_finished());
         super::set_paused("cloud", false);

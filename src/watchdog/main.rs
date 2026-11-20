@@ -20,9 +20,9 @@
 mod win;
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// The watchdog's own version. NOT the GAZE version: it changes only when the
@@ -139,11 +139,7 @@ fn dir_of(data: &Path) -> PathBuf {
 }
 
 fn load_settings(data: &Path) -> Settings {
-    std::fs::read_to_string(dir_of(data).join("settings.toml"))
-        .ok()
-        .and_then(|t| toml::from_str::<Settings>(&t).ok())
-        .unwrap_or_default()
-        .clamped()
+    std::fs::read_to_string(dir_of(data).join("settings.toml")).ok().and_then(|t| toml::from_str::<Settings>(&t).ok()).unwrap_or_default().clamped()
 }
 
 fn write_settings(data: &Path, s: &Settings) {
@@ -151,9 +147,10 @@ fn write_settings(data: &Path, s: &Settings) {
     let _ = std::fs::create_dir_all(&dir);
     let tmp = dir.join("settings.toml.tmp");
     if let Ok(t) = toml::to_string_pretty(s)
-        && std::fs::write(&tmp, t).is_ok() {
-            let _ = std::fs::rename(&tmp, dir.join("settings.toml"));
-        }
+        && std::fs::write(&tmp, t).is_ok()
+    {
+        let _ = std::fs::rename(&tmp, dir.join("settings.toml"));
+    }
 }
 
 /// Switch watching on or off (the icon's menu).
@@ -647,10 +644,33 @@ async fn install_update(data: &Path) -> Result<String, String> {
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let base = format!("{}/{}/releases/latest/download/{ASSET}", web_base(), repo());
-    let client = reqwest::Client::builder().user_agent(concat!("GAZE-Watchdog/", env!("CARGO_PKG_VERSION"))).connect_timeout(Duration::from_secs(30)).timeout(Duration::from_secs(300)).build().map_err(|e| e.to_string())?;
-    let want = client.get(format!("{base}.sha256")).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| format!("no checksum for {latest}: {e}"))?.text().await.map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("GAZE-Watchdog/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let want = client
+        .get(format!("{base}.sha256"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| format!("no checksum for {latest}: {e}"))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
     let want = want.split_whitespace().next().unwrap_or("").to_lowercase();
-    let bytes = client.get(&base).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| format!("no watchdog in release {latest}: {e}"))?.bytes().await.map_err(|e| e.to_string())?;
+    let bytes = client
+        .get(&base)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| format!("no watchdog in release {latest}: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
     let got = {
         use sha2::Digest;
         sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>()
@@ -673,7 +693,10 @@ async fn install_update(data: &Path) -> Result<String, String> {
         // The service ends now; a helper starts it again with the new program.
         if cfg!(windows) {
             let mut c = std::process::Command::new("cmd");
-            c.args(["/C", &format!("ping -n 4 127.0.0.1 >nul & sc start {TASK_NAME}")]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            c.args(["/C", &format!("ping -n 4 127.0.0.1 >nul & sc start {TASK_NAME}")])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
@@ -719,7 +742,9 @@ fn take_lock_named(data: &Path, wait_pid: Option<u32>, file: &str) -> bool {
     let lock = dir.join(file);
     if let Some(pid) = std::fs::read_to_string(&lock).ok().and_then(|t| t.trim().parse::<u32>().ok()) {
         let mut sys = new_system();
-        if let Some(sys) = sys.as_mut() { sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true); }
+        if let Some(sys) = sys.as_mut() {
+            sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+        }
         if pid != std::process::id() && sys.as_ref().and_then(|s| s.process(Pid::from_u32(pid))).is_some_and(|p| p.name().to_string_lossy().to_lowercase().contains("watchdog")) {
             return false;
         }
@@ -761,7 +786,8 @@ async fn run(data: PathBuf, wait_pid: Option<u32>) {
     let mut settings_mtime = std::fs::metadata(dir_of(&data).join("settings.toml")).and_then(|m| m.modified()).ok();
     let mut mon = Monitor::default();
     let mut st = Status { version: VERSION.into(), pid: std::process::id(), started, startup: startup_state(), ..Default::default() };
-    let (mut last_check, mut last_status, mut last_update) = (Instant::now() - Duration::from_secs(3600), Instant::now() - Duration::from_secs(3600), Instant::now() - Duration::from_secs(10 * 86400));
+    let (mut last_check, mut last_status, mut last_update) =
+        (Instant::now() - Duration::from_secs(3600), Instant::now() - Duration::from_secs(3600), Instant::now() - Duration::from_secs(10 * 86400));
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut force: Option<String> = None;
     let mut recheck_update = true;
@@ -869,7 +895,11 @@ async fn run(data: PathBuf, wait_pid: Option<u32>) {
                 let _ = std::fs::remove_file(quit_marker(&data));
             }
             let marker = quit_marker(&data).exists();
-            let action = if let Some(why) = force.take() { if running { Action::Restart(why) } else { Action::Start(why) } } else { mon.look(&settings, running, answered, marker, Instant::now()) };
+            let action = if let Some(why) = force.take() {
+                if running { Action::Restart(why) } else { Action::Start(why) }
+            } else {
+                mon.look(&settings, running, answered, marker, Instant::now())
+            };
             let was_waiting = mon.message.clone();
             match action {
                 Action::Nothing => {}
@@ -939,7 +969,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // HTTPS (update checks) uses rustls with the ring crypto backend.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let data = arg_value(&args, "--data").map(PathBuf::from).unwrap_or_else(|| std::env::current_exe().ok().and_then(|e| e.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf())).unwrap_or_default());
+    let data = arg_value(&args, "--data")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_exe().ok().and_then(|e| e.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf())).unwrap_or_default());
     if args.iter().any(|a| a == "--version") {
         println!("{VERSION}");
     } else if args.iter().any(|a| a == "--install") {
@@ -1128,7 +1160,15 @@ mod tests {
                 n += 1;
                 let mut buf = [0u8; 512];
                 let _ = sock.read(&mut buf).await;
-                let reply: &[u8] = match n { 1 => b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n", 2 => b"HTTP/1.1 302 Found\r\nlocation: https://x/\r\ncontent-length: 0\r\n\r\n", 3 => b"HTTP/1.1 500 Oops\r\ncontent-length: 0\r\n\r\n", _ => { tokio::time::sleep(Duration::from_secs(5)).await; b"" } };
+                let reply: &[u8] = match n {
+                    1 => b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n",
+                    2 => b"HTTP/1.1 302 Found\r\nlocation: https://x/\r\ncontent-length: 0\r\n\r\n",
+                    3 => b"HTTP/1.1 500 Oops\r\ncontent-length: 0\r\n\r\n",
+                    _ => {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        b""
+                    }
+                };
                 let _ = sock.write_all(reply).await;
             }
         });

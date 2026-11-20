@@ -25,11 +25,7 @@ pub fn parse(url: &str) -> Option<Target> {
         Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h, p.parse().ok()?),
         _ => (hostport, 21),
     };
-    (!host.is_empty()).then(|| Target {
-        host: host.trim_matches(['[', ']']).to_string(),
-        port,
-        folder: folder.trim_matches('/').to_string(),
-    })
+    (!host.is_empty()).then(|| Target { host: host.trim_matches(['[', ']']).to_string(), port, folder: folder.trim_matches('/').to_string() })
 }
 
 pub fn is_ftp(remote: &str) -> bool {
@@ -48,15 +44,9 @@ impl Session {
             .await
             .map_err(|_| anyhow!("{}:{} didn't answer", t.host, t.port))?
             .with_context(|| format!("cannot reach {}:{}", t.host, t.port))?;
-        let mut me = Self {
-            ctl: BufReader::new(s),
-        };
+        let mut me = Self { ctl: BufReader::new(s) };
         me.expect(&[220]).await.context("not an FTP server")?;
-        let user = if user.trim().is_empty() {
-            "anonymous"
-        } else {
-            user.trim()
-        };
+        let user = if user.trim().is_empty() { "anonymous" } else { user.trim() };
         let (code, msg) = me.cmd(&format!("USER {user}")).await?;
         if code == 331 {
             let (code, msg) = me.cmd(&format!("PASS {pass}")).await?;
@@ -77,9 +67,7 @@ impl Session {
         let mut first: Option<String> = None;
         loop {
             line.clear();
-            let n = tokio::time::timeout(TIMEOUT, self.ctl.read_line(&mut line))
-                .await
-                .map_err(|_| anyhow!("the NAS stopped answering"))??;
+            let n = tokio::time::timeout(TIMEOUT, self.ctl.read_line(&mut line)).await.map_err(|_| anyhow!("the NAS stopped answering"))??;
             if n == 0 {
                 bail!("the NAS closed the connection");
             }
@@ -111,10 +99,7 @@ impl Session {
     }
 
     async fn cmd(&mut self, c: &str) -> Result<(u32, String)> {
-        self.ctl
-            .get_mut()
-            .write_all(format!("{c}\r\n").as_bytes())
-            .await?;
+        self.ctl.get_mut().write_all(format!("{c}\r\n").as_bytes()).await?;
         self.reply().await
     }
 
@@ -132,9 +117,7 @@ impl Session {
         for part in folder.split('/').filter(|p| !p.is_empty()) {
             if self.cmd(&format!("CWD {part}")).await?.0 != 250 {
                 self.cmd(&format!("MKD {part}")).await?;
-                self.ok(&format!("CWD {part}"), &[250])
-                    .await
-                    .with_context(|| format!("can't make the folder {part}"))?;
+                self.ok(&format!("CWD {part}"), &[250]).await.with_context(|| format!("can't make the folder {part}"))?;
             }
         }
         Ok(())
@@ -145,22 +128,12 @@ impl Session {
     async fn data(&mut self) -> Result<TcpStream> {
         let peer = self.ctl.get_ref().peer_addr()?;
         let (code, msg) = self.cmd("EPSV").await?;
-        let port = if code == 229 {
-            msg.split('|').filter_map(|p| p.parse::<u16>().ok()).next()
-        } else {
-            None
-        };
+        let port = if code == 229 { msg.split('|').filter_map(|p| p.parse::<u16>().ok()).next() } else { None };
         let port = match port {
             Some(p) => p,
             None => {
                 let msg = self.ok("PASV", &[227]).await?;
-                let nums: Vec<u16> = msg
-                    .split(['(', ')'])
-                    .nth(1)
-                    .unwrap_or("")
-                    .split(',')
-                    .filter_map(|n| n.trim().parse().ok())
-                    .collect();
+                let nums: Vec<u16> = msg.split(['(', ')']).nth(1).unwrap_or("").split(',').filter_map(|n| n.trim().parse().ok()).collect();
                 if nums.len() != 6 {
                     bail!("unexpected passive-mode reply: {msg}");
                 }
@@ -192,9 +165,7 @@ impl Session {
         }
         data.shutdown().await?;
         drop(data);
-        self.expect(&[226, 250])
-            .await
-            .context("upload not finished")?;
+        self.expect(&[226, 250]).await.context("upload not finished")?;
         self.cmd(&format!("DELE {name}")).await?; // an older copy, if any
         self.ok(&format!("RNFR {tmp}"), &[350]).await?;
         self.ok(&format!("RNTO {name}"), &[250]).await?;
@@ -236,15 +207,9 @@ mod tests {
     #[test]
     fn parses_addresses() {
         let t = super::parse("ftp://nas.local/Cameras/GAZE/").unwrap();
-        assert_eq!(
-            (t.host.as_str(), t.port, t.folder.as_str()),
-            ("nas.local", 21, "Cameras/GAZE")
-        );
+        assert_eq!((t.host.as_str(), t.port, t.folder.as_str()), ("nas.local", 21, "Cameras/GAZE"));
         let t = super::parse("ftp://192.168.1.5:2121").unwrap();
-        assert_eq!(
-            (t.host.as_str(), t.port, t.folder.as_str()),
-            ("192.168.1.5", 2121, "")
-        );
+        assert_eq!((t.host.as_str(), t.port, t.folder.as_str()), ("192.168.1.5", 2121, ""));
         assert!(super::parse("gdrive:NVR").is_none());
         assert!(super::parse("ftp://").is_none());
     }

@@ -50,11 +50,7 @@ pub fn build(cfg: &EmailConfig, m: &Message<'_>) -> Result<lettre::Message> {
     }
     let text = SinglePart::builder().header(ContentType::TEXT_PLAIN).body(text);
     let msg = match &m.picture {
-        Some(p) => b.multipart(
-            MultiPart::mixed()
-                .singlepart(text)
-                .singlepart(Attachment::new("alert.jpg".to_string()).body(p.clone(), "image/jpeg".parse().unwrap())),
-        ),
+        Some(p) => b.multipart(MultiPart::mixed().singlepart(text).singlepart(Attachment::new("alert.jpg".to_string()).body(p.clone(), "image/jpeg".parse().unwrap()))),
         None => b.singlepart(text),
     };
     msg.context("could not build the email")

@@ -3,10 +3,10 @@
 //! stream open or poll single frames (used by the multi-camera grid).
 //! The process only runs while somebody is watching.
 
-use crate::sync::MutexExt;
 use crate::config::{CameraConfig, redact};
 use crate::ffmpeg;
 use crate::manager::RuntimeEnv;
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, bail};
 use bytes::{Bytes, BytesMut};
 use std::process::Stdio;
@@ -61,8 +61,7 @@ impl Live {
         cancel: CancellationToken,
     ) -> Arc<Self> {
         // The GPU is only worth it for full-quality streams (see HardwareConfig).
-        let use_gpu = env.hardware.hwaccel != "none"
-            && (quality == Quality::Main || env.hardware.gpu_substreams);
+        let use_gpu = env.hardware.hwaccel != "none" && (quality == Quality::Main || env.hardware.gpu_substreams);
         let cam_view = cam.view.clone();
         Arc::new(Self {
             cam,
@@ -88,11 +87,7 @@ impl Live {
     /// Frames per second currently produced (0 when idle).
     pub fn fps(&self) -> f32 {
         let f = self.fps.locked();
-        if f.1.elapsed() > Duration::from_secs(5) {
-            0.0
-        } else {
-            f.2
-        }
+        if f.1.elapsed() > Duration::from_secs(5) { 0.0 } else { f.2 }
     }
 
     /// Frames per second this stream is produced at.
@@ -149,14 +144,8 @@ impl Live {
         *self.last_poll.locked() = Instant::now();
         let mut rx = self.tx.subscribe();
         self.ensure_running();
-        let fresh = |f: &Frame| {
-            f.as_ref()
-                .is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(3))
-        };
-        let frame = tokio::time::timeout(Duration::from_secs(10), rx.wait_for(fresh))
-            .await
-            .context("no picture from camera yet")?
-            .context("camera removed")?;
+        let fresh = |f: &Frame| f.as_ref().is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(3));
+        let frame = tokio::time::timeout(Duration::from_secs(10), rx.wait_for(fresh)).await.context("no picture from camera yet")?.context("camera removed")?;
         Ok(frame.as_ref().unwrap().1.clone())
     }
 
@@ -169,17 +158,7 @@ impl Live {
             .args(["-hide_banner", "-loglevel", "error"])
             .args(self.relay.input_args())
             .args(self.cam.view_filter().map(|f| vec!["-vf".to_string(), f]).unwrap_or_default())
-            .args([
-                "-frames:v",
-                "1",
-                "-q:v",
-                "2",
-                "-f",
-                "image2pipe",
-                "-c:v",
-                "mjpeg",
-                "pipe:1",
-            ])
+            .args(["-frames:v", "1", "-q:v", "2", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -187,11 +166,7 @@ impl Live {
             .spawn()
             .context("running ffmpeg")?;
         let stop = CancellationToken::new();
-        let _feed = crate::relay::feed(
-            self.relay.subscribe(),
-            child.stdin.take().unwrap(),
-            stop.clone(),
-        );
+        let _feed = crate::relay::feed(self.relay.subscribe(), child.stdin.take().unwrap(), stop.clone());
         let mut out = Vec::new();
         let mut stdout = child.stdout.take().unwrap();
         let r = tokio::time::timeout(Duration::from_secs(25), stdout.read_to_end(&mut out)).await;
@@ -199,20 +174,14 @@ impl Live {
         let _ = child.kill().await;
         r.context("timed out waiting for a picture from the camera")??;
         if out.is_empty() {
-            let err = self
-                .relay
-                .status()
-                .error
-                .unwrap_or_else(|| "no picture".into());
+            let err = self.relay.status().error.unwrap_or_else(|| "no picture".into());
             bail!("no image from camera: {}", redact(&err, &self.cam.url));
         }
         Ok(Bytes::from(out))
     }
 
     fn wanted(&self) -> bool {
-        !self.cancel.is_cancelled()
-            && (self.tx.receiver_count() > 0
-                || self.last_poll.locked().elapsed() < POLL_KEEPALIVE)
+        !self.cancel.is_cancelled() && (self.tx.receiver_count() > 0 || self.last_poll.locked().elapsed() < POLL_KEEPALIVE)
     }
 
     async fn produce(self: Arc<Self>) {
@@ -227,11 +196,7 @@ impl Live {
                 // The detector analyses a few frames per second; faster grid
                 // views need their own decoder.
                 // (A fisheye camera's grid picture is flattened: its own decoder.)
-                Some(d)
-                    if Instant::now() >= own_decoder_until
-                        && self.target_fps() <= self.cam.detect.fps
-                        && !self.cam.dewarp.enabled =>
-                {
+                Some(d) if Instant::now() >= own_decoder_until && self.target_fps() <= self.cam.detect.fps && !self.cam.dewarp.enabled => {
                     let r = self.run_from_detector(d).await;
                     if r.is_err() {
                         own_decoder_until = Instant::now() + Duration::from_secs(60);
@@ -249,21 +214,14 @@ impl Live {
                 }
             }
             if use_gpu && failures >= 2 {
-                warn!(
-                    "[{}] live: GPU decoding failed, switching to CPU",
-                    self.cam.name
-                );
+                warn!("[{}] live: GPU decoding failed, switching to CPU", self.cam.name);
                 self.use_gpu.store(false, Ordering::SeqCst);
             }
             {
                 let mut running = self.running.locked();
                 if !self.wanted() {
                     *running = false;
-                    info!(
-                        "[{}] live ({}): no viewers, stopping",
-                        self.cam.name,
-                        self.q()
-                    );
+                    info!("[{}] live ({}): no viewers, stopping", self.cam.name, self.q());
                     return;
                 }
             }
@@ -345,12 +303,7 @@ impl Live {
         let mut back = crate::load::BackToGpu::default();
         let mut back_tick = tokio::time::interval(Duration::from_secs(5));
         let mut child = cmd
-            .args([
-                "-fflags",
-                "nobuffer+discardcorrupt",
-                "-flags",
-                "+low_delay-output_corrupt",
-            ])
+            .args(["-fflags", "nobuffer+discardcorrupt", "-flags", "+low_delay-output_corrupt"])
             .args(self.relay.input_args())
             .args(["-an", "-vf", &vf, "-q:v", &live.quality.to_string()])
             .args(["-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
@@ -362,11 +315,7 @@ impl Live {
             .context("starting ffmpeg for live view")?;
         let mut stdout = child.stdout.take().context("no stdout")?;
         let stop_feed = CancellationToken::new();
-        let _feed = crate::relay::feed(
-            self.relay.subscribe(),
-            child.stdin.take().context("no stdin")?,
-            stop_feed.clone(),
-        );
+        let _feed = crate::relay::feed(self.relay.subscribe(), child.stdin.take().context("no stdin")?, stop_feed.clone());
         let _stop_on_exit = stop_feed.drop_guard();
         if let Some(stderr) = child.stderr.take() {
             let name = self.cam.name.clone();
@@ -469,14 +418,8 @@ mod tests {
         buf.extend_from_slice(&[0x00, 0xFF, 0xD8, 1, 2, 0xFF]);
         assert!(next_jpeg(&mut buf, &mut scan).is_none());
         buf.extend_from_slice(&[0xD9, 0xFF, 0xD8, 3, 0xFF, 0xD9]);
-        assert_eq!(
-            &next_jpeg(&mut buf, &mut scan).unwrap()[..],
-            &[0xFF, 0xD8, 1, 2, 0xFF, 0xD9]
-        );
-        assert_eq!(
-            &next_jpeg(&mut buf, &mut scan).unwrap()[..],
-            &[0xFF, 0xD8, 3, 0xFF, 0xD9]
-        );
+        assert_eq!(&next_jpeg(&mut buf, &mut scan).unwrap()[..], &[0xFF, 0xD8, 1, 2, 0xFF, 0xD9]);
+        assert_eq!(&next_jpeg(&mut buf, &mut scan).unwrap()[..], &[0xFF, 0xD8, 3, 0xFF, 0xD9]);
         assert!(next_jpeg(&mut buf, &mut scan).is_none());
     }
 }

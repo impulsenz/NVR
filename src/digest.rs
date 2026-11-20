@@ -61,14 +61,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 /// Put the digest together. Pure, so it can be tested.
-pub fn compose(
-    server: &str,
-    from: DateTime<Local>,
-    to: DateTime<Local>,
-    cams: &[CamDay],
-    warnings: &[String],
-    is_night: &dyn Fn(DateTime<Local>) -> bool,
-) -> Digest {
+pub fn compose(server: &str, from: DateTime<Local>, to: DateTime<Local>, cams: &[CamDay], warnings: &[String], is_night: &dyn Fn(DateTime<Local>) -> bool) -> Digest {
     let in_period = |e: &&Event| is_alert(e) && e.start >= from && e.start < to;
     // "yesterday 22:14" / "today 03:40": the period spans midnight.
     let when = |t: DateTime<Local>| format!("{} {}", if t.date_naive() == to.date_naive() { "today" } else { "yesterday" }, t.format("%H:%M"));
@@ -106,7 +99,15 @@ pub fn compose(
             }
             if let Some(t) = &e.thumb {
                 // A person at night matters most, then any person, then a vehicle.
-                let rank = if k.person && night { 4 } else if k.person { 3 } else if k.vehicle { 2 } else { 1 } + if e.suspicious.is_empty() { 0 } else { 1 };
+                let rank = if k.person && night {
+                    4
+                } else if k.person {
+                    3
+                } else if k.vehicle {
+                    2
+                } else {
+                    1
+                } + if e.suspicious.is_empty() { 0 } else { 1 };
                 if best.as_ref().is_none_or(|(r, at, _, _)| (rank, e.start) > (*r, *at)) {
                     best = Some((rank, e.start, ci, t.clone()));
                 }
@@ -182,7 +183,12 @@ async fn warnings(mgr: &Manager) -> Vec<String> {
     }
     for d in crate::smart::overview().drives.iter().filter(|d| d.health == "failing" || d.health == "warning") {
         let what = d.problems.first().cloned().unwrap_or_default();
-        w.push(format!("Drive {}: {}{}", d.name, if d.health == "failing" { "failing" } else { "needs attention" }, if what.is_empty() { String::new() } else { format!(" ({what})") }));
+        w.push(format!(
+            "Drive {}: {}{}",
+            d.name,
+            if d.health == "failing" { "failing" } else { "needs attention" },
+            if what.is_empty() { String::new() } else { format!(" ({what})") }
+        ));
     }
     w
 }
@@ -196,11 +202,7 @@ pub async fn build(mgr: &Manager, to: DateTime<Local>) -> (Digest, Option<Vec<u8
     let warn = warnings(mgr).await;
     let n = cfg.notify.clone();
     let d = compose(&cfg.server.name, from, to, &cams, &warn, &|t| crate::notify::is_night(&n, t));
-    let picture = if cfg.notify.digest.picture {
-        d.picture.as_ref().and_then(|(ci, thumb)| std::fs::read(rts[*ci].events.dir().join(thumb)).ok())
-    } else {
-        None
-    };
+    let picture = if cfg.notify.digest.picture { d.picture.as_ref().and_then(|(ci, thumb)| std::fs::read(rts[*ci].events.dir().join(thumb)).ok()) } else { None };
     (d, picture)
 }
 

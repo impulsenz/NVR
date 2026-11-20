@@ -12,9 +12,9 @@
 //! The relay keeps the packets since the last keyframe, so a new consumer
 //! starts with a complete picture immediately.
 
-use crate::sync::MutexExt;
 use crate::config::{mask_url, redact};
 use crate::ffmpeg::{self, StreamInfo};
+use crate::sync::MutexExt;
 use bytes::{Bytes, BytesMut};
 use serde::Serialize;
 use std::process::Stdio;
@@ -92,16 +92,7 @@ pub struct Relay {
 
 impl Relay {
     #[allow(clippy::too_many_arguments)] // built once per camera stream, from the camera's settings
-    pub fn new(
-        name: &str,
-        stream: (&str, bool),
-        label: &'static str,
-        url: &str,
-        transport: &str,
-        ffmpeg: &str,
-        cancel: CancellationToken,
-        rotate: u16,
-    ) -> Arc<Self> {
+    pub fn new(name: &str, stream: (&str, bool), label: &'static str, url: &str, transport: &str, ffmpeg: &str, cancel: CancellationToken, rotate: u16) -> Arc<Self> {
         let r = Arc::new(Self {
             rotate,
             name: name.into(),
@@ -119,13 +110,7 @@ impl Relay {
                 gop_ok: false,
                 connected: false,
                 last_used: Instant::now(),
-                status: RelayStatus {
-                    state: RelayState::Idle,
-                    consumers: 0,
-                    error: None,
-                    connects: 0,
-                    retry_in: None,
-                },
+                status: RelayStatus { state: RelayState::Idle, consumers: 0, error: None, connects: 0, retry_in: None },
             }),
             wake: Notify::new(),
             info: watch::Sender::new(None),
@@ -315,35 +300,14 @@ impl Relay {
         // (Through go2rtc or straight to the camera: see source().)
         let src = self.source();
         let mut cmd = crate::load::cmd(&self.ffmpeg);
-        cmd.args([
-            "-hide_banner",
-            "-nostdin",
-            "-nostats",
-            "-loglevel",
-            "level+info",
-            "-fflags",
-            "+genpts",
-        ])
-        .args(ffmpeg::input_args(&src, &self.transport))
-        .args([
-            "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-ar",
-            "16000",
-        ])
-        .args([
-            "-f",
-            "mpegts",
-            "-mpegts_flags",
-            "+resend_headers",
-            "-muxdelay",
-            "0",
-            "-muxpreload",
-            "0",
-            "pipe:1",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        cmd.args(["-hide_banner", "-nostdin", "-nostats", "-loglevel", "level+info", "-fflags", "+genpts"])
+            .args(ffmpeg::input_args(&src, &self.transport))
+            .args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-ar", "16000"])
+            .args(["-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0", "-muxpreload", "0", "pipe:1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return (false, Some(format!("cannot start ffmpeg: {e}"))),
@@ -439,27 +403,15 @@ impl Relay {
         s.subs.retain(|tx| tx.try_send(data.clone()).is_ok());
     }
 
-    async fn read_stderr(
-        self: Arc<Self>,
-        stderr: tokio::process::ChildStderr,
-        first_error: Arc<Mutex<Option<String>>>,
-    ) {
+    async fn read_stderr(self: Arc<Self>, stderr: tokio::process::ChildStderr, first_error: Arc<Mutex<Option<String>>>) {
         let mut lines = BufReader::new(stderr).lines();
         let mut filter = ffmpeg::StderrFilter::default();
         let mut in_input = true;
         let mut audio = String::new();
         while let Ok(Some(line)) = lines.next_line().await {
             // "-loglevel level+info" prefixes each line with its level.
-            let (level, msg) = match line
-                .trim_start()
-                .strip_prefix('[')
-                .and_then(|r| r.split_once("] "))
-            {
-                Some((l, m))
-                    if ["info", "warning", "error", "fatal", "panic", "verbose"].contains(&l) =>
-                {
-                    (l, m)
-                }
+            let (level, msg) = match line.trim_start().strip_prefix('[').and_then(|r| r.split_once("] ")) {
+                Some((l, m)) if ["info", "warning", "error", "fatal", "panic", "verbose"].contains(&l) => (l, m),
                 _ => ("info", line.as_str()),
             };
             if level == "info" || level == "verbose" {
@@ -481,15 +433,7 @@ impl Relay {
                     && self.info.borrow().is_none()
                     && let Some(i) = parse_stream_line(msg)
                 {
-                    info!(
-                        "[{}] {}: {} {}×{} {} fps",
-                        self.name,
-                        self.label,
-                        i.codec,
-                        i.width.unwrap_or(0),
-                        i.height.unwrap_or(0),
-                        i.fps.unwrap_or(0.0)
-                    );
+                    info!("[{}] {}: {} {}×{} {} fps", self.name, self.label, i.codec, i.width.unwrap_or(0), i.height.unwrap_or(0), i.fps.unwrap_or(0.0));
                     self.info.send_replace(Some(i));
                 }
                 continue;
@@ -528,16 +472,8 @@ pub fn parse_stream_line(line: &str) -> Option<StreamInfo> {
         let (w, h) = t.split_once('x')?;
         Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
     });
-    let fps = v
-        .split(',')
-        .find_map(|t| t.trim().strip_suffix(" fps")?.trim().parse::<f64>().ok());
-    Some(StreamInfo {
-        kind: "video".into(),
-        codec,
-        width: size.map(|s| s.0),
-        height: size.map(|s| s.1),
-        fps,
-    })
+    let fps = v.split(',').find_map(|t| t.trim().strip_suffix(" fps")?.trim().parse::<f64>().ok());
+    Some(StreamInfo { kind: "video".into(), codec, width: size.map(|s| s.0), height: size.map(|s| s.1), fps })
 }
 
 // ---------- minimal MPEG-TS parsing ----------
@@ -652,10 +588,7 @@ impl Relay {
         let mut a = Vec::new();
         if !self.rotate.is_multiple_of(360) {
             // ffmpeg counts anticlockwise.
-            a.extend([
-                "-display_rotation".to_string(),
-                ((360 - self.rotate % 360) % 360).to_string(),
-            ]);
+            a.extend(["-display_rotation".to_string(), ((360 - self.rotate % 360) % 360).to_string()]);
         }
         a.extend(pipe_input_args());
         a
@@ -663,11 +596,7 @@ impl Relay {
 
     /// Picture size after rotation.
     pub fn rotated(&self, w: u32, h: u32) -> (u32, u32) {
-        if self.rotate % 180 == 90 {
-            (h, w)
-        } else {
-            (w, h)
-        }
+        if self.rotate % 180 == 90 { (h, w) } else { (w, h) }
     }
 }
 
@@ -675,49 +604,19 @@ impl Relay {
 /// The relay starts each consumer with the stream headers and a keyframe,
 /// so a short analysis is enough (ffmpeg's default waits 5 s).
 pub fn pipe_input_args() -> Vec<String> {
-    [
-        "-analyzeduration",
-        "1500000",
-        "-probesize",
-        "4000000",
-        "-f",
-        "mpegts",
-        "-i",
-        "pipe:0",
-    ]
-    .map(String::from)
-    .to_vec()
+    ["-analyzeduration", "1500000", "-probesize", "4000000", "-f", "mpegts", "-i", "pipe:0"].map(String::from).to_vec()
 }
 
 /// ffmpeg input from a relay pipe for live sound: as little buffering and
 /// probing as possible.
 pub fn pipe_input_args_low_delay() -> Vec<String> {
-    [
-        "-fflags",
-        "nobuffer",
-        "-flags",
-        "low_delay",
-        "-analyzeduration",
-        "300000",
-        "-probesize",
-        "200000",
-        "-f",
-        "mpegts",
-        "-i",
-        "pipe:0",
-    ]
-    .map(String::from)
-    .to_vec()
+    ["-fflags", "nobuffer", "-flags", "low_delay", "-analyzeduration", "300000", "-probesize", "200000", "-f", "mpegts", "-i", "pipe:0"].map(String::from).to_vec()
 }
 
 /// Feed a relay into a child ffmpeg's stdin until either side stops.
 /// Closing stdin (when the relay ends or `stop` fires) makes ffmpeg finish
 /// its output files cleanly.
-pub fn feed(
-    mut rx: mpsc::Receiver<Bytes>,
-    mut stdin: ChildStdin,
-    stop: CancellationToken,
-) -> tokio::task::JoinHandle<()> {
+pub fn feed(mut rx: mpsc::Receiver<Bytes>, mut stdin: ChildStdin, stop: CancellationToken) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -786,17 +685,7 @@ pub async fn grab_rgb(relay: &Relay, ffmpeg: &str, w: u32, h: u32) -> anyhow::Re
     let mut child: Child = crate::load::cmd(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error"])
         .args(relay.input_args())
-        .args([
-            "-frames:v",
-            "1",
-            "-vf",
-            &format!("scale={w}:{h}"),
-            "-pix_fmt",
-            "rgb24",
-            "-f",
-            "rawvideo",
-            "pipe:1",
-        ])
+        .args(["-frames:v", "1", "-vf", &format!("scale={w}:{h}"), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -823,24 +712,15 @@ mod tests {
 
     #[test]
     fn parses_stream_lines() {
-        assert_eq!(
-            parse_audio_line("  Stream #0:1: Audio: pcm_mulaw, 8000 Hz, mono, s16, 64 kb/s")
-                .as_deref(),
-            Some("pcm_mulaw, 8000 Hz")
-        );
-        assert_eq!(
-            parse_audio_line(
-                "Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 16000 Hz, mono"
-            )
-            .as_deref(),
-            Some("aac, 16000 Hz")
-        );
+        assert_eq!(parse_audio_line("  Stream #0:1: Audio: pcm_mulaw, 8000 Hz, mono, s16, 64 kb/s").as_deref(), Some("pcm_mulaw, 8000 Hz"));
+        assert_eq!(parse_audio_line("Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 16000 Hz, mono").as_deref(), Some("aac, 16000 Hz"));
         assert!(parse_audio_line("Stream #0:0: Video: h264").is_none());
         let i = parse_stream_line("  Stream #0:0: Video: hevc (Main), yuvj420p(pc, bt709), 2560x1440, 15 fps, 15 tbr, 90k tbn").unwrap();
         assert_eq!(i.codec, "hevc");
         assert_eq!((i.width, i.height), (Some(2560), Some(1440)));
         assert_eq!(i.fps, Some(15.0));
-        let i = parse_stream_line("Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 1280x720 [SAR 1:1 DAR 16:9], 1323 kb/s, 15 fps, 15 tbr").unwrap();
+        let i = parse_stream_line("Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 1280x720 [SAR 1:1 DAR 16:9], 1323 kb/s, 15 fps, 15 tbr")
+            .unwrap();
         assert_eq!(i.codec, "h264");
         assert_eq!(i.width, Some(1280));
         assert!(parse_stream_line("Stream #0:1: Audio: aac").is_none());

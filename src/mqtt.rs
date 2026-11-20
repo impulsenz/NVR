@@ -13,8 +13,8 @@
 //!   gaze/<camera>/event             JSON of each new alert
 //!   gaze/<camera>/snapshot          the alert's picture (JPEG)
 
-use crate::sync::MutexExt;
 use crate::manager::Manager;
+use crate::sync::MutexExt;
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -72,12 +72,17 @@ async fn session(mgr: &Arc<Manager>, cfg: &crate::config::MqttConfig) {
     let pump = tokio::spawn(async move {
         loop {
             match events.poll().await {
-                Ok(Event::Incoming(Packet::ConnAck(_))) => { let _ = tx.send(Ok(String::new())).await; }
+                Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                    let _ = tx.send(Ok(String::new())).await;
+                }
                 Ok(Event::Incoming(Packet::Publish(m))) if m.topic == set_topic => {
                     let _ = tx.send(Ok(String::from_utf8_lossy(&m.payload).trim().to_lowercase())).await;
                 }
                 Ok(_) => {}
-                Err(e) => { let _ = tx.send(Err(e.to_string())).await; tokio::time::sleep(Duration::from_secs(5)).await; }
+                Err(e) => {
+                    let _ = tx.send(Err(e.to_string())).await;
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
             }
         }
     });
@@ -211,26 +216,34 @@ async fn discovery(mgr: &Arc<Manager>, client: &AsyncClient, p: &str) {
         let id = slug(&c.id);
         let dev = json!({"identifiers": [format!("{p}_{id}")], "name": c.name, "manufacturer": "GAZE", "model": "Camera", "via_device": format!("{p}_nvr")});
         let uid = |k: &str| format!("{p}_{id}_{k}");
-        out.push(msg(format!("homeassistant/binary_sensor/{}/config", uid("motion")),
-            json!({"name": "Motion", "unique_id": uid("motion"), "state_topic": format!("{p}/{id}/motion"), "device_class": "motion", "availability": avail, "device": dev})));
+        out.push(msg(
+            format!("homeassistant/binary_sensor/{}/config", uid("motion")),
+            json!({"name": "Motion", "unique_id": uid("motion"), "state_topic": format!("{p}/{id}/motion"), "device_class": "motion", "availability": avail, "device": dev}),
+        ));
         out.push(msg(format!("homeassistant/binary_sensor/{}/config", uid("online")),
             json!({"name": "Online", "unique_id": uid("online"), "state_topic": format!("{p}/{id}/online"), "device_class": "connectivity", "entity_category": "diagnostic", "availability": avail, "device": dev})));
         out.push(msg(format!("homeassistant/image/{}/config", uid("snapshot")),
             json!({"name": "Last alert", "unique_id": uid("snapshot"), "image_topic": format!("{p}/{id}/snapshot"), "content_type": "image/jpeg", "availability": avail, "device": dev})));
         for st in states.iter().filter(|st| st.camera == c.id) {
             let k = format!("state_{}", slug(&st.name));
-            out.push(msg(format!("homeassistant/sensor/{}/config", uid(&k)),
+            out.push(msg(
+                format!("homeassistant/sensor/{}/config", uid(&k)),
                 json!({"name": st.name, "unique_id": uid(&k), "state_topic": format!("{p}/{id}/state/{}", slug(&st.name)),
-                       "icon": "mdi:eye-check", "availability": avail, "device": dev})));
+                       "icon": "mdi:eye-check", "availability": avail, "device": dev}),
+            ));
         }
-        out.push(msg(format!("homeassistant/event/{}/config", uid("alert")),
+        out.push(msg(
+            format!("homeassistant/event/{}/config", uid("alert")),
             json!({"name": "Alert", "unique_id": uid("alert"), "state_topic": format!("{p}/{id}/event"), "event_types": ["alert"],
-                   "availability": avail, "device": dev})));
+                   "availability": avail, "device": dev}),
+        ));
         for o in &c.detect.objects {
             let k = slug(o);
-            out.push(msg(format!("homeassistant/binary_sensor/{}/config", uid(&k)),
+            out.push(msg(
+                format!("homeassistant/binary_sensor/{}/config", uid(&k)),
                 json!({"name": format!("{}{}", o[..1].to_uppercase(), &o[1..]), "unique_id": uid(&k), "state_topic": format!("{p}/{id}/{k}"), "device_class": "occupancy",
-                       "icon": "mdi:cctv", "availability": avail, "device": dev})));
+                       "icon": "mdi:cctv", "availability": avail, "device": dev}),
+            ));
         }
     }
     for (t, v) in out {

@@ -1,6 +1,5 @@
 //! HTTP interface: the web UI, JSON API, live video and file playback.
 
-use crate::sync::MutexExt;
 use crate::config::{CameraConfig, Config, DashboardConfig, mask_url};
 use crate::ffmpeg;
 use crate::library::{self, Query as LibQuery};
@@ -8,6 +7,7 @@ use crate::live::Quality;
 use crate::logs::{self, LogQuery};
 use crate::manager::{Manager, SettingsUpdate};
 use crate::storage;
+use crate::sync::MutexExt;
 use axum::{
     Json, Router,
     body::{Body, Bytes},
@@ -41,48 +41,30 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         // plays the recordings as one continuous stream.
         .route("/hls.min.js", get(|h: axum::http::HeaderMap| async move { static_text(&h, &HLS_JS, "text/javascript; charset=utf-8", "public, max-age=86400") }))
         .route("/app.css", get(|h: axum::http::HeaderMap| async move { static_text(&h, &APP_CSS, "text/css; charset=utf-8", "no-cache") }))
-        .route(
-            "/logo.png",
-            get(|| async {
-                (
-                    [
-                        (header::CONTENT_TYPE, "image/png"),
-                        (header::CACHE_CONTROL, "max-age=86400"),
-                    ],
-                    include_bytes!("../static/logo.png").as_slice(),
-                )
-            }),
-        )
-        .route(
-            "/icon.png",
-            get(|| async {
-                (
-                    [
-                        (header::CONTENT_TYPE, "image/png"),
-                        (header::CACHE_CONTROL, "max-age=86400"),
-                    ],
-                    include_bytes!("../static/icon.png").as_slice(),
-                )
-            }),
-        )
+        .route("/logo.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/logo.png").as_slice()) }))
+        .route("/icon.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon.png").as_slice()) }))
         .route(
             "/favicon.png",
-            get(|| async {
-                (
-                    [
-                        (header::CONTENT_TYPE, "image/png"),
-                        (header::CACHE_CONTROL, "max-age=86400"),
-                    ],
-                    include_bytes!("../static/favicon.png").as_slice(),
-                )
-            }),
+            get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/favicon.png").as_slice()) }),
         )
         // Installing GAZE as an app (phones, Windows, Mac).
-        .route("/manifest.webmanifest", get(|| async { ([(header::CONTENT_TYPE, "application/manifest+json"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/manifest.webmanifest")) }))
+        .route(
+            "/manifest.webmanifest",
+            get(|| async { ([(header::CONTENT_TYPE, "application/manifest+json"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/manifest.webmanifest")) }),
+        )
         .route("/sw.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/sw.js")) }))
-        .route("/icon-192.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-192.png").as_slice()) }))
-        .route("/icon-512.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-512.png").as_slice()) }))
-        .route("/icon-maskable.png", get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-maskable.png").as_slice()) }))
+        .route(
+            "/icon-192.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-192.png").as_slice()) }),
+        )
+        .route(
+            "/icon-512.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-512.png").as_slice()) }),
+        )
+        .route(
+            "/icon-maskable.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../static/icon-maskable.png").as_slice()) }),
+        )
         .route("/api/auth/state", get(auth_state))
         .route("/api/auth/setup", post(auth_setup))
         .route("/api/auth/login", post(auth_login))
@@ -113,10 +95,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/discover", post(discover_now))
         .route("/api/known", get(known_list).post(known_create))
         .route("/api/known/{id}", put(known_update).delete(known_delete))
-        .route(
-            "/api/known/{id}/photo",
-            post(known_photo).layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
-        )
+        .route("/api/known/{id}/photo", post(known_photo).layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/known/{id}/photo/{name}", get(known_photo_get))
         .route("/api/known/{id}/learn", post(known_learn))
         .route("/api/heatmaps", get(heatmaps))
@@ -163,10 +142,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/config/locker", get(locker_size))
         .route("/api/config/import", post(import_config).layer(DefaultBodyLimit::disable()))
         .route("/api/cameras", get(list_cameras).post(add_camera))
-        .route(
-            "/api/cameras/{id}",
-            put(update_camera).delete(delete_camera),
-        )
+        .route("/api/cameras/{id}", put(update_camera).delete(delete_camera))
         .route("/api/cameras/{id}/pause", post(pause))
         .route("/api/cameras/{id}/ptz/move", post(ptz_move))
         .route("/api/cameras/{id}/device", get(device_get))
@@ -216,27 +192,15 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/maintenance/previews", post(rebuild_previews))
         .route("/api/maintenance/reidentify", post(reidentify))
         .route("/api/maintenance/delete-footage", post(delete_all_footage))
-        .route(
-            "/api/maintenance/alert-pictures",
-            post(refresh_alert_pictures),
-        )
-        .route(
-            "/api/cameras/{id}/ptz/presets",
-            get(ptz_presets).post(ptz_save_preset),
-        )
+        .route("/api/maintenance/alert-pictures", post(refresh_alert_pictures))
+        .route("/api/cameras/{id}/ptz/presets", get(ptz_presets).post(ptz_save_preset))
         .route("/api/cameras/{id}/ptz/goto", post(ptz_goto))
         .route("/api/cameras/{id}/ptz/patrol", get(ptz_patrol_get).put(ptz_patrol_put))
         .route("/api/cameras/{id}/ptz/presets/{token}", axum::routing::delete(ptz_delete_preset))
         .route("/api/ptz/test", post(ptz_test))
         .route("/api/cameras/{id}/resume", post(resume))
-        .route(
-            "/api/cameras/{id}/recordings/{name}",
-            axum::routing::delete(delete_recording),
-        )
-        .route(
-            "/api/cameras/{id}/events/{eid}",
-            axum::routing::delete(delete_event),
-        )
+        .route("/api/cameras/{id}/recordings/{name}", axum::routing::delete(delete_recording))
+        .route("/api/cameras/{id}/events/{eid}", axum::routing::delete(delete_event))
         .route("/api/recordings", get(search))
         .route("/api/timeline", get(timeline))
         .route("/api/export", get(export_clip))
@@ -306,9 +270,8 @@ macro_rules! camera {
 /// Identifies this run of GAZE (its start time): a restart or an update
 /// gives a new one, and every open page then reloads itself.
 fn boot_id() -> u64 {
-    static ID: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(1)
-    });
+    static ID: std::sync::LazyLock<u64> =
+        std::sync::LazyLock::new(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(1));
     *ID
 }
 
@@ -369,11 +332,7 @@ fn static_text(h: &axum::http::HeaderMap, p: &Packed, ctype: &'static str, cache
 async fn index(h: axum::http::HeaderMap) -> Response {
     static PAGE: std::sync::LazyLock<Packed> = std::sync::LazyLock::new(|| {
         let v = env!("CARGO_PKG_VERSION");
-        pack(
-            &include_str!("../static/index.html")
-                .replace("href=\"app.css\"", &format!("href=\"app.css?v={v}\""))
-                .replace("src=\"app.js\"", &format!("src=\"app.js?v={v}\"")),
-        )
+        pack(&include_str!("../static/index.html").replace("href=\"app.css\"", &format!("href=\"app.css?v={v}\"")).replace("src=\"app.js\"", &format!("src=\"app.js?v={v}\"")))
     });
     static_text(&h, &PAGE, "text/html; charset=utf-8", "no-cache")
 }
@@ -391,11 +350,7 @@ fn device_kind(d: &str) -> &'static str {
     if d == "mobile" { "mobile" } else { "desktop" }
 }
 
-async fn status(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(dq): Query<DeviceQuery>,
-) -> Response {
+async fn status(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(dq): Query<DeviceQuery>) -> Response {
     Json(status_value(&m, &user, &dq.device).await).into_response()
 }
 
@@ -428,11 +383,7 @@ async fn status_value(m: &Arc<Manager>, user: &Option<axum::Extension<CurrentUse
         .filter(|c| vis.as_ref().is_none_or(|v| v.contains(&c.cfg.id)))
         .map(|c| {
             // Options that change without a restart come from the current config.
-            let cur = cfg
-                .cameras
-                .iter()
-                .find(|x| x.id == c.cfg.id)
-                .unwrap_or(&c.cfg);
+            let cur = cfg.cameras.iter().find(|x| x.id == c.cfg.id).unwrap_or(&c.cfg);
             json!({
                 "osd": cur.osd,
                 "view": cur.view,
@@ -468,8 +419,7 @@ async fn status_value(m: &Arc<Manager>, user: &Option<axum::Extension<CurrentUse
             })
         })
         .collect();
-    let (warnings, errors) =
-        logs::buffer().problems_since(Local::now() - chrono::Duration::hours(1));
+    let (warnings, errors) = logs::buffer().problems_since(Local::now() - chrono::Duration::hours(1));
     let upd = crate::update::status();
     json!({
         "name": cfg.server.name,
@@ -810,11 +760,7 @@ async fn alerts_seen_all(State(m): App) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 
-async fn alerts_unseen(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Json(r): Json<SeenReq>,
-) -> Response {
+async fn alerts_unseen(State(m): App, user: Option<axum::Extension<CurrentUser>>, Json(r): Json<SeenReq>) -> Response {
     if let Some(denied) = camera_denied(&user, &r.camera) {
         return denied;
     }
@@ -858,10 +804,7 @@ struct KnownReq {
 }
 
 async fn known_create(State(m): App, Json(r): Json<KnownReq>) -> Response {
-    match m
-        .known
-        .create(&r.kind, &r.name, r.plates.unwrap_or_default())
-    {
+    match m.known.create(&r.kind, &r.name, r.plates.unwrap_or_default()) {
         Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
         Err(e) => bad(e),
     }
@@ -1286,33 +1229,17 @@ async fn known_delete(State(m): App, Path(id): Path<String>) -> Response {
 /// vehicle's plate and look.
 async fn known_photo(State(m): App, Path(id): Path<String>, body: Bytes) -> Response {
     let res = async {
-        let k = m
-            .known
-            .get(&id)
-            .ok_or_else(|| anyhow::anyhow!("not found"))?;
-        let img = crate::imgutil::decode_jpeg(&body)
-            .map_err(|_| anyhow::anyhow!("send the photo as a JPEG picture"))?;
+        let k = m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?;
+        let img = crate::imgutil::decode_jpeg(&body).map_err(|_| anyhow::anyhow!("send the photo as a JPEG picture"))?;
         if k.kind == "person" {
-            let mut faces: Vec<_> = m
-                .recog
-                .faces(&img)
-                .await?
-                .into_iter()
-                .filter(|f| f.score >= 0.7)
-                .collect();
+            let mut faces: Vec<_> = m.recog.faces(&img).await?.into_iter().filter(|f| f.score >= 0.7).collect();
             faces.sort_by(|a, b| (b.w * b.h).total_cmp(&(a.w * a.h)));
-            let face = faces.first().ok_or_else(|| {
-                anyhow::anyhow!("no face found in this photo — use a clear photo of the face")
-            })?;
+            let face = faces.first().ok_or_else(|| anyhow::anyhow!("no face found in this photo — use a clear photo of the face"))?;
             // Several people of similar size: we can't tell which one is meant.
             if let Some(second) = faces.get(1)
                 && second.w * second.h > face.w * face.h * 0.5
             {
-                anyhow::bail!(
-                    "this photo has {} faces — use a photo of {} alone (or crop it)",
-                    faces.len(),
-                    k.name
-                );
+                anyhow::bail!("this photo has {} faces — use a photo of {} alone (or crop it)", faces.len(), k.name);
             }
             let print = m.recog.faceprint(&img, face).await?;
             m.known.add(&id, Some(&print), None, Some(&body))?;
@@ -1351,11 +1278,7 @@ fn recheck_faces_soon(m: &Arc<Manager>) {
     });
 }
 
-async fn known_photo_get(
-    State(m): App,
-    Path((id, name)): Path<(String, String)>,
-    req: Request,
-) -> Response {
+async fn known_photo_get(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
     match m.known.photo_path(&id, &name) {
         Some(p) => serve_file(p, req, None, false).await,
         None => err(StatusCode::NOT_FOUND, "not found"),
@@ -1372,36 +1295,15 @@ struct LearnReq {
 /// "This is …": name a face seen in an alert (and learn it), or correct a
 /// wrong name: the person it was wrongly taken for stops matching it. The
 /// id "none" means "not anyone I know".
-async fn known_learn(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Path(id): Path<String>,
-    Json(r): Json<LearnReq>,
-) -> Response {
+async fn known_learn(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Json(r): Json<LearnReq>) -> Response {
     if let Some(denied) = camera_denied(&user, &r.camera) {
         return denied;
     }
     let res = (|| {
-        let k = if id == "none" {
-            None
-        } else {
-            Some(
-                m.known
-                    .get(&id)
-                    .ok_or_else(|| anyhow::anyhow!("not found"))?,
-            )
-        };
-        let c = m
-            .camera(&r.camera)
-            .ok_or_else(|| anyhow::anyhow!("camera not found"))?;
-        let mut e = c
-            .events
-            .get(&r.event)
-            .ok_or_else(|| anyhow::anyhow!("alert not found"))?;
-        let f = e
-            .faces
-            .get_mut(r.face)
-            .ok_or_else(|| anyhow::anyhow!("face not found"))?;
+        let k = if id == "none" { None } else { Some(m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?) };
+        let c = m.camera(&r.camera).ok_or_else(|| anyhow::anyhow!("camera not found"))?;
+        let mut e = c.events.get(&r.event).ok_or_else(|| anyhow::anyhow!("alert not found"))?;
+        let f = e.faces.get_mut(r.face).ok_or_else(|| anyhow::anyhow!("face not found"))?;
         let print = crate::known::unpack(&f.print);
         let new_name = k.as_ref().map(|k| k.name.clone());
         // Wrongly named before: that person no longer matches this face.
@@ -1428,9 +1330,7 @@ async fn known_learn(
         anyhow::Ok((
             notes,
             match (new_name, old) {
-                (Some(n), Some(o)) => format!(
-                    "Corrected — this is {n}, not {o}. GAZE won't take this face for {o} again."
-                ),
+                (Some(n), Some(o)) => format!("Corrected — this is {n}, not {o}. GAZE won't take this face for {o} again."),
                 (Some(n), None) if again => format!("Already confirmed — this is {n}"),
                 (Some(n), None) if confirming => format!("Confirmed — this is {n}. Added to {n}'s faces, so GAZE knows them better."),
                 (Some(n), None) => format!("Learned — this is {n}. Added to {n}'s faces."),
@@ -1483,10 +1383,7 @@ fn alert_kinds(c: &crate::config::CameraConfig, ai: &crate::config::AiConfig) ->
 
 fn recent_events(m: &Manager, days: i64) -> Vec<crate::events::Event> {
     let now = Local::now();
-    m.cameras()
-        .iter()
-        .flat_map(|c| c.events.between(now - chrono::Duration::days(days), now))
-        .collect()
+    m.cameras().iter().flat_map(|c| c.events.between(now - chrono::Duration::days(days), now)).collect()
 }
 
 #[derive(Deserialize)]
@@ -1558,18 +1455,10 @@ struct InboxRange {
 
 /// New faces and plates (not named yet), from the last 30 days, or from the
 /// days asked for (the Alerts page's "New faces & plates" filter).
-async fn inbox_list(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(r): Query<InboxRange>,
-) -> Response {
+async fn inbox_list(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(r): Query<InboxRange>) -> Response {
     let vis = visible(&user);
     let mut evs = match (r.from, r.to) {
-        (Some(from), Some(to)) => m
-            .cameras()
-            .iter()
-            .flat_map(|c| c.events.between(from, to))
-            .collect(),
+        (Some(from), Some(to)) => m.cameras().iter().flat_map(|c| c.events.between(from, to)).collect(),
         _ => recent_events(&m, 30),
     };
     evs.retain(|e| vis.as_ref().is_none_or(|v| v.contains(&e.camera)));
@@ -1593,10 +1482,7 @@ struct InboxReq {
 /// Name every alert a face group is in, and learn the face.
 async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
     let res = (|| {
-        let k = m
-            .known
-            .get(&r.known)
-            .ok_or_else(|| anyhow::anyhow!("choose a person or vehicle"))?;
+        let k = m.known.get(&r.known).ok_or_else(|| anyhow::anyhow!("choose a person or vehicle"))?;
         if !r.plate.is_empty() {
             if k.kind != "vehicle" {
                 anyhow::bail!("a number plate belongs to a vehicle");
@@ -1605,20 +1491,12 @@ async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
             // Alerts with this plate now say whose it is.
             let mut n = 0;
             for c in m.cameras() {
-                for mut e in c
-                    .events
-                    .between(Local::now() - chrono::Duration::days(30), Local::now())
-                {
-                    if !e
-                        .plates
-                        .iter()
-                        .any(|p| crate::recog::plate_matches(p, &r.plate))
-                    {
+                for mut e in c.events.between(Local::now() - chrono::Duration::days(30), Local::now()) {
+                    if !e.plates.iter().any(|p| crate::recog::plate_matches(p, &r.plate)) {
                         continue;
                     }
                     let note = format!("Plate {} — {}", r.plate, k.name);
-                    e.notes
-                        .retain(|x| !x.ends_with(&format!(" plate {}", r.plate)));
+                    e.notes.retain(|x| !x.ends_with(&format!(" plate {}", r.plate)));
                     if !e.notes.contains(&note) {
                         e.notes.push(note);
                     }
@@ -1626,10 +1504,7 @@ async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
                     n += 1;
                 }
             }
-            return anyhow::Ok(format!(
-                "Plate {} is {} — {n} alert(s) updated",
-                r.plate, k.name
-            ));
+            return anyhow::Ok(format!("Plate {} is {} — {n} alert(s) updated", r.plate, k.name));
         }
         if k.kind != "person" {
             anyhow::bail!("a face belongs to a person");
@@ -1662,18 +1537,9 @@ async fn inbox_assign(State(m): App, Json(r): Json<InboxReq>) -> Response {
         }
         anyhow::ensure!(!prints.is_empty(), "those alerts are gone");
         for (i, p) in crate::inbox::learn_set(&prints).iter().enumerate() {
-            m.known.add(
-                &k.id,
-                Some(p),
-                None,
-                if i == 0 { photo.as_deref() } else { None },
-            )?;
+            m.known.add(&k.id, Some(p), None, if i == 0 { photo.as_deref() } else { None })?;
         }
-        anyhow::Ok(format!(
-            "This is {} — {} alert(s) named and the face learned",
-            k.name,
-            r.members.len()
-        ))
+        anyhow::Ok(format!("This is {} — {} alert(s) named and the face learned", k.name, r.members.len()))
     })();
     match res {
         Ok(msg) => Json(json!({ "ok": true, "message": msg })).into_response(),
@@ -1700,17 +1566,10 @@ async fn inbox_dismiss(State(m): App, Json(r): Json<InboxReq>) -> Response {
     }
 }
 
-async fn put_dashboard(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(dq): Query<DeviceQuery>,
-    Json(d): Json<DashboardConfig>,
-) -> Response {
+async fn put_dashboard(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(dq): Query<DeviceQuery>, Json(d): Json<DashboardConfig>) -> Response {
     // Saved as this user's own layout for this kind of device.
     let res = match &user {
-        Some(u) => m
-            .users
-            .set_layout(&u.0.0.username, device_kind(&dq.device), d),
+        Some(u) => m.users.set_layout(&u.0.0.username, device_kind(&dq.device), d),
         None => m.update_dashboard(d).await,
     };
     match res {
@@ -1919,9 +1778,7 @@ async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: Body) 
     let res = import_config_inner(&m, q, body, &tmp).await;
     let _ = std::fs::remove_file(&tmp);
     match res {
-        Ok((n, restart, what)) => {
-            Json(json!({ "ok": true, "cameras": n, "restart_required": restart, "message": format!("Imported {what}.") })).into_response()
-        }
+        Ok((n, restart, what)) => Json(json!({ "ok": true, "cameras": n, "restart_required": restart, "message": format!("Imported {what}.") })).into_response(),
         Err(e) => bad(e),
     }
 }
@@ -1972,7 +1829,7 @@ async fn import_config_inner(m: &Arc<Manager>, q: ImportQuery, body: Body, tmp: 
         }
         out.flush().await?;
     }
-    
+
     async {
         // Every file in the backup except the locker's (at most 500 MB unpacked).
         let tp = tmp.to_path_buf();
@@ -2055,10 +1912,7 @@ async fn import_config_inner(m: &Arc<Manager>, q: ImportQuery, body: Body, tmp: 
         if is_zip {
             let tp = tmp.to_path_buf();
             if let Some((added, skipped)) = tokio::task::spawn_blocking(move || import_locker(&tp)).await?? {
-                parts.push(format!(
-                    "{added} Evidence Locker case(s){}",
-                    if skipped > 0 { format!(" ({skipped} already here, left as they are)") } else { String::new() }
-                ));
+                parts.push(format!("{added} Evidence Locker case(s){}", if skipped > 0 { format!(" ({skipped} already here, left as they are)") } else { String::new() }));
             }
         }
         anyhow::Ok((n, restart, parts.join(", ")))
@@ -2085,12 +1939,7 @@ struct MoveQuery {
     move_recordings: bool,
 }
 
-async fn update_camera(
-    State(m): App,
-    Path(id): Path<String>,
-    Query(q): Query<MoveQuery>,
-    Json(cam): Json<CameraConfig>,
-) -> Response {
+async fn update_camera(State(m): App, Path(id): Path<String>, Query(q): Query<MoveQuery>, Json(cam): Json<CameraConfig>) -> Response {
     match m.update_camera(&id, cam, q.move_recordings).await {
         Ok(c) => Json(c).into_response(),
         Err(e) => bad(e),
@@ -2131,11 +1980,7 @@ struct DeleteQuery {
     delete_recordings: bool,
 }
 
-async fn delete_camera(
-    State(m): App,
-    Path(id): Path<String>,
-    Query(q): Query<DeleteQuery>,
-) -> Response {
+async fn delete_camera(State(m): App, Path(id): Path<String>, Query(q): Query<DeleteQuery>) -> Response {
     match m.delete_camera(&id, q.delete_recordings).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
@@ -2148,11 +1993,7 @@ async fn delete_camera(
 /// PTZ tab, or else from the stream URL (PTZ need not be turned on).
 fn device_target(m: &Manager, id: &str) -> anyhow::Result<crate::onvif::Target> {
     let cfg = m.config();
-    let cam = cfg
-        .cameras
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| anyhow::anyhow!("camera not found"))?;
+    let cam = cfg.cameras.iter().find(|c| c.id == id).ok_or_else(|| anyhow::anyhow!("camera not found"))?;
     crate::onvif::Target::from(cam, &cam.ptz)
 }
 
@@ -2163,10 +2004,7 @@ async fn device_get(State(m): App, Path(id): Path<String>) -> Response {
         Err(e) => return bad(e),
     };
     match crate::onvif::Onvif::default().device_info(&t).await {
-        Ok(i) => {
-            Json(json!({ "ok": true, "info": i, "address": format!("{}:{}", t.host, t.port) }))
-                .into_response()
-        }
+        Ok(i) => Json(json!({ "ok": true, "info": i, "address": format!("{}:{}", t.host, t.port) })).into_response(),
         Err(e) => Json(json!({ "ok": false, "error": format!("{e:#}") })).into_response(),
     }
 }
@@ -2190,11 +2028,7 @@ struct NetworkReq {
     update_nvr: bool,
 }
 
-async fn device_network(
-    State(m): App,
-    Path(id): Path<String>,
-    Json(r): Json<NetworkReq>,
-) -> Response {
+async fn device_network(State(m): App, Path(id): Path<String>, Json(r): Json<NetworkReq>) -> Response {
     let res = async {
         let t = device_target(&m, &id)?;
         let onvif = crate::onvif::Onvif::default();
@@ -2231,9 +2065,7 @@ struct TimeReq {
 async fn device_time(State(m): App, Path(id): Path<String>, Json(r): Json<TimeReq>) -> Response {
     let res = async {
         let t = device_target(&m, &id)?;
-        crate::onvif::Onvif::default()
-            .set_time(&t, &r.time, r.sync_clock.then(chrono::Utc::now))
-            .await
+        crate::onvif::Onvif::default().set_time(&t, &r.time, r.sync_clock.then(chrono::Utc::now)).await
     }
     .await;
     match res {
@@ -2242,11 +2074,7 @@ async fn device_time(State(m): App, Path(id): Path<String>, Json(r): Json<TimeRe
     }
 }
 
-async fn device_video(
-    State(m): App,
-    Path(id): Path<String>,
-    Json(r): Json<crate::onvif_device::VideoChange>,
-) -> Response {
+async fn device_video(State(m): App, Path(id): Path<String>, Json(r): Json<crate::onvif_device::VideoChange>) -> Response {
     let res = async {
         let t = device_target(&m, &id)?;
         crate::onvif::Onvif::default().set_video(&t, &r).await?;
@@ -2265,11 +2093,7 @@ async fn device_video(
     }
 }
 
-async fn device_imaging(
-    State(m): App,
-    Path(id): Path<String>,
-    Json(r): Json<crate::onvif_device::ImagingChange>,
-) -> Response {
+async fn device_imaging(State(m): App, Path(id): Path<String>, Json(r): Json<crate::onvif_device::ImagingChange>) -> Response {
     let res = async {
         let t = device_target(&m, &id)?;
         crate::onvif::Onvif::default().set_imaging(&t, &r).await
@@ -2295,11 +2119,7 @@ async fn device_reboot(State(m): App, Path(id): Path<String>) -> Response {
 
 fn ptz_target(m: &Manager, id: &str) -> anyhow::Result<crate::onvif::Target> {
     let cfg = m.config();
-    let cam = cfg
-        .cameras
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| anyhow::anyhow!("camera not found"))?;
+    let cam = cfg.cameras.iter().find(|c| c.id == id).ok_or_else(|| anyhow::anyhow!("camera not found"))?;
     if !cam.ptz.enabled {
         anyhow::bail!("PTZ is not turned on for this camera (camera settings → PTZ)");
     }
@@ -2323,18 +2143,8 @@ async fn ptz_move(State(m): App, Path(id): Path<String>, Json(mv): Json<PtzMove>
         let cfg = m.config();
         // (The camera can be deleted between the two lookups.)
         let p = &cfg.cameras.iter().find(|c| c.id == id).ok_or_else(|| anyhow::anyhow!("camera not found"))?.ptz;
-        let (sx, sy) = (
-            if p.invert_pan { -1.0 } else { 1.0 },
-            if p.invert_tilt { -1.0 } else { 1.0 },
-        );
-        m.onvif(&id)
-            .move_continuous(
-                &t,
-                mv.pan * p.speed * sx,
-                mv.tilt * p.speed * sy,
-                mv.zoom * p.speed,
-            )
-            .await
+        let (sx, sy) = (if p.invert_pan { -1.0 } else { 1.0 }, if p.invert_tilt { -1.0 } else { 1.0 });
+        m.onvif(&id).move_continuous(&t, mv.pan * p.speed * sx, mv.tilt * p.speed * sy, mv.zoom * p.speed).await
     }
     .await;
     match r {
@@ -2369,12 +2179,7 @@ struct PresetReq {
 
 async fn ptz_goto(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq>) -> Response {
     crate::ptz_auto::manual(&id);
-    let res = async {
-        m.onvif(&id)
-            .goto_preset(&ptz_target(&m, &id)?, &r.token)
-            .await
-    }
-    .await;
+    let res = async { m.onvif(&id).goto_preset(&ptz_target(&m, &id)?, &r.token).await }.await;
     match res {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
@@ -2439,20 +2244,11 @@ async fn ptz_delete_preset(State(m): App, Path((id, token)): Path<(String, Strin
     StatusCode::NO_CONTENT.into_response()
 }
 
-async fn ptz_save_preset(
-    State(m): App,
-    Path(id): Path<String>,
-    Json(r): Json<PresetReq>,
-) -> Response {
+async fn ptz_save_preset(State(m): App, Path(id): Path<String>, Json(r): Json<PresetReq>) -> Response {
     if r.name.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "enter a name for the preset");
     }
-    let res = async {
-        m.onvif(&id)
-            .set_preset(&ptz_target(&m, &id)?, r.name.trim())
-            .await
-    }
-    .await;
+    let res = async { m.onvif(&id).set_preset(&ptz_target(&m, &id)?, r.name.trim()).await }.await;
     match res {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
@@ -2520,27 +2316,13 @@ async fn probe(State(m): App, Json(req): Json<StreamReq>) -> Response {
     }
     let ffmpeg = m.config().server.ffmpeg_path;
     if let Some((c, q)) = running_stream(&m, req.url.trim()) {
-        let relay = if q == Quality::Main {
-            c.relay_main.clone()
-        } else {
-            c.relay_sub.clone()
-        };
+        let relay = if q == Quality::Main { c.relay_main.clone() } else { c.relay_sub.clone() };
         let _connect = relay.subscribe();
         let info = relay.wait_info(Duration::from_secs(20)).await;
-        let mut res = ffmpeg::ProbeResult {
-            ok: info.is_some(),
-            ..Default::default()
-        };
+        let mut res = ffmpeg::ProbeResult { ok: info.is_some(), ..Default::default() };
         match info {
             Some(i) => res.streams.push(i),
-            None => {
-                res.error = Some(
-                    relay
-                        .status()
-                        .error
-                        .unwrap_or_else(|| "no picture from the camera yet".into()),
-                )
-            }
+            None => res.error = Some(relay.status().error.unwrap_or_else(|| "no picture from the camera yet".into())),
         }
         return Json(res).into_response();
     }
@@ -2558,22 +2340,10 @@ async fn start_preview(State(m): App, Json(req): Json<StreamReq>) -> Response {
     // Already connected: show the NVR's own live stream instead of a new session.
     if let Some((c, q)) = running_stream(&m, req.url.trim()) {
         let q = if q == Quality::Main { "main" } else { "sub" };
-        return Json(json!({ "url": format!("live/{}/stream.mjpeg?q={q}", c.cfg.id) }))
-            .into_response();
+        return Json(json!({ "url": format!("live/{}/stream.mjpeg?q={q}", c.cfg.id) })).into_response();
     }
-    let token = format!(
-        "{:x}{:x}",
-        Local::now().timestamp_nanos_opt().unwrap_or(0),
-        std::process::id()
-    );
-    m.previews.locked().insert(
-        token.clone(),
-        (
-            req.url.trim().to_string(),
-            req.rtsp_transport,
-            Instant::now(),
-        ),
-    );
+    let token = format!("{:x}{:x}", Local::now().timestamp_nanos_opt().unwrap_or(0), std::process::id());
+    m.previews.locked().insert(token.clone(), (req.url.trim().to_string(), req.rtsp_transport, Instant::now()));
     Json(json!({ "url": format!("api/preview/{token}") })).into_response()
 }
 
@@ -2584,29 +2354,9 @@ async fn preview_stream(State(m): App, Path(token): Path<String>) -> Response {
     };
     let ffmpeg = m.config().server.ffmpeg_path;
     let child = crate::load::cmd(&ffmpeg)
-        .args([
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-fflags",
-            "nobuffer",
-        ])
+        .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-fflags", "nobuffer"])
         .args(ffmpeg::input_args(&url, &transport))
-        .args([
-            "-an",
-            "-vf",
-            "fps=5,scale='min(640,iw)':-2",
-            "-q:v",
-            "6",
-            "-t",
-            "600",
-            "-f",
-            "image2pipe",
-            "-c:v",
-            "mjpeg",
-            "pipe:1",
-        ])
+        .args(["-an", "-vf", "fps=5,scale='min(640,iw)':-2", "-q:v", "6", "-t", "600", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -2625,9 +2375,7 @@ async fn preview_stream(State(m): App, Path(token): Path<String>) -> Response {
         let mut chunk = vec![0u8; 65536];
         let mut scan = 0;
         loop {
-            let n = match tokio::time::timeout(Duration::from_secs(20), stdout.read(&mut chunk))
-                .await
-            {
+            let n = match tokio::time::timeout(Duration::from_secs(20), stdout.read(&mut chunk)).await {
                 Ok(Ok(n)) if n > 0 => n,
                 _ => return,
             };
@@ -2690,15 +2438,11 @@ async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
     // A freshly created built-in engine needs a moment to load its model.
     let t = Instant::now();
     let mut res = ai.detect_stages(&frame).await;
-    while matches!(res, Err(crate::ai::AiError::NotReady(_)))
-        && t.elapsed() < Duration::from_secs(120)
-    {
+    while matches!(res, Err(crate::ai::AiError::NotReady(_))) && t.elapsed() < Duration::from_secs(120) {
         tokio::time::sleep(Duration::from_millis(500)).await;
         res = ai.detect_stages(&frame).await;
     }
-    let data_url = |f: &crate::imgutil::Frame| {
-        f.jpeg(85).ok().map(|j| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(j)))
-    };
+    let data_url = |f: &crate::imgutil::Frame| f.jpeg(85).ok().map(|j| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(j)));
     let image = data_url(&frame);
     let stages = match res {
         Ok(s) => s,
@@ -2717,11 +2461,7 @@ async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
                    "image": if i == 0 { image.clone() } else { None }})
         })
         .collect();
-    let watched: Vec<crate::ai::Detection> = finds
-        .iter()
-        .filter(|d| c.cfg.detect.objects.contains(&d.label))
-        .cloned()
-        .collect();
+    let watched: Vec<crate::ai::Detection> = finds.iter().filter(|d| c.cfg.detect.objects.contains(&d.label)).cloned().collect();
     if c.cfg.has_sub() {
         let t = Instant::now();
         let ffmpeg = m.config().server.ffmpeg_path;
@@ -2739,18 +2479,11 @@ async fn ai_test(State(m): App, Json(req): Json<AiTestReq>) -> Response {
 }
 
 /// One decoded RGB frame from the sub-stream, for AI tests when detection is off.
-async fn grab_frame(
-    m: &Manager,
-    c: &crate::manager::CameraRuntime,
-) -> anyhow::Result<crate::imgutil::Frame> {
+async fn grab_frame(m: &Manager, c: &crate::manager::CameraRuntime) -> anyhow::Result<crate::imgutil::Frame> {
     let ffmpeg = m.config().server.ffmpeg_path;
     let (w, h) = (640u32, 360u32);
     let rgb = crate::relay::grab_rgb(&c.relay_sub, &ffmpeg, w, h).await?;
-    Ok(crate::imgutil::Frame {
-        width: w,
-        height: h,
-        rgb: Arc::new(rgb),
-    })
+    Ok(crate::imgutil::Frame { width: w, height: h, rgb: Arc::new(rgb) })
 }
 
 async fn cloud_status() -> Response {
@@ -2798,23 +2531,12 @@ struct SearchQuery {
 }
 
 fn split_list(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(str::trim)
-        .filter(|x| !x.is_empty())
-        .map(String::from)
-        .collect()
+    s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
 }
 
-fn range(
-    from: Option<DateTime<chrono::FixedOffset>>,
-    to: Option<DateTime<chrono::FixedOffset>>,
-) -> (DateTime<Local>, DateTime<Local>) {
-    let to = to
-        .map(|t| t.with_timezone(&Local))
-        .unwrap_or_else(Local::now);
-    let from = from
-        .map(|t| t.with_timezone(&Local))
-        .unwrap_or(to - chrono::Duration::days(1));
+fn range(from: Option<DateTime<chrono::FixedOffset>>, to: Option<DateTime<chrono::FixedOffset>>) -> (DateTime<Local>, DateTime<Local>) {
+    let to = to.map(|t| t.with_timezone(&Local)).unwrap_or_else(Local::now);
+    let from = from.map(|t| t.with_timezone(&Local)).unwrap_or(to - chrono::Duration::days(1));
     (from, to)
 }
 
@@ -2825,25 +2547,14 @@ fn allowed_cameras(asked: Vec<String>, vis: Option<Vec<String>>) -> Vec<String> 
         Some(v) if asked.is_empty() => v,
         Some(v) => {
             let a: Vec<String> = asked.into_iter().filter(|c| v.contains(c)).collect();
-            if a.is_empty() {
-                vec!["\u{0}none".into()]
-            } else {
-                a
-            }
+            if a.is_empty() { vec!["\u{0}none".into()] } else { a }
         }
     }
 }
 
-async fn search(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(q): Query<SearchQuery>,
-) -> Response {
+async fn search(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<SearchQuery>) -> Response {
     let (from, to) = range(q.from, q.to);
-    let t = |s: &Option<String>| {
-        s.as_deref()
-            .and_then(|x| NaiveTime::parse_from_str(x, "%H:%M").ok())
-    };
+    let t = |s: &Option<String>| s.as_deref().and_then(|x| NaiveTime::parse_from_str(x, "%H:%M").ok());
     // ("to 17:59" means up to the end of that minute.)
     let tod_to = t(&q.tod_to).map(|x| x + chrono::Duration::seconds(59));
     let tod = match (t(&q.tod_from), tod_to) {
@@ -2853,13 +2564,7 @@ async fn search(
         _ => None,
     };
     // A known person or vehicle (People & vehicles).
-    let who = (!q.who.is_empty())
-        .then(|| m.known.get(&q.who))
-        .flatten()
-        .map(|k| library::Who {
-            name: k.name,
-            plates: k.plates,
-        });
+    let who = (!q.who.is_empty()).then(|| m.known.get(&q.who)).flatten().map(|k| library::Who { name: k.name, plates: k.plates });
     let lq = LibQuery {
         cameras: allowed_cameras(split_list(&q.cameras), visible(&user)),
         from,
@@ -2877,9 +2582,7 @@ async fn search(
     let limit = lq.limit;
     let asked = lq.cameras.clone();
     let m2 = m.clone();
-    let items = tokio::task::spawn_blocking(move || library::search(&m2, &lq))
-        .await
-        .unwrap_or_default();
+    let items = tokio::task::spawn_blocking(move || library::search(&m2, &lq)).await.unwrap_or_default();
     // Cameras brought in from other servers: their alerts and recordings
     // are asked for there.
     let far = imported_asked(&m, &asked);
@@ -2902,7 +2605,11 @@ async fn search(
         }
         format!("api/recordings?{}", p.iter().map(|(k, v)| format!("{k}={}", library::enc(v))).collect::<Vec<_>>().join("&"))
     };
-    let got = futures_util::future::join_all(far.iter().map(|imp| { let p = qs(&imp.remote_id); async move { crate::remote::json(imp, &p).await } })).await;
+    let got = futures_util::future::join_all(far.iter().map(|imp| {
+        let p = qs(&imp.remote_id);
+        async move { crate::remote::json(imp, &p).await }
+    }))
+    .await;
     for (imp, g) in far.iter().zip(got) {
         match g {
             Ok(serde_json::Value::Array(a)) => all.extend(a),
@@ -2919,30 +2626,25 @@ async fn search(
 /// The cameras asked for (none: all) that were brought in from another
 /// server.
 fn imported_asked(m: &Manager, asked: &[String]) -> Vec<crate::remote::Imported> {
-    crate::remote::imported(&m.config())
-        .into_iter()
-        .filter(|i| asked.is_empty() || asked.contains(&i.id))
-        .collect()
+    crate::remote::imported(&m.config()).into_iter().filter(|i| asked.is_empty() || asked.contains(&i.id)).collect()
 }
 
-async fn timeline(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(q): Query<SearchQuery>,
-) -> Response {
+async fn timeline(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<SearchQuery>) -> Response {
     let (from, to) = range(q.from, q.to);
     let cams = allowed_cameras(split_list(&q.cameras), visible(&user));
     let far = imported_asked(&m, &cams);
     let m2 = m.clone();
-    let t = tokio::task::spawn_blocking(move || library::timeline(&m2, &cams, from, to))
-        .await
-        .unwrap_or_default();
+    let t = tokio::task::spawn_blocking(move || library::timeline(&m2, &cams, from, to)).await.unwrap_or_default();
     if far.is_empty() {
         return Json(t).into_response();
     }
     // A camera brought in from another server: its timeline from there.
     let path = |rid: &str| format!("api/timeline?cameras={}&from={}&to={}", library::enc(rid), library::enc(&from.to_rfc3339()), library::enc(&to.to_rfc3339()));
-    let got = futures_util::future::join_all(far.iter().map(|imp| { let p = path(&imp.remote_id); async move { crate::remote::json(imp, &p).await } })).await;
+    let got = futures_util::future::join_all(far.iter().map(|imp| {
+        let p = path(&imp.remote_id);
+        async move { crate::remote::json(imp, &p).await }
+    }))
+    .await;
     let mut out: Vec<serde_json::Value> = Vec::new();
     for c in t {
         let Ok(mut v) = serde_json::to_value(&c) else { continue };
@@ -3086,12 +2788,7 @@ async fn warm_footage(State(m): App, user: Option<axum::Extension<CurrentUser>>,
     let stream = if q.stream == "main" { "main" } else { "sub" };
     tokio::task::spawn_blocking(move || {
         let t = library::timeline(&m, std::slice::from_ref(&c.cfg.id), from, to);
-        let mut files: Vec<PathBuf> = t
-            .into_iter()
-            .flat_map(|x| x.segments)
-            .filter(|s| s.kind != "clip" && s.stream == stream)
-            .map(|s| segment_path(&c.dir, &s))
-            .collect();
+        let mut files: Vec<PathBuf> = t.into_iter().flat_map(|x| x.segments).filter(|s| s.kind != "clip" && s.stream == stream).map(|s| segment_path(&c.dir, &s)).collect();
         // Nearest the playhead first.
         files.reverse();
         crate::vstore::warm(&files);
@@ -3158,7 +2855,9 @@ async fn playback_report(State(m): App, Json(r): Json<PlaybackReport>) -> Respon
                 let prev = list.iter().position(|r| r.name == fname).and_then(|i| list.get(i + 1)).map(|r| dir.join(&r.name));
                 let this = crate::ffmpeg::describe(&ffmpeg, &path).await;
                 let before = match &prev {
-                    Some(p) => format!("; the one before ({}): {}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), crate::ffmpeg::describe(&ffmpeg, p).await),
+                    Some(p) => {
+                        format!("; the one before ({}): {}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), crate::ffmpeg::describe(&ffmpeg, p).await)
+                    }
                     None => String::new(),
                 };
                 tracing::warn!("[{cam}] the browser refused {fname}: {this}{before}");
@@ -3178,7 +2877,14 @@ async fn slow_requests(req: Request, next: Next) -> Response {
     let took = t.elapsed();
     if took > Duration::from_millis(1500) && !path.ends_with("/video") && !path.contains("/live/") && path != "/api/live/ws" {
         // (Kinds: "/media/x/rec", "/api/hls", "/api/timeline" …)
-        let kind: String = path.split('/').filter(|x| !x.is_empty()).enumerate().filter(|(i, x)| *i == 0 || (*i == 1 && *x != "media") || (*i == 2 && path.starts_with("/media"))).map(|(_, x)| x).collect::<Vec<_>>().join("/");
+        let kind: String = path
+            .split('/')
+            .filter(|x| !x.is_empty())
+            .enumerate()
+            .filter(|(i, x)| *i == 0 || (*i == 1 && *x != "media") || (*i == 2 && path.starts_with("/media")))
+            .map(|(_, x)| x)
+            .collect::<Vec<_>>()
+            .join("/");
         static LAST: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Instant>>> = std::sync::LazyLock::new(Default::default);
         let mut l = LAST.locked();
         if l.get(&kind).is_none_or(|x| x.elapsed() > Duration::from_secs(10)) {
@@ -3219,11 +2925,7 @@ async fn remote_footage(State(m): App, req: Request, next: Next) -> Response {
         return next.run(req).await;
     }
     let cfg = m.config();
-    let id = if by_query {
-        query.split('&').find_map(|kv| kv.strip_prefix("camera=")).map(percent_decode).unwrap_or_default()
-    } else {
-        percent_decode(seg[at])
-    };
+    let id = if by_query { query.split('&').find_map(|kv| kv.strip_prefix("camera=")).map(percent_decode).unwrap_or_default() } else { percent_decode(seg[at]) };
     let Some(imp) = crate::remote::find(&cfg, &id) else { return next.run(req).await };
     let user = req.extensions().get::<CurrentUser>().cloned().map(axum::Extension);
     if let Some(denied) = camera_denied(&user, &id) {
@@ -3250,11 +2952,18 @@ async fn remote_footage(State(m): App, req: Request, next: Next) -> Response {
         Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{} can't be reached: {e:#}", imp.server.name)),
     };
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let keep = [header::CONTENT_TYPE, header::CONTENT_LENGTH, header::CONTENT_RANGE, header::ACCEPT_RANGES, header::CACHE_CONTROL, header::CONTENT_DISPOSITION, header::LAST_MODIFIED, header::ETAG];
-    let headers: Vec<(header::HeaderName, header::HeaderValue)> = keep
-        .iter()
-        .filter_map(|k| resp.headers().get(k.as_str()).and_then(|v| header::HeaderValue::from_bytes(v.as_bytes()).ok()).map(|v| (k.clone(), v)))
-        .collect();
+    let keep = [
+        header::CONTENT_TYPE,
+        header::CONTENT_LENGTH,
+        header::CONTENT_RANGE,
+        header::ACCEPT_RANGES,
+        header::CACHE_CONTROL,
+        header::CONTENT_DISPOSITION,
+        header::LAST_MODIFIED,
+        header::ETAG,
+    ];
+    let headers: Vec<(header::HeaderName, header::HeaderValue)> =
+        keep.iter().filter_map(|k| resp.headers().get(k.as_str()).and_then(|v| header::HeaderValue::from_bytes(v.as_bytes()).ok()).map(|v| (k.clone(), v))).collect();
     let ct = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     // Playlists and lists name the camera: as it's called here.
     if ct.contains("mpegurl") || ct.contains("json") {
@@ -3299,12 +3008,14 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len()
-            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
         out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }
@@ -3319,9 +3030,7 @@ async fn usage_kinds(State(m): App, user: Option<axum::Extension<CurrentUser>>) 
     let list = match cached {
         Some(v) => v,
         None => {
-            let v = tokio::task::spawn_blocking(move || m.cameras().iter().map(|c| library::space_use(c)).collect::<Vec<_>>())
-                .await
-                .unwrap_or_default();
+            let v = tokio::task::spawn_blocking(move || m.cameras().iter().map(|c| library::space_use(c)).collect::<Vec<_>>()).await.unwrap_or_default();
             *CACHE.locked() = Some((std::time::Instant::now(), v.clone()));
             v
         }
@@ -3360,12 +3069,7 @@ fn segment_path(camera_dir: &std::path::Path, s: &library::Segment) -> PathBuf {
 /// A camera's recordings of one stream ("sub" or "main", path ends in
 /// `.m3u8`) between two times, as one continuous HLS playlist (see hls.rs).
 /// HD alert clips aren't in it (they're played as files).
-async fn hls_playlist(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Path((id, stream)): Path<(String, String)>,
-    Query(q): Query<HlsQuery>,
-) -> Response {
+async fn hls_playlist(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, stream)): Path<(String, String)>, Query(q): Query<HlsQuery>) -> Response {
     if let Some(denied) = camera_denied(&user, &id) {
         return denied;
     }
@@ -3378,11 +3082,7 @@ async fn hls_playlist(
     }
     let text = tokio::task::spawn_blocking(move || {
         let t = library::timeline(&m, std::slice::from_ref(&c.cfg.id), from, to);
-        let mut segs: Vec<_> = t
-            .into_iter()
-            .flat_map(|x| x.segments)
-            .filter(|s| s.kind != "clip" && s.stream == stream)
-            .collect();
+        let mut segs: Vec<_> = t.into_iter().flat_map(|x| x.segments).filter(|s| s.kind != "clip" && s.stream == stream).collect();
         segs.sort_by_key(|s| s.start);
         let mut files = Vec::new();
         for s in segs {
@@ -3394,23 +3094,12 @@ async fn hls_playlist(
     })
     .await
     .unwrap_or_default();
-    (
-        [
-            (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        text,
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, "application/vnd.apple.mpegurl"), (header::CACHE_CONTROL, "no-store")], text).into_response()
 }
 
 /// One recording as an HLS playlist of its pieces (see hls.rs): the camera
 /// view's player opens and jumps within a file without reading it through.
-async fn hls_file_playlist(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Path((id, kind, name)): Path<(String, String, String)>,
-) -> Response {
+async fn hls_file_playlist(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, kind, name)): Path<(String, String, String)>) -> Response {
     if let Some(denied) = camera_denied(&user, &id) {
         return denied;
     }
@@ -3418,10 +3107,7 @@ async fn hls_file_playlist(
     let name = name.trim_end_matches(".m3u8").to_string();
     let (path, url) = match kind.as_str() {
         "rec" => (storage::resolve(&c.dir, &name), library::rec_url(&c.cfg.id, &name)),
-        "tl" => (
-            storage::resolve(&storage::timeline_dir(&c.dir), &name),
-            format!("media/{}/tl/{}", library::enc(&c.cfg.id), library::enc(&name)),
-        ),
+        "tl" => (storage::resolve(&storage::timeline_dir(&c.dir), &name), format!("media/{}/tl/{}", library::enc(&c.cfg.id), library::enc(&name))),
         _ => return err(StatusCode::NOT_FOUND, "not found"),
     };
     let Ok(path) = path else { return err(StatusCode::NOT_FOUND, "not found") };
@@ -3447,12 +3133,7 @@ struct ExportQuery {
 }
 
 /// Cut a time range out of the recordings and download it as one MP4.
-async fn export_clip(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(q): Query<ExportQuery>,
-    req: Request,
-) -> Response {
+async fn export_clip(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<ExportQuery>, req: Request) -> Response {
     // The camera is in the query here, not the path: check it's one this
     // account may see.
     if let Some(denied) = camera_denied(&user, &q.camera) {
@@ -3470,12 +3151,7 @@ async fn export_clip(
     if parts.is_empty() {
         return err(StatusCode::NOT_FOUND, "no recordings in that time range");
     }
-    let name = format!(
-        "{} {} to {}.mp4",
-        file_safe(&c.cfg.name),
-        from.format("%Y-%m-%d %H-%M-%S"),
-        to.format("%H-%M-%S")
-    );
+    let name = format!("{} {} to {}.mp4", file_safe(&c.cfg.name), from.format("%Y-%m-%d %H-%M-%S"), to.format("%H-%M-%S"));
     let out = m.data_dir.join("tmp").join(&name);
     let ffmpeg = m.config().server.ffmpeg_path;
     if let Err(e) = ffmpeg::export(&ffmpeg, &parts, &out).await {
@@ -3484,8 +3160,6 @@ async fn export_clip(
     tracing::info!("[{}] exported clip {name}", c.cfg.name);
     serve_file(out, req, Some(name), true).await
 }
-
-
 
 // ---------- the watchdog ----------
 
@@ -3761,12 +3435,7 @@ struct CaseItemReq {
 
 /// Add footage to a case: it's copied into the case (an alert's picture and
 /// video, a stretch of recording, one picture) and protected.
-async fn cases_add_item(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Path(id): Path<String>,
-    Json(r): Json<CaseItemReq>,
-) -> Response {
+async fn cases_add_item(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Json(r): Json<CaseItemReq>) -> Response {
     use crate::cases::Kind;
     if let Some(denied) = camera_denied(&user, &r.camera) {
         return denied;
@@ -3816,7 +3485,9 @@ async fn cases_add_item(
                 picture = Some(name);
             }
         }
-        if r.kind == Kind::Alert && let Some(clip) = &e.clip {
+        if r.kind == Kind::Alert
+            && let Some(clip) = &e.clip
+        {
             let name = crate::cases::file_name(&title, "mp4");
             if tokio::fs::copy(c.events.dir().join(clip), dir.join(&name)).await.is_ok() {
                 video = Some(name);
@@ -3863,7 +3534,9 @@ async fn cases_add_item(
         picture = Some(name);
     }
     // A video without a picture gets one from its own footage (a thumbnail).
-    if picture.is_none() && let Some(v) = &video {
+    if picture.is_none()
+        && let Some(v) = &video
+    {
         let name = crate::cases::file_name(&title, "jpg");
         for ss in ["1", "0"] {
             let ok = crate::load::cmd(&ffmpeg_path)
@@ -3918,11 +3591,7 @@ struct CaseItemUpdate {
     notes: Option<String>,
 }
 
-async fn cases_update_item(
-    user: Option<axum::Extension<CurrentUser>>,
-    Path((id, item)): Path<(String, String)>,
-    Json(r): Json<CaseItemUpdate>,
-) -> Response {
+async fn cases_update_item(user: Option<axum::Extension<CurrentUser>>, Path((id, item)): Path<(String, String)>, Json(r): Json<CaseItemUpdate>) -> Response {
     if case_item_hidden_from(&user, &id, &item) {
         return err(StatusCode::FORBIDDEN, "your account can't see this camera");
     }
@@ -3934,7 +3603,12 @@ async fn cases_update_item(
     match crate::cases::update_item(&id, &item, r.protected, r.title.as_deref(), r.notes.as_deref()) {
         Ok(it) => {
             if let Some(p) = r.protected {
-                tracing::info!("Evidence Locker: “{}” {}{}", it.title, if p { "protected" } else { "unprotected" }, user.map(|u| format!(" by {}", u.0.0.username)).unwrap_or_default());
+                tracing::info!(
+                    "Evidence Locker: “{}” {}{}",
+                    it.title,
+                    if p { "protected" } else { "unprotected" },
+                    user.map(|u| format!(" by {}", u.0.0.username)).unwrap_or_default()
+                );
             }
             Json(it).into_response()
         }
@@ -3951,7 +3625,6 @@ async fn cases_remove_item(user: Option<axum::Extension<CurrentUser>>, Path((id,
         Err(e) => err(StatusCode::CONFLICT, format!("{e:#}")),
     }
 }
-
 
 /// One case, or all of them, as a ZIP to hand to somebody.
 async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cases: Vec<crate::cases::Case>, name: String, req: Request) -> Response {
@@ -3975,11 +3648,16 @@ async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cas
             tracing::info!("Evidence Locker: exported “{name}”");
             let mut req = req;
             // Always a download.
-            if let Ok(u) = format!("{}?download=1", req.uri().path()).parse() { *req.uri_mut() = u; }
+            if let Ok(u) = format!("{}?download=1", req.uri().path()).parse() {
+                *req.uri_mut() = u;
+            }
             let fname = format!("{}.zip", crate::cases::safe_part(&name));
             serve_file(out, req, Some(fname), true).await
         }
-        Ok(Err(e)) => { let _ = std::fs::remove_file(&out); bad(e) }
+        Ok(Err(e)) => {
+            let _ = std::fs::remove_file(&out);
+            bad(e)
+        }
         Err(e) => bad(anyhow::anyhow!("{e}")),
     }
 }
@@ -3992,7 +3670,9 @@ async fn cases_export(State(m): App, user: Option<axum::Extension<CurrentUser>>,
 
 async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUser>>, req: Request) -> Response {
     let all = crate::cases::list();
-    if all.is_empty() { return err(StatusCode::NOT_FOUND, "no cases to export"); }
+    if all.is_empty() {
+        return err(StatusCode::NOT_FOUND, "no cases to export");
+    }
     cases_zip(&m, &user, all, "Evidence Locker".into(), req).await
 }
 
@@ -4002,10 +3682,8 @@ async fn cases_file(user: Option<axum::Extension<CurrentUser>>, Path((id, name))
         return err(StatusCode::NOT_FOUND, "no such case");
     };
     let vis = visible(&user);
-    let ok = case.items.iter().any(|i| {
-        (i.video.as_deref() == Some(name.as_str()) || i.picture.as_deref() == Some(name.as_str()))
-            && vis.as_ref().is_none_or(|v| v.contains(&i.camera))
-    });
+    let ok =
+        case.items.iter().any(|i| (i.video.as_deref() == Some(name.as_str()) || i.picture.as_deref() == Some(name.as_str())) && vis.as_ref().is_none_or(|v| v.contains(&i.camera)));
     let Some(dir) = crate::cases::case_dir(&id) else {
         return err(StatusCode::NOT_FOUND, "no such case");
     };
@@ -4047,26 +3725,18 @@ async fn delete_recording(State(m): App, Path((id, name)): Path<(String, String)
 
 async fn delete_event(State(m): App, Path((id, eid)): Path<(String, String)>) -> Response {
     let c = camera!(m, id);
-    let locked = crate::cases::locks_event(&c.cfg.id, &eid)
-        .or_else(|| c.events.get(&eid).and_then(|e| crate::cases::locks_time(&c.cfg.id, e.start, e.end)));
+    let locked = crate::cases::locks_event(&c.cfg.id, &eid).or_else(|| c.events.get(&eid).and_then(|e| crate::cases::locks_time(&c.cfg.id, e.start, e.end)));
     if let Some(case) = locked {
         return err(StatusCode::CONFLICT, crate::cases::locked_message(&case));
     }
-    if c.events.delete(&eid) {
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        err(StatusCode::NOT_FOUND, "event not found")
-    }
+    if c.events.delete(&eid) { StatusCode::NO_CONTENT.into_response() } else { err(StatusCode::NOT_FOUND, "event not found") }
 }
 
 /// Content-Disposition for a download: a plain-ASCII name for old browsers
 /// and the exact (UTF-8) name for the rest.
 fn attachment(name: &str) -> String {
     let ascii: String = name.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { if c == '"' { '\'' } else { c } } else { '_' }).collect();
-    let enc: String = name
-        .bytes()
-        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
-        .collect();
+    let enc: String = name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{enc}")
 }
 
@@ -4113,11 +3783,7 @@ async fn serve_file(path: PathBuf, req: Request, name: Option<String>, force: bo
     }
 }
 
-async fn serve_recording(
-    State(m): App,
-    Path((id, name)): Path<(String, String)>,
-    req: Request,
-) -> Response {
+async fn serve_recording(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
     let c = camera!(m, id);
     match storage::resolve(&c.dir, &name) {
         Ok(p) => {
@@ -4128,11 +3794,7 @@ async fn serve_recording(
     }
 }
 
-async fn serve_timeline_file(
-    State(m): App,
-    Path((id, name)): Path<(String, String)>,
-    req: Request,
-) -> Response {
+async fn serve_timeline_file(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
     let c = camera!(m, id);
     match storage::resolve(&storage::timeline_dir(&c.dir), &name) {
         Ok(p) => {
@@ -4143,11 +3805,7 @@ async fn serve_timeline_file(
     }
 }
 
-async fn serve_event_file(
-    State(m): App,
-    Path((id, name)): Path<(String, String)>,
-    req: Request,
-) -> Response {
+async fn serve_event_file(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
     let c = camera!(m, id);
     match storage::resolve(c.events.dir(), &name) {
         Ok(p) => {
@@ -4181,11 +3839,7 @@ struct PlayQuery {
 /// Play a recording converted to H.264 on the fly, for browsers that cannot
 /// play the camera's own format (usually H.265). Starts at `t` seconds; the
 /// player asks again with a new `t` when seeking.
-async fn play_converted(
-    State(m): App,
-    Path((id, kind, name)): Path<(String, String, String)>,
-    Query(q): Query<PlayQuery>,
-) -> Response {
+async fn play_converted(State(m): App, Path((id, kind, name)): Path<(String, String, String)>, Query(q): Query<PlayQuery>) -> Response {
     let c = camera!(m, id);
     let src = match media_path(&c, &kind, &name) {
         Ok(p) => p,
@@ -4194,19 +3848,12 @@ async fn play_converted(
     // Each one is a video encoder running: a few at a time, so no one
     // (or a stuck page asking again and again) can tie up the computer.
     let Ok(permit) = CONVERSIONS.clone().try_acquire_owned() else {
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "too many videos are being converted right now — try again in a moment",
-        );
+        return err(StatusCode::SERVICE_UNAVAILABLE, "too many videos are being converted right now — try again in a moment");
     };
     let cfg = m.config();
     let hw = &cfg.hardware;
     let gpu = hw.uses_gpu() && !crate::load::gpu_too_busy("video conversion");
-    let encoder = if gpu {
-        hw.resolved_encoder()
-    } else {
-        "libx264"
-    };
+    let encoder = if gpu { hw.resolved_encoder() } else { "libx264" };
     let (pre, mut out) = ffmpeg::encoder_args(encoder, hw, false);
     if encoder == "libx264" {
         // Speed matters more than size here.
@@ -4218,77 +3865,42 @@ async fn play_converted(
     cmd.args(["-hide_banner", "-loglevel", "error"]);
     if q.copy && !q.lite {
         // Only the sound changes: picture copied as it is.
-        cmd.args(["-ss", &format!("{:.3}", q.t.max(0.0)), "-i"])
-            .arg(&src)
-            .args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k"])
-            .args(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1"]);
-    } else {
-    if gpu {
-        cmd.args(ffmpeg::decode_args(hw, false));
-    }
-    cmd
-        .args(pre)
-        .args(["-ss", &format!("{:.3}", q.t.max(0.0)), "-i"])
-        .arg(&src)
-        .args([
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a:0?",
-            "-vf",
-            if q.lite {
-                "fps='min(15,source_fps)',scale='min(854,iw)':-2"
-            } else {
-                "scale='min(1920,iw)':-2"
-            },
-        ])
-        .args(out)
-        // Data saver: about 0.7 Mbit/s instead of several (later options win).
-        .args(if q.lite {
-            vec![
-                "-b:v", "600k", "-maxrate", "700k", "-bufsize", "1400k", "-c:a", "aac", "-b:a",
-                "48k", "-ac", "1",
-            ]
-        } else {
-            vec!["-c:a", "aac", "-b:a", "96k"]
-        })
-        .args([
+        cmd.args(["-ss", &format!("{:.3}", q.t.max(0.0)), "-i"]).arg(&src).args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k"]).args([
             "-f",
             "mp4",
             "-movflags",
             "frag_keyframe+empty_moov+default_base_moof",
             "pipe:1",
         ]);
+    } else {
+        if gpu {
+            cmd.args(ffmpeg::decode_args(hw, false));
+        }
+        cmd.args(pre)
+            .args(["-ss", &format!("{:.3}", q.t.max(0.0)), "-i"])
+            .arg(&src)
+            .args(["-map", "0:v:0", "-map", "0:a:0?", "-vf", if q.lite { "fps='min(15,source_fps)',scale='min(854,iw)':-2" } else { "scale='min(1920,iw)':-2" }])
+            .args(out)
+            // Data saver: about 0.7 Mbit/s instead of several (later options win).
+            .args(if q.lite { vec!["-b:v", "600k", "-maxrate", "700k", "-bufsize", "1400k", "-c:a", "aac", "-b:a", "48k", "-ac", "1"] } else { vec!["-c:a", "aac", "-b:a", "96k"] })
+            .args(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1"]);
     }
-    let child = cmd
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn();
+    let child = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true).spawn();
     let mut child = match child {
         Ok(c) => c,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
     let stdout = child.stdout.take().unwrap();
     // The ffmpeg process lives as long as the response body (browser disconnect ends it).
-    let stream = futures_util::stream::unfold(
-        (tokio_util::io::ReaderStream::new(stdout), child, permit),
-        |(mut r, c, p)| async move {
-            use futures_util::StreamExt;
-            r.next().await.map(|x| (x, (r, c, p)))
-        },
-    );
-    Response::builder()
-        .header(header::CONTENT_TYPE, "video/mp4")
-        .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::from_stream(stream))
-        .unwrap()
+    let stream = futures_util::stream::unfold((tokio_util::io::ReaderStream::new(stdout), child, permit), |(mut r, c, p)| async move {
+        use futures_util::StreamExt;
+        r.next().await.map(|x| (x, (r, c, p)))
+    });
+    Response::builder().header(header::CONTENT_TYPE, "video/mp4").header(header::CACHE_CONTROL, "no-store").body(Body::from_stream(stream)).unwrap()
 }
 
 /// Videos being converted for the browser at once.
-static CONVERSIONS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
-    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(6)));
+static CONVERSIONS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> = std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(6)));
 
 #[derive(Deserialize)]
 struct TimelapseQuery {
@@ -4302,11 +3914,7 @@ struct TimelapseQuery {
 
 /// A time-lapse video (MP4) of any stretch of time, made from the
 /// time-lapse pictures already kept: a whole day takes seconds to make.
-async fn timelapse_export(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(q): Query<TimelapseQuery>,
-) -> Response {
+async fn timelapse_export(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(q): Query<TimelapseQuery>) -> Response {
     if let Some(denied) = camera_denied(&user, &q.camera) {
         return denied;
     }
@@ -4351,19 +3959,12 @@ async fn timelapse_export(
         let _ = stdin.shutdown().await;
     });
     let stdout = child.stdout.take().unwrap();
-    let stream = futures_util::stream::unfold(
-        (tokio_util::io::ReaderStream::new(stdout), child, _permit),
-        |(mut r, c, p)| async move {
-            use futures_util::StreamExt;
-            r.next().await.map(|x| (x, (r, c, p)))
-        },
-    );
+    let stream = futures_util::stream::unfold((tokio_util::io::ReaderStream::new(stdout), child, _permit), |(mut r, c, p)| async move {
+        use futures_util::StreamExt;
+        r.next().await.map(|x| (x, (r, c, p)))
+    });
     let name = format!("{} time-lapse {} to {}.mp4", file_safe(&c.cfg.name), from.format("%Y-%m-%d %H-%M"), to.format("%Y-%m-%d %H-%M"));
-    let mut res = Response::builder()
-        .header(header::CONTENT_TYPE, "video/mp4")
-        .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::from_stream(stream))
-        .unwrap();
+    let mut res = Response::builder().header(header::CONTENT_TYPE, "video/mp4").header(header::CACHE_CONTROL, "no-store").body(Body::from_stream(stream)).unwrap();
     if let Ok(v) = HeaderValue::from_str(&attachment(&name)) {
         res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
     }
@@ -4371,18 +3972,13 @@ async fn timelapse_export(
 }
 
 /// Resolve "rec"/"clip" + name to a file of the camera.
-fn media_path(
-    c: &crate::manager::CameraRuntime,
-    kind: &str,
-    name: &str,
-) -> anyhow::Result<PathBuf> {
+fn media_path(c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyhow::Result<PathBuf> {
     match kind {
         "clip" => storage::resolve(c.events.dir(), name),
         "tl" => storage::resolve(&storage::timeline_dir(&c.dir), name),
         _ => storage::resolve(&c.dir, name),
     }
 }
-
 
 /// Only a couple of preview jobs at a time.
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
@@ -4410,11 +4006,7 @@ fn fresh(cache: &std::path::Path, src: &std::path::Path) -> bool {
     }
 }
 
-async fn recording_thumb(
-    State(m): App,
-    Path((id, name)): Path<(String, String)>,
-    req: Request,
-) -> Response {
+async fn recording_thumb(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
     let c = camera!(m, id);
     let Ok(src) = storage::resolve(&c.dir, &name) else {
         return err(StatusCode::NOT_FOUND, "not found");
@@ -4432,12 +4024,7 @@ async fn recording_thumb(
     serve_file(cache, req, None, false).await
 }
 
-async fn ensure_sprite(
-    m: &Manager,
-    c: &crate::manager::CameraRuntime,
-    kind: &str,
-    name: &str,
-) -> anyhow::Result<(PathBuf, ffmpeg::SpriteInfo)> {
+async fn ensure_sprite(m: &Manager, c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyhow::Result<(PathBuf, ffmpeg::SpriteInfo)> {
     let src = media_path(c, kind, name)?;
     let dir = src.parent().unwrap().join(".thumbs");
     let prefix = dir.join(format!("{name}.sprite"));
@@ -4445,19 +4032,13 @@ async fn ensure_sprite(
     let meta = dir.join(format!("{name}.sprite.json"));
     // Previews from before pictures were stored in their own shape are made again.
     let every = m.config().storage.timelapse_seconds;
-    let load = || -> Option<ffmpeg::SpriteInfo> {
-        sprite_meta_current(&meta, every)
-            .then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok())
-            .flatten()
-    };
+    let load = || -> Option<ffmpeg::SpriteInfo> { sprite_meta_current(&meta, every).then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()).flatten() };
     // The quick answer (already made) is looked up off the web server's
     // threads: on a network drive each look at a file is a trip to the NAS.
     let (ready, growing) = {
         let (first, src, meta) = (first.clone(), src.clone(), meta.clone());
         tokio::task::spawn_blocking(move || {
-            let load = || -> Option<ffmpeg::SpriteInfo> {
-                sprite_meta_current(&meta, every).then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()).flatten()
-            };
+            let load = || -> Option<ffmpeg::SpriteInfo> { sprite_meta_current(&meta, every).then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()).flatten() };
             if fresh(&first, &src)
                 && let Some(i) = load()
             {
@@ -4465,9 +4046,7 @@ async fn ensure_sprite(
             }
             // The file still being recorded: show the preview made a minute
             // or two ago straight away; the background job keeps it up to date.
-            let growing = std::fs::metadata(&src)
-                .and_then(|m| m.modified())
-                .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(120));
+            let growing = std::fs::metadata(&src).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(120));
             (if growing { load() } else { None }, growing)
         })
         .await
@@ -4479,9 +4058,7 @@ async fn ensure_sprite(
     let _p = THUMB_JOBS.acquire().await;
     // Made while waiting (another request for the same file), or a growing
     // file's preview refreshed in the last few seconds: use that.
-    let just_made = std::fs::metadata(&meta)
-        .and_then(|m| m.modified())
-        .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20));
+    let just_made = std::fs::metadata(&meta).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20));
     if (fresh(&first, &src) || (growing && just_made))
         && let Some(i) = load()
     {
@@ -4507,10 +4084,7 @@ async fn ensure_sprite(
             };
             let (cam_dir, staging2, every) = (c.dir.clone(), staging.clone(), cfg.storage.timelapse_seconds as f64);
             match end {
-                Some(end) if end > start => tokio::task::spawn_blocking(move || crate::picturelog::sprite(&cam_dir, start, end, every, aspect, &staging2))
-                    .await
-                    .ok()
-                    .flatten(),
+                Some(end) if end > start => tokio::task::spawn_blocking(move || crate::picturelog::sprite(&cam_dir, start, end, every, aspect, &staging2)).await.ok().flatten(),
                 _ => None,
             }
         }
@@ -4544,10 +4118,7 @@ async fn ensure_sprite(
         let start = format!("{name}.sprite-");
         for e in rd.flatten() {
             let f = e.file_name().to_string_lossy().to_string();
-            if let Some(n) = f
-                .strip_prefix(&start)
-                .and_then(|r| r.strip_suffix(".jpg"))
-                .and_then(|n| n.parse::<u32>().ok())
+            if let Some(n) = f.strip_prefix(&start).and_then(|r| r.strip_suffix(".jpg")).and_then(|n| n.parse::<u32>().ok())
                 && n >= info.pages
             {
                 let _ = std::fs::remove_file(e.path());
@@ -4567,22 +4138,12 @@ fn preview_ready(c: &crate::manager::CameraRuntime, kind: &str, name: &str, ever
     let Ok(src) = media_path(c, kind, name) else {
         return false;
     };
-    let first = src
-        .parent()
-        .unwrap()
-        .join(".thumbs")
-        .join(format!("{name}.sprite-000.jpg"));
+    let first = src.parent().unwrap().join(".thumbs").join(format!("{name}.sprite-000.jpg"));
     let meta = first.with_file_name(format!("{name}.sprite.json"));
     fresh(&first, &src) && sprite_meta_current(&meta, every)
 }
 
-type PreviewTodo = (
-    Arc<crate::manager::CameraRuntime>,
-    &'static str,
-    String,
-    DateTime<Local>,
-    DateTime<Local>,
-);
+type PreviewTodo = (Arc<crate::manager::CameraRuntime>, &'static str, String, DateTime<Local>, DateTime<Local>);
 
 /// Files between `from` and `to` whose time-lapse preview is missing or out
 /// of date, newest first: the light timeline copies, the recordings of any
@@ -4591,25 +4152,16 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
     let mut todo: Vec<PreviewTodo> = Vec::new();
     let now = Local::now();
     for c in m.cameras() {
-        let copies: Vec<_> = library::timeline_recordings(&c)
-            .into_iter()
-            .filter(|r| r.end >= from && r.start < to)
-            .collect();
+        let copies: Vec<_> = library::timeline_recordings(&c).into_iter().filter(|r| r.end >= from && r.start < to).collect();
         for r in &copies {
             todo.push((c.clone(), "tl", r.name.clone(), r.start, r.end));
         }
-        for r in library::recordings(&c)
-            .iter()
-            .filter(|r| r.end >= from && r.start < to)
-        {
+        for r in library::recordings(&c).iter().filter(|r| r.end >= from && r.start < to) {
             // Skip the file still being written (it keeps growing).
             if (now - r.end).num_seconds() < 30 {
                 continue;
             }
-            let covered = copies.iter().any(|t| {
-                t.start <= r.start + chrono::Duration::seconds(5)
-                    && t.end >= r.end - chrono::Duration::seconds(5)
-            });
+            let covered = copies.iter().any(|t| t.start <= r.start + chrono::Duration::seconds(5) && t.end >= r.end - chrono::Duration::seconds(5));
             if !covered {
                 todo.push((c.clone(), "rec", r.name.clone(), r.start, r.end));
             }
@@ -4621,9 +4173,7 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
         }
     }
     let every = m.config().storage.timelapse_seconds;
-    todo.retain(|(c, kind, name, ..)| {
-        media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name, every)
-    });
+    todo.retain(|(c, kind, name, ..)| media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name, every));
     todo.sort_by_key(|x| std::cmp::Reverse(x.3));
     todo
 }
@@ -4641,8 +4191,7 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
     }
     let mut announced = false;
     // Files that failed: (tries, when).
-    let mut failed: std::collections::HashMap<String, (u32, std::time::Instant)> =
-        std::collections::HashMap::new();
+    let mut failed: std::collections::HashMap<String, (u32, std::time::Instant)> = std::collections::HashMap::new();
     let mut last_sweep: Option<std::time::Instant> = None;
     loop {
         let mut built = 0usize;
@@ -4660,35 +4209,16 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
             let day_ago = now - chrono::Duration::hours(24);
             // Not again too soon after failing: 5 minutes, then longer each
             // time (up to 6 hours); older footage at most 3 tries.
-            let retry_ok =
-                |failed: &std::collections::HashMap<String, (u32, std::time::Instant)>,
-                 t: &PreviewTodo,
-                 old: bool| {
-                    failed
-                        .get(&format!("{}/{}", t.0.cfg.id, t.2))
-                        .is_none_or(|(n, at)| {
-                            (!old || *n < 3)
-                                && at.elapsed()
-                                    >= std::time::Duration::from_secs(
-                                        (300u64 << (*n - 1).min(6)).min(6 * 3600),
-                                    )
-                        })
-                };
-            let recent: Vec<PreviewTodo> =
-                missing_previews(&m, day_ago, now + chrono::Duration::minutes(5))
-                    .into_iter()
-                    .filter(|t| force || retry_ok(&failed, t, false))
-                    .collect();
-            let sweep = force
-                || recent.is_empty()
-                    && last_sweep
-                        .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(600));
+            let retry_ok = |failed: &std::collections::HashMap<String, (u32, std::time::Instant)>, t: &PreviewTodo, old: bool| {
+                failed
+                    .get(&format!("{}/{}", t.0.cfg.id, t.2))
+                    .is_none_or(|(n, at)| (!old || *n < 3) && at.elapsed() >= std::time::Duration::from_secs((300u64 << (*n - 1).min(6)).min(6 * 3600)))
+            };
+            let recent: Vec<PreviewTodo> = missing_previews(&m, day_ago, now + chrono::Duration::minutes(5)).into_iter().filter(|t| force || retry_ok(&failed, t, false)).collect();
+            let sweep = force || recent.is_empty() && last_sweep.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(600));
             let mut older: Vec<PreviewTodo> = if sweep {
                 last_sweep = Some(std::time::Instant::now());
-                missing_previews(&m, now - chrono::Duration::days(3650), day_ago)
-                    .into_iter()
-                    .filter(|t| force || retry_ok(&failed, t, true))
-                    .collect()
+                missing_previews(&m, now - chrono::Duration::days(3650), day_ago).into_iter().filter(|t| force || retry_ok(&failed, t, true)).collect()
             } else {
                 Vec::new()
             };
@@ -4697,16 +4227,9 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
             if !force {
                 older.truncate(30);
             }
-            for (part, list, title) in [
-                (0, recent, "Time-lapse previews (last 24 hours)".to_string()),
-                (
-                    1,
-                    older,
-                    format!(
-                        "Time-lapse previews — catching up on older footage ({backlog} missing)"
-                    ),
-                ),
-            ] {
+            for (part, list, title) in
+                [(0, recent, "Time-lapse previews (last 24 hours)".to_string()), (1, older, format!("Time-lapse previews — catching up on older footage ({backlog} missing)"))]
+            {
                 if list.is_empty() {
                     continue;
                 }
@@ -4743,11 +4266,7 @@ pub async fn prebuild_timelapse(m: Arc<Manager>) {
                             "clip" => "alert clip",
                             _ => "recording",
                         },
-                        if part == 0 {
-                            start.format("%H:%M:%S").to_string()
-                        } else {
-                            start.format("%d/%m %H:%M:%S").to_string()
-                        },
+                        if part == 0 { start.format("%H:%M:%S").to_string() } else { start.format("%d/%m %H:%M:%S").to_string() },
                         end.format("%H:%M:%S")
                     ));
                     // Let people scrubbing the timeline go first — the preview
@@ -4856,28 +4375,12 @@ async fn notify_test(State(m): App, Json(mut n): Json<crate::config::NotifyConfi
     if n.email.password.is_empty() {
         n.email.password = saved.email.password;
     }
-    let newest = m
-        .cameras()
-        .into_iter()
-        .filter_map(|c| {
-            c.events
-                .all()
-                .into_iter()
-                .filter(|e| e.thumb.is_some())
-                .max_by_key(|e| e.start)
-                .map(|e| (c, e))
-        })
-        .max_by_key(|(_, e)| e.start);
-    let picture = newest
-        .as_ref()
-        .and_then(|(c, e)| std::fs::read(c.events.dir().join(e.thumb.as_ref()?)).ok());
+    let newest =
+        m.cameras().into_iter().filter_map(|c| c.events.all().into_iter().filter(|e| e.thumb.is_some()).max_by_key(|e| e.start).map(|e| (c, e))).max_by_key(|(_, e)| e.start);
+    let picture = newest.as_ref().and_then(|(c, e)| std::fs::read(c.events.dir().join(e.thumb.as_ref()?)).ok());
     let msg = crate::notify::Message {
         title: format!("{}: test notification", m.config().server.name),
-        body: if picture.is_some() {
-            "Notifications work. This is the newest alert picture.".into()
-        } else {
-            "Notifications work.".into()
-        },
+        body: if picture.is_some() { "Notifications work. This is the newest alert picture.".into() } else { "Notifications work.".into() },
         tags: "white_check_mark",
         priority: 3,
         click: (!n.link.trim().is_empty()).then(|| n.link.trim().to_string()),
@@ -4910,11 +4413,7 @@ async fn where_work_runs(State(m): App) -> Response {
     let cfg = m.config();
     let hw = &cfg.hardware;
     let gpu_dec = hw.hwaccel != "none";
-    let no_dec = if hw.auto {
-        "no GPU video decoder worked on this computer (checked at start-up)"
-    } else {
-        "GPU video decoding is off in Settings → GPU acceleration"
-    };
+    let no_dec = if hw.auto { "no GPU video decoder worked on this computer (checked at start-up)" } else { "GPU video decoding is off in Settings → GPU acceleration" };
     let cams: Vec<_> = m
         .cameras()
         .iter()
@@ -4958,9 +4457,7 @@ async fn jobs_list(State(m): App) -> Response {
             if (cfg.ai.faces || cfg.ai.plates)
                 && !e.identified
                 && e.start > now - chrono::Duration::days(7)
-                && e.boxes.iter().any(|b| {
-                    ["person", "vehicle", "car", "truck", "bus", "motorcycle"].contains(&b.label.as_str())
-                })
+                && e.boxes.iter().any(|b| ["person", "vehicle", "car", "truck", "bus", "motorcycle"].contains(&b.label.as_str()))
             {
                 identify += 1;
             }
@@ -4990,11 +4487,7 @@ async fn jobs_pause(Json(r): Json<PauseReq>) -> Response {
     } else if !crate::jobs::set_paused(&r.kind, r.paused) {
         return err(StatusCode::BAD_REQUEST, "this kind of task can't be paused");
     }
-    tracing::info!(
-        "background work {:?} {}",
-        r.kind,
-        if r.paused { "paused" } else { "resumed" }
-    );
+    tracing::info!("background work {:?} {}", r.kind, if r.paused { "paused" } else { "resumed" });
     Json(json!({ "paused": crate::jobs::paused() })).into_response()
 }
 
@@ -5003,10 +4496,7 @@ async fn jobs_pause(Json(r): Json<PauseReq>) -> Response {
 async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
     let cfg = m.config();
     if !(cfg.ai.faces || cfg.ai.plates) {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "Faces & plates are off (Settings → People & vehicles)",
-        );
+        return err(StatusCode::BAD_REQUEST, "Faces & plates are off (Settings → People & vehicles)");
     }
     let since = Local::now() - chrono::Duration::days(r.days.clamp(1, 7));
     let mut n = 0;
@@ -5018,13 +4508,7 @@ async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
             for f in e.faces.drain(..) {
                 let _ = std::fs::remove_file(c.events.dir().join(&f.file));
             }
-            e.notes.retain(|x| {
-                !(x.starts_with("Recognized ")
-                    || x == "Unknown face"
-                    || x.contains(" plate ")
-                    || x.starts_with("Plate ")
-                    || x.starts_with("Looks like "))
-            });
+            e.notes.retain(|x| !(x.starts_with("Recognized ") || x == "Unknown face" || x.contains(" plate ") || x.starts_with("Plate ") || x.starts_with("Looks like ")));
             e.plates.clear();
             e.identified = false;
             c.events.save(e);
@@ -5038,18 +4522,11 @@ async fn reidentify(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
 /// 24 hours again (older ones are made when looked at).
 async fn rebuild_previews(State(m): App) -> Response {
     if !crate::picturelog::enabled() {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "time-lapse previews are switched off",
-        );
+        return err(StatusCode::BAD_REQUEST, "time-lapse previews are switched off");
     }
     let mut removed = 0;
     for c in m.cameras() {
-        for dir in [
-            c.dir.clone(),
-            crate::storage::timeline_dir(&c.dir),
-            c.events.dir().to_path_buf(),
-        ] {
+        for dir in [c.dir.clone(), crate::storage::timeline_dir(&c.dir), c.events.dir().to_path_buf()] {
             let t = dir.join(".thumbs");
             if t.is_dir() && std::fs::remove_dir_all(&t).is_ok() {
                 removed += 1;
@@ -5070,16 +4547,10 @@ async fn delete_all_footage(State(m): App) -> Response {
     crate::vstore::close_all();
     let res = tokio::task::spawn_blocking(move || {
         let (mut files, mut bytes, mut alerts) = (0u64, 0u64, 0usize);
-        let busy = |p: &std::path::Path| {
-            std::fs::metadata(p)
-                .and_then(|m| m.modified())
-                .is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20))
-        };
+        let busy = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20));
         // Every camera's alerts, also cameras that aren't running — except
         // those locked in an Evidence Locker case.
-        let locked_ev = |cam: &str, e: &crate::events::Event| {
-            crate::cases::locks_event(cam, &e.id).is_some() || crate::cases::locks_time(cam, e.start, e.end).is_some()
-        };
+        let locked_ev = |cam: &str, e: &crate::events::Event| crate::cases::locks_event(cam, &e.id).is_some() || crate::cases::locks_time(cam, e.start, e.end).is_some();
         let mut kept = 0usize;
         for (cam, store) in m.event_stores() {
             alerts += store.remove_where(|e| !locked_ev(&cam, e));
@@ -5102,11 +4573,7 @@ async fn delete_all_footage(State(m): App) -> Response {
                     keep.insert(c.events.dir().join(f));
                 }
             }
-            for dir in [
-                c.dir.clone(),
-                crate::storage::timeline_dir(&c.dir),
-                c.events.dir().to_path_buf(),
-            ] {
+            for dir in [c.dir.clone(), crate::storage::timeline_dir(&c.dir), c.events.dir().to_path_buf()] {
                 if keep.is_empty() {
                     let _ = std::fs::remove_dir_all(dir.join(".thumbs"));
                 }
@@ -5117,11 +4584,7 @@ async fn delete_all_footage(State(m): App) -> Response {
                     let p = e.path();
                     let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
                     // Pictures always; video files unless being written right now.
-                    if !p.is_file()
-                        || !["mp4", "jpg", "ts", "part"].contains(&ext)
-                        || (ext != "jpg" && busy(&p))
-                        || keep.contains(&p)
-                    {
+                    if !p.is_file() || !["mp4", "jpg", "ts", "part"].contains(&ext) || (ext != "jpg" && busy(&p)) || keep.contains(&p) {
                         continue;
                     }
                     let size = e.metadata().map(|m| m.len()).unwrap_or(0);
@@ -5137,10 +4600,7 @@ async fn delete_all_footage(State(m): App) -> Response {
     .await;
     match res {
         Ok((files, bytes, alerts, kept)) => {
-            tracing::warn!(
-                "all saved footage deleted from the toolbar: {files} file(s), {:.1} GB, {alerts} alert(s)",
-                bytes as f64 / 1e9
-            );
+            tracing::warn!("all saved footage deleted from the toolbar: {files} file(s), {:.1} GB, {alerts} alert(s)", bytes as f64 / 1e9);
             let locked = if kept > 0 { format!(" {kept} alert(s) and their footage locked in Evidence Locker cases were kept.") } else { String::new() };
             Json(json!({"ok": true, "message": format!(
                 "Deleted {files} file(s) ({:.1} GB) and {alerts} alert(s). Recording carries on.{locked}",
@@ -5163,10 +4623,7 @@ fn seven() -> i64 {
 
 /// Alert pictures again, from the full-quality recordings.
 async fn refresh_alert_pictures(State(m): App, Json(r): Json<RefreshPictures>) -> Response {
-    tokio::spawn(crate::identify::refresh_pictures(
-        m.clone(),
-        r.days.clamp(1, 90),
-    ));
+    tokio::spawn(crate::identify::refresh_pictures(m.clone(), r.days.clamp(1, 90)));
     Json(json!({"ok": true, "message": "Making sharper alert pictures from the recordings (see Tasks)"})).into_response()
 }
 
@@ -5180,14 +4637,7 @@ async fn whats_new() -> Response {
         .split("\n## ")
         .map(|s| format!("## {s}"))
         .find(|s| s.starts_with(&head) || s.starts_with(&format!("#{head}")))
-        .map(|s| {
-            s.lines()
-                .skip(1)
-                .collect::<Vec<_>>()
-                .join("\n")
-                .trim()
-                .to_string()
-        })
+        .map(|s| s.lines().skip(1).collect::<Vec<_>>().join("\n").trim().to_string())
         .unwrap_or_default();
     Json(json!({ "version": version, "text": text })).into_response()
 }
@@ -5202,11 +4652,7 @@ struct ReadyReq {
 /// Which of these files already have their time-lapse preview made (and
 /// its details), in one go — nothing is made here. The timeline asks this
 /// when it opens, so previews made before show at once after a reload.
-async fn sprites_ready(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Json(r): Json<ReadyReq>,
-) -> Response {
+async fn sprites_ready(State(m): App, user: Option<axum::Extension<CurrentUser>>, Json(r): Json<ReadyReq>) -> Response {
     if let Some(denied) = camera_denied(&user, &r.camera) {
         return denied;
     }
@@ -5251,7 +4697,16 @@ async fn sprites_ready(
             let per = todo.len().div_ceil(crate::load::DISK_READERS).max(1);
             let hs: Vec<_> = todo
                 .chunks(per)
-                .map(|ch| sc.spawn(|| ch.iter().map(|(k, n)| { let _t = crate::load::disk_slot(); ((k.clone(), n.clone()), check(k, n)) }).collect::<Vec<_>>()))
+                .map(|ch| {
+                    sc.spawn(|| {
+                        ch.iter()
+                            .map(|(k, n)| {
+                                let _t = crate::load::disk_slot();
+                                ((k.clone(), n.clone()), check(k, n))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
                 .collect();
             hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
         });
@@ -5272,15 +4727,9 @@ async fn sprites_ready(
     Json(serde_json::Value::Object(out)).into_response()
 }
 
-async fn sprite_info(
-    State(m): App,
-    Path((id, kind, name)): Path<(String, String, String)>,
-) -> Response {
+async fn sprite_info(State(m): App, Path((id, kind, name)): Path<(String, String, String)>) -> Response {
     if !crate::picturelog::enabled() {
-        return err(
-            StatusCode::NOT_FOUND,
-            "time-lapse previews are switched off",
-        );
+        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
     }
     let c = camera!(m, id);
     match ensure_sprite(&m, &c, &kind, &name).await {
@@ -5299,33 +4748,18 @@ struct PageQuery {
     page: u32,
 }
 
-async fn sprite_image(
-    State(m): App,
-    Path((id, kind, name)): Path<(String, String, String)>,
-    Query(q): Query<PageQuery>,
-    req: Request,
-) -> Response {
+async fn sprite_image(State(m): App, Path((id, kind, name)): Path<(String, String, String)>, Query(q): Query<PageQuery>, req: Request) -> Response {
     if !crate::picturelog::enabled() {
-        return err(
-            StatusCode::NOT_FOUND,
-            "time-lapse previews are switched off",
-        );
+        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
     }
     let c = camera!(m, id);
     // A page already made is served as it is (pages are only ever written
     // over with more pictures); making previews is for the info request.
     if let Ok(src) = media_path(&c, &kind, &name) {
-        let file = src
-            .parent()
-            .unwrap()
-            .join(".thumbs")
-            .join(format!("{name}.sprite-{:03}.jpg", q.page));
+        let file = src.parent().unwrap().join(".thumbs").join(format!("{name}.sprite-{:03}.jpg", q.page));
         if file.is_file() {
             let mut res = serve_file(file, req, None, false).await;
-            res.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("max-age=86400"),
-            );
+            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=86400"));
             return res;
         }
     }
@@ -5334,10 +4768,7 @@ async fn sprite_image(
             let file = PathBuf::from(format!("{}-{:03}.jpg", prefix.display(), q.page));
             let mut res = serve_file(file, req, None, false).await;
             // Pages are versioned in their URL, so they can be cached for long.
-            res.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("max-age=86400"),
-            );
+            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=86400"));
             res
         }
         Ok(_) => err(StatusCode::NOT_FOUND, "no such page"),
@@ -5348,10 +4779,7 @@ async fn sprite_image(
 // ---------- live ----------
 
 fn multipart_part(frame: &[u8]) -> Bytes {
-    let head = format!(
-        "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
-        frame.len()
-    );
+    let head = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", frame.len());
     let mut part = Vec::with_capacity(head.len() + frame.len() + 2);
     part.extend_from_slice(head.as_bytes());
     part.extend_from_slice(frame);
@@ -5359,14 +4787,9 @@ fn multipart_part(frame: &[u8]) -> Bytes {
     part.into()
 }
 
-fn mjpeg_response(
-    stream: impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
-) -> Response {
+fn mjpeg_response(stream: impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static) -> Response {
     Response::builder()
-        .header(
-            header::CONTENT_TYPE,
-            "multipart/x-mixed-replace; boundary=frame",
-        )
+        .header(header::CONTENT_TYPE, "multipart/x-mixed-replace; boundary=frame")
         .header(header::CACHE_CONTROL, "no-cache, no-store")
         .body(Body::from_stream(stream))
         .unwrap()
@@ -5384,11 +4807,7 @@ fn sub() -> Quality {
     Quality::Sub
 }
 
-async fn live_mjpeg(
-    State(m): App,
-    Path(id): Path<String>,
-    Query(q): Query<QualityQuery>,
-) -> Response {
+async fn live_mjpeg(State(m): App, Path(id): Path<String>, Query(q): Query<QualityQuery>) -> Response {
     let c = camera!(m, id);
     let mut rx = c.live(q.q).subscribe();
     drop(c);
@@ -5426,36 +4845,15 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
     let ffmpeg = m.config().server.ffmpeg_path;
     // The main stream, unless only the sub-stream is known to carry sound.
     let has = |a: Option<String>| a.is_some_and(|a| !a.is_empty());
-    let relay = if c.relay_main.audio().as_deref() == Some("") && has(c.relay_sub.audio()) {
-        c.relay_sub.clone()
-    } else {
-        c.relay_main.clone()
-    };
-    if relay.audio().as_deref() == Some("")
-        && !has(c.relay_sub.audio())
-        && c.relay_sub.audio().is_some()
-    {
+    let relay = if c.relay_main.audio().as_deref() == Some("") && has(c.relay_sub.audio()) { c.relay_sub.clone() } else { c.relay_main.clone() };
+    if relay.audio().as_deref() == Some("") && !has(c.relay_sub.audio()) && c.relay_sub.audio().is_some() {
         return err(StatusCode::NOT_FOUND, NO_SOUND);
     }
     let rx = relay.subscribe_now();
     let child = crate::load::cmd(&ffmpeg)
         .args(["-hide_banner", "-loglevel", "error"])
         .args(crate::relay::pipe_input_args_low_delay())
-        .args([
-            "-vn",
-            "-map",
-            "0:a:0",
-            "-c:a",
-            "libmp3lame",
-            "-b:a",
-            "64k",
-            "-ac",
-            "1",
-            "-ar",
-            "22050",
-            "-reservoir",
-            "0",
-        ])
+        .args(["-vn", "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "64k", "-ac", "1", "-ar", "22050", "-reservoir", "0"])
         .args(["-flush_packets", "1", "-f", "mp3", "pipe:1"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -5465,10 +4863,7 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
-            return err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("can't start ffmpeg: {e}"),
-            );
+            return err(StatusCode::INTERNAL_SERVER_ERROR, format!("can't start ffmpeg: {e}"));
         }
     };
     let stop = tokio_util::sync::CancellationToken::new();
@@ -5479,30 +4874,21 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
     // Wait for the first sound before answering, so a camera without sound
     // gets a message the page can show instead of an empty file.
     let mut buf = vec![0u8; 4096];
-    let first =
-        tokio::time::timeout(std::time::Duration::from_secs(15), stdout.read(&mut buf)).await;
+    let first = tokio::time::timeout(std::time::Duration::from_secs(15), stdout.read(&mut buf)).await;
     let n = match first {
         Ok(Ok(n)) if n > 0 => n,
         other => {
             stop.cancel();
             let _ = child.kill().await;
             let mut e = String::new();
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_millis(500),
-                stderr.read_to_string(&mut e),
-            )
-            .await;
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), stderr.read_to_string(&mut e)).await;
             let audio = relay.audio();
             let msg = if audio.as_deref() == Some("") || e.contains("matches no streams") {
                 NO_SOUND.to_string()
             } else if other.is_err() {
                 "The camera didn't send any sound within 15 seconds.".to_string()
             } else if let Some(l) = e.lines().rev().find(|l| !l.trim().is_empty()) {
-                format!(
-                    "ffmpeg could not convert the camera's sound ({}): {}",
-                    audio.unwrap_or_default(),
-                    l.trim()
-                )
+                format!("ffmpeg could not convert the camera's sound ({}): {}", audio.unwrap_or_default(), l.trim())
             } else {
                 "The camera's stream isn't available right now.".to_string()
             };
@@ -5530,30 +4916,16 @@ async fn live_audio(State(m): App, Path(id): Path<String>) -> Response {
         let _ = child.kill().await;
     });
     (
-        [
-            (header::CONTENT_TYPE, "audio/mpeg"),
-            (header::CACHE_CONTROL, "no-cache, no-store"),
-        ],
+        [(header::CONTENT_TYPE, "audio/mpeg"), (header::CACHE_CONTROL, "no-cache, no-store")],
         axum::body::Body::from_stream(futures_util::stream::poll_fn(move |cx| out.poll_recv(cx))),
     )
         .into_response()
 }
 
-async fn live_frame(
-    State(m): App,
-    Path(id): Path<String>,
-    Query(q): Query<QualityQuery>,
-) -> Response {
+async fn live_frame(State(m): App, Path(id): Path<String>, Query(q): Query<QualityQuery>) -> Response {
     let c = camera!(m, id);
     match c.live(q.q).frame().await {
-        Ok(jpg) => (
-            [
-                (header::CONTENT_TYPE, "image/jpeg"),
-                (header::CACHE_CONTROL, "no-cache, no-store"),
-            ],
-            jpg,
-        )
-            .into_response(),
+        Ok(jpg) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-cache, no-store")], jpg).into_response(),
         Err(e) => err(StatusCode::SERVICE_UNAVAILABLE, format!("{e:#}")),
     }
 }
@@ -5563,14 +4935,7 @@ async fn snapshot(State(m): App, Path(id): Path<String>) -> Response {
     match c.live_main.snapshot().await {
         Ok(jpg) => {
             let name = attachment(&download_name(&c.cfg.name, Some(Local::now()), "snapshot.jpg"));
-            let mut res = (
-                [
-                    (header::CONTENT_TYPE, "image/jpeg"),
-                    (header::CACHE_CONTROL, "no-cache"),
-                ],
-                jpg,
-            )
-                .into_response();
+            let mut res = ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-cache")], jpg).into_response();
             if let Ok(v) = HeaderValue::from_str(&name) {
                 res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
             }
@@ -5583,12 +4948,7 @@ async fn snapshot(State(m): App, Path(id): Path<String>) -> Response {
 /// All live video goes over one WebSocket: the browser says which cameras it
 /// wants at which quality and frame rate; the server pushes JPEG frames.
 /// Binary message layout: [quality: 0 sub / 1 main][id length][id][JPEG].
-async fn live_ws(
-    State(m): App,
-    user: Option<axum::Extension<CurrentUser>>,
-    Query(dq): Query<DeviceQuery>,
-    ws: WebSocketUpgrade,
-) -> Response {
+async fn live_ws(State(m): App, user: Option<axum::Extension<CurrentUser>>, Query(dq): Query<DeviceQuery>, ws: WebSocketUpgrade) -> Response {
     let vis = visible(&user);
     ws.on_upgrade(move |socket| live_socket(socket, m, vis, user, dq.device))
 }
@@ -5821,11 +5181,12 @@ async fn remotes_check(State(m): App, Json(q): Json<RemoteCheck>) -> Response {
     // Which of them are brought in here already.
     let here = crate::remote::address(&r);
     let cfg = m.config();
-    v["imported"] = json!(cfg
-        .cameras
-        .iter()
-        .filter_map(|c| c.remote.as_ref().filter(|s| s.server.trim().trim_end_matches('/') == here).map(|s| json!({"camera": s.camera, "id": c.id, "name": c.name})))
-        .collect::<Vec<_>>());
+    v["imported"] = json!(
+        cfg.cameras
+            .iter()
+            .filter_map(|c| c.remote.as_ref().filter(|s| s.server.trim().trim_end_matches('/') == here).map(|s| json!({"camera": s.camera, "id": c.id, "name": c.name})))
+            .collect::<Vec<_>>()
+    );
     Json(v).into_response()
 }
 
@@ -5966,17 +5327,15 @@ async fn live_stream_mp4(State(m): App, Path(id): Path<String>, Query(lq): Query
     });
     (
         [(header::CONTENT_TYPE, "video/mp4"), (header::CACHE_CONTROL, "no-store")],
-        Body::from_stream({ let mut rx = rx; futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx)) }),
+        Body::from_stream({
+            let mut rx = rx;
+            futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))
+        }),
     )
         .into_response()
 }
 
-async fn live_video_ws(
-    State(m): App,
-    Path(id): Path<String>,
-    Query(lq): Query<LiveVideoQuery>,
-    ws: WebSocketUpgrade,
-) -> Response {
+async fn live_video_ws(State(m): App, Path(id): Path<String>, Query(lq): Query<LiveVideoQuery>, ws: WebSocketUpgrade) -> Response {
     let c = camera!(m, id);
     let main = !matches!(lq.q, Some(Quality::Sub)) || !c.cfg.has_sub();
     let mux = if main { c.mux_main.clone() } else { c.mux_sub.clone() };
@@ -6098,11 +5457,7 @@ async fn sound_status() -> Response {
 }
 
 async fn overview_key(State(m): App) -> Response {
-    let cams: serde_json::Map<String, serde_json::Value> = m
-        .cameras()
-        .iter()
-        .map(|c| (c.cfg.id.clone(), json!(crate::overview::camera_key(&m.data_dir, &c.cfg.id))))
-        .collect();
+    let cams: serde_json::Map<String, serde_json::Value> = m.cameras().iter().map(|c| (c.cfg.id.clone(), json!(crate::overview::camera_key(&m.data_dir, &c.cfg.id)))).collect();
     Json(json!({ "key": crate::overview::key(&m.data_dir, false), "cameras": cams })).into_response()
 }
 
@@ -6115,28 +5470,16 @@ async fn overview_key_renew(State(m): App) -> Response {
 /// messages); GAZE plays it on the camera's speaker. The first text message
 /// from the server says whether it worked: {"ok":true,"codec":".."} or
 /// {"error":".."}.
-async fn talk_ws(
-    State(m): App,
-    Path(id): Path<String>,
-    user: Option<axum::Extension<CurrentUser>>,
-    ws: WebSocketUpgrade,
-) -> Response {
+async fn talk_ws(State(m): App, Path(id): Path<String>, user: Option<axum::Extension<CurrentUser>>, ws: WebSocketUpgrade) -> Response {
     let vis = visible(&user);
     let cam = m.config().cameras.iter().find(|c| c.id == id).cloned();
     let Some(cam) = cam.filter(|_| vis.as_ref().is_none_or(|v| v.contains(&id))) else {
         return err(StatusCode::NOT_FOUND, "no such camera");
     };
     if !cam.talk {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "two-way audio is off for this camera (camera settings → General)",
-        );
+        return err(StatusCode::BAD_REQUEST, "two-way audio is off for this camera (camera settings → General)");
     }
-    let talk_url = if cam.talk_url.trim().is_empty() {
-        cam.url.clone()
-    } else {
-        cam.talk_url.trim().to_string()
-    };
+    let talk_url = if cam.talk_url.trim().is_empty() { cam.url.clone() } else { cam.talk_url.trim().to_string() };
     let who = user.map(|u| u.0.0.username.clone()).unwrap_or_default();
     ws.on_upgrade(move |mut socket| async move {
         let mut talk = match crate::talk::Talk::open(&cam.id, &talk_url).await {
@@ -6348,12 +5691,7 @@ struct SayReq {
 }
 
 /// Live view → "Say": the camera's speaker says the typed words.
-async fn say(
-    State(m): App,
-    Path(id): Path<String>,
-    user: Option<axum::Extension<CurrentUser>>,
-    Json(r): Json<SayReq>,
-) -> Response {
+async fn say(State(m): App, Path(id): Path<String>, user: Option<axum::Extension<CurrentUser>>, Json(r): Json<SayReq>) -> Response {
     let vis = visible(&user);
     let cfg = m.config();
     let Some(cam) = cfg.cameras.iter().find(|c| c.id == id && vis.as_ref().is_none_or(|v| v.contains(&id))).cloned() else {
@@ -6423,19 +5761,11 @@ async fn talk_test(State(m): App, Json(t): Json<TalkTest>) -> Response {
     let url = if !t.url.trim().is_empty() {
         t.url.trim().to_string()
     } else if let Some(c) = saved {
-        if c.talk_url.trim().is_empty() {
-            c.url.clone()
-        } else {
-            c.talk_url.clone()
-        }
+        if c.talk_url.trim().is_empty() { c.url.clone() } else { c.talk_url.clone() }
     } else {
         return err(StatusCode::BAD_REQUEST, "enter the camera's address first");
     };
-    let key = if t.camera.is_empty() {
-        "test".to_string()
-    } else {
-        t.camera.clone()
-    };
+    let key = if t.camera.is_empty() { "test".to_string() } else { t.camera.clone() };
     let mut talk = match crate::talk::Talk::open(&key, &url).await {
         Ok(t) => t,
         Err(e) => return bad(e),
@@ -6444,11 +5774,7 @@ async fn talk_test(State(m): App, Json(t): Json<TalkTest>) -> Response {
     let beep: Vec<i16> = (0..8000)
         .map(|i| {
             let on = (i % 4000) < 2400;
-            if on {
-                ((i as f32 * 2.0 * std::f32::consts::PI * 880.0 / 8000.0).sin() * 9000.0) as i16
-            } else {
-                0
-            }
+            if on { ((i as f32 * 2.0 * std::f32::consts::PI * 880.0 / 8000.0).sin() * 9000.0) as i16 } else { 0 }
         })
         .collect();
     let codec = talk.codec().to_string();
@@ -6558,10 +5884,7 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
             let frame = rx.borrow_and_update().clone();
             if first {
                 first = false;
-                if frame
-                    .as_ref()
-                    .is_none_or(|f| f.0.elapsed() > Duration::from_secs(5))
-                {
+                if frame.as_ref().is_none_or(|f| f.0.elapsed() > Duration::from_secs(5)) {
                     continue;
                 }
             }
@@ -6573,9 +5896,7 @@ async fn feed(m: Arc<Manager>, sub: WsSub, tx: tokio::sync::mpsc::Sender<Bytes>)
             let jpg = if sub.lite {
                 // Data saver: grid pictures 480 px, full view 960 px, more compressed.
                 let (w, q) = if qb == 1 { (960, 50) } else { (480, 45) };
-                match tokio::task::spawn_blocking(move || crate::imgutil::shrink_jpeg(&jpg, w, q))
-                    .await
-                {
+                match tokio::task::spawn_blocking(move || crate::imgutil::shrink_jpeg(&jpg, w, q)).await {
                     Ok(Ok(small)) => Bytes::from(small),
                     _ => continue,
                 }
@@ -6622,21 +5943,13 @@ fn secure_request(headers: &axum::http::HeaderMap) -> bool {
     headers.contains_key("x-gaze-https")
 }
 fn https(headers: &axum::http::HeaderMap) -> bool {
-    secure_request(headers)
-        || headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+    secure_request(headers) || headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
 fn session_cookie(token: &str, remember: bool, secure: bool) -> HeaderValue {
     let age = if remember { format!("; Max-Age={}", crate::users::remember_days() as u64 * 86400) } else { String::new() };
     let sec = if secure { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!(
-        "{}={token}; Path=/; HttpOnly; SameSite=Lax{age}{sec}",
-        if secure { COOKIE_SECURE } else { COOKIE }
-    ))
-    .unwrap()
+    HeaderValue::from_str(&format!("{}={token}; Path=/; HttpOnly; SameSite=Lax{age}{sec}", if secure { COOKIE_SECURE } else { COOKIE })).unwrap()
 }
 
 /// The address a request comes from (the real one behind a proxy on this
@@ -6648,13 +5961,7 @@ fn session_cookie(token: &str, remember: bool, secure: bool) -> HeaderValue {
 fn client_ip(addr: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> std::net::IpAddr {
     let ip = addr.ip();
     if ip.is_loopback()
-        && let Some(f) = headers
-            .get_all("x-forwarded-for")
-            .iter()
-            .next_back()
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.rsplit(',').next())
-            .and_then(|v| v.trim().parse().ok())
+        && let Some(f) = headers.get_all("x-forwarded-for").iter().next_back().and_then(|v| v.to_str().ok()).and_then(|v| v.rsplit(',').next()).and_then(|v| v.trim().parse().ok())
     {
         return f;
     }
@@ -6665,9 +5972,7 @@ fn client_ip(addr: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> std
 /// web server's threads, so a flood of sign-in attempts can't stall GAZE.
 static PASSWORD_CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
-async fn check_password_blocking<T: Send + 'static>(
-    f: impl FnOnce() -> T + Send + 'static,
-) -> Option<T> {
+async fn check_password_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let _slot = PASSWORD_CHECKS.acquire().await.ok()?;
     tokio::task::spawn_blocking(f).await.ok()
 }
@@ -6747,11 +6052,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         return true;
     }
     // Changes anyone signed in may make.
-    if path.starts_with("/api/alerts/")
-        || path == "/api/dashboard"
-        || path == "/api/sprites-ready"
-        || path.starts_with("/api/auth/")
-    {
+    if path.starts_with("/api/alerts/") || path == "/api/dashboard" || path == "/api/sprites-ready" || path.starts_with("/api/auth/") {
         return true;
     }
     // Operators may keep evidence: make cases and add to them (deleting a
@@ -6776,10 +6077,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
 fn foreign_origin(req: &Request) -> bool {
     let h = req.headers();
     let upgrade = h.get(header::UPGRADE).is_some();
-    let read = matches!(
-        *req.method(),
-        axum::http::Method::GET | axum::http::Method::HEAD
-    );
+    let read = matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD);
     if read && !upgrade {
         return false;
     }
@@ -6814,20 +6112,14 @@ fn authority(a: &str, scheme: &str) -> String {
 fn harden(mut r: Response) -> Response {
     let h = r.headers_mut();
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert(
-        "x-content-type-options",
-        HeaderValue::from_static("nosniff"),
-    );
+    h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("same-origin"));
     r
 }
 
 async fn auth(State(m): App, req: Request, next: Next) -> Response {
     if foreign_origin(&req) {
-        return harden(err(
-            StatusCode::FORBIDDEN,
-            "requests from other websites are not allowed",
-        ));
+        return harden(err(StatusCode::FORBIDDEN, "requests from other websites are not allowed"));
     }
     harden(check_access(m, req, next).await)
 }
@@ -6886,10 +6178,7 @@ async fn check_access(m: Arc<Manager>, mut req: Request, next: Next) -> Response
         return err(StatusCode::UNAUTHORIZED, "please sign in");
     };
     if !allowed(user.role, req.method(), &path) {
-        return err(
-            StatusCode::FORBIDDEN,
-            "your account isn't allowed to do this — ask the admin",
-        );
+        return err(StatusCode::FORBIDDEN, "your account isn't allowed to do this — ask the admin");
     }
     if let Some(cam) = camera_in_path(&path)
         && !user.can_see(cam)
@@ -6913,20 +6202,12 @@ fn camera_denied(user: &Option<axum::Extension<CurrentUser>>, camera: &str) -> O
 }
 
 fn visible(user: &Option<axum::Extension<CurrentUser>>) -> Option<Vec<String>> {
-    user.as_ref()
-        .map(|u| u.0.0.cameras.clone())
-        .filter(|c| !c.is_empty())
+    user.as_ref().map(|u| u.0.0.cameras.clone()).filter(|c| !c.is_empty())
 }
 
 async fn auth_state(State(m): App, headers: axum::http::HeaderMap) -> Response {
-    let me = session_token(&headers)
-        .and_then(|t| m.users.session_user(&t))
-        .map(|u| crate::users::Me {
-            two_step: u.two_step(),
-            username: u.username,
-            role: u.role,
-            cameras: u.cameras,
-        });
+    let me =
+        session_token(&headers).and_then(|t| m.users.session_user(&t)).map(|u| crate::users::Me { two_step: u.two_step(), username: u.username, role: u.role, cameras: u.cameras });
     Json(json!({ "setup_needed": m.users.setup_needed(), "user": me, "name": m.config().server.name, "idle_minutes": crate::users::idle_minutes() })).into_response()
 }
 
@@ -6941,25 +6222,14 @@ struct LoginReq {
     remember: bool,
 }
 
-async fn auth_setup(
-    State(m): App,
-    headers: axum::http::HeaderMap,
-    Json(r): Json<LoginReq>,
-) -> Response {
+async fn auth_setup(State(m): App, headers: axum::http::HeaderMap, Json(r): Json<LoginReq>) -> Response {
     let m2 = m.clone();
     let (u, p) = (r.username.clone(), r.password.clone());
     let res = check_password_blocking(move || m2.users.setup(&u, &p)).await;
     match res.unwrap_or_else(|| Err(anyhow::anyhow!("busy, try again"))) {
         Ok(t) => {
             tracing::info!("admin account {:?} created", r.username.trim());
-            (
-                [(
-                    header::SET_COOKIE,
-                    session_cookie(&t, true, https(&headers)),
-                )],
-                Json(json!({ "ok": true })),
-            )
-                .into_response()
+            ([(header::SET_COOKIE, session_cookie(&t, true, https(&headers)))], Json(json!({ "ok": true }))).into_response()
         }
         Err(e) => bad(e),
     }
@@ -6973,23 +6243,10 @@ async fn auth_login(
 ) -> Response {
     let ip = client_ip(addr, &headers).to_string();
     let m2 = m.clone();
-    let (u, p, remember, from, code) = (
-        r.username.clone(),
-        r.password.clone(),
-        r.remember,
-        ip.clone(),
-        r.code.clone(),
-    );
+    let (u, p, remember, from, code) = (r.username.clone(), r.password.clone(), r.remember, ip.clone(), r.code.clone());
     let res = check_password_blocking(move || m2.users.login(&u, &p, code.as_deref(), remember, &from)).await;
     match res.unwrap_or_else(|| Err(anyhow::anyhow!("busy, try again"))) {
-        Ok(t) => (
-            [(
-                header::SET_COOKIE,
-                session_cookie(&t, r.remember, https(&headers)),
-            )],
-            Json(json!({ "ok": true })),
-        )
-            .into_response(),
+        Ok(t) => ([(header::SET_COOKIE, session_cookie(&t, r.remember, https(&headers)))], Json(json!({ "ok": true }))).into_response(),
         // Right password: now the code from the authenticator app.
         Err(e) if e.to_string() == crate::users::NEED_CODE => {
             (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Enter the 6-digit code from your authenticator app", "need_code": true }))).into_response()
@@ -7033,9 +6290,7 @@ async fn tokens_remove(State(m): App, user: axum::Extension<CurrentUser>, Path(i
 async fn two_step_start(State(m): App, user: axum::Extension<CurrentUser>) -> Response {
     let name = user.0.0.username.clone();
     let (secret, uri) = m.users.start_two_step(&name);
-    let qr = qrcode::QrCode::new(uri.as_bytes())
-        .map(|q| q.render::<qrcode::render::svg::Color>().min_dimensions(200, 200).quiet_zone(true).build())
-        .unwrap_or_default();
+    let qr = qrcode::QrCode::new(uri.as_bytes()).map(|q| q.render::<qrcode::render::svg::Color>().min_dimensions(200, 200).quiet_zone(true).build()).unwrap_or_default();
     // Spaced in fours, for typing it in instead.
     let spaced = secret.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).to_string()).collect::<Vec<_>>().join(" ");
     Json(json!({ "qr_svg": qr, "secret": spaced })).into_response()
@@ -7140,14 +6395,7 @@ async fn auth_password(
         Ok(()) => {
             // Signed out everywhere; stay signed in on this browser.
             let t = m.users.new_session(&name, true);
-            (
-                [(
-                    header::SET_COOKIE,
-                    session_cookie(&t, true, https(&headers)),
-                )],
-                Json(json!({ "ok": true })),
-            )
-                .into_response()
+            ([(header::SET_COOKIE, session_cookie(&t, true, https(&headers)))], Json(json!({ "ok": true }))).into_response()
         }
         Err(e) => bad(e),
     }
@@ -7168,12 +6416,7 @@ struct UserReq {
 }
 
 async fn users_create(State(m): App, Json(r): Json<UserReq>) -> Response {
-    match m.users.create(
-        &r.username,
-        &r.password,
-        r.role.unwrap_or(crate::users::Role::Viewer),
-        r.cameras.unwrap_or_default(),
-    ) {
+    match m.users.create(&r.username, &r.password, r.role.unwrap_or(crate::users::Role::Viewer), r.cameras.unwrap_or_default()) {
         Ok(()) => {
             tracing::info!("user \"{}\" created", r.username.trim());
             Json(json!({ "ok": true })).into_response()
@@ -7190,16 +6433,9 @@ async fn users_update(State(m): App, Path(name): Path<String>, Json(r): Json<Use
     }
 }
 
-async fn users_delete(
-    State(m): App,
-    Path(name): Path<String>,
-    user: axum::Extension<CurrentUser>,
-) -> Response {
+async fn users_delete(State(m): App, Path(name): Path<String>, user: axum::Extension<CurrentUser>) -> Response {
     if user.0.0.username == name {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "you can't delete your own account while signed in with it",
-        );
+        return err(StatusCode::BAD_REQUEST, "you can't delete your own account while signed in with it");
     }
     match m.users.delete(&name) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -7264,7 +6500,6 @@ mod tests {
         assert_eq!(moved["cameras"][1]["fps"], 6);
     }
 
-
     #[test]
     fn camera_ids_are_found_in_every_camera_path() {
         // The sign-in check keeps a restricted account away from other cameras on all these.
@@ -7307,27 +6542,27 @@ mod tests {
         // Reviewed: the handler checks `visible(&user)` itself, or the route
         // does not carry camera data.
         const REVIEWED: &[&str] = &[
-            "/api/archive/{id}",                  // handler: visible()
-            "/api/archive/{id}/{name}",           // handler: visible()
-            "/api/auth/tokens/{id}",              // the caller's own token
-            "/api/cases/{id}",                    // cases: restricted accounts see only their cameras' items
+            "/api/archive/{id}",        // handler: visible()
+            "/api/archive/{id}/{name}", // handler: visible()
+            "/api/auth/tokens/{id}",    // the caller's own token
+            "/api/cases/{id}",          // cases: restricted accounts see only their cameras' items
             "/api/cases/{id}/export",
             "/api/cases/{id}/files/{name}",
             "/api/cases/{id}/items",
             "/api/cases/{id}/items/{item}",
-            "/api/known/{id}",                    // people and vehicles, not camera data
+            "/api/known/{id}", // people and vehicles, not camera data
             "/api/known/{id}/learn",
             "/api/known/{id}/photo",
             "/api/known/{id}/photo/{name}",
-            "/api/preview/{token}",               // admin-only (setup preview)
-            "/api/states/{id}",                   // writes: admin only (`allowed`)
-            "/api/states/{id}/examples",          // handler: state_for() = visible() on the camera
-            "/api/states/{id}/examples/{thumb}",  // handler: state_for() (read); delete: admin only
-            "/api/tts/downloads/{id}",            // admin-only
-            "/api/users/{name}",                  // admin-only
-            "/api/users/{name}/two-step-off",     // admin-only
-            "/remote/{i}/{cam}/frame.jpg",        // handler refuses restricted accounts
-            "/remote/{i}/{cam}/stream.mjpeg",     // handler refuses restricted accounts
+            "/api/preview/{token}",              // admin-only (setup preview)
+            "/api/states/{id}",                  // writes: admin only (`allowed`)
+            "/api/states/{id}/examples",         // handler: state_for() = visible() on the camera
+            "/api/states/{id}/examples/{thumb}", // handler: state_for() (read); delete: admin only
+            "/api/tts/downloads/{id}",           // admin-only
+            "/api/users/{name}",                 // admin-only
+            "/api/users/{name}/two-step-off",    // admin-only
+            "/remote/{i}/{cam}/frame.jpg",       // handler refuses restricted accounts
+            "/remote/{i}/{cam}/stream.mjpeg",    // handler refuses restricted accounts
         ];
         let src = include_str!("web.rs");
         let mut seen = 0;
@@ -7396,7 +6631,8 @@ mod tests {
         assert!(foreign_origin(&req("POST", Some("http://192.168.1.5:3000"), "192.168.1.5:8080")));
         assert!(foreign_origin(&req("POST", Some("http://evil.example"), "192.168.1.5:8080")));
         // HTTP/2: the address is in the request line.
-        let h2 = axum::http::Request::builder().method("POST").uri("https://192.168.1.5:8443/api/x").header(header::ORIGIN, "https://192.168.1.5:8443").body(Body::empty()).unwrap();
+        let h2 =
+            axum::http::Request::builder().method("POST").uri("https://192.168.1.5:8443/api/x").header(header::ORIGIN, "https://192.168.1.5:8443").body(Body::empty()).unwrap();
         assert!(!foreign_origin(&h2));
         assert!(foreign_origin(&req("POST", Some("null"), "192.168.1.5:8080")));
         // Reading is fine; tools without a browser send no Origin.
@@ -7448,7 +6684,15 @@ mod tests {
 
     #[test]
     fn a_segment_in_deep_storage_is_read_from_there() {
-        let seg = |kind: &'static str, archived: bool| library::Segment { start: Local::now(), end: Local::now(), url: "media/c/rec/a.mp4".into(), name: "a.mp4".into(), kind, stream: "main", archived };
+        let seg = |kind: &'static str, archived: bool| library::Segment {
+            start: Local::now(),
+            end: Local::now(),
+            url: "media/c/rec/a.mp4".into(),
+            name: "a.mp4".into(),
+            kind,
+            stream: "main",
+            archived,
+        };
         let local = std::path::PathBuf::from("/data/recordings/Front");
         let deep = std::path::PathBuf::from("/nas/cameras/Front");
         storage::set_archive(&local, Some(deep.clone()));

@@ -1,10 +1,10 @@
 //! Finding recordings and events for the Recordings page: filtered search,
 //! multi-camera timelines, and the file pieces needed to export a time range.
 
-use crate::sync::MutexExt;
 use crate::events::Event;
 use crate::manager::{CameraRuntime, Manager};
 use crate::storage::{self, Recording};
+use crate::sync::MutexExt;
 use chrono::{DateTime, Duration as CDuration, Local, NaiveTime};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -14,18 +14,7 @@ use std::sync::Arc;
 /// Object labels with their own filter tick box; anything else is "other".
 /// Objects with their own button in the Alerts filter; "Other objects"
 /// is everything else.
-pub const FILTER_LABELS: &[&str] = &[
-    "sound",
-    "vehicle",
-    "person",
-    "car",
-    "truck",
-    "motorcycle",
-    "bicycle",
-    "dog",
-    "cat",
-    "package",
-];
+pub const FILTER_LABELS: &[&str] = &["sound", "vehicle", "person", "car", "truck", "motorcycle", "bicycle", "dog", "cat", "package"];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Play {
@@ -83,27 +72,13 @@ pub struct Who {
 
 /// Was this known person or vehicle in the alert?
 fn has_who(e: &Event, w: &Who) -> bool {
-    e.faces
-        .iter()
-        .any(|f| f.name.as_deref() == Some(w.name.as_str()))
-        || e.plates
-            .iter()
-            .any(|p| w.plates.iter().any(|k| crate::recog::plate_matches(k, p)))
-        || e.notes.iter().any(|n| {
-            n == &format!("Recognized {}", w.name) || n.ends_with(&format!(" — {}", w.name))
-        })
+    e.faces.iter().any(|f| f.name.as_deref() == Some(w.name.as_str()))
+        || e.plates.iter().any(|p| w.plates.iter().any(|k| crate::recog::plate_matches(k, p)))
+        || e.notes.iter().any(|n| n == &format!("Recognized {}", w.name) || n.ends_with(&format!(" — {}", w.name)))
 }
 
 pub fn enc(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
-                c.to_string()
-            } else {
-                format!("%{:02X}", c as u32)
-            }
-        })
-        .collect()
+    s.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c.to_string() } else { format!("%{:02X}", c as u32) }).collect()
 }
 
 pub fn rec_url(cam: &str, name: &str) -> String {
@@ -117,11 +92,7 @@ pub fn event_file_url(cam: &str, file: &str) -> String {
 fn in_tod(t: DateTime<Local>, tod: Option<(NaiveTime, NaiveTime)>) -> bool {
     let Some((a, b)) = tod else { return true };
     let x = t.time();
-    if a <= b {
-        x >= a && x <= b
-    } else {
-        x >= a || x <= b
-    }
+    if a <= b { x >= a && x <= b } else { x >= a || x <= b }
 }
 
 /// Was an alert going on at some time of day inside `tod`? (Not only starting in it: an alert that
@@ -132,10 +103,7 @@ fn event_in_tod(start: DateTime<Local>, end: DateTime<Local>, tod: Option<(Naive
         return true;
     }
     // The window opens while the alert is on (that day or the next).
-    [start.date_naive(), start.date_naive() + chrono::Duration::days(1)]
-        .iter()
-        .filter_map(|d| d.and_time(a).and_local_timezone(Local).earliest())
-        .any(|w| w >= start && w <= end)
+    [start.date_naive(), start.date_naive() + chrono::Duration::days(1)].iter().filter_map(|d| d.and_time(a).and_local_timezone(Local).earliest()).any(|w| w >= start && w <= end)
 }
 
 fn event_matches(e: &Event, types: &HashSet<String>) -> bool {
@@ -143,41 +111,23 @@ fn event_matches(e: &Event, types: &HashSet<String>) -> bool {
         return true;
     }
     // Alerts where a face was seen or a number plate read.
-    if (types.contains("face") && !e.faces.is_empty())
-        || (types.contains("plate") && !e.plates.is_empty())
-    {
+    if (types.contains("face") && !e.faces.is_empty()) || (types.contains("plate") && !e.plates.is_empty()) {
         return true;
     }
     if e.labels.is_empty() {
         return types.contains("motion");
     }
-    e.labels.iter().any(|l| {
-        types.contains(&l.label)
-            || (types.contains("other") && !FILTER_LABELS.contains(&l.label.as_str()))
-    })
+    e.labels.iter().any(|l| types.contains(&l.label) || (types.contains("other") && !FILTER_LABELS.contains(&l.label.as_str())))
 }
 
 /// Where to play footage at time `t` for a camera.
-pub fn play_at(
-    rt: &CameraRuntime,
-    recs: &[Recording],
-    e: Option<&Event>,
-    t: DateTime<Local>,
-) -> Option<Play> {
+pub fn play_at(rt: &CameraRuntime, recs: &[Recording], e: Option<&Event>, t: DateTime<Local>) -> Option<Play> {
     if let Some(e) = e
         && let (Some(clip), Some(cs)) = (&e.clip, e.clip_start)
     {
-        return Some(Play {
-            url: event_file_url(&rt.cfg.id, clip),
-            offset: 0.0,
-            file_start: cs,
-            kind: "clip",
-            name: clip.clone(),
-        });
+        return Some(Play { url: event_file_url(&rt.cfg.id, clip), offset: 0.0, file_start: cs, kind: "clip", name: clip.clone() });
     }
-    let r = recs
-        .iter()
-        .find(|r| r.start <= t && t <= r.end + CDuration::seconds(2))?;
+    let r = recs.iter().find(|r| r.start <= t && t <= r.end + CDuration::seconds(2))?;
     let lead = if e.is_some() { 3.0 } else { 0.0 };
     Some(Play {
         url: rec_url(&rt.cfg.id, &r.name),
@@ -193,10 +143,7 @@ pub fn play_at(
 /// modification time lags behind while it is being written).
 pub fn recordings(rt: &CameraRuntime) -> Vec<Recording> {
     let mut recs = storage::list(&rt.dir);
-    let live = rt
-        .recorder
-        .as_ref()
-        .is_some_and(|r| r.status().state == crate::recorder::RecState::Recording);
+    let live = rt.recorder.as_ref().is_some_and(|r| r.status().state == crate::recorder::RecState::Recording);
     if live && let Some(r) = recs.first_mut() {
         r.end = Local::now();
     }
@@ -216,10 +163,7 @@ pub fn recordings_all(rt: &CameraRuntime) -> Vec<Recording> {
 /// The light sub-stream copy for the timeline (newest still growing).
 pub fn timeline_recordings(rt: &CameraRuntime) -> Vec<Recording> {
     let mut recs = storage::list(&storage::timeline_dir(&rt.dir));
-    let live = rt
-        .timeline_recorder
-        .as_ref()
-        .is_some_and(|r| r.status().state == crate::recorder::RecState::Recording);
+    let live = rt.timeline_recorder.as_ref().is_some_and(|r| r.status().state == crate::recorder::RecState::Recording);
     if live && let Some(r) = recs.first_mut() {
         r.end = Local::now();
     }
@@ -239,10 +183,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
         let recs = || recs_cell.get_or_init(|| recordings_all(&rt));
         // Looking for someone only finds alerts.
         if q.who.is_none() && (q.types.is_empty() || q.types.contains("recording")) {
-            for r in recs()
-                .iter()
-                .filter(|r| r.end >= q.from && r.start <= q.to && in_tod(r.start, q.tod))
-            {
+            for r in recs().iter().filter(|r| r.end >= q.from && r.start <= q.to && in_tod(r.start, q.tod)) {
                 items.push(Item {
                     kind: "recording",
                     camera: id.clone(),
@@ -253,13 +194,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                     name: Some(r.name.clone()),
                     event: None,
                     thumb: Some(format!("media/{}/thumb/{}", enc(id), enc(&r.name))),
-                    play: Some(Play {
-                        url: rec_url(id, &r.name),
-                        offset: 0.0,
-                        file_start: r.start,
-                        kind: "recording",
-                        name: r.name.clone(),
-                    }),
+                    play: Some(Play { url: rec_url(id, &r.name), offset: 0.0, file_start: r.start, kind: "recording", name: r.name.clone() }),
                     download: Some(format!("{}?download=1", rec_url(id, &r.name))),
                     pending: false,
                     seen: true,
@@ -280,17 +215,11 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             {
                 continue;
             }
-            let play = if e.clip.is_some() && e.clip_start.is_some() {
-                play_at(&rt, &[], Some(&e), e.start)
-            } else {
-                play_at(&rt, recs(), Some(&e), e.start)
-            };
+            let play = if e.clip.is_some() && e.clip_start.is_some() { play_at(&rt, &[], Some(&e), e.start) } else { play_at(&rt, recs(), Some(&e), e.start) };
             // Its full-quality clip is still to come (saved a few seconds
             // after the activity stops); meanwhile it plays from the
             // continuous recording, if there is one.
-            let pending = e.clip.is_none()
-                && rt.cfg.record_mode.event_clips()
-                && (Local::now() - e.end).num_seconds() < 180;
+            let pending = e.clip.is_none() && rt.cfg.record_mode.event_clips() && (Local::now() - e.end).num_seconds() < 180;
             // (Not read from the disk per alert: that made the list slow.)
             let size = None;
             items.push(Item {
@@ -308,10 +237,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
                     let v = e.thumb_at.map(|x| x.timestamp_millis()).unwrap_or(0);
                     format!("{}?v={v}", event_file_url(id, t))
                 }),
-                download: e
-                    .clip
-                    .as_ref()
-                    .map(|c| format!("{}?download=1", event_file_url(id, c))),
+                download: e.clip.as_ref().map(|c| format!("{}?download=1", event_file_url(id, c))),
                 play,
                 pending,
                 seen: mgr.seen.is_seen(&e.id, e.start),
@@ -349,12 +275,7 @@ pub struct CameraTimeline {
     pub pruning: bool,
 }
 
-pub fn timeline(
-    mgr: &Manager,
-    cameras: &[String],
-    from: DateTime<Local>,
-    to: DateTime<Local>,
-) -> Vec<CameraTimeline> {
+pub fn timeline(mgr: &Manager, cameras: &[String], from: DateTime<Local>, to: DateTime<Local>) -> Vec<CameraTimeline> {
     let mut out = Vec::new();
     let cfg = mgr.config();
     for rt in mgr.cameras() {
@@ -378,15 +299,7 @@ pub fn timeline(
         let stream_of = |name: &str| recording_stream(&rt, name);
         let mut segments: Vec<Segment> = in_view
             .into_iter()
-            .map(|r| Segment {
-                start: r.start,
-                end: r.end,
-                url: rec_url(id, &r.name),
-                stream: stream_of(&r.name),
-                name: r.name,
-                kind: "recording",
-                archived: false,
-            })
+            .map(|r| Segment { start: r.start, end: r.end, url: rec_url(id, &r.name), stream: stream_of(&r.name), name: r.name, kind: "recording", archived: false })
             .collect();
         if let Some(p) = &plan {
             let dest = p.dest.clone();
@@ -401,56 +314,34 @@ pub fn timeline(
                 archived: true,
             }));
         }
-        segments.extend(
-            timeline_recordings(&rt)
-                .into_iter()
-                .filter(|r| r.end >= from && r.start <= to)
-                .map(|r| Segment {
-                    start: r.start,
-                    end: r.end,
-                    url: format!("media/{}/tl/{}", enc(id), enc(&r.name)),
-                    name: r.name,
-                    kind: "sub",
-                    stream: "sub",
-                    archived: false,
-                }),
-        );
+        segments.extend(timeline_recordings(&rt).into_iter().filter(|r| r.end >= from && r.start <= to).map(|r| Segment {
+            start: r.start,
+            end: r.end,
+            url: format!("media/{}/tl/{}", enc(id), enc(&r.name)),
+            name: r.name,
+            kind: "sub",
+            stream: "sub",
+            archived: false,
+        }));
         let events = rt.events.between(from, to);
         // (One listing of the folder, not a check per clip.)
         let have = storage::names_in(rt.events.dir());
         for e in &events {
             if let (Some(clip), Some(cs)) = (&e.clip, e.clip_start)
-                && have.contains(clip) {
-                    let end = e.end + CDuration::seconds(rt.cfg.detect.post_seconds as i64);
-                    segments.push(Segment {
-                        start: cs,
-                        end,
-                        url: event_file_url(id, clip),
-                        name: clip.clone(),
-                        kind: "clip",
-                        stream: "main",
-                        archived: false,
-                    });
-                }
+                && have.contains(clip)
+            {
+                let end = e.end + CDuration::seconds(rt.cfg.detect.post_seconds as i64);
+                segments.push(Segment { start: cs, end, url: event_file_url(id, clip), name: clip.clone(), kind: "clip", stream: "main", archived: false });
+            }
         }
         segments.sort_by_key(|s| s.start);
-        out.push(CameraTimeline {
-            camera: id.clone(),
-            name: rt.cfg.name.clone(),
-            segments,
-            events,
-            pruning: crate::storage::pruning(&rt.dir),
-        });
+        out.push(CameraTimeline { camera: id.clone(), name: rt.cfg.name.clone(), segments, events, pruning: crate::storage::pruning(&rt.dir) });
     }
     out
 }
 
 /// Pieces of files covering `[from, to)`: (path, seconds in, seconds out).
-pub fn export_parts(
-    rt: &Arc<CameraRuntime>,
-    from: DateTime<Local>,
-    to: DateTime<Local>,
-) -> Vec<(PathBuf, f64, f64)> {
+pub fn export_parts(rt: &Arc<CameraRuntime>, from: DateTime<Local>, to: DateTime<Local>) -> Vec<(PathBuf, f64, f64)> {
     let secs = |a: DateTime<Local>, b: DateTime<Local>| (b - a).num_milliseconds() as f64 / 1000.0;
     // (Footage that moved to deep storage is part of an export too.)
     let mut recs: Vec<(Recording, PathBuf)> = storage::list(&rt.dir)
@@ -460,16 +351,7 @@ pub fn export_parts(
         .filter(|(r, _)| r.end > from && r.start < to)
         .collect();
     recs.sort_by_key(|(r, _)| r.start);
-    let mut parts: Vec<(PathBuf, f64, f64)> = recs
-        .iter()
-        .map(|(r, d)| {
-            (
-                d.join(&r.name),
-                secs(r.start, from).max(0.0),
-                secs(r.start, to.min(r.end)),
-            )
-        })
-        .collect();
+    let mut parts: Vec<(PathBuf, f64, f64)> = recs.iter().map(|(r, d)| (d.join(&r.name), secs(r.start, from).max(0.0), secs(r.start, to.min(r.end)))).collect();
     // Always the higher quality: when the continuous recording is the
     // sub-stream, use the full-quality alert clips where there are any.
     let main_recordings = rt.cfg.record_mode.continuous_stream() == Some(false);
@@ -502,23 +384,14 @@ pub fn export_parts(
     }
     parts.retain(|p| p.2 > p.1);
     let clip_parts = parts;
-    if main_recordings && !rec_parts.is_empty() || clip_parts.is_empty() {
-        rec_parts.into_iter().filter(|p| p.2 > p.1).collect()
-    } else {
-        clip_parts
-    }
+    if main_recordings && !rec_parts.is_empty() || clip_parts.is_empty() { rec_parts.into_iter().filter(|p| p.2 > p.1).collect() } else { clip_parts }
 }
 
 /// New (not yet viewed) alerts in the last week. Plain motion (nothing
 /// recognised) isn't counted: it's there to look up, not to review.
 pub fn unseen_count(mgr: &Manager) -> usize {
     let from = Local::now() - CDuration::days(7);
-    mgr.cameras()
-        .iter()
-        .flat_map(|rt| rt.events.between(from, Local::now()))
-        .filter(|e| !e.labels.is_empty())
-        .filter(|e| !mgr.seen.is_seen(&e.id, e.start))
-        .count()
+    mgr.cameras().iter().flat_map(|rt| rt.events.between(from, Local::now())).filter(|e| !e.labels.is_empty()).filter(|e| !mgr.seen.is_seen(&e.id, e.start)).count()
 }
 
 /// Which stream a recording is ("main" or "sub"): told by its picture size
@@ -536,10 +409,18 @@ pub fn recording_stream_in(rt: &CameraRuntime, dir: &std::path::Path, name: &str
     match mp4_height_cached(&dir.join(name)) {
         Some(fh) => match (main_h, sub_h) {
             (Some(m), Some(s)) if s < m => {
-                if fh * 2 <= s + m { "sub" } else { "main" }
+                if fh * 2 <= s + m {
+                    "sub"
+                } else {
+                    "main"
+                }
             }
             _ => {
-                if fh <= 576 { "sub" } else { "main" }
+                if fh <= 576 {
+                    "sub"
+                } else {
+                    "main"
+                }
             }
         },
         None => now_stream,
@@ -553,8 +434,7 @@ pub fn recording_stream_in(rt: &CameraRuntime, dir: &std::path::Path, name: &str
 // read many at a time, and remembered on this computer (nvr-data/heights),
 // so each file is only ever read once.
 
-static HEIGHTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, u32>>> =
-    std::sync::LazyLock::new(Default::default);
+static HEIGHTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, u32>>> = std::sync::LazyLock::new(Default::default);
 static HEIGHT_DIRS: std::sync::LazyLock<std::sync::Mutex<HashSet<PathBuf>>> = std::sync::LazyLock::new(Default::default);
 static HEIGHT_STORE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
@@ -595,7 +475,16 @@ fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
         let per = missing.len().div_ceil(crate::load::DISK_READERS).max(1);
         let hs: Vec<_> = missing
             .chunks(per)
-            .map(|ch| sc.spawn(move || ch.iter().filter_map(|p| { let _t = crate::load::disk_slot(); mp4_height(p).map(|h| (p.clone(), h)) }).collect::<Vec<_>>()))
+            .map(|ch| {
+                sc.spawn(move || {
+                    ch.iter()
+                        .filter_map(|p| {
+                            let _t = crate::load::disk_slot();
+                            mp4_height(p).map(|h| (p.clone(), h))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
             .collect();
         hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
@@ -613,8 +502,7 @@ fn prefetch_heights(dir: &std::path::Path, names: &[String]) {
     if let Some(f) = heights_file(dir) {
         let _ = std::fs::create_dir_all(f.parent().unwrap());
         // Older entries for files out of view are kept too.
-        let mut all: std::collections::HashMap<String, u32> =
-            std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut all: std::collections::HashMap<String, u32> = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         all.extend(keep);
         // Files deleted since (old footage): forgotten.
         all.retain(|n, _| storage::parse_start(n).is_some_and(|t| Local::now() - t < CDuration::days(400)));
@@ -637,7 +525,10 @@ fn prefetch_heights_soon(dir: &std::path::Path, names: Vec<String>) {
             c.insert(dir.join(n), h);
         }
     }
-    let any = { let c = HEIGHTS.locked(); names.iter().any(|n| !c.contains_key(&dir.join(n))) };
+    let any = {
+        let c = HEIGHTS.locked();
+        names.iter().any(|n| !c.contains_key(&dir.join(n)))
+    };
     if !any || !BUSY.locked().insert(dir.to_path_buf()) {
         return;
     }
@@ -723,15 +614,8 @@ mod mp4_tests {
         let mut tkhd = vec![0u8; 84];
         tkhd[76..80].copy_from_slice(&(1280u32 << 16).to_be_bytes());
         tkhd[80..84].copy_from_slice(&(720u32 << 16).to_be_bytes());
-        let bx = |t: &[u8], body: &[u8]| {
-            [&((body.len() + 8) as u32).to_be_bytes()[..], t, body].concat()
-        };
-        let file = [
-            bx(b"ftyp", &[0; 8]),
-            bx(b"mdat", &[1; 32]),
-            bx(b"moov", &bx(b"trak", &bx(b"tkhd", &tkhd))),
-        ]
-        .concat();
+        let bx = |t: &[u8], body: &[u8]| [&((body.len() + 8) as u32).to_be_bytes()[..], t, body].concat();
+        let file = [bx(b"ftyp", &[0; 8]), bx(b"mdat", &[1; 32]), bx(b"moov", &bx(b"trak", &bx(b"tkhd", &tkhd)))].concat();
         let p = std::env::temp_dir().join(format!("gaze-mp4-{}.mp4", std::process::id()));
         std::fs::write(&p, file).unwrap();
         assert_eq!(super::mp4_height(&p), Some(720));
@@ -782,7 +666,11 @@ pub fn space_use(rt: &CameraRuntime) -> SpaceUse {
                     continue;
                 }
                 let n = dir_size(&p);
-                if e.file_name() == ".thumbs" { u.timelapse += n } else { u.other += n }
+                if e.file_name() == ".thumbs" {
+                    u.timelapse += n
+                } else {
+                    u.other += n
+                }
                 continue;
             }
             let name = e.file_name().to_string_lossy().to_string();

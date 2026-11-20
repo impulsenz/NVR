@@ -26,10 +26,7 @@ pub fn talk_dir(camera_dir: &Path) -> PathBuf {
 pub fn save(camera_dir: &Path, start: DateTime<Local>, samples: &[i16]) -> Result<PathBuf> {
     let dir = talk_dir(camera_dir);
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!(
-        "talk_{}.wav",
-        start.format("%Y-%m-%d_%H-%M-%S-%3f")
-    ));
+    let path = dir.join(format!("talk_{}.wav", start.format("%Y-%m-%d_%H-%M-%S-%3f")));
     let data_len = (samples.len() * 2) as u32;
     let mut b = Vec::with_capacity(44 + data_len as usize);
     b.extend_from_slice(b"RIFF");
@@ -71,12 +68,7 @@ fn sessions(camera_dir: &Path) -> Vec<Session> {
             let start = Local.from_local_datetime(&naive).earliest()?;
             let len = e.metadata().ok()?.len().saturating_sub(44);
             let secs = len as f64 / (RATE as f64 * 2.0);
-            Some(Session {
-                path: e.path(),
-                name,
-                start,
-                end: start + chrono::Duration::milliseconds((secs * 1000.0) as i64),
-            })
+            Some(Session { path: e.path(), name, start, end: start + chrono::Duration::milliseconds((secs * 1000.0) as i64) })
         })
         .collect()
 }
@@ -91,26 +83,14 @@ struct Target {
 fn targets(c: &CameraRuntime) -> Vec<Target> {
     let mut out = Vec::new();
     for r in crate::library::recordings(c) {
-        out.push(Target {
-            path: c.dir.join(&r.name),
-            start: r.start,
-            end: r.end,
-        });
+        out.push(Target { path: c.dir.join(&r.name), start: r.start, end: r.end });
     }
     for r in crate::library::timeline_recordings(c) {
-        out.push(Target {
-            path: crate::storage::timeline_dir(&c.dir).join(&r.name),
-            start: r.start,
-            end: r.end,
-        });
+        out.push(Target { path: crate::storage::timeline_dir(&c.dir).join(&r.name), start: r.start, end: r.end });
     }
     for e in c.events.all() {
         if let (Some(clip), Some(start)) = (&e.clip, e.clip_start) {
-            out.push(Target {
-                path: c.events.dir().join(clip),
-                start,
-                end: e.end + chrono::Duration::seconds(60),
-            });
+            out.push(Target { path: c.events.dir().join(clip), start, end: e.end + chrono::Duration::seconds(60) });
         }
     }
     out
@@ -121,20 +101,12 @@ fn done_file(camera_dir: &Path) -> PathBuf {
 }
 
 fn load_done(camera_dir: &Path) -> HashSet<String> {
-    std::fs::read_to_string(done_file(camera_dir))
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_string)
-        .collect()
+    std::fs::read_to_string(done_file(camera_dir)).unwrap_or_default().lines().map(str::to_string).collect()
 }
 
 fn mark_done(camera_dir: &Path, key: &str) {
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(done_file(camera_dir))
-    {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(done_file(camera_dir)) {
         let _ = writeln!(f, "{key}");
     }
 }
@@ -159,45 +131,25 @@ async fn has_audio(ffmpeg: &str, file: &Path) -> bool {
 async fn mix(ffmpeg: &str, target: &Path, talk: &Path, offset: f64) -> Result<()> {
     let modified = std::fs::metadata(target)?.modified()?;
     let talk_chain = if offset >= 0.0 {
-        format!(
-            "[1:a]aresample=16000,adelay={}:all=1[t]",
-            (offset * 1000.0).round() as i64
-        )
+        format!("[1:a]aresample=16000,adelay={}:all=1[t]", (offset * 1000.0).round() as i64)
     } else {
-        format!(
-            "[1:a]atrim=start={:.3},asetpts=PTS-STARTPTS,aresample=16000[t]",
-            -offset
-        )
+        format!("[1:a]atrim=start={:.3},asetpts=PTS-STARTPTS,aresample=16000[t]", -offset)
     };
     let audio = has_audio(ffmpeg, target).await;
     let filter = if audio {
-        format!(
-            "{talk_chain};[0:a]aresample=16000[c];[c][t]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]"
-        )
+        format!("{talk_chain};[0:a]aresample=16000[c];[c][t]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
     } else {
         format!("{talk_chain};[t]apad[a]")
     };
     // Hidden while it's made (not listed as a recording).
-    let tmp = target.with_file_name(format!(
-        ".{}.talk-tmp",
-        target.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let tmp = target.with_file_name(format!(".{}.talk-tmp", target.file_name().unwrap_or_default().to_string_lossy()));
     let mut cmd = crate::load::cmd(ffmpeg);
     crate::load::background(&mut cmd)
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(target)
         .arg("-i")
         .arg(talk)
-        .args([
-            "-filter_complex",
-            &filter,
-            "-map",
-            "0:v",
-            "-map",
-            "[a]",
-            "-c:v",
-            "copy",
-        ])
+        .args(["-filter_complex", &filter, "-map", "0:v", "-map", "[a]", "-c:v", "copy"])
         .args(crate::ffmpeg::hevc_tag(ffmpeg, target).await)
         .args(["-c:a", "aac", "-b:a", "64k", "-ac", "1"]);
     if !audio {
@@ -249,9 +201,7 @@ async fn round(m: &Manager) {
             }
             for t in all.iter().filter(|t| t.start < s.end && t.end > s.start) {
                 // Only finished files (not still being written).
-                let quiet = std::fs::metadata(&t.path)
-                    .and_then(|m| m.modified())
-                    .is_ok_and(|m| m.elapsed().unwrap_or_default() > Duration::from_secs(90));
+                let quiet = std::fs::metadata(&t.path).and_then(|m| m.modified()).is_ok_and(|m| m.elapsed().unwrap_or_default() > Duration::from_secs(90));
                 if !quiet {
                     continue;
                 }
@@ -264,17 +214,9 @@ async fn round(m: &Manager) {
                 match mix(&ffmpeg, &t.path, &s.path, offset).await {
                     Ok(()) => {
                         mark_done(&c.dir, &key);
-                        info!(
-                            "[{}] push-to-talk sound added to {}",
-                            c.cfg.name,
-                            t.path.file_name().unwrap_or_default().to_string_lossy()
-                        );
+                        info!("[{}] push-to-talk sound added to {}", c.cfg.name, t.path.file_name().unwrap_or_default().to_string_lossy());
                     }
-                    Err(e) => warn!(
-                        "[{}] couldn't add push-to-talk sound to {}: {e:#}",
-                        c.cfg.name,
-                        t.path.display()
-                    ),
+                    Err(e) => warn!("[{}] couldn't add push-to-talk sound to {}: {e:#}", c.cfg.name, t.path.display()),
                 }
             }
         }

@@ -55,8 +55,7 @@ static AHEAD_SLOTS: Mutex<usize> = Mutex::new(0);
 /// Testing: pretend every open and read of the storage takes this long (a
 /// network drive), to measure how playback copes.
 fn test_delay() {
-    static D: LazyLock<Option<Duration>> =
-        LazyLock::new(|| std::env::var("GAZE_TEST_IO_DELAY_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis));
+    static D: LazyLock<Option<Duration>> = LazyLock::new(|| std::env::var("GAZE_TEST_IO_DELAY_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis));
     if let Some(d) = *D {
         std::thread::sleep(d);
     }

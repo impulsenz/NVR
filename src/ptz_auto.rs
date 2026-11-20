@@ -8,9 +8,9 @@
 //!
 //! While the camera moves itself, its movement isn't counted as motion.
 
-use crate::sync::MutexExt;
 use crate::manager::Manager;
 use crate::onvif::Target;
+use crate::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};

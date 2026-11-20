@@ -34,24 +34,14 @@ pub fn port_of(config: &Path) -> u16 {
 pub fn https_port_of(config: &Path) -> u16 {
     std::fs::read_to_string(config)
         .ok()
-        .and_then(|t| {
-            t.lines()
-                .map(str::trim)
-                .find(|l| l.starts_with("https_port") && l.contains('='))
-                .and_then(|l| l.split('=').nth(1))
-                .and_then(|p| p.trim().parse().ok())
-        })
+        .and_then(|t| t.lines().map(str::trim).find(|l| l.starts_with("https_port") && l.contains('=')).and_then(|l| l.split('=').nth(1)).and_then(|p| p.trim().parse().ok()))
         .unwrap_or(8443)
 }
 
 /// The address GAZE opens at on this computer: the secure (https) one
 /// when it's on, else the plain one.
 pub fn local_url(port: u16, https_port: u16) -> String {
-    if https_port > 0 {
-        format!("https://localhost:{https_port}/")
-    } else {
-        format!("http://localhost:{port}/")
-    }
+    if https_port > 0 { format!("https://localhost:{https_port}/") } else { format!("http://localhost:{port}/") }
 }
 
 /// Is a GAZE already answering on this port?

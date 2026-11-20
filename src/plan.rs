@@ -440,7 +440,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let s = PlanStore::open(&dir);
-        let ok = Plan { cameras: vec![cam("a"), PlanCamera { x: 0.2, ..cam("b") }], links: vec![Link { a: "a".into(), b: "b".into(), travel_seconds: Some(8.0) }], ..Default::default() };
+        let ok = Plan {
+            cameras: vec![cam("a"), PlanCamera { x: 0.2, ..cam("b") }],
+            links: vec![Link { a: "a".into(), b: "b".into(), travel_seconds: Some(8.0) }],
+            ..Default::default()
+        };
         s.update(ok.clone()).unwrap();
         for (what, bad) in [
             ("same camera twice", Plan { cameras: vec![cam("a"), cam("a")], ..Default::default() }),
@@ -554,4 +558,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

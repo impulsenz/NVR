@@ -196,9 +196,7 @@ pub async fn speak(id: &str, text: &str, rate: i32, wav: &Path) -> Result<()> {
         i.write_all(text.replace('\n', " ").as_bytes()).await?;
         i.write_all(b"\n").await?;
     }
-    let out = tokio::time::timeout(std::time::Duration::from_secs(60), child.wait_with_output())
-        .await
-        .context("the voice engine took too long")??;
+    let out = tokio::time::timeout(std::time::Duration::from_secs(60), child.wait_with_output()).await.context("the voice engine took too long")??;
     if !out.status.success() || !wav.exists() {
         bail!("the voice engine failed: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""));
     }

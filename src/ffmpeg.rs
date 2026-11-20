@@ -26,7 +26,10 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::new();
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
             out.push(v);
             i += 3;
             continue;
@@ -85,18 +88,11 @@ pub fn decode_args(hw: &HardwareConfig, keep_on_gpu: bool) -> Vec<String> {
 
 /// True when decoder and encoder are on the same GPU API so frames never leave the GPU.
 pub fn full_gpu_pipeline(hw: &HardwareConfig) -> bool {
-    matches!(
-        (hw.hwaccel.as_str(), hw.resolved_encoder()),
-        ("cuda", "h264_nvenc") | ("qsv", "h264_qsv") | ("vaapi", "h264_vaapi")
-    )
+    matches!((hw.hwaccel.as_str(), hw.resolved_encoder()), ("cuda", "h264_nvenc") | ("qsv", "h264_qsv") | ("vaapi", "h264_vaapi"))
 }
 
 /// H.264 encoder options: (before input, after input).
-pub fn encoder_args(
-    encoder: &str,
-    hw: &HardwareConfig,
-    frames_on_gpu: bool,
-) -> (Vec<String>, Vec<String>) {
+pub fn encoder_args(encoder: &str, hw: &HardwareConfig, frames_on_gpu: bool) -> (Vec<String>, Vec<String>) {
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let mut pre = Vec::new();
     let mut out = match encoder {
@@ -118,13 +114,9 @@ pub fn encoder_args(
             v
         }
         "h264_videotoolbox" => s(&["-c:v", "h264_videotoolbox", "-b:v", "4M"]),
-        "h264_amf" => s(&[
-            "-c:v", "h264_amf", "-quality", "balanced", "-rc", "cqp", "-qp_i", "23", "-qp_p", "23",
-        ]),
+        "h264_amf" => s(&["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cqp", "-qp_i", "23", "-qp_p", "23"]),
         "h264_mf" => s(&["-c:v", "h264_mf", "-b:v", "4M"]),
-        _ => s(&[
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-        ]),
+        _ => s(&["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]),
     };
     // Regular keyframes so files split cleanly and seeking is fast.
     out.extend(s(&["-force_key_frames", "expr:gte(t,n_forced*2)"]));
@@ -141,20 +133,13 @@ fn ffprobe_path(ffmpeg: &str) -> String {
 
 async fn run(cmd: &mut Command, secs: u64) -> Result<std::process::Output> {
     cmd.stdin(Stdio::null()).kill_on_drop(true);
-    tokio::time::timeout(Duration::from_secs(secs), cmd.output())
-        .await
-        .context("timed out")?
-        .context("could not run ffmpeg")
+    tokio::time::timeout(Duration::from_secs(secs), cmd.output()).await.context("timed out")?.context("could not run ffmpeg")
 }
 
 /// The most useful error from ffmpeg's stderr: the first line usually names the
 /// root cause ("Cannot load libcuda.so.1"); later lines are generic fallout.
 fn first_error(stderr: &[u8]) -> String {
-    String::from_utf8_lossy(stderr)
-        .lines()
-        .map(clean_line)
-        .find(|l| !l.is_empty())
-        .unwrap_or_default()
+    String::from_utf8_lossy(stderr).lines().map(clean_line).find(|l| !l.is_empty()).unwrap_or_default()
 }
 
 /// Split ffmpeg's `[hevc @ 0x55d1…] message` (Linux/macOS) or
@@ -164,8 +149,7 @@ fn context(line: &str) -> Option<(&str, &str)> {
     let end = l.strip_prefix('[')?.find("] ")? + 1;
     let (name, addr) = l[1..end].rsplit_once(" @ ")?;
     let hex = addr.trim_start_matches("0x");
-    (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
-        .then(|| (name, l[end + 2..].trim()))
+    (!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit())).then(|| (name, l[end + 2..].trim()))
 }
 
 /// Strip ffmpeg's `[h264_nvenc @ 0x55...] ` context prefix.
@@ -177,20 +161,7 @@ pub fn clean_line(line: &str) -> String {
 }
 
 /// Decoders whose complaints are about individual damaged/missing frames.
-const DECODERS: &[&str] = &[
-    "h264",
-    "hevc",
-    "h265",
-    "mpeg4",
-    "mjpeg",
-    "h263",
-    "aac",
-    "pcm_alaw",
-    "pcm_mulaw",
-    "adpcm_g726",
-    "adpcm_g726le",
-    "opus",
-];
+const DECODERS: &[&str] = &["h264", "hevc", "h265", "mpeg4", "mjpeg", "h263", "aac", "pcm_alaw", "pcm_mulaw", "adpcm_g726", "adpcm_g726le", "opus"];
 
 /// Separates useful ffmpeg messages from per-frame noise.
 ///
@@ -207,11 +178,7 @@ pub struct StderrFilter {
 
 impl Default for StderrFilter {
     fn default() -> Self {
-        Self {
-            decode_warnings: 0,
-            lost_packets: 0,
-            window: Instant::now(),
-        }
+        Self { decode_warnings: 0, lost_packets: 0, window: Instant::now() }
     }
 }
 
@@ -230,11 +197,7 @@ impl StderrFilter {
             return Some(line.to_string());
         };
         if let Some(rest) = msg.strip_prefix("RTP: missed ") {
-            let n: u64 = rest
-                .split_whitespace()
-                .next()
-                .and_then(|n| n.parse().ok())
-                .unwrap_or(1);
+            let n: u64 = rest.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(1);
             self.lost_packets += n;
             return None;
         }
@@ -257,10 +220,7 @@ impl StderrFilter {
         }
         let mut parts = Vec::new();
         if self.decode_warnings > 0 {
-            parts.push(format!(
-                "{} damaged/incomplete video frames",
-                self.decode_warnings
-            ));
+            parts.push(format!("{} damaged/incomplete video frames", self.decode_warnings));
         }
         if self.lost_packets > 0 {
             parts.push(format!("{} lost network packets", self.lost_packets));
@@ -289,41 +249,15 @@ pub struct Capabilities {
 pub async fn capabilities(ffmpeg: &str) -> Capabilities {
     let mut caps = Capabilities::default();
     if let Ok(o) = run(crate::load::cmd(ffmpeg).arg("-version"), 10).await {
-        caps.ffmpeg_version = String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .to_string();
+        caps.ffmpeg_version = String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").to_string();
     }
-    if let Ok(o) = run(
-        crate::load::cmd(ffmpeg).args(["-hide_banner", "-hwaccels"]),
-        10,
-    )
-    .await
-    {
-        caps.hwaccels = String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .skip(1)
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect();
+    if let Ok(o) = run(crate::load::cmd(ffmpeg).args(["-hide_banner", "-hwaccels"]), 10).await {
+        caps.hwaccels = String::from_utf8_lossy(&o.stdout).lines().skip(1).map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
     }
-    if let Ok(o) = run(
-        crate::load::cmd(ffmpeg).args(["-hide_banner", "-encoders"]),
-        10,
-    )
-    .await
-    {
+    if let Ok(o) = run(crate::load::cmd(ffmpeg).args(["-hide_banner", "-encoders"]), 10).await {
         let text = String::from_utf8_lossy(&o.stdout);
-        caps.encoders = crate::config::ENCODERS
-            .iter()
-            .filter(|e| **e != "auto")
-            .filter(|e| {
-                text.lines()
-                    .any(|l| l.split_whitespace().nth(1) == Some(**e))
-            })
-            .map(|e| e.to_string())
-            .collect();
+        caps.encoders =
+            crate::config::ENCODERS.iter().filter(|e| **e != "auto").filter(|e| text.lines().any(|l| l.split_whitespace().nth(1) == Some(**e))).map(|e| e.to_string()).collect();
     }
     caps
 }
@@ -343,102 +277,43 @@ pub struct HwTest {
 /// Actually try the selected GPU decoder and encoder on a generated test clip.
 pub async fn test_hardware(ffmpeg: &str, hw: &HardwareConfig) -> HwTest {
     let clip = std::env::temp_dir().join(format!("nvr-hwtest-{}.mp4", std::process::id()));
-    let lavfi = [
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc2=size=1280x720:rate=25",
-        "-t",
-        "2",
-    ];
+    let lavfi = ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25", "-t", "2"];
 
     // Encoder.
     let encoder = hw.resolved_encoder().to_string();
     let (pre, out) = encoder_args(&encoder, hw, false);
-    let enc = run(
-        crate::load::cmd(ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-y"])
-            .args(&pre)
-            .args(lavfi)
-            .args(&out)
-            .arg(&clip),
-        30,
-    )
-    .await;
+    let enc = run(crate::load::cmd(ffmpeg).args(["-hide_banner", "-loglevel", "error", "-y"]).args(&pre).args(lavfi).args(&out).arg(&clip), 30).await;
     let encoder_res = match enc {
-        Ok(o) if o.status.success() => TestResult {
-            ok: true,
-            message: format!("{encoder} works"),
-        },
-        Ok(o) => TestResult {
-            ok: false,
-            message: format!("{encoder} failed: {}", first_error(&o.stderr)),
-        },
-        Err(e) => TestResult {
-            ok: false,
-            message: format!("{encoder} failed: {e:#}"),
-        },
+        Ok(o) if o.status.success() => TestResult { ok: true, message: format!("{encoder} works") },
+        Ok(o) => TestResult { ok: false, message: format!("{encoder} failed: {}", first_error(&o.stderr)) },
+        Err(e) => TestResult { ok: false, message: format!("{encoder} failed: {e:#}") },
     };
 
     // Decoder: needs an H.264 clip; make one on the CPU if the GPU encoder failed.
     let decoder_res = if hw.hwaccel == "none" {
-        TestResult {
-            ok: true,
-            message: "GPU decoding is off (CPU decoding)".into(),
-        }
+        TestResult { ok: true, message: "GPU decoding is off (CPU decoding)".into() }
     } else {
         let have_clip = encoder_res.ok
-            || run(
-                crate::load::cmd(ffmpeg)
-                    .args(["-hide_banner", "-loglevel", "error", "-y"])
-                    .args(lavfi)
-                    .args(["-c:v", "libx264", "-preset", "ultrafast"])
-                    .arg(&clip),
-                30,
-            )
-            .await
-            .is_ok_and(|o| o.status.success());
+            || run(crate::load::cmd(ffmpeg).args(["-hide_banner", "-loglevel", "error", "-y"]).args(lavfi).args(["-c:v", "libx264", "-preset", "ultrafast"]).arg(&clip), 30)
+                .await
+                .is_ok_and(|o| o.status.success());
         if !have_clip {
-            TestResult {
-                ok: false,
-                message: "could not create a test clip (is libx264 available?)".into(),
-            }
+            TestResult { ok: false, message: "could not create a test clip (is libx264 available?)".into() }
         } else {
-            let dec = run(
-                crate::load::cmd(ffmpeg)
-                    .args(["-hide_banner", "-loglevel", "error"])
-                    .args(decode_args(hw, false))
-                    .arg("-i")
-                    .arg(&clip)
-                    .args(["-f", "null", "-"]),
-                30,
-            )
-            .await;
+            let dec =
+                run(crate::load::cmd(ffmpeg).args(["-hide_banner", "-loglevel", "error"]).args(decode_args(hw, false)).arg("-i").arg(&clip).args(["-f", "null", "-"]), 30).await;
             match dec {
                 Ok(o) if o.status.success() => TestResult {
                     ok: true,
-                    message: if hw.hwaccel == "auto" {
-                        "auto: ffmpeg will use a GPU if it finds one, otherwise the CPU".into()
-                    } else {
-                        format!("{} decoding works", hw.hwaccel)
-                    },
+                    message: if hw.hwaccel == "auto" { "auto: ffmpeg will use a GPU if it finds one, otherwise the CPU".into() } else { format!("{} decoding works", hw.hwaccel) },
                 },
-                Ok(o) => TestResult {
-                    ok: false,
-                    message: format!("{} failed: {}", hw.hwaccel, first_error(&o.stderr)),
-                },
-                Err(e) => TestResult {
-                    ok: false,
-                    message: format!("{} failed: {e:#}", hw.hwaccel),
-                },
+                Ok(o) => TestResult { ok: false, message: format!("{} failed: {}", hw.hwaccel, first_error(&o.stderr)) },
+                Err(e) => TestResult { ok: false, message: format!("{} failed: {e:#}", hw.hwaccel) },
             }
         }
     };
     let _ = std::fs::remove_file(&clip);
-    HwTest {
-        decoder: decoder_res,
-        encoder: encoder_res,
-    }
+    HwTest { decoder: decoder_res, encoder: encoder_res }
 }
 
 /// The processor time (seconds, user + system) ffmpeg took for a job, from
@@ -454,12 +329,13 @@ fn bench_cpu(stderr: &[u8]) -> Option<f64> {
 /// pictures motion detection uses (as GAZE does it) takes with decoder `hw`.
 async fn decode_cost(ffmpeg: &str, hw: &HardwareConfig, clip: &std::path::Path) -> Option<f64> {
     let o = run(
-        crate::load::cmd(ffmpeg)
-            .args(["-hide_banner", "-benchmark", "-loglevel", "info"])
-            .args(decode_args(hw, false))
-            .arg("-i")
-            .arg(clip)
-            .args(["-vf", "scale=640:-2,format=rgb24", "-f", "null", "-"]),
+        crate::load::cmd(ffmpeg).args(["-hide_banner", "-benchmark", "-loglevel", "info"]).args(decode_args(hw, false)).arg("-i").arg(clip).args([
+            "-vf",
+            "scale=640:-2,format=rgb24",
+            "-f",
+            "null",
+            "-",
+        ]),
         60,
     )
     .await
@@ -525,17 +401,8 @@ pub async fn auto_in_background(m: std::sync::Arc<crate::manager::Manager>, caps
     job.step("done".to_string());
 }
 
-pub async fn auto_hardware(
-    ffmpeg: &str,
-    caps: &Capabilities,
-    cur: &HardwareConfig,
-) -> HardwareConfig {
-    let mut hw = HardwareConfig {
-        hwaccel: "none".into(),
-        encoder: "libx264".into(),
-        gpu_substreams: false,
-        ..cur.clone()
-    };
+pub async fn auto_hardware(ffmpeg: &str, caps: &Capabilities, cur: &HardwareConfig) -> HardwareConfig {
+    let mut hw = HardwareConfig { hwaccel: "none".into(), encoder: "libx264".into(), gpu_substreams: false, ..cur.clone() };
     // NVIDIA's own (CUDA) first: it decodes on the card with the least
     // copying; the others are measured too.
     let decoders: &[&str] = if cfg!(windows) {
@@ -555,8 +422,7 @@ pub async fn auto_hardware(
             .arg(out);
         c
     };
-    let have = run(&mut make("1920x1080", &big), 60).await.is_ok_and(|o| o.status.success())
-        && run(&mut make("640x360", &small), 60).await.is_ok_and(|o| o.status.success());
+    let have = run(&mut make("1920x1080", &big), 60).await.is_ok_and(|o| o.status.success()) && run(&mut make("640x360", &small), 60).await.is_ok_and(|o| o.status.success());
     if have {
         let cpu_big = decode_cost(ffmpeg, &HardwareConfig { hwaccel: "none".into(), ..cur.clone() }, &big).await;
         let cpu_small = decode_cost(ffmpeg, &HardwareConfig { hwaccel: "none".into(), ..cur.clone() }, &small).await;
@@ -591,21 +457,11 @@ pub async fn auto_hardware(
     }
     let _ = std::fs::remove_file(&big);
     let _ = std::fs::remove_file(&small);
-    for e in [
-        "h264_nvenc",
-        "h264_amf",
-        "h264_qsv",
-        "h264_videotoolbox",
-        "h264_mf",
-    ] {
+    for e in ["h264_nvenc", "h264_amf", "h264_qsv", "h264_videotoolbox", "h264_mf"] {
         if !caps.encoders.iter().any(|x| x == e) {
             continue;
         }
-        let t = HardwareConfig {
-            hwaccel: "none".into(),
-            encoder: e.into(),
-            ..cur.clone()
-        };
+        let t = HardwareConfig { hwaccel: "none".into(), encoder: e.into(), ..cur.clone() };
         if test_hardware(ffmpeg, &t).await.encoder.ok {
             hw.encoder = e.into();
             break;
@@ -638,14 +494,7 @@ pub struct ProbeResult {
 /// Codec, size and frame rate of each stream.
 pub async fn probe_streams(ffmpeg: &str, url: &str, transport: &str) -> Result<Vec<StreamInfo>> {
     let mut cmd = crate::load::cmd(ffprobe_path(ffmpeg));
-    cmd.args([
-        "-v",
-        "error",
-        "-show_entries",
-        "stream=codec_type,codec_name,width,height,avg_frame_rate",
-        "-of",
-        "json",
-    ]);
+    cmd.args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,avg_frame_rate", "-of", "json"]);
     let mut input = input_args(url, transport);
     input.retain(|a| a != "-re" && a != "-stream_loop" && a != "-1");
     let url_arg = input.pop().unwrap();
@@ -677,32 +526,26 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
     let info = probe_streams(ffmpeg, url, transport);
     let snap = async {
         let o = run(
-            crate::load::cmd(ffmpeg)
-                .args(["-hide_banner", "-loglevel", "error"])
-                .args(input_args(url, transport))
-                .args([
-                    "-frames:v",
-                    "1",
-                    "-vf",
-                    "scale='min(640,iw)':-2",
-                    "-q:v",
-                    "4",
-                    "-f",
-                    "image2pipe",
-                    "-c:v",
-                    "mjpeg",
-                    "pipe:1",
-                ]),
+            crate::load::cmd(ffmpeg).args(["-hide_banner", "-loglevel", "error"]).args(input_args(url, transport)).args([
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale='min(640,iw)':-2",
+                "-q:v",
+                "4",
+                "-f",
+                "image2pipe",
+                "-c:v",
+                "mjpeg",
+                "pipe:1",
+            ]),
             20,
         )
         .await?;
         if o.stdout.is_empty() {
             bail!("{}", first_error(&o.stderr));
         }
-        Ok::<_, anyhow::Error>(format!(
-            "data:image/jpeg;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(&o.stdout)
-        ))
+        Ok::<_, anyhow::Error>(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&o.stdout)))
     };
     let (info, snap) = tokio::join!(info, snap);
     let mut res = ProbeResult::default();
@@ -712,9 +555,7 @@ pub async fn probe(ffmpeg: &str, url: &str, transport: &str) -> ProbeResult {
     }
     match info {
         Ok(s) => res.streams = s,
-        Err(e) if res.error.is_none() && res.snapshot.is_none() => {
-            res.error = Some(redact(&format!("{e:#}"), url))
-        }
+        Err(e) if res.error.is_none() && res.snapshot.is_none() => res.error = Some(redact(&format!("{e:#}"), url)),
         Err(_) => {}
     }
     res.ok = res.snapshot.is_some();
@@ -745,7 +586,10 @@ pub async fn describe(ffmpeg: &str, file: &std::path::Path) -> String {
                 "picture {} ({}{}) {}×{} {} fps",
                 s(st, "codec_name"),
                 s(st, "codec_tag_string"),
-                { let p = s(st, "profile"); if p.is_empty() { p } else { format!(", {p}") } },
+                {
+                    let p = s(st, "profile");
+                    if p.is_empty() { p } else { format!(", {p}") }
+                },
                 s(st, "width"),
                 s(st, "height"),
                 s(st, "r_frame_rate").split('/').collect::<Vec<_>>().as_slice().pipe_fps()
@@ -776,53 +620,22 @@ impl PipeFps for [&str] {
 }
 
 pub async fn video_codec(ffmpeg: &str, file: &std::path::Path) -> Option<String> {
-    let o = run(
-        crate::load::cmd(ffprobe_path(ffmpeg))
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name",
-                "-of",
-                "default=nw=1:nk=1",
-            ])
-            .arg(file),
-        20,
-    )
-    .await
-    .ok()?;
+    let o =
+        run(crate::load::cmd(ffprobe_path(ffmpeg)).args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "default=nw=1:nk=1"]).arg(file), 20)
+            .await
+            .ok()?;
     let c = String::from_utf8_lossy(&o.stdout).trim().to_string();
     (!c.is_empty()).then_some(c)
 }
 
 /// Extra output options so copied H.265 plays on Apple devices.
 pub async fn hevc_tag(ffmpeg: &str, file: &std::path::Path) -> Vec<String> {
-    if video_codec(ffmpeg, file).await.as_deref() == Some("hevc") {
-        vec!["-tag:v".into(), "hvc1".into()]
-    } else {
-        vec![]
-    }
+    if video_codec(ffmpeg, file).await.as_deref() == Some("hevc") { vec!["-tag:v".into(), "hvc1".into()] } else { vec![] }
 }
 
 /// Duration of a media file in seconds.
 pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
-    let o = run(
-        crate::load::cmd(ffprobe_path(ffmpeg))
-            .args([
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=nw=1:nk=1",
-            ])
-            .arg(file),
-        30,
-    )
-    .await
-    .ok()?;
+    let o = run(crate::load::cmd(ffprobe_path(ffmpeg)).args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"]).arg(file), 30).await.ok()?;
     String::from_utf8_lossy(&o.stdout).trim().parse().ok()
 }
 
@@ -830,28 +643,14 @@ pub async fn duration(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
 pub async fn display_aspect(ffmpeg: &str, file: &std::path::Path) -> Option<f64> {
     let o = run(
         crate::load::cmd(ffprobe_path(ffmpeg))
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height,sample_aspect_ratio",
-                "-of",
-                "default=nw=1",
-            ])
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,sample_aspect_ratio", "-of", "default=nw=1"])
             .arg(file),
         30,
     )
     .await
     .ok()?;
     let text = String::from_utf8_lossy(&o.stdout).to_string();
-    let get = |k: &str| {
-        text.lines()
-            .find_map(|l| l.strip_prefix(&format!("{k}=")))
-            .map(str::trim)
-            .map(String::from)
-    };
+    let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).map(str::trim).map(String::from);
     let (w, h): (f64, f64) = (get("width")?.parse().ok()?, get("height")?.parse().ok()?);
     let sar = get("sample_aspect_ratio")
         .and_then(|s| {
@@ -869,16 +668,7 @@ pub async fn thumbnail(ffmpeg: &str, file: &std::path::Path, out: &std::path::Pa
         crate::load::background(&mut crate::load::cmd(ffmpeg))
             .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "1", "-i"])
             .arg(file)
-            .args([
-                "-frames:v",
-                "1",
-                "-vf",
-                "scale=320:-2",
-                "-q:v",
-                "5",
-                "-update",
-                "1",
-            ])
+            .args(["-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "5", "-update", "1"])
             .arg(out),
         30,
     )
@@ -919,13 +709,7 @@ pub struct SpriteInfo {
 /// one picture per 2 seconds. Pictures are put together here rather than
 /// by ffmpeg, so the count is exact (no black filler pictures) and a
 /// picture that decoded black is replaced by the previous one.
-pub async fn sprite(
-    ffmpeg: &str,
-    file: &std::path::Path,
-    prefix: &std::path::Path,
-    interval: f64,
-    hw: &[String],
-) -> Result<SpriteInfo> {
+pub async fn sprite(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::Path, interval: f64, hw: &[String]) -> Result<SpriteInfo> {
     // On the graphics card when one is set up (Settings → GPU acceleration);
     // the processor if that fails for this file.
     if !hw.is_empty() {
@@ -937,13 +721,7 @@ pub async fn sprite(
     sprite_with(ffmpeg, file, prefix, interval, &[]).await
 }
 
-async fn sprite_with(
-    ffmpeg: &str,
-    file: &std::path::Path,
-    prefix: &std::path::Path,
-    interval: f64,
-    hw: &[String],
-) -> Result<SpriteInfo> {
+async fn sprite_with(ffmpeg: &str, file: &std::path::Path, prefix: &std::path::Path, interval: f64, hw: &[String]) -> Result<SpriteInfo> {
     use tokio::io::AsyncReadExt;
     const COLS: u32 = SPRITE_COLUMNS;
     const PER_PAGE: u32 = SPRITE_PER_PAGE;
@@ -962,9 +740,7 @@ async fn sprite_with(
     let mut child = cmd
         .arg("-i")
         .arg(file)
-        .args([
-            "-an", "-vf", &vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
-        ])
+        .args(["-an", "-vf", &vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -980,9 +756,7 @@ async fn sprite_with(
     let (mut count, mut pages) = (0u32, 0u32);
     let save = |tiles: Vec<Vec<u8>>, n: u32| {
         let p = std::path::PathBuf::from(format!("{}-{n:03}.jpg", prefix.display()));
-        async move {
-            tokio::task::spawn_blocking(move || write_sprite_page(&p, &tiles, (tw, th))).await?
-        }
+        async move { tokio::task::spawn_blocking(move || write_sprite_page(&p, &tiles, (tw, th))).await? }
     };
     let timeout = Duration::from_secs(600);
     let started = Instant::now();
@@ -1027,10 +801,7 @@ async fn sprite_with(
     if count == 0 {
         bail!("no pictures could be read from the recording");
     }
-    let version = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let version = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     Ok(SpriteInfo {
         interval,
         count,
@@ -1040,11 +811,7 @@ async fn sprite_with(
         tile_width: tw,
         tile_height: th,
         aspect,
-        duration: if duration > 0.0 {
-            duration
-        } else {
-            count as f64 * interval
-        },
+        duration: if duration > 0.0 { duration } else { count as f64 * interval },
         version,
     })
 }
@@ -1108,26 +875,16 @@ pub fn flat_picture(rgb: &[u8]) -> bool {
 /// (with forward slashes, and quotes escaped).
 pub fn concat_path(path: &std::path::Path) -> String {
     let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    full.display()
-        .to_string()
-        .replace('\\', "/")
-        .replace('\'', "'\\''")
+    full.display().to_string().replace('\\', "/").replace('\'', "'\\''")
 }
 
 /// Cut `[from, to)` seconds out of a sequence of files into one MP4
 /// (without re-encoding, so cuts snap to the nearest keyframe).
-pub async fn export(
-    ffmpeg: &str,
-    parts: &[(std::path::PathBuf, f64, f64)],
-    out: &std::path::Path,
-) -> Result<()> {
+pub async fn export(ffmpeg: &str, parts: &[(std::path::PathBuf, f64, f64)], out: &std::path::Path) -> Result<()> {
     let list = out.with_extension("txt");
     let mut text = String::new();
     for (path, inpoint, outpoint) in parts {
-        text.push_str(&format!(
-            "file '{}'\ninpoint {inpoint:.3}\noutpoint {outpoint:.3}\n",
-            concat_path(path)
-        ));
+        text.push_str(&format!("file '{}'\ninpoint {inpoint:.3}\noutpoint {outpoint:.3}\n", concat_path(path)));
     }
     std::fs::write(&list, text)?;
     let tag = match parts.first() {
@@ -1136,26 +893,9 @@ pub async fn export(
     };
     let o = run(
         crate::load::cmd(ffmpeg)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-            ])
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i"])
             .arg(&list)
-            .args([
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                "-avoid_negative_ts",
-                "make_zero",
-            ])
+            .args(["-c", "copy", "-movflags", "+faststart", "-avoid_negative_ts", "make_zero"])
             .args(&tag)
             .arg(out),
         600,
@@ -1203,75 +943,40 @@ mod tests {
     #[test]
     fn ffprobe_next_to_ffmpeg() {
         assert_eq!(ffprobe_path("ffmpeg"), "ffprobe");
-        assert_eq!(
-            ffprobe_path("/opt/ffmpeg/bin/ffmpeg.exe"),
-            "/opt/ffmpeg/bin/ffprobe.exe"
-        );
+        assert_eq!(ffprobe_path("/opt/ffmpeg/bin/ffmpeg.exe"), "/opt/ffmpeg/bin/ffprobe.exe");
     }
 
     #[test]
     fn gpu_args() {
-        let hw = HardwareConfig {
-            hwaccel: "cuda".into(),
-            encoder: "auto".into(),
-            device: String::new(),
-            ..Default::default()
-        };
+        let hw = HardwareConfig { hwaccel: "cuda".into(), encoder: "auto".into(), device: String::new(), ..Default::default() };
         assert!(full_gpu_pipeline(&hw));
-        assert_eq!(
-            decode_args(&hw, true),
-            ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-        );
-        let hw = HardwareConfig {
-            hwaccel: "vaapi".into(),
-            encoder: "h264_vaapi".into(),
-            device: String::new(),
-            ..Default::default()
-        };
+        assert_eq!(decode_args(&hw, true), ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]);
+        let hw = HardwareConfig { hwaccel: "vaapi".into(), encoder: "h264_vaapi".into(), device: String::new(), ..Default::default() };
         let (pre, out) = encoder_args("h264_vaapi", &hw, false);
         assert_eq!(pre, ["-vaapi_device", "/dev/dri/renderD128"]);
         assert!(out.contains(&"format=nv12,hwupload".to_string()));
         assert_eq!(parse_rate("15/1"), Some(15.0));
         assert_eq!(parse_rate("0/0"), None);
-        assert_eq!(
-            clean_line("[h264_nvenc @ 0x5560a47] Cannot load libcuda.so.1"),
-            "Cannot load libcuda.so.1"
-        );
+        assert_eq!(clean_line("[h264_nvenc @ 0x5560a47] Cannot load libcuda.so.1"), "Cannot load libcuda.so.1");
         assert_eq!(clean_line("[tcp] x"), "[tcp] x");
-        assert_eq!(
-            clean_line("[hevc @ 000002138f332440] First slice in a frame missing."),
-            "First slice in a frame missing."
-        );
+        assert_eq!(clean_line("[hevc @ 000002138f332440] First slice in a frame missing."), "First slice in a frame missing.");
     }
 
     #[test]
     fn filters_decoder_noise() {
         let mut f = StderrFilter::default();
-        assert_eq!(
-            f.filter("[hevc @ 000001ae7039be00] Could not find ref with POC 23"),
-            None
-        );
-        assert_eq!(
-            f.filter("[h264 @ 0x55d1c2a0] error while decoding MB 3 4"),
-            None
-        );
+        assert_eq!(f.filter("[hevc @ 000001ae7039be00] Could not find ref with POC 23"), None);
+        assert_eq!(f.filter("[h264 @ 0x55d1c2a0] error while decoding MB 3 4"), None);
         assert_eq!(f.filter("Last message repeated 2 times"), None);
         assert_eq!(f.filter("[rtsp @ 0x5512] RTP: missed 7 packets"), None);
         assert_eq!(
-            f.filter("[tcp @ 0x5512] Connection to tcp://10.0.0.5:554 failed: Connection refused")
-                .as_deref(),
+            f.filter("[tcp @ 0x5512] Connection to tcp://10.0.0.5:554 failed: Connection refused").as_deref(),
             Some("Connection to tcp://10.0.0.5:554 failed: Connection refused")
         );
-        assert_eq!(
-            f.filter("Error opening input file x.").as_deref(),
-            Some("Error opening input file x.")
-        );
+        assert_eq!(f.filter("Error opening input file x.").as_deref(), Some("Error opening input file x."));
         assert!(f.summary(false).is_none()); // not a minute yet
         let s = f.summary(true).unwrap();
-        assert!(
-            s.starts_with("2 damaged/incomplete video frames and 7 lost network packets"),
-            "{s}"
-        );
+        assert!(s.starts_with("2 damaged/incomplete video frames and 7 lost network packets"), "{s}");
         assert!(f.summary(true).is_none());
     }
 }

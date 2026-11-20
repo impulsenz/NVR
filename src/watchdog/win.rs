@@ -63,8 +63,8 @@ mod imp {
     use windows_sys::Win32::System::Services::*;
     use windows_sys::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
     use windows_sys::Win32::UI::Shell::{
-        IsUserAnAdmin, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, SEE_MASK_NOCLOSEPROCESS,
-        SHELLEXECUTEINFOW, Shell_NotifyIconW, ShellExecuteExW, ShellExecuteW,
+        IsUserAnAdmin, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, Shell_NotifyIconW,
+        ShellExecuteExW, ShellExecuteW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -161,7 +161,21 @@ mod imp {
         let mut s = service(&scm, SERVICE_ALL_ACCESS);
         if s.is_none() {
             let h = unsafe {
-                CreateServiceW(scm.0, n.as_ptr(), display.as_ptr(), SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL, cmd.as_ptr(), null(), null_mut(), null(), null(), null())
+                CreateServiceW(
+                    scm.0,
+                    n.as_ptr(),
+                    display.as_ptr(),
+                    SERVICE_ALL_ACCESS,
+                    SERVICE_WIN32_OWN_PROCESS,
+                    SERVICE_AUTO_START,
+                    SERVICE_ERROR_NORMAL,
+                    cmd.as_ptr(),
+                    null(),
+                    null_mut(),
+                    null(),
+                    null(),
+                    null(),
+                )
             };
             if h.is_null() {
                 return Err(format!("could not create the Windows service ({})", std::io::Error::last_os_error()));
@@ -174,8 +188,15 @@ mod imp {
             let desc = SERVICE_DESCRIPTIONW { lpDescription: d.as_mut_ptr() };
             ChangeServiceConfig2W(s.0, SERVICE_CONFIG_DESCRIPTION, &desc as *const _ as *const c_void);
             // Windows restarts the watchdog itself if it ever stops: 5 s, 5 s, then 1 min.
-            let mut actions = [SC_ACTION { Type: SC_ACTION_RESTART, Delay: 5000 }, SC_ACTION { Type: SC_ACTION_RESTART, Delay: 5000 }, SC_ACTION { Type: SC_ACTION_RESTART, Delay: 60000 }];
-            let fail = SERVICE_FAILURE_ACTIONSW { dwResetPeriod: 86400, lpRebootMsg: null_mut(), lpCommand: null_mut(), cActions: actions.len() as u32, lpsaActions: actions.as_mut_ptr() };
+            let mut actions =
+                [SC_ACTION { Type: SC_ACTION_RESTART, Delay: 5000 }, SC_ACTION { Type: SC_ACTION_RESTART, Delay: 5000 }, SC_ACTION { Type: SC_ACTION_RESTART, Delay: 60000 }];
+            let fail = SERVICE_FAILURE_ACTIONSW {
+                dwResetPeriod: 86400,
+                lpRebootMsg: null_mut(),
+                lpCommand: null_mut(),
+                cActions: actions.len() as u32,
+                lpsaActions: actions.as_mut_ptr(),
+            };
             ChangeServiceConfig2W(s.0, SERVICE_CONFIG_FAILURE_ACTIONS, &fail as *const _ as *const c_void);
             if state(&s) != SERVICE_RUNNING && StartServiceW(s.0, 0, null()) == 0 {
                 return Err(format!("the service was created but did not start ({})", std::io::Error::last_os_error()));
@@ -247,10 +268,8 @@ mod imp {
     pub fn run_service(run: impl Fn() + Send + Sync + 'static, stop: impl Fn() + Send + Sync + 'static) -> bool {
         let _ = RUN.set((Box::new(run), Box::new(stop)));
         let mut n = w(SERVICE);
-        let table = [
-            SERVICE_TABLE_ENTRYW { lpServiceName: n.as_mut_ptr(), lpServiceProc: Some(service_main) },
-            SERVICE_TABLE_ENTRYW { lpServiceName: null_mut(), lpServiceProc: None },
-        ];
+        let table =
+            [SERVICE_TABLE_ENTRYW { lpServiceName: n.as_mut_ptr(), lpServiceProc: Some(service_main) }, SERVICE_TABLE_ENTRYW { lpServiceName: null_mut(), lpServiceProc: None }];
         unsafe { StartServiceCtrlDispatcherW(table.as_ptr()) != 0 }
     }
 
@@ -417,7 +436,18 @@ mod imp {
         unsafe {
             let inst = GetModuleHandleW(null());
             let class = w("GAZE.watchdog.tray");
-            let wc = WNDCLASSW { style: 0, lpfnWndProc: Some(wndproc), cbClsExtra: 0, cbWndExtra: 0, hInstance: inst, hIcon: null_mut(), hCursor: null_mut(), hbrBackground: null_mut(), lpszMenuName: null(), lpszClassName: class.as_ptr() };
+            let wc = WNDCLASSW {
+                style: 0,
+                lpfnWndProc: Some(wndproc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: inst,
+                hIcon: null_mut(),
+                hCursor: null_mut(),
+                hbrBackground: null_mut(),
+                lpszMenuName: null(),
+                lpszClassName: class.as_ptr(),
+            };
             RegisterClassW(&wc);
             let tc = w("TaskbarCreated");
             TASKBAR_CREATED.store(RegisterWindowMessageW(tc.as_ptr()), Ordering::SeqCst);

@@ -607,7 +607,13 @@ impl Tube {
     /// How far from where it started it got (picture pixels).
     fn travel(&self) -> f32 {
         let (cx, cy) = Tube::centre(&self.frames[0]);
-        self.frames.iter().map(|f| { let (x, y) = Tube::centre(f); ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() }).fold(0.0, f32::max)
+        self.frames
+            .iter()
+            .map(|f| {
+                let (x, y) = Tube::centre(f);
+                ((x - cx).powi(2) + (y - cy).powi(2)).sqrt()
+            })
+            .fold(0.0, f32::max)
     }
     fn bytes(&self) -> usize {
         self.frames.iter().map(|f| f.rgba.len()).sum()
@@ -1498,7 +1504,8 @@ fn start_worker() {
                 j.state = State::Running;
                 (j.req.clone(), j.mgr.clone(), j.handle.clone(), j.pr.clone())
             };
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_one(&req, &mgr, &handle, &pr))).unwrap_or_else(|_| Err(anyhow::anyhow!("the summary stopped unexpectedly")));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_one(&req, &mgr, &handle, &pr)))
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("the summary stopped unexpectedly")));
             if let Some(j) = JOBS.locked().get_mut(&k) {
                 j.state = match r {
                     Ok(()) => State::Done,
@@ -1528,10 +1535,7 @@ fn run_one(req: &Request, mgr: &Arc<Manager>, handle: &tokio::runtime::Handle, p
     let mut classify = |rgb: &[u8]| -> Result<Vec<Det>> {
         let frame = crate::imgutil::Frame { width: W as u32, height: H as u32, rgb: Arc::new(rgb.to_vec()) };
         let dets = handle.block_on(ai.detect(&frame)).map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(dets
-            .into_iter()
-            .map(|d| Det { label: d.label, score: d.score, x: d.x * W as f32, y: d.y * H as f32, w: d.w * W as f32, h: d.h * H as f32 })
-            .collect())
+        Ok(dets.into_iter().map(|d| Det { label: d.label, score: d.score, x: d.x * W as f32, y: d.y * H as f32, w: d.w * W as f32, h: d.h * H as f32 }).collect())
     };
     make(req, &sources, &ffmpeg, &dir.join(format!("{}.mp4", req.id)), &mut classify, pr)?;
     // The new one replaces the camera's earlier summary.
@@ -1637,22 +1641,41 @@ pub fn list(mgr: &Manager, visible: Option<&[String]>, limit: usize) -> (Vec<Car
             let Some(m) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Meta>(&b).ok()) else { continue };
             if let Some(c) = cards.iter_mut().find(|c| &c.camera == id) {
                 if m.built_at > c.built_at {
-                    *c = Card { camera: id.clone(), camera_name: rt.cfg.name.clone(), id: m.id, from: m.from, to: m.to, built_at: m.built_at, scheduled: m.scheduled, seconds: m.seconds, objects: m.objects.len(), counts: m.counts };
+                    *c = Card {
+                        camera: id.clone(),
+                        camera_name: rt.cfg.name.clone(),
+                        id: m.id,
+                        from: m.from,
+                        to: m.to,
+                        built_at: m.built_at,
+                        scheduled: m.scheduled,
+                        seconds: m.seconds,
+                        objects: m.objects.len(),
+                        counts: m.counts,
+                    };
                 }
                 continue;
             }
-            cards.push(Card { camera: id.clone(), camera_name: rt.cfg.name.clone(), id: m.id, from: m.from, to: m.to, built_at: m.built_at, scheduled: m.scheduled, seconds: m.seconds, objects: m.objects.len(), counts: m.counts });
+            cards.push(Card {
+                camera: id.clone(),
+                camera_name: rt.cfg.name.clone(),
+                id: m.id,
+                from: m.from,
+                to: m.to,
+                built_at: m.built_at,
+                scheduled: m.scheduled,
+                seconds: m.seconds,
+                objects: m.objects.len(),
+                counts: m.counts,
+            });
         }
     }
     cards.sort_by(|a, b| b.built_at.cmp(&a.built_at));
     cards.truncate(limit);
     let active: Vec<serde_json::Value> = {
         let jobs = JOBS.locked();
-        let mut v: Vec<(std::time::Instant, serde_json::Value)> = jobs
-            .iter()
-            .filter(|(_, j)| visible.is_none_or(|vis| vis.contains(&j.req.camera)))
-            .filter_map(|(k, j)| job_json(k, j).map(|x| (j.queued_at, x)))
-            .collect();
+        let mut v: Vec<(std::time::Instant, serde_json::Value)> =
+            jobs.iter().filter(|(_, j)| visible.is_none_or(|vis| vis.contains(&j.req.camera))).filter_map(|(k, j)| job_json(k, j).map(|x| (j.queued_at, x))).collect();
         v.sort_by_key(|x| x.0);
         v.into_iter().map(|x| x.1).collect()
     };
@@ -1718,7 +1741,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("in.mp4");
-        let made = std::process::Command::new(ff).args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=5:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p"]).arg(&src).status();
+        let made = std::process::Command::new(ff)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=5:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status();
         if !made.is_ok_and(|s| s.success()) {
             return; // no ffmpeg with libx264 here
         }
@@ -1951,12 +1977,19 @@ mod tests {
         let pl = Plan { speed: 1.0, starts: vec![0], len: 6 };
         // The left edge of the white object in each video picture.
         let mut lefts: Vec<i32> = Vec::new();
-        render(&bg, &[t], &pl, &mut |f| {
-            let row = 140 * W * 3;
-            let left = (0..W).find(|x| f[row + x * 3 + 1] > 200).map(|x| x as i32);
-            lefts.extend(left);
-            Ok(())
-        }, &Progress::new()).unwrap();
+        render(
+            &bg,
+            &[t],
+            &pl,
+            &mut |f| {
+                let row = 140 * W * 3;
+                let left = (0..W).find(|x| f[row + x * 3 + 1] > 200).map(|x| x as i32);
+                lefts.extend(left);
+                Ok(())
+            },
+            &Progress::new(),
+        )
+        .unwrap();
         // The first pictures cover the 167 ms: steady steps to the right, no jump back and no big leap.
         let steps: Vec<i32> = lefts.windows(2).take(5).map(|w| w[1] - w[0]).collect();
         assert!(steps.iter().all(|&d| (3..=30).contains(&d)), "movement not smooth: lefts {:?}", &lefts[..8.min(lefts.len())]);
@@ -1998,11 +2031,18 @@ mod tests {
         let mut frames = 0;
         let mut painted = false;
         let pr = Progress::new();
-        let r = render(&bg, &tubes, &pl, &mut |f| {
-            frames += 1;
-            painted |= f != &bg[..];
-            Ok(())
-        }, &pr).unwrap();
+        let r = render(
+            &bg,
+            &tubes,
+            &pl,
+            &mut |f| {
+                frames += 1;
+                painted |= f != &bg[..];
+                Ok(())
+            },
+            &pr,
+        )
+        .unwrap();
         assert_eq!(r.frames, frames);
         assert!(painted, "the object was not drawn");
         assert_eq!(r.objects.len(), 1);
@@ -2017,7 +2057,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gaze-syn-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let files = ["2026-11-18.mp4", "2026-11-18.json", "2026-11-18.jpg", "2026-11-19_0630_24h.mp4", "2026-11-19_0630_24h.json", "2026-11-19_0630_24h.jpg", "2026-11-19.part.mp4", "notes.txt"];
+        let files = [
+            "2026-11-18.mp4",
+            "2026-11-18.json",
+            "2026-11-18.jpg",
+            "2026-11-19_0630_24h.mp4",
+            "2026-11-19_0630_24h.json",
+            "2026-11-19_0630_24h.jpg",
+            "2026-11-19.part.mp4",
+            "notes.txt",
+        ];
         for f in files {
             std::fs::write(dir.join(f), b"x").unwrap();
         }
@@ -2042,7 +2091,20 @@ mod tests {
         assert_eq!((f.format("%d %H:%M").to_string(), t.format("%d %H:%M").to_string(), h), ("18 06:30".into(), "19 06:30".into(), 24));
         assert_eq!(window_id(t, 24), "2026-11-19_0630_24h");
         // Not accepted: other shapes, path tricks, absurd hours, the future.
-        for bad in ["", "..", "../x", "2026-11-18/../x", "2026-1-5", "2026-11-19_0630_0h", "2026-11-19_0630_99h", "2026-11-19_0630_24", "2026-11-19_2530_24h", "2026-11-20", "2026-11-19_0630_24h.mp4", "x_y_z"] {
+        for bad in [
+            "",
+            "..",
+            "../x",
+            "2026-11-18/../x",
+            "2026-1-5",
+            "2026-11-19_0630_0h",
+            "2026-11-19_0630_99h",
+            "2026-11-19_0630_24",
+            "2026-11-19_2530_24h",
+            "2026-11-20",
+            "2026-11-19_0630_24h.mp4",
+            "x_y_z",
+        ] {
             assert!(parse_id(bad, now).is_none(), "{bad:?} should not be a summary id");
         }
     }
@@ -2076,8 +2138,31 @@ mod tests {
         let clip = dir.join("clip.mp4");
         // 30 s of grey with a red box crossing in 10 s (from 2 s, and again from 17 s) (and a blue one flickering in place).
         let st = std::process::Command::new(ff)
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x606060:s=640x360:r=10:d=30", "-f", "lavfi", "-i", "color=c=red:s=50x90:r=10:d=30", "-f", "lavfi", "-i", "color=c=blue:s=40x40:r=10:d=30",
-                "-filter_complex", "[0][1]overlay=x='if(between(mod(t,15),2,12),(mod(t,15)-2)*55,-100)':y=140[a];[a][2]overlay=x=560:y='20+4*mod(floor(t*4),2)'", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "10"])
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=0x606060:s=640x360:r=10:d=30",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=50x90:r=10:d=30",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=40x40:r=10:d=30",
+                "-filter_complex",
+                "[0][1]overlay=x='if(between(mod(t,15),2,12),(mod(t,15)-2)*55,-100)':y=140[a];[a][2]overlay=x=560:y='20+4*mod(floor(t*4),2)'",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-g",
+                "10",
+            ])
             .arg(&clip)
             .status()
             .unwrap();
@@ -2087,7 +2172,16 @@ mod tests {
         let from = Local::now() - CDuration::minutes(5);
         let src = Source { path: clip, start: from, skip: 0.0, dur: 30.0 };
         let out = dir.join("out").join("day.mp4");
-        let req = Request { camera: "cam".into(), camera_name: "Cam".into(), id: "2026-11-18".into(), from, to: from + CDuration::seconds(30), scheduled: false, params: Params::default(), wanted: vec!["person".into()] };
+        let req = Request {
+            camera: "cam".into(),
+            camera_name: "Cam".into(),
+            id: "2026-11-18".into(),
+            from,
+            to: from + CDuration::seconds(30),
+            scheduled: false,
+            params: Params::default(),
+            wanted: vec!["person".into()],
+        };
         // A stand-in AI: a person wherever there is something red, nothing else.
         let mut asked = 0;
         let mut ai = |rgb: &[u8]| -> Result<Vec<Det>> {
@@ -2105,7 +2199,12 @@ mod tests {
         };
         let m = make(&req, &[src], ff, &out, &mut ai, &Progress::new()).unwrap();
         assert!(out.is_file() && out.with_extension("json").is_file() && out.with_extension("jpg").is_file());
-        assert_eq!(m.objects.len(), 2, "two crossings by the red box, none by the flickering blue one: {:?}", m.objects.iter().map(|o| (&o.label, &o.at, o.out_start, o.out_end)).collect::<Vec<_>>());
+        assert_eq!(
+            m.objects.len(),
+            2,
+            "two crossings by the red box, none by the flickering blue one: {:?}",
+            m.objects.iter().map(|o| (&o.label, &o.at, o.out_start, o.out_end)).collect::<Vec<_>>()
+        );
         assert!(m.objects.iter().all(|o| o.label == "person"));
         assert_eq!(m.counts, vec![("person".to_string(), 2)]);
         assert!(m.seconds >= 2.0);

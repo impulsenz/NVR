@@ -2,8 +2,8 @@
 //! e.g. home and a holiday house, or home and the shop. Each is reached at
 //! its own address with an API token made on that server.
 
-use crate::sync::MutexExt;
 use crate::config::RemoteServer;
+use crate::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -83,11 +83,7 @@ pub async fn frame(r: &RemoteServer, camera: &str) -> anyhow::Result<bytes::Byte
     if !crate::storage::valid_component(camera) {
         anyhow::bail!("bad camera id");
     }
-    let resp = client(r, 10)?
-        .get(format!("{}/live/{}/frame.jpg", base(r), camera))
-        .bearer_auth(r.token.trim())
-        .send()
-        .await?;
+    let resp = client(r, 10)?.get(format!("{}/live/{}/frame.jpg", base(r), camera)).bearer_auth(r.token.trim()).send().await?;
     if !resp.status().is_success() {
         anyhow::bail!("it answered {}", resp.status());
     }
@@ -99,15 +95,8 @@ pub async fn mjpeg(r: &RemoteServer, camera: &str) -> anyhow::Result<reqwest::Re
     if !crate::storage::valid_component(camera) {
         anyhow::bail!("bad camera id");
     }
-    let c = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(8))
-        .danger_accept_invalid_certs(r.trust_own_cert)
-        .build()?;
-    let resp = c
-        .get(format!("{}/live/{}/stream.mjpeg?fps=8", base(r), camera))
-        .bearer_auth(r.token.trim())
-        .send()
-        .await?;
+    let c = reqwest::Client::builder().connect_timeout(Duration::from_secs(8)).danger_accept_invalid_certs(r.trust_own_cert).build()?;
+    let resp = c.get(format!("{}/live/{}/stream.mjpeg?fps=8", base(r), camera)).bearer_auth(r.token.trim()).send().await?;
     if !resp.status().is_success() {
         anyhow::bail!("it answered {}", resp.status());
     }
@@ -151,10 +140,7 @@ pub fn address(r: &RemoteServer) -> String {
 /// Ask that server for something (a path with its query, e.g.
 /// "api/timeline?…"), passing on the range asked for (video).
 pub async fn fetch(r: &RemoteServer, method: reqwest::Method, path: &str, range: Option<&str>, body: Option<Vec<u8>>) -> anyhow::Result<reqwest::Response> {
-    let c = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(8))
-        .danger_accept_invalid_certs(r.trust_own_cert)
-        .build()?;
+    let c = reqwest::Client::builder().connect_timeout(Duration::from_secs(8)).danger_accept_invalid_certs(r.trust_own_cert).build()?;
     let mut q = c.request(method, format!("{}/{}", base(r), path.trim_start_matches('/'))).bearer_auth(r.token.trim());
     if let Some(range) = range {
         q = q.header(reqwest::header::RANGE, range);
@@ -181,10 +167,9 @@ pub fn localize(v: &mut serde_json::Value, imp: &Imported) {
             }
         }
         Value::Array(a) => a.iter_mut().for_each(|x| localize(x, imp)),
-        Value::String(s)
-            if (s.starts_with("media/") || s.starts_with("api/") || s.starts_with("/media/")) => {
-                *s = localize_text(s, imp);
-            }
+        Value::String(s) if (s.starts_with("media/") || s.starts_with("api/") || s.starts_with("/media/")) => {
+            *s = localize_text(s, imp);
+        }
         _ => {}
     }
 }
@@ -214,12 +199,7 @@ pub async fn json(imp: &Imported, path: &str) -> anyhow::Result<serde_json::Valu
 mod tests {
     #[test]
     fn localizes() {
-        let imp = super::Imported {
-            id: "shop-door".into(),
-            name: "Shop door".into(),
-            server: Default::default(),
-            remote_id: "door".into(),
-        };
+        let imp = super::Imported { id: "shop-door".into(), name: "Shop door".into(), server: Default::default(), remote_id: "door".into() };
         let mut v = serde_json::json!([{"camera": "door", "camera_name": "Door", "name": "x.mp4",
             "play": {"url": "media/door/rec/x.mp4"}, "event": {"camera": "door", "thumb": "e.jpg"}}]);
         super::localize(&mut v, &imp);

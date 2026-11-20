@@ -267,11 +267,7 @@ pub fn index_cached(path: &Path) -> Option<Arc<FileIndex>> {
     }
     let finished = modified.elapsed().is_ok_and(|e| e > std::time::Duration::from_secs(120)) && !crate::vstore::is_growing(path, modified);
     // Indexed before (a finished file), on this computer.
-    let saved = if had.is_none() && finished {
-        stored(path, len).and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<FileIndex>(&b).ok())
-    } else {
-        None
-    };
+    let saved = if had.is_none() && finished { stored(path, len).and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<FileIndex>(&b).ok()) } else { None };
     let (ix, resume) = match saved {
         Some(ix) => (ix, Resume::default()),
         None => match had {
@@ -419,11 +415,7 @@ mod tests {
         assert_eq!(ix.pieces.len(), 4);
         assert!(ix.pieces.iter().all(|x| (x.dur - 2.0).abs() < 1e-9));
         assert_eq!(ix.pieces[1].off, ix.pieces[0].off + ix.pieces[0].len);
-        let pl = super::playlist(
-            &[super::PlaylistFile { path: p.clone(), url: "media/c/rec/a.mp4".into(), start: chrono::Local::now() }],
-            4.0,
-            "../../../",
-        );
+        let pl = super::playlist(&[super::PlaylistFile { path: p.clone(), url: "media/c/rec/a.mp4".into(), start: chrono::Local::now() }], 4.0, "../../../");
         assert_eq!(pl.matches("#EXTINF:4.000").count(), 2);
         assert!(pl.contains(&format!("BYTERANGE=\"{}@0\"", ix.init_len)));
         let _ = std::fs::remove_dir_all(&dir);

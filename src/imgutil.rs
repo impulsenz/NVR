@@ -18,11 +18,7 @@ impl Frame {
 
     /// Bilinear resize.
     pub fn resize(&self, w: u32, h: u32) -> Frame {
-        Frame {
-            width: w,
-            height: h,
-            rgb: Arc::new(resize_rgb(&self.rgb, self.width, self.height, w, h)),
-        }
+        Frame { width: w, height: h, rgb: Arc::new(resize_rgb(&self.rgb, self.width, self.height, w, h)) }
     }
 
     /// A piece of the picture; `x, y, w, h` are fractions (0..1) of it.
@@ -68,12 +64,7 @@ pub fn low_light_boost(f: &Frame) -> Option<Frame> {
     if n == 0 {
         return None;
     }
-    let mean = hist
-        .iter()
-        .enumerate()
-        .map(|(v, c)| v as f64 * *c as f64)
-        .sum::<f64>()
-        / n as f64;
+    let mean = hist.iter().enumerate().map(|(v, c)| v as f64 * *c as f64).sum::<f64>() / n as f64;
     if mean >= 70.0 {
         return None;
     }
@@ -101,11 +92,7 @@ pub fn low_light_boost(f: &Frame) -> Option<Frame> {
         *o = (x.powf(gamma) * 255.0).round() as u8;
     }
     let rgb: Vec<u8> = f.rgb.iter().map(|&v| lut[v as usize]).collect();
-    Some(Frame {
-        width: f.width,
-        height: f.height,
-        rgb: Arc::new(rgb),
-    })
+    Some(Frame { width: f.width, height: f.height, rgb: Arc::new(rgb) })
 }
 
 /// Decode a JPEG picture into a frame.
@@ -118,11 +105,7 @@ pub fn decode_jpeg(jpg: &[u8]) -> Result<Frame> {
         jpeg_decoder::PixelFormat::L8 => pixels.iter().flat_map(|&v| [v, v, v]).collect(),
         f => anyhow::bail!("unsupported picture format {f:?}"),
     };
-    Ok(Frame {
-        width: info.width as u32,
-        height: info.height as u32,
-        rgb: Arc::new(rgb),
-    })
+    Ok(Frame { width: info.width as u32, height: info.height as u32, rgb: Arc::new(rgb) })
 }
 
 /// Make a picture smaller for slow connections: decode, scale down to at
@@ -171,11 +154,7 @@ mod tests {
     fn crop_resize_encode() {
         let (w, h) = (64u32, 48u32);
         let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i % 251) as u8).collect();
-        let f = Frame {
-            width: w,
-            height: h,
-            rgb: Arc::new(rgb),
-        };
+        let f = Frame { width: w, height: h, rgb: Arc::new(rgb) };
         let r = f.resize(32, 24);
         assert_eq!(r.rgb.len(), 32 * 24 * 3);
         let j = f.jpeg(80).unwrap();
@@ -271,11 +250,7 @@ impl Frame {
         counts
             .into_iter()
             .map(|(c, n)| {
-                let w = if matches!(c, "black" | "white" | "grey" | "silver") {
-                    1.0
-                } else {
-                    1.6
-                };
+                let w = if matches!(c, "black" | "white" | "grey" | "silver") { 1.0 } else { 1.6 };
                 (c, n as f32 * w)
             })
             .max_by(|a, b| a.1.total_cmp(&b.1))
@@ -294,11 +269,7 @@ mod color_tests {
         assert_eq!(pixel_color(20, 20, 25), "black");
         assert_eq!(pixel_color(30, 60, 200), "blue");
         assert_eq!(pixel_color(140, 140, 140), "silver");
-        let f = Frame {
-            width: 4,
-            height: 4,
-            rgb: Arc::new([200u8, 20, 20].repeat(16)),
-        };
+        let f = Frame { width: 4, height: 4, rgb: Arc::new([200u8, 20, 20].repeat(16)) };
         assert_eq!(f.color_name(0.0, 0.0, 1.0, 1.0), Some("red"));
     }
 }

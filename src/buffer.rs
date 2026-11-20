@@ -4,8 +4,8 @@
 //! clip (`<camera>/events/<event id>.mp4`) covering the event plus the
 //! pre-/post-event time.
 
-use crate::sync::MutexExt;
 use crate::events::EventStore;
+use crate::sync::MutexExt;
 use chrono::{DateTime, Duration as CDuration, Local, NaiveDateTime, TimeZone};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -43,13 +43,7 @@ struct Seg {
 }
 
 impl EventBuffer {
-    pub fn new(
-        camera_dir: &Path,
-        name: &str,
-        ffmpeg: &str,
-        pre_seconds: u64,
-        store: Arc<EventStore>,
-    ) -> Arc<Self> {
+    pub fn new(camera_dir: &Path, name: &str, ffmpeg: &str, pre_seconds: u64, store: Arc<EventStore>) -> Arc<Self> {
         Arc::new(Self {
             dir: camera_dir.join(".buffer"),
             name: name.to_string(),
@@ -74,11 +68,7 @@ impl EventBuffer {
     /// An event finished: build a clip from `start - pre` to `end + post`.
     pub fn finish(&self, id: &str, from: DateTime<Local>, to: DateTime<Local>) {
         self.holds.locked().remove(id);
-        self.jobs.locked().push(Job {
-            event_id: id.to_string(),
-            from,
-            to,
-        });
+        self.jobs.locked().push(Job { event_id: id.to_string(), from, to });
     }
 
     fn segments(&self) -> Vec<Seg> {
@@ -90,9 +80,7 @@ impl EventBuffer {
             .filter_map(|e| {
                 let p = e.path();
                 let name = p.file_name()?.to_str()?.to_string();
-                let ts = name
-                    .strip_prefix(&format!("{PREFIX}_"))?
-                    .strip_suffix(".mp4")?;
+                let ts = name.strip_prefix(&format!("{PREFIX}_"))?.strip_suffix(".mp4")?;
                 let n = NaiveDateTime::parse_from_str(ts, "%Y-%m-%d_%H-%M-%S").ok()?;
                 Some((p, Local.from_local_datetime(&n).earliest()?))
             })
@@ -100,13 +88,7 @@ impl EventBuffer {
         v.sort_by_key(|x| x.1);
         // The newest file is still being written; its end is "now".
         let n = v.len();
-        (0..n)
-            .map(|i| Seg {
-                path: v[i].0.clone(),
-                start: v[i].1,
-                end: if i + 1 < n { v[i + 1].1 } else { Local::now() },
-            })
-            .collect()
+        (0..n).map(|i| Seg { path: v[i].0.clone(), start: v[i].1, end: if i + 1 < n { v[i + 1].1 } else { Local::now() } }).collect()
     }
 
     pub async fn run(self: Arc<Self>, cancel: CancellationToken) {
@@ -135,32 +117,20 @@ impl EventBuffer {
         if segs.is_empty() {
             return;
         }
-        let writing_start = if stopping {
-            Local::now() + CDuration::days(1)
-        } else {
-            segs.last().unwrap().start
-        };
+        let writing_start = if stopping { Local::now() + CDuration::days(1) } else { segs.last().unwrap().start };
         let complete = if stopping { segs.len() } else { segs.len() - 1 };
 
         // Build clips whose time range is fully written.
         let ready: Vec<Job> = {
             let mut jobs = self.jobs.locked();
-            let (ready, wait): (Vec<Job>, Vec<Job>) =
-                jobs.drain(..).partition(|j| j.to <= writing_start);
+            let (ready, wait): (Vec<Job>, Vec<Job>) = jobs.drain(..).partition(|j| j.to <= writing_start);
             *jobs = wait;
             ready
         };
         for job in ready {
-            let parts: Vec<Seg> = segs[..complete]
-                .iter()
-                .filter(|s| s.end > job.from && s.start < job.to)
-                .cloned()
-                .collect();
+            let parts: Vec<Seg> = segs[..complete].iter().filter(|s| s.end > job.from && s.start < job.to).cloned().collect();
             if parts.is_empty() {
-                warn!(
-                    "[{}] no buffered video for event {}",
-                    self.name, job.event_id
-                );
+                warn!("[{}] no buffered video for event {}", self.name, job.event_id);
                 continue;
             }
             match self.build_clip(&job.event_id, &parts).await {
@@ -204,25 +174,12 @@ impl EventBuffer {
         // crash or power cut never leaves a broken clip behind.
         let part = out_dir.join(format!("{event_id}{}", crate::mp4fix::PART_SUFFIX));
         let list = self.dir.join(format!("{event_id}.txt"));
-        let text: String = parts
-            .iter()
-            .map(|p| format!("file '{}'\n", crate::ffmpeg::concat_path(&p.path)))
-            .collect();
+        let text: String = parts.iter().map(|p| format!("file '{}'\n", crate::ffmpeg::concat_path(&p.path))).collect();
         std::fs::write(&list, text)?;
         let out = tokio::time::timeout(
             Duration::from_secs(300),
             crate::load::cmd(&self.ffmpeg)
-                .args([
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                ])
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i"])
                 .arg(&list)
                 .args(["-c", "copy", "-movflags", "+faststart"])
                 .args(crate::ffmpeg::hevc_tag(&self.ffmpeg, &parts[0].path).await)
@@ -235,13 +192,7 @@ impl EventBuffer {
         let _ = std::fs::remove_file(&list);
         if !out.status.success() {
             let _ = std::fs::remove_file(&part);
-            anyhow::bail!(
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-                    .lines()
-                    .next()
-                    .unwrap_or("ffmpeg failed")
-            );
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("ffmpeg failed"));
         }
         crate::mp4fix::commit(&part, &out_dir.join(&name))?;
         let secs = (parts.last().unwrap().end - parts[0].start).num_seconds();

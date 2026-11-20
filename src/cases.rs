@@ -255,17 +255,13 @@ pub fn locks_event(camera: &str, event: &str) -> Option<String> {
 pub fn locks_time(camera: &str, from: DateTime<Local>, to: DateTime<Local>) -> Option<String> {
     let g = LOCKER.locked();
     let l = g.as_ref()?;
-    l.cases
-        .iter()
-        .find(|c| c.items.iter().any(|i| i.protected && i.camera == camera && i.from <= to && i.to >= from))
-        .map(|c| c.name.clone())
+    l.cases.iter().find(|c| c.items.iter().any(|i| i.protected && i.camera == camera && i.from <= to && i.to >= from)).map(|c| c.name.clone())
 }
 
 /// What a blocked delete says.
 pub fn locked_message(case: &str) -> String {
     format!("This is locked in the Evidence Locker case “{case}”. To delete it, open that case (Evidence) and unprotect it first.")
 }
-
 
 pub fn safe_part(s: &str) -> String {
     let t: String = s.chars().map(|c| if c.is_alphanumeric() || " -_.".contains(c) { c } else { '_' }).collect();
@@ -444,22 +440,25 @@ mod tests {
         let c = create("Break-in", "back door").unwrap();
         assert!(create("  ", "").is_err());
         let t = Local::now();
-        let it = add(&c.id, Item {
-            id: String::new(),
-            kind: Kind::Alert,
-            title: "Person at the back door".into(),
-            camera: "back".into(),
-            camera_name: "Back".into(),
-            event: Some("e1".into()),
-            from: t - Duration::seconds(10),
-            to: t,
-            video: None,
-            picture: None,
-            notes: String::new(),
-            added: t,
-            added_by: "admin".into(),
-            protected: true,
-        })
+        let it = add(
+            &c.id,
+            Item {
+                id: String::new(),
+                kind: Kind::Alert,
+                title: "Person at the back door".into(),
+                camera: "back".into(),
+                camera_name: "Back".into(),
+                event: Some("e1".into()),
+                from: t - Duration::seconds(10),
+                to: t,
+                video: None,
+                picture: None,
+                notes: String::new(),
+                added: t,
+                added_by: "admin".into(),
+                protected: true,
+            },
+        )
         .unwrap();
         // The alert and the footage of its time are locked; other footage isn't.
         assert_eq!(locks_event("back", "e1").as_deref(), Some("Break-in"));

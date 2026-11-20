@@ -5,10 +5,10 @@
 //! (the camera keeps the events until asked), which works through NAT and
 //! firewalls, unlike the camera calling GAZE.
 
-use crate::sync::MutexExt;
 use crate::config::CameraConfig;
 use crate::manager::Manager;
 use crate::onvif::{Target, attr_values, capability_xaddr, security_header, tag_text};
+use crate::sync::MutexExt;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -93,13 +93,7 @@ impl Client {
         let env = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:tt="http://www.onvif.org/ver10/schema" xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" xmlns:tev="http://www.onvif.org/ver10/events/wsdl">{sec}<s:Body>{body}</s:Body></s:Envelope>"#
         );
-        let r = self
-            .http
-            .post(url)
-            .header("Content-Type", format!("application/soap+xml; charset=utf-8; action=\"{action}\""))
-            .body(env)
-            .send()
-            .await?;
+        let r = self.http.post(url).header("Content-Type", format!("application/soap+xml; charset=utf-8; action=\"{action}\"")).body(env).send().await?;
         let status = r.status();
         let text = r.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -124,17 +118,26 @@ async fn watch(mgr: &Arc<Manager>, cam: &CameraConfig) -> Result<()> {
     let t = Target::from(cam, &cam.ptz)?;
     let c = Client { http: reqwest::Client::builder().timeout(Duration::from_secs(25)).build()?, t };
     let caps = c
-        .call(&c.t.device_url(), "http://www.onvif.org/ver10/device/wsdl/GetCapabilities",
-            r#"<GetCapabilities xmlns="http://www.onvif.org/ver10/device/wsdl"><Category>Events</Category></GetCapabilities>"#)
+        .call(
+            &c.t.device_url(),
+            "http://www.onvif.org/ver10/device/wsdl/GetCapabilities",
+            r#"<GetCapabilities xmlns="http://www.onvif.org/ver10/device/wsdl"><Category>Events</Category></GetCapabilities>"#,
+        )
         .await?;
     let events = capability_xaddr(&caps, "Events").ok_or_else(|| anyhow::anyhow!("this camera doesn't offer ONVIF events"))?;
     let events = c.fix(&events);
     let sub = c
-        .call(&events, "http://www.onvif.org/ver10/events/wsdl/EventPortType/CreatePullPointSubscriptionRequest",
-            "<tev:CreatePullPointSubscription><tev:InitialTerminationTime>PT120S</tev:InitialTerminationTime></tev:CreatePullPointSubscription>")
+        .call(
+            &events,
+            "http://www.onvif.org/ver10/events/wsdl/EventPortType/CreatePullPointSubscriptionRequest",
+            "<tev:CreatePullPointSubscription><tev:InitialTerminationTime>PT120S</tev:InitialTerminationTime></tev:CreatePullPointSubscription>",
+        )
         .await?;
     let addr = tag_text(&sub, "Address").map(|a| c.fix(&a)).ok_or_else(|| anyhow::anyhow!("the camera didn't give a subscription address"))?;
-    set(&cam.id, |s| { s.connected = true; s.error = None; });
+    set(&cam.id, |s| {
+        s.connected = true;
+        s.error = None;
+    });
     info!("[{}] listening to the camera's own detection (ONVIF events)", cam.name);
     crate::camlog::add(&cam.id, "connection", None, "Listening to the camera's own detection (ONVIF events)");
     let mut renewed = std::time::Instant::now();
@@ -148,13 +151,16 @@ async fn watch(mgr: &Arc<Manager>, cam: &CameraConfig) -> Result<()> {
             return Ok(());
         }
         if renewed.elapsed() > Duration::from_secs(60) {
-            c.call(&addr, "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/RenewRequest",
-                "<wsnt:Renew><wsnt:TerminationTime>PT120S</wsnt:TerminationTime></wsnt:Renew>").await?;
+            c.call(&addr, "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/RenewRequest", "<wsnt:Renew><wsnt:TerminationTime>PT120S</wsnt:TerminationTime></wsnt:Renew>")
+                .await?;
             renewed = std::time::Instant::now();
         }
         let xml = c
-            .call(&addr, "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest",
-                "<tev:PullMessages><tev:Timeout>PT10S</tev:Timeout><tev:MessageLimit>32</tev:MessageLimit></tev:PullMessages>")
+            .call(
+                &addr,
+                "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest",
+                "<tev:PullMessages><tev:Timeout>PT10S</tev:Timeout><tev:MessageLimit>32</tev:MessageLimit></tev:PullMessages>",
+            )
             .await?;
         for (topic, active) in parse_messages(&xml) {
             let was = on.insert(topic.clone(), active).unwrap_or(false);
@@ -168,7 +174,10 @@ async fn watch(mgr: &Arc<Manager>, cam: &CameraConfig) -> Result<()> {
                 }
                 continue;
             };
-            set(&cam.id, |s| { s.last = Some(topic.clone()); s.last_at = Some(chrono::Local::now()); });
+            set(&cam.id, |s| {
+                s.last = Some(topic.clone());
+                s.last_at = Some(chrono::Local::now());
+            });
             crate::camlog::add(&cam.id, "camera", Some(&topic), &camera_said(label, note));
             if let Some(d) = mgr.camera(&cam.id).and_then(|r| r.detector()) {
                 d.external(label, note);
@@ -179,11 +188,7 @@ async fn watch(mgr: &Arc<Manager>, cam: &CameraConfig) -> Result<()> {
 
 /// What the camera reported, as a line for the camera's log.
 fn camera_said(label: &str, note: &str) -> String {
-    if note.is_empty() {
-        format!("Motion (the camera's own motion detection) → alert: {label}")
-    } else {
-        format!("{note} → alert: {label}")
-    }
+    if note.is_empty() { format!("Motion (the camera's own motion detection) → alert: {label}") } else { format!("{note} → alert: {label}") }
 }
 
 pub async fn run(mgr: Arc<Manager>) {
@@ -212,7 +217,10 @@ pub async fn run(mgr: Arc<Manager>) {
                     if let Err(e) = watch(&m, &cam).await {
                         warn!("[{}] camera's own detection: {e:#} — trying again in {wait} s", cam.name);
                         crate::camlog::add(&cam.id, "connection", None, &format!("Camera's own detection: {e:#} — trying again in {wait} s"));
-                        set(&cam.id, |s| { s.connected = false; s.error = Some(format!("{e:#}")); });
+                        set(&cam.id, |s| {
+                            s.connected = false;
+                            s.error = Some(format!("{e:#}"));
+                        });
                     } else if m.config().cameras.iter().find(|x| x.id == cam.id) != Some(&cam) {
                         return;
                     }

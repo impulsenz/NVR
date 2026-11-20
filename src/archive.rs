@@ -10,10 +10,10 @@
 //!
 //! What's being moved shows in System → Tasks (files left, size, speed).
 
-use crate::sync::MutexExt;
 use crate::config::{ArchivePlan, Config};
 use crate::manager::Manager;
 use crate::storage::{self, Recording};
+use crate::sync::MutexExt;
 use chrono::{DateTime, Duration as CDuration, Local};
 use serde_json::{Value, json};
 use std::path::Path;

@@ -106,10 +106,7 @@ pub fn pack(v: &[f32]) -> String {
 
 pub fn unpack(s: &str) -> Vec<f32> {
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s)
-        .map(|b| b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
-        .unwrap_or_default()
+    base64::engine::general_purpose::STANDARD.decode(s).map(|b| b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()).unwrap_or_default()
 }
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {

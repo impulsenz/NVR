@@ -5,8 +5,8 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg_attr(not(windows), allow(dead_code))]
 const BUILD: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
@@ -176,4 +176,3 @@ mod tests {
         assert!(BUILD.ends_with(f));
     }
 }
-

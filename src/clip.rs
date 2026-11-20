@@ -62,9 +62,7 @@ impl Bpe {
             l.push_str("</w>");
         }
         loop {
-            let best = (0..parts.len().saturating_sub(1))
-                .filter_map(|i| self.ranks.get(&(parts[i].clone(), parts[i + 1].clone())).map(|r| (*r, i)))
-                .min();
+            let best = (0..parts.len().saturating_sub(1)).filter_map(|i| self.ranks.get(&(parts[i].clone(), parts[i + 1].clone())).map(|r| (*r, i))).min();
             let Some((_, i)) = best else { break };
             let b = parts.remove(i + 1);
             parts[i].push_str(&b);
@@ -115,7 +113,9 @@ fn split_words(t: &str) -> Vec<String> {
         }
         if ch == '\'' {
             let rest: String = c[i + 1..c.len().min(i + 3)].iter().collect();
-            if let Some(e) = ["ll", "re", "ve"].iter().find(|e| rest.starts_with(**e)).map(|e| e.len()).or_else(|| ["s", "t", "m", "d"].iter().find(|e| rest.starts_with(**e)).map(|_| 1)) {
+            if let Some(e) =
+                ["ll", "re", "ve"].iter().find(|e| rest.starts_with(**e)).map(|e| e.len()).or_else(|| ["s", "t", "m", "d"].iter().find(|e| rest.starts_with(**e)).map(|_| 1))
+            {
                 out.push(c[i..=i + e].iter().collect());
                 i += e + 1;
                 continue;
@@ -150,12 +150,7 @@ fn load_net(path: &Path, what: &str, int: bool) -> Result<crate::infer::Net> {
     crate::infer::load(path, what, || {
         use tract_onnx::prelude::*;
         let m = tract_onnx::onnx().model_for_path(path).map_err(|e| anyhow!("{e}"))?;
-        let m = if int {
-            m.with_input_fact(0, i64::fact([1, TOKENS]).into())
-        } else {
-            m.with_input_fact(0, f32::fact([1, 3, SIZE, SIZE]).into())
-        }
-        .map_err(|e| anyhow!("{e}"))?;
+        let m = if int { m.with_input_fact(0, i64::fact([1, TOKENS]).into()) } else { m.with_input_fact(0, f32::fact([1, 3, SIZE, SIZE]).into()) }.map_err(|e| anyhow!("{e}"))?;
         m.into_optimized().map_err(|e| anyhow!("{e}"))?.into_runnable().map_err(|e| anyhow!("{e}"))
     })
 }
@@ -459,9 +454,7 @@ pub async fn search(mgr: &crate::manager::Manager, allowed: Option<&[String]>, q
     let neutral = {
         static N: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
         let c3 = c.clone();
-        N.get_or_try_init(|| async move { tokio::task::spawn_blocking(move || NEUTRAL.iter().map(|t| c3.words(t)).collect::<Result<Vec<_>>>()).await? })
-            .await?
-            .clone()
+        N.get_or_try_init(|| async move { tokio::task::spawn_blocking(move || NEUTRAL.iter().map(|t| c3.words(t)).collect::<Result<Vec<_>>>()).await? }).await?.clone()
     };
     let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
     // As CLIP decides between descriptions (×100, softmax): the share the

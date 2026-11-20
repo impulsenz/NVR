@@ -4,9 +4,9 @@
 //! of everyday sound, 16 MB), run on this computer every half second on the
 //! last second of sound. What's heard makes an alert like a person seen.
 
-use crate::sync::MutexExt;
 use crate::config::CameraConfig;
 use crate::manager::Manager;
+use crate::sync::MutexExt;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,20 +49,14 @@ fn class_names() -> &'static [&'static str] {
 fn kind_classes() -> &'static [Vec<usize>] {
     static K: LazyLock<Vec<Vec<usize>>> = LazyLock::new(|| {
         let names = class_names();
-        KINDS
-            .iter()
-            .map(|(_, _, cls)| cls.iter().filter_map(|c| names.iter().position(|n| n == c)).collect())
-            .collect()
+        KINDS.iter().map(|(_, _, cls)| cls.iter().filter_map(|c| names.iter().position(|n| n == c)).collect()).collect()
     });
     &K
 }
 
 /// How sure, per kind, from the model's 521 scores.
 fn kind_scores(scores: &[f32]) -> Vec<f32> {
-    kind_classes()
-        .iter()
-        .map(|cls| cls.iter().map(|&i| scores.get(i).copied().unwrap_or(0.0)).fold(0.0, f32::max))
-        .collect()
+    kind_classes().iter().map(|cls| cls.iter().map(|&i| scores.get(i).copied().unwrap_or(0.0)).fold(0.0, f32::max)).collect()
 }
 
 /// The score a kind must reach, from the camera's sensitivity (1–10).

@@ -113,12 +113,7 @@ fn pick(kept: &[(i64, PathBuf)], start: i64, end: i64, interval: f64) -> Option<
     for n in 0..slots {
         let t = start + n * step;
         let i = kept.partition_point(|x| x.0 < t);
-        let best = [i.checked_sub(1), Some(i)]
-            .into_iter()
-            .flatten()
-            .filter_map(|j| kept.get(j))
-            .min_by_key(|x| (x.0 - t).abs())
-            .filter(|x| (x.0 - t).abs() <= near);
+        let best = [i.checked_sub(1), Some(i)].into_iter().flatten().filter_map(|j| kept.get(j)).min_by_key(|x| (x.0 - t).abs()).filter(|x| (x.0 - t).abs() <= near);
         out.push(best.map(|x| x.1.clone()));
     }
     let have = out.iter().filter(|x| x.is_some()).count();
@@ -129,26 +124,19 @@ fn pick(kept: &[(i64, PathBuf)], start: i64, end: i64, interval: f64) -> Option<
     // A missing moment: the picture before it.
     let mut last = None;
     out.into_iter()
-            .map(|x| {
-                if x.is_some() {
-                    last.clone_from(&x);
-                }
-                x.or_else(|| last.clone())
-            })
-            .collect::<Option<Vec<_>>>()
+        .map(|x| {
+            if x.is_some() {
+                last.clone_from(&x);
+            }
+            x.or_else(|| last.clone())
+        })
+        .collect::<Option<Vec<_>>>()
 }
 
 /// Time-lapse pages for a recording, put together from the kept pictures:
 /// written as `<prefix>-000.jpg` … like the ones made from files. `end`: how
 /// far the recording goes (for one still being recorded: now).
-pub fn sprite(
-    camera_dir: &Path,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-    interval: f64,
-    aspect: f64,
-    prefix: &Path,
-) -> Option<SpriteInfo> {
+pub fn sprite(camera_dir: &Path, start: DateTime<Local>, end: DateTime<Local>, interval: f64, aspect: f64, prefix: &Path) -> Option<SpriteInfo> {
     let interval = interval.max(1.0);
     let t = tile();
     let kept = list(camera_dir);
@@ -157,11 +145,7 @@ pub fn sprite(
         .iter()
         .map(|p| {
             let f = crate::imgutil::decode_jpeg(&std::fs::read(p).ok()?).ok()?;
-            Some(if (f.width, f.height) == t {
-                (*f.rgb).clone()
-            } else {
-                crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, t.0, t.1)
-            })
+            Some(if (f.width, f.height) == t { (*f.rgb).clone() } else { crate::imgutil::resize_rgb(&f.rgb, f.width, f.height, t.0, t.1) })
         })
         .collect::<Option<_>>()?;
     let (count, pages) = crate::ffmpeg::write_sprite_pages(prefix, tiles, t).ok()?;

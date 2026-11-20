@@ -4,8 +4,8 @@
 //!
 //! A scan also runs once a day; cameras not seen before are reported.
 
-use crate::sync::MutexExt;
 use crate::manager::Manager;
+use crate::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -65,9 +65,7 @@ fn pct_decode(s: &str) -> String {
 /// Read one ProbeMatch reply.
 pub fn parse_match(xml: &str) -> Option<Found> {
     let xaddrs = crate::onvif::tag_text(xml, "XAddrs")?;
-    let first = xaddrs
-        .split_whitespace()
-        .find(|u| u.starts_with("http://"))?;
+    let first = xaddrs.split_whitespace().find(|u| u.starts_with("http://"))?;
     let hostport = first.trim_start_matches("http://").split('/').next()?;
     let (ip, port) = match hostport.rsplit_once(':') {
         Some((h, p)) => (h.to_string(), p.parse().unwrap_or(80)),
@@ -75,21 +73,8 @@ pub fn parse_match(xml: &str) -> Option<Found> {
     };
     ip.parse::<Ipv4Addr>().ok()?;
     let scopes = crate::onvif::tag_text(xml, "Scopes").unwrap_or_default();
-    let scope = |key: &str| {
-        scopes
-            .split_whitespace()
-            .find_map(|s| s.strip_prefix(&format!("onvif://www.onvif.org/{key}/")))
-            .map(pct_decode)
-            .unwrap_or_default()
-    };
-    Some(Found {
-        ip,
-        onvif_port: port,
-        name: scope("name"),
-        hardware: scope("hardware"),
-        manufacturer: scope("mfr"),
-        ..Default::default()
-    })
+    let scope = |key: &str| scopes.split_whitespace().find_map(|s| s.strip_prefix(&format!("onvif://www.onvif.org/{key}/"))).map(pct_decode).unwrap_or_default();
+    Some(Found { ip, onvif_port: port, name: scope("name"), hardware: scope("hardware"), manufacturer: scope("mfr"), ..Default::default() })
 }
 
 /// ONVIF discovery: the probe goes out of every network adapter (sent from
@@ -168,14 +153,7 @@ fn camera_hosts(mgr: &Manager) -> HashSet<String> {
         .flat_map(|c| [c.url.clone(), c.live_url.clone(), c.ptz.host.clone()])
         .filter_map(|u| {
             let rest = u.split_once("://").map(|x| x.1).unwrap_or(&u).to_string();
-            let host = rest
-                .rsplit('@')
-                .next()
-                .unwrap_or(&rest)
-                .split(['/', ':', '?'])
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let host = rest.rsplit('@').next().unwrap_or(&rest).split(['/', ':', '?']).next().unwrap_or("").to_string();
             (!host.is_empty()).then_some(host)
         })
         .collect()
@@ -205,11 +183,7 @@ async fn sweep(nets: Vec<[u8; 3]>, port: u16) -> Vec<String> {
             let sem = sem.clone();
             tasks.push(tokio::spawn(async move {
                 let _p = sem.acquire().await.ok()?;
-                let ok = tokio::time::timeout(
-                    Duration::from_millis(400),
-                    tokio::net::TcpStream::connect((ip, port)),
-                )
-                .await;
+                let ok = tokio::time::timeout(Duration::from_millis(400), tokio::net::TcpStream::connect((ip, port))).await;
                 matches!(ok, Ok(Ok(_))).then(|| ip.to_string())
             }));
         }
@@ -232,12 +206,7 @@ pub async fn scan(mgr: &Manager, extra: &[[u8; 3]]) -> Vec<Found> {
     let (onvif, rtsp) = tokio::join!(ws_discovery(Duration::from_secs(3)), rtsp_sweep(nets));
     let mut all: BTreeMap<String, Found> = onvif.into_iter().map(|f| (f.ip.clone(), f)).collect();
     for ip in rtsp {
-        all.entry(ip.clone())
-            .or_insert(Found {
-                ip,
-                ..Default::default()
-            })
-            .rtsp = true;
+        all.entry(ip.clone()).or_insert(Found { ip, ..Default::default() }).rtsp = true;
     }
     // Which are already cameras here (by the address in their stream URLs).
     let known = camera_hosts(mgr);
@@ -259,47 +228,20 @@ pub async fn daily(mgr: Arc<Manager>) {
     let file = mgr.data_dir.join("discovered.json");
     loop {
         let found = scan(&mgr, &[]).await;
-        let seen: HashSet<String> = std::fs::read(&file)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        let new: Vec<&Found> = found
-            .iter()
-            .filter(|f| !f.added && !seen.contains(&f.ip))
-            .collect();
+        let seen: HashSet<String> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let new: Vec<&Found> = found.iter().filter(|f| !f.added && !seen.contains(&f.ip)).collect();
         if !seen.is_empty() || !found.is_empty() {
             for f in &new {
-                let what = [
-                    f.manufacturer.as_str(),
-                    f.hardware.as_str(),
-                    f.name.as_str(),
-                ]
-                .iter()
-                .filter(|s| !s.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" ");
+                let what = [f.manufacturer.as_str(), f.hardware.as_str(), f.name.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
                 warn!(target: "event", "New camera found on the network: {}{}", f.ip, if what.is_empty() { String::new() } else { format!(" ({what})") });
             }
         }
-        *mgr.new_cameras.locked() = found
-            .iter()
-            .filter(|f| !f.added)
-            .filter(|&f| new.iter().any(|n| n.ip == f.ip) || !seen.contains(&f.ip))
-            .cloned()
-            .collect();
-        let all: HashSet<String> = seen
-            .into_iter()
-            .chain(found.iter().map(|f| f.ip.clone()))
-            .collect();
+        *mgr.new_cameras.locked() = found.iter().filter(|f| !f.added).filter(|&f| new.iter().any(|n| n.ip == f.ip) || !seen.contains(&f.ip)).cloned().collect();
+        let all: HashSet<String> = seen.into_iter().chain(found.iter().map(|f| f.ip.clone())).collect();
         if let Ok(b) = serde_json::to_vec(&all) {
             let _ = std::fs::write(&file, b);
         }
-        info!(
-            "network scan: {} camera(s) found, {} not added",
-            found.len(),
-            found.iter().filter(|f| !f.added).count()
-        );
+        info!("network scan: {} camera(s) found, {} not added", found.len(), found.iter().filter(|f| !f.added).count());
         tokio::time::sleep(Duration::from_secs(86_400)).await;
     }
 }
@@ -321,10 +263,7 @@ mod tests {
 
     #[test]
     fn reads_typed_networks() {
-        assert_eq!(
-            super::parse_networks("192.168.5.0/24, 10.0.2.x 172.16.4.17; nonsense"),
-            vec![[192, 168, 5], [10, 0, 2], [172, 16, 4]]
-        );
+        assert_eq!(super::parse_networks("192.168.5.0/24, 10.0.2.x 172.16.4.17; nonsense"), vec![[192, 168, 5], [10, 0, 2], [172, 16, 4]]);
     }
 
     #[test]

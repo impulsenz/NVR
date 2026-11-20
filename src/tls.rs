@@ -133,10 +133,7 @@ pub async fn serve(mgr: Arc<crate::manager::Manager>, bind: String, port: u16) {
     info!("secure web interface on https://{addr} ({source})");
     // Marked as https for the rest of GAZE (secure sign-in cookie, links).
     let app = crate::web::router(mgr.clone()).layer(axum::middleware::from_fn(mark_https));
-    if let Err(e) = axum_server::bind_rustls(addr, rustls)
-        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .await
-    {
+    if let Err(e) = axum_server::bind_rustls(addr, rustls).serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
         warn!("https stopped: {e}");
         set(Status { port, error: Some(format!("can't use port {port}: {e}")), ..Default::default() });
     }
@@ -152,8 +149,7 @@ async fn mark_https(mut req: axum::extract::Request, next: axum::middleware::Nex
 pub async fn from_tailscale(data_dir: &Path) -> Result<(String, String, String)> {
     let exe = if cfg!(windows) { "C:\\Program Files\\Tailscale\\tailscale.exe" } else { "tailscale" };
     let exe = if Path::new(exe).exists() { exe.to_string() } else { "tailscale".to_string() };
-    let out = tokio::process::Command::new(&exe).args(["status", "--json"]).output().await
-        .context("Tailscale isn't installed on this computer (tailscale.com/download)")?;
+    let out = tokio::process::Command::new(&exe).args(["status", "--json"]).output().await.context("Tailscale isn't installed on this computer (tailscale.com/download)")?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).context("Tailscale didn't answer — is it signed in?")?;
     let name = v["Self"]["DNSName"].as_str().unwrap_or("").trim_end_matches('.').to_string();
     if name.is_empty() {
@@ -162,9 +158,7 @@ pub async fn from_tailscale(data_dir: &Path) -> Result<(String, String, String)>
     let dir = own_dir(data_dir);
     std::fs::create_dir_all(&dir)?;
     let (c, k) = (dir.join("tailscale.crt"), dir.join("tailscale.key"));
-    let out = tokio::process::Command::new(&exe)
-        .args(["cert", "--cert-file"]).arg(&c).arg("--key-file").arg(&k).arg(&name)
-        .output().await?;
+    let out = tokio::process::Command::new(&exe).args(["cert", "--cert-file"]).arg(&c).arg("--key-file").arg(&k).arg(&name).output().await?;
     if !out.status.success() {
         let e = String::from_utf8_lossy(&out.stderr);
         anyhow::bail!("Tailscale couldn't make a certificate: {} (turn on HTTPS certificates in the Tailscale admin page, DNS tab)", e.trim());

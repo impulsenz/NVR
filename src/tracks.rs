@@ -12,7 +12,7 @@
 //!
 //! Pieces, each testable on its own: `Tracker` (one camera: looks → walks),
 //! `signature` (clothing colour), `link` (walks → journeys), `Store` (files).
-#![allow(clippy::needless_range_loop)]  // small fixed arrays (colour bands, signatures): indexed loops read like the maths
+#![allow(clippy::needless_range_loop)] // small fixed arrays (colour bands, signatures): indexed loops read like the maths
 
 use crate::plan::{Plan, Tuning};
 use crate::sync::MutexExt;
@@ -776,7 +776,16 @@ mod tests {
     /// Two cameras side by side on a 40 m × 20 m plan: A looks at the left half, B at the right.
     fn plan() -> Plan {
         let calib = |x0: f64, x1: f64| Calib { picture: [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]], plan: [[x0, 1.0], [x1, 1.0], [x1, 0.0], [x0, 0.0]] };
-        let cam = |id: &str, x0: f64, x1: f64| PlanCamera { id: id.into(), x: (x0 + x1) / 2.0, y: 0.5, rotation_deg: 0.0, fov_deg: 90.0, range_m: 15.0, calib: Some(calib(x0, x1)), size: 1.0 };
+        let cam = |id: &str, x0: f64, x1: f64| PlanCamera {
+            id: id.into(),
+            x: (x0 + x1) / 2.0,
+            y: 0.5,
+            rotation_deg: 0.0,
+            fov_deg: 90.0,
+            range_m: 15.0,
+            calib: Some(calib(x0, x1)),
+            size: 1.0,
+        };
         Plan { has_image: true, image_w: 800, image_h: 400, px_per_m: 20.0, cameras: vec![cam("a", 0.0, 0.5), cam("b", 0.5, 1.0)], tuning: tuning(), ..Default::default() }
     }
 
@@ -913,7 +922,11 @@ mod tests {
     #[test]
     fn the_numbers_add_up() {
         let p = plan();
-        let tracks = [walk("a1", "a", 1_800_000_000_000, 14, 0.0, 1.0, None), walk("b1", "b", 1_800_000_016_000, 14, 0.0, 1.0, None), walk("a2", "a", 1_800_000_500_000, 10, 0.2, 0.4, None)];
+        let tracks = [
+            walk("a1", "a", 1_800_000_000_000, 14, 0.0, 1.0, None),
+            walk("b1", "b", 1_800_000_016_000, 14, 0.0, 1.0, None),
+            walk("a2", "a", 1_800_000_500_000, 10, 0.2, 0.4, None),
+        ];
         let js = link(&tracks, &p);
         let st = stats(&js, &tracks);
         assert_eq!(st.people, 2);
@@ -929,4 +942,3 @@ mod tests {
         assert!(on_plan(&p, "zzz", &Point(0, 0.0, 0.5, 0.0, 0.0)).is_none());
     }
 }
-

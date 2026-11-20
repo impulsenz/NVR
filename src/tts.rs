@@ -48,10 +48,7 @@ pub async fn speak(ffmpeg: &str, text: &str, t: &TtsConfig) -> Result<Vec<i16>> 
 }
 
 fn rand_id() -> u32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0)
 }
 
 /// Two soft rising tones and a short pause (8 kHz).
@@ -132,9 +129,7 @@ async fn system_voices() -> Vec<Voice> {
         let sapi = "Add-Type -AssemblyName System.Speech; \
             (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | Where-Object { $_.Enabled } | \
             ForEach-Object { $_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture.Name }";
-        let one = format!(
-            "{WINRT_HELPER}\n[Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices | ForEach-Object {{ $_.DisplayName + '|' + $_.Language }}"
-        );
+        let one = format!("{WINRT_HELPER}\n[Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices | ForEach-Object {{ $_.DisplayName + '|' + $_.Language }}");
         for (kind, script) in [("onecore", one.as_str()), ("sapi", sapi)] {
             if let Ok(o) = powershell(script, &[]).await {
                 for l in String::from_utf8_lossy(&o.stdout).lines() {
@@ -210,12 +205,7 @@ $r.ReadBytes($b)
             let rate = 1.08f64.powi(t.rate.clamp(-10, 10));
             let out = powershell(
                 &script,
-                &[
-                    ("GAZE_TTS_TEXT", text.to_string()),
-                    ("GAZE_TTS_FILE", file.clone()),
-                    ("GAZE_TTS_VOICE", name.to_string()),
-                    ("GAZE_TTS_RATE", format!("{rate:.3}")),
-                ],
+                &[("GAZE_TTS_TEXT", text.to_string()), ("GAZE_TTS_FILE", file.clone()), ("GAZE_TTS_VOICE", name.to_string()), ("GAZE_TTS_RATE", format!("{rate:.3}"))],
             )
             .await?;
             if out.status.success() && wav.exists() {
@@ -240,10 +230,7 @@ $r.ReadBytes($b)
         )
         .await?;
         if !out.status.success() || !wav.exists() {
-            bail!(
-                "Windows' voice failed: {}",
-                String::from_utf8_lossy(&out.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or("no voice installed")
-            );
+            bail!("Windows' voice failed: {}", String::from_utf8_lossy(&out.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or("no voice installed"));
         }
         Ok(())
     }

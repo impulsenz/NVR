@@ -24,6 +24,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Formatting (cargo fmt; settings in rustfmt.toml)
+        run: cargo fmt --check
       - name: Tests
         run: cargo test --locked
       - name: Clippy (correctness and suspicious code)

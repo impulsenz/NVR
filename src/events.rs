@@ -220,9 +220,7 @@ fn writer_thread(dir: PathBuf, rx: std::sync::mpsc::Receiver<WriteOp>) {
 fn rewrite_to(dir: &Path, text: &str) {
     let path = dir.join("events.jsonl");
     let tmp = dir.join("events.jsonl.tmp");
-    let swapped = std::fs::write(&tmp, text).is_ok()
-        && std::fs::File::open(&tmp).and_then(|f| f.sync_all()).is_ok()
-        && std::fs::rename(&tmp, &path).is_ok();
+    let swapped = std::fs::write(&tmp, text).is_ok() && std::fs::File::open(&tmp).and_then(|f| f.sync_all()).is_ok() && std::fs::rename(&tmp, &path).is_ok();
     if !swapped {
         let _ = std::fs::remove_file(&tmp);
         for _ in 0..5 {
@@ -273,13 +271,8 @@ impl Drop for EventStore {
 impl EventStore {
     pub fn open(camera_dir: &Path) -> Self {
         let dir = camera_dir.join("events");
-        let mut events: Vec<Event> = std::fs::read_to_string(dir.join("events.jsonl"))
-            .map(|t| {
-                t.lines()
-                    .filter_map(|l| serde_json::from_str(l).ok())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut events: Vec<Event> =
+            std::fs::read_to_string(dir.join("events.jsonl")).map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()).unwrap_or_default();
         // Later lines replace earlier ones with the same id (updates).
         let mut seen = std::collections::HashMap::new();
         for (i, e) in events.iter().enumerate() {
@@ -317,11 +310,7 @@ impl EventStore {
             let d = dir.clone();
             let _ = std::thread::Builder::new().name("alerts-writer".into()).spawn(move || writer_thread(d, rx));
         }
-        let store = Self {
-            dir,
-            events: RwLock::new(events),
-            writer: std::sync::Mutex::new(tx),
-        };
+        let store = Self { dir, events: RwLock::new(events), writer: std::sync::Mutex::new(tx) };
         if store.events.reader().len() != before {
             store.rewrite(&store.events.reader());
         }
@@ -329,11 +318,7 @@ impl EventStore {
     }
 
     fn rewrite(&self, ev: &[Event]) {
-        let text: String = ev
-            .iter()
-            .filter_map(|e| serde_json::to_string(e).ok())
-            .map(|l| l + "\n")
-            .collect();
+        let text: String = ev.iter().filter_map(|e| serde_json::to_string(e).ok()).map(|l| l + "\n").collect();
         let _ = self.writer.locked().send(WriteOp::All(text));
     }
 
@@ -383,10 +368,7 @@ impl EventStore {
             // A picture already made from the saved recording stays, unless
             // detection has since chosen a better moment (that one is then
             // made from the recording again).
-            if old.thumb.as_deref().is_some_and(|t| t.ends_with("-hd.jpg"))
-                && e.thumb != old.thumb
-                && e.thumb_at == old.thumb_at
-            {
+            if old.thumb.as_deref().is_some_and(|t| t.ends_with("-hd.jpg")) && e.thumb != old.thumb && e.thumb_at == old.thumb_at {
                 e.thumb = old.thumb;
             }
         }
@@ -429,20 +411,11 @@ impl EventStore {
     }
 
     pub fn get(&self, id: &str) -> Option<Event> {
-        self.events
-            .reader()
-            .iter()
-            .find(|e| e.id == id)
-            .cloned()
+        self.events.reader().iter().find(|e| e.id == id).cloned()
     }
 
     pub fn between(&self, from: DateTime<Local>, to: DateTime<Local>) -> Vec<Event> {
-        self.events
-            .reader()
-            .iter()
-            .filter(|e| e.end >= from && e.start <= to)
-            .cloned()
-            .collect()
+        self.events.reader().iter().filter(|e| e.end >= from && e.start <= to).cloned().collect()
     }
 
     pub fn all(&self) -> Vec<Event> {
@@ -543,12 +516,7 @@ mod tests {
             meaning: None,
         };
         s.save_detected(e.clone());
-        e.labels.push(Label {
-            label: "person".into(),
-            score: 0.9,
-            color: None,
-            hd: None,
-        });
+        e.labels.push(Label { label: "person".into(), score: 0.9, color: None, hd: None });
         s.save(e.clone());
         s.flush();
         let s2 = EventStore::open(&dir);
@@ -614,7 +582,8 @@ mod tests {
         let mk = |labels: &[&str]| -> Event {
             let labels: Vec<_> = labels.iter().map(|l| serde_json::json!({"label": l, "score": 0.9})).collect();
             serde_json::from_value(serde_json::json!({"id": "x", "camera": "c", "start": "2026-01-01T00:00:00+00:00",
-                "end": "2026-01-01T00:01:00+00:00", "labels": labels})).unwrap()
+                "end": "2026-01-01T00:01:00+00:00", "labels": labels}))
+            .unwrap()
         };
         let ev = [mk(&[]), mk(&[]), mk(&["person"]), mk(&["person", "vehicle"]), mk(&["dog"]), mk(&["vehicle"])];
         let a = activity_per_hour(&ev, 2.0);

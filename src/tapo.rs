@@ -70,10 +70,7 @@ fn is_hash(s: &str) -> bool {
 
 fn parse(url: &str) -> Result<Addr> {
     let rest = url.trim();
-    let rest = rest
-        .get(7..)
-        .filter(|_| is_tapo(rest))
-        .ok_or_else(|| anyhow!("a Tapo speaker address starts with tapo://"))?;
+    let rest = rest.get(7..).filter(|_| is_tapo(rest)).ok_or_else(|| anyhow!("a Tapo speaker address starts with tapo://"))?;
     let authority = &rest[..rest.find(['/', '?']).unwrap_or(rest.len())];
     let (cred, hostport) = match authority.rfind('@') {
         Some(i) => (&authority[..i], &authority[i + 1..]),
@@ -150,10 +147,7 @@ async fn read_head(rd: &mut BufReader<OwnedReadHalf>) -> Result<Head> {
 }
 
 fn between<'a>(s: &'a str, a: &str, b: &str) -> &'a str {
-    s.find(a)
-        .map(|i| &s[i + a.len()..])
-        .map(|r| &r[..r.find(b).unwrap_or(r.len())])
-        .unwrap_or("")
+    s.find(a).map(|i| &s[i + a.len()..]).map(|r| &r[..r.find(b).unwrap_or(r.len())]).unwrap_or("")
 }
 
 impl Speaker {
@@ -176,9 +170,7 @@ impl Speaker {
                             logins.push((user, h));
                         }
                     }
-                    last = anyhow!(
-                        "the Tapo camera refused the login — use the password of the TP-Link (Tapo app) account the camera is in"
-                    );
+                    last = anyhow!("the Tapo camera refused the login — use the password of the TP-Link (Tapo app) account the camera is in");
                 }
                 Err(e) => return Err(e),
             }
@@ -245,26 +237,14 @@ impl Speaker {
 
     async fn start((mut rd, mut wr): (BufReader<OwnedReadHalf>, OwnedWriteHalf)) -> Result<Speaker> {
         let body = r#"{"params":{"talk":{"mode":"aec"},"method":"get"},"seq":3,"type":"request"}"#;
-        let part = format!(
-            "--{CLIENT_BOUNDARY}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}\r\n",
-            body.len()
-        );
+        let part = format!("--{CLIENT_BOUNDARY}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}\r\n", body.len());
         wr.write_all(part.as_bytes()).await?;
-        let json = tokio::time::timeout(Duration::from_secs(5), read_part(&mut rd))
-            .await
-            .map_err(|_| anyhow!("the camera didn't answer the talk request"))??;
+        let json = tokio::time::timeout(Duration::from_secs(5), read_part(&mut rd)).await.map_err(|_| anyhow!("the camera didn't answer the talk request"))??;
         let v: serde_json::Value = serde_json::from_slice(&json).unwrap_or_default();
-        let session = v["params"]["session_id"]
-            .as_str()
-            .map(str::to_string)
-            .or_else(|| v["params"]["session_id"].as_i64().map(|n| n.to_string()))
-            .unwrap_or_default();
+        let session = v["params"]["session_id"].as_str().map(str::to_string).or_else(|| v["params"]["session_id"].as_i64().map(|n| n.to_string())).unwrap_or_default();
         if session.is_empty() {
             let code = v["params"]["error_code"].as_i64().or(v["error_code"].as_i64());
-            bail!(
-                "the Tapo camera didn't open its speaker{}",
-                code.map(|c| format!(" (error {c}) — it may be in use by the Tapo app")).unwrap_or_default()
-            );
+            bail!("the Tapo camera didn't open its speaker{}", code.map(|c| format!(" (error {c}) — it may be in use by the Tapo app")).unwrap_or_default());
         }
         let mut s = Speaker { rd, wr, session, cc_pat: 0, cc_pmt: 0, cc_audio: 0, pts: 90_000, frames: 0 };
         let head = s.tables();
@@ -277,12 +257,8 @@ impl Speaker {
     }
 
     async fn write_part(&mut self, ts: &[u8]) -> Result<()> {
-        let mut part = format!(
-            "--{CLIENT_BOUNDARY}\r\nContent-Type: audio/mp2t\r\nX-If-Encrypt: 0\r\nX-Session-Id: {}\r\nContent-Length: {}\r\n\r\n",
-            self.session,
-            ts.len()
-        )
-        .into_bytes();
+        let mut part =
+            format!("--{CLIENT_BOUNDARY}\r\nContent-Type: audio/mp2t\r\nX-If-Encrypt: 0\r\nX-Session-Id: {}\r\nContent-Length: {}\r\n\r\n", self.session, ts.len()).into_bytes();
         part.extend_from_slice(ts);
         part.extend_from_slice(b"\r\n");
         self.wr.write_all(&part).await.context("the camera closed the connection")
@@ -394,13 +370,7 @@ fn psi(pid: u16, section: &mut Vec<u8>, cc: &mut u8) -> Vec<u8> {
 
 fn pts_bytes(pts: u64, marker: u8) -> [u8; 5] {
     let p = pts & 0x1_FFFF_FFFF;
-    [
-        (marker << 4) | (((p >> 30) as u8 & 0x07) << 1) | 1,
-        (p >> 22) as u8,
-        (((p >> 15) as u8 & 0x7F) << 1) | 1,
-        (p >> 7) as u8,
-        ((p as u8 & 0x7F) << 1) | 1,
-    ]
+    [(marker << 4) | (((p >> 30) as u8 & 0x07) << 1) | 1, (p >> 22) as u8, (((p >> 15) as u8 & 0x7F) << 1) | 1, (p >> 7) as u8, ((p as u8 & 0x7F) << 1) | 1]
 }
 
 /// One PES packet of audio, cut into TS packets.

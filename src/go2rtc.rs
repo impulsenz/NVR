@@ -54,11 +54,7 @@ pub fn stream_name(camera: &str, sub: bool) -> String {
 /// Where a camera stream is read from right now: through go2rtc when it's
 /// chosen and running, otherwise the camera itself.
 pub fn source(camera_url: &str, camera: &str, sub: bool) -> String {
-    if healthy() {
-        format!("rtsp://127.0.0.1:{RTSP_PORT}/{}", stream_name(camera, sub))
-    } else {
-        camera_url.to_string()
-    }
+    if healthy() { format!("rtsp://127.0.0.1:{RTSP_PORT}/{}", stream_name(camera, sub)) } else { camera_url.to_string() }
 }
 
 /// go2rtc's settings for these cameras: every main and sub-stream, the RTSP
@@ -92,11 +88,7 @@ fn source_for(url: &str) -> String {
     if !crate::config::stream_url_ok(u) {
         return String::new();
     }
-    if (u.starts_with("rtsp://") || u.starts_with("rtsps://")) && !u.contains("#backchannel") {
-        format!("{u}#backchannel=0")
-    } else {
-        u.to_string()
-    }
+    if (u.starts_with("rtsp://") || u.starts_with("rtsps://")) && !u.contains("#backchannel") { format!("{u}#backchannel=0") } else { u.to_string() }
 }
 
 /// What go2rtc says about one stream (its connection to the camera and any
@@ -352,4 +344,3 @@ mod pin_tests {
         assert!(pinned("go2rtc_other").is_none());
     }
 }
-

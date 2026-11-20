@@ -10,10 +10,10 @@
 //! At most one notification per camera per `gap_minutes` (a shorter gap at
 //! night); the summary of an alert whose picture was sent always follows.
 
-use crate::sync::MutexExt;
 use crate::config::NotifyConfig;
 use crate::events::Event;
 use crate::manager::{CameraRuntime, Manager};
+use crate::sync::MutexExt;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, NaiveTime};
 use serde_json::Value;
@@ -37,10 +37,7 @@ fn header(s: &str) -> String {
         s.replace('\n', "\\n")
     } else {
         use base64::Engine;
-        format!(
-            "=?UTF-8?B?{}?=",
-            base64::engine::general_purpose::STANDARD.encode(s)
-        )
+        format!("=?UTF-8?B?{}?=", base64::engine::general_purpose::STANDARD.encode(s))
     }
 }
 
@@ -148,19 +145,9 @@ pub async fn send(cfg: &NotifyConfig, m: Message<'_>) -> Result<()> {
 }
 
 async fn send_ntfy(cfg: &NotifyConfig, m: &Message<'_>) -> Result<()> {
-    let url = format!(
-        "{}/{}",
-        cfg.server.trim().trim_end_matches('/'),
-        cfg.topic.trim()
-    );
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
-    let mut req = client
-        .put(&url)
-        .header("Title", header(&m.title))
-        .header("Tags", m.tags)
-        .header("Priority", m.priority.to_string());
+    let url = format!("{}/{}", cfg.server.trim().trim_end_matches('/'), cfg.topic.trim());
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let mut req = client.put(&url).header("Title", header(&m.title)).header("Tags", m.tags).header("Priority", m.priority.to_string());
     if let Some(c) = &m.click {
         req = req.header("Click", header(c));
     }
@@ -172,23 +159,14 @@ async fn send_ntfy(cfg: &NotifyConfig, m: &Message<'_>) -> Result<()> {
     }
     req = match &m.picture {
         // With a picture the text goes in a header; the picture is the body.
-        Some(p) => req
-            .header("Message", header(&m.body))
-            .header("Filename", "alert.jpg")
-            .body(p.clone()),
+        Some(p) => req.header("Message", header(&m.body)).header("Filename", "alert.jpg").body(p.clone()),
         None => req.body(m.body.clone()),
     };
-    let resp = req
-        .send()
-        .await
-        .with_context(|| format!("cannot reach {}", cfg.server))?;
+    let resp = req.send().await.with_context(|| format!("cannot reach {}", cfg.server))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let v: Value = resp.json().await.unwrap_or(Value::Null);
-        bail!(
-            "ntfy {status}: {}",
-            v["error"].as_str().unwrap_or("request refused")
-        );
+        bail!("ntfy {status}: {}", v["error"].as_str().unwrap_or("request refused"));
     }
     Ok(())
 }
@@ -203,11 +181,7 @@ pub fn is_night(cfg: &NotifyConfig, t: DateTime<Local>) -> bool {
         return false;
     };
     let now = t.time();
-    if a <= b {
-        a <= now && now < b
-    } else {
-        now >= a || now < b
-    }
+    if a <= b { a <= now && now < b } else { now >= a || now < b }
 }
 
 /// Notes that are worth attention by themselves.
@@ -216,11 +190,7 @@ fn zone_alarm(e: &Event) -> Option<&str> {
         .iter()
         .find(|n| {
             let l = n.to_lowercase();
-            l.contains("crossed")
-                || l.contains("lingering")
-                || l.contains("loiter")
-                || l.contains("picked up")
-                || l.contains("taken")
+            l.contains("crossed") || l.contains("lingering") || l.contains("loiter") || l.contains("picked up") || l.contains("taken")
         })
         .map(String::as_str)
 }
@@ -240,25 +210,14 @@ fn suspicious(cfg: &NotifyConfig, e: &Event) -> Option<String> {
 }
 
 fn what(e: &Event) -> String {
-    let mut v: Vec<String> = e
-        .labels
-        .iter()
-        .filter(|l| l.label != "motion" && l.hd != Some(false))
-        .map(|l| cap(&l.label))
-        .collect();
+    let mut v: Vec<String> = e.labels.iter().filter(|l| l.label != "motion" && l.hd != Some(false)).map(|l| cap(&l.label)).collect();
     v.dedup();
-    if v.is_empty() {
-        "Motion".into()
-    } else {
-        v.join(", ")
-    }
+    if v.is_empty() { "Motion".into() } else { v.join(", ") }
 }
 
 fn cap(s: &str) -> String {
     let mut c = s.chars();
-    c.next()
-        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
-        .unwrap_or_default()
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
 fn tags(e: &Event, sus: bool) -> &'static str {
@@ -268,11 +227,7 @@ fn tags(e: &Event, sus: bool) -> &'static str {
         "bust_in_silhouette"
     } else if e.labels.iter().any(|l| l.label == "package") {
         "package"
-    } else if e
-        .labels
-        .iter()
-        .any(|l| crate::ai::canon(&l.label) == "vehicle")
-    {
+    } else if e.labels.iter().any(|l| crate::ai::canon(&l.label) == "vehicle") {
         "car"
     } else {
         "camera"
@@ -302,9 +257,7 @@ fn link(cfg: &NotifyConfig, server: &crate::config::ServerConfig, e: &Event) -> 
 pub fn lan_ip() -> Option<std::net::IpAddr> {
     // No packet is sent: connecting a UDP socket only picks the route.
     let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    s.connect("192.168.0.1:9")
-        .or_else(|_| s.connect("8.8.8.8:53"))
-        .ok()?;
+    s.connect("192.168.0.1:9").or_else(|_| s.connect("8.8.8.8:53")).ok()?;
     let ip = s.local_addr().ok()?.ip();
     (!ip.is_unspecified() && !ip.is_loopback()).then_some(ip)
 }
@@ -321,37 +274,15 @@ fn alert_picture(rt: &CameraRuntime, e: &Event) -> Option<Vec<u8>> {
     let Ok(f) = crate::imgutil::decode_jpeg(&raw) else {
         return Some(raw);
     };
-    let labels: Vec<String> = e
-        .boxes
-        .iter()
-        .filter(|b| b.label != "motion")
-        .map(|b| format!("{} {:.0}%", b.label, b.score * 100.0))
-        .collect();
-    let mut marks: Vec<crate::draw::Mark> = e
-        .boxes
-        .iter()
-        .filter(|b| b.label != "motion")
-        .zip(&labels)
-        .map(|(b, l)| crate::draw::Mark {
-            x: b.x,
-            y: b.y,
-            w: b.w,
-            h: b.h,
-            label: l,
-        })
-        .collect();
+    let labels: Vec<String> = e.boxes.iter().filter(|b| b.label != "motion").map(|b| format!("{} {:.0}%", b.label, b.score * 100.0)).collect();
+    let mut marks: Vec<crate::draw::Mark> =
+        e.boxes.iter().filter(|b| b.label != "motion").zip(&labels).map(|(b, l)| crate::draw::Mark { x: b.x, y: b.y, w: b.w, h: b.h, label: l }).collect();
     let fallback;
     if marks.is_empty()
         && let (Some([x, y, w, h]), Some(l)) = (e.focus, e.labels.first())
     {
         fallback = format!("{} {:.0}%", l.label, l.score * 100.0);
-        marks.push(crate::draw::Mark {
-            x,
-            y,
-            w,
-            h,
-            label: &fallback,
-        });
+        marks.push(crate::draw::Mark { x, y, w, h, label: &fallback });
     }
     if marks.is_empty() {
         return Some(raw);
@@ -371,14 +302,8 @@ struct Notifier {
 
 impl Notifier {
     fn may_send(&self, cfg: &NotifyConfig, cam: &str, now: DateTime<Local>) -> bool {
-        let gap = if is_night(cfg, now) {
-            cfg.night_gap_minutes
-        } else {
-            cfg.gap_minutes
-        } as i64;
-        self.last
-            .get(cam)
-            .is_none_or(|t| (now - *t).num_seconds() >= gap * 60)
+        let gap = if is_night(cfg, now) { cfg.night_gap_minutes } else { cfg.gap_minutes } as i64;
+        self.last.get(cam).is_none_or(|t| (now - *t).num_seconds() >= gap * 60)
     }
 
     fn report(&mut self, r: Result<()>) -> bool {
@@ -426,9 +351,7 @@ impl Notifier {
             }
             for mut e in rt.events.between(now - chrono::Duration::minutes(15), now) {
                 // Only what the full-quality check didn't turn down.
-                if e.notified == DONE
-                    || !e.labels.iter().any(|l| (n.objects.contains(&l.label) || l.label == "doorbell" || l.label == "sound") && l.hd != Some(false))
-                {
+                if e.notified == DONE || !e.labels.iter().any(|l| (n.objects.contains(&l.label) || l.label == "doorbell" || l.label == "sound") && l.hd != Some(false)) {
                     continue;
                 }
                 // Being checked in full quality: wait for the answer (a
@@ -506,41 +429,17 @@ impl Notifier {
                     rt.events.save(e);
                     continue;
                 }
-                let story = format!(
-                    "{} — {} s",
-                    what(&e),
-                    (e.end - e.start).num_seconds().max(1)
-                );
+                let story = format!("{} — {} s", what(&e), (e.end - e.start).num_seconds().max(1));
                 let mut body = story;
-                let extra: Vec<&String> = e
-                    .notes
-                    .iter()
-                    .filter(|x| !body.contains(x.as_str()))
-                    .collect();
+                let extra: Vec<&String> = e.notes.iter().filter(|x| !body.contains(x.as_str())).collect();
                 if !extra.is_empty() {
-                    body += &format!(
-                        "\n{}",
-                        extra
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    );
+                    body += &format!("\n{}", extra.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("; "));
                 }
                 if let Some(r) = &sus {
                     body = format!("⚠ {r}\n{body}");
                 }
                 let msg = Message {
-                    title: format!(
-                        "{} {}: {}",
-                        rt.cfg.name,
-                        e.start.format("%H:%M"),
-                        if sus.is_some() {
-                            "suspicious activity"
-                        } else {
-                            "what happened"
-                        }
-                    ),
+                    title: format!("{} {}: {}", rt.cfg.name, e.start.format("%H:%M"), if sus.is_some() { "suspicious activity" } else { "what happened" }),
                     body,
                     tags: tags(&e, sus.is_some()),
                     priority: if sus.is_some() { 5 } else { 2 },
@@ -565,18 +464,10 @@ pub struct Status {
     pub last_error: Option<String>,
 }
 
-pub static STATUS: std::sync::Mutex<Status> = std::sync::Mutex::new(Status {
-    sent: 0,
-    last_sent: None,
-    last_error: None,
-});
+pub static STATUS: std::sync::Mutex<Status> = std::sync::Mutex::new(Status { sent: 0, last_sent: None, last_error: None });
 
 pub async fn run(mgr: Arc<Manager>) {
-    let mut n = Notifier {
-        last: HashMap::new(),
-        last_error: String::new(),
-        retry_after: None,
-    };
+    let mut n = Notifier { last: HashMap::new(), last_error: String::new(), retry_after: None };
     loop {
         tokio::time::sleep(Duration::from_secs(3)).await;
         let cfg = mgr.config();

@@ -294,7 +294,8 @@ pub fn read(data: &Path, cam: &str, from: DateTime<Local>, to: DateTime<Local>, 
     let mut first_logged: Option<i64> = None;
     if let Some(d) = dir(data, cam) {
         // The earliest hour ever logged for this camera (the first day file).
-        let mut names: Vec<String> = std::fs::read_dir(&d).into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str().map(String::from)).filter(|n| n.ends_with(".json")).collect();
+        let mut names: Vec<String> =
+            std::fs::read_dir(&d).into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str().map(String::from)).filter(|n| n.ends_with(".json")).collect();
         names.sort();
         if let Some(first) = names.first() {
             first_logged = read_day(&d.join(first)).keys().filter_map(|h| h.parse::<i64>().ok()).min();
@@ -587,7 +588,17 @@ mod tests {
         let ms = now.timestamp_millis();
         // Motion in the top left, a person and a car lower down, a cat, something unusual.
         motion(cam, ms, &[mo(0.0, 0.0, 0.25, 0.25), mo(0.0, 0.0, 0.25, 0.25)]);
-        objects(cam, ms, &[det("person", 0.9, 0.5, 0.5, 0.1, 0.3), det("truck", 0.8, 0.6, 0.7, 0.3, 0.2), det("cat", 0.7, 0.9, 0.9, 0.1, 0.1), det("chair", 0.8, 0.1, 0.5, 0.1, 0.1), det("person", 0.2, 0.0, 0.5, 0.1, 0.1)]);
+        objects(
+            cam,
+            ms,
+            &[
+                det("person", 0.9, 0.5, 0.5, 0.1, 0.3),
+                det("truck", 0.8, 0.6, 0.7, 0.3, 0.2),
+                det("cat", 0.7, 0.9, 0.9, 0.1, 0.1),
+                det("chair", 0.8, 0.1, 0.5, 0.1, 0.1),
+                det("person", 0.2, 0.0, 0.5, 0.1, 0.1),
+            ],
+        );
         // Some of it already on disk, some still waiting: both count, and the second write adds to the first.
         flush(&data);
         motion(cam, ms, &[mo(0.0, 0.0, 0.25, 0.25)]);

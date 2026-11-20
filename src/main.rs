@@ -3,57 +3,54 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod ai;
-mod buffer;
-mod cases;
 mod archive;
+mod buffer;
+mod camlog;
+mod cases;
+mod clip;
 mod cloud;
 mod config;
+mod describe;
 mod detect;
 mod digest;
 mod discover;
 mod draw;
 mod events;
 mod ffmpeg;
-mod geo;
-mod getffmpeg;
-mod go2rtc;
 mod finalize;
 mod fsbrowse;
 mod ftp;
+mod geo;
+mod getffmpeg;
+mod go2rtc;
 mod health;
 mod heatmap;
-mod hooks;
 mod hls;
+mod hooks;
 mod identify;
 mod imgutil;
 mod inbox;
 mod infer;
-mod launch;
 mod jobs;
 mod known;
+mod launch;
 mod library;
-mod vstore;
 mod live;
 mod livemux;
 mod load;
 mod logs;
+mod mail;
 mod manager;
 mod mp4fix;
-mod mail;
 mod mqtt;
 mod notify;
 mod onvif;
-mod picturelog;
-mod plan;
-mod piper;
 mod onvif_device;
-mod camlog;
 mod onvif_events;
-mod siren;
-mod sound;
-mod clip;
-mod describe;
 mod overview;
+mod picturelog;
+mod piper;
+mod plan;
 mod ptz_auto;
 mod recog;
 mod recorder;
@@ -61,12 +58,14 @@ mod relay;
 mod remote;
 mod rtmp;
 mod seen;
-mod stationary;
+mod siren;
 mod smart;
+mod sound;
 mod states;
+mod stationary;
 mod storage;
-mod synopsis;
 mod sync;
+mod synopsis;
 mod sysmon;
 mod talk;
 mod talkmix;
@@ -76,8 +75,9 @@ mod tracks;
 mod tray;
 mod tts;
 mod update;
-mod watchdog_ctl;
 mod users;
+mod vstore;
+mod watchdog_ctl;
 mod web;
 mod winservice;
 mod zones;
@@ -95,15 +95,11 @@ static AFTER: std::sync::Mutex<Option<tray::Action>> = std::sync::Mutex::new(Non
 static EXE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 fn exe() -> std::path::PathBuf {
-    EXE.get()
-        .cloned()
-        .unwrap_or_else(|| std::env::current_exe().unwrap_or_default())
+    EXE.get().cloned().unwrap_or_else(|| std::env::current_exe().unwrap_or_default())
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
-    Ok(tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?)
+    Ok(tokio::runtime::Builder::new_multi_thread().enable_all().build()?)
 }
 
 fn main() -> Result<()> {
@@ -139,9 +135,7 @@ fn main() -> Result<()> {
     #[cfg(windows)]
     match mode {
         Mode::Install => {
-            let listen = config::Config::load_or_create(&path)
-                .map(|(c, _)| c.server.listen)
-                .unwrap_or_default();
+            let listen = config::Config::load_or_create(&path).map(|(c, _)| c.server.listen).unwrap_or_default();
             let dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             std::process::exit(winservice::install(&path, &dir, &listen));
         }
@@ -150,9 +144,7 @@ fn main() -> Result<()> {
         Mode::Service => {
             // After an update: the new program restarts the service.
             update::set_restart(|| {
-                let _ = std::process::Command::new(exe())
-                    .arg("--restart-service")
-                    .spawn();
+                let _ = std::process::Command::new(exe()).arg("--restart-service").spawn();
             });
             let p = path.clone();
             let ok = winservice::run_service(
@@ -164,9 +156,7 @@ fn main() -> Result<()> {
                 || QUIT.notify_one(),
             );
             if !ok {
-                eprintln!(
-                    "--service is used by the Windows service manager; start nvr.exe without it."
-                );
+                eprintln!("--service is used by the Windows service manager; start nvr.exe without it.");
             }
             return Ok(());
         }
@@ -217,22 +207,15 @@ fn main() -> Result<()> {
             #[cfg(unix)]
             {
                 use std::os::unix::process::CommandExt;
-                let e = std::process::Command::new(&exe)
-                    .args(std::env::args_os().skip(1))
-                    .exec();
+                let e = std::process::Command::new(&exe).args(std::env::args_os().skip(1)).exec();
                 return Err(e.into());
             }
             #[cfg(not(unix))]
-            std::process::Command::new(exe)
-                .args(std::env::args_os().skip(1).filter(|a| a != "--open"))
-                .spawn()?;
+            std::process::Command::new(exe).args(std::env::args_os().skip(1).filter(|a| a != "--open")).spawn()?;
         }
         Some(tray::Action::BecomeService) => {
             // The service is taking over; the icon stays for this user.
-            std::process::Command::new(exe)
-                .arg("--companion")
-                .arg(&path)
-                .spawn()?;
+            std::process::Command::new(exe).arg("--companion").arg(&path).spawn()?;
         }
         _ => {
             // Closed on purpose (Quit): the watchdog, if there is one, leaves it closed.
@@ -251,27 +234,15 @@ fn main() -> Result<()> {
 fn companion(path: &std::path::Path, just_installed: bool) -> Result<()> {
     // Right after "Run as a Windows service": wait for it to appear.
     let t = std::time::Instant::now();
-    while just_installed
-        && !winservice::installed()
-        && t.elapsed() < std::time::Duration::from_secs(180)
-    {
+    while just_installed && !winservice::installed() && t.elapsed() < std::time::Duration::from_secs(180) {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
     if !winservice::installed() {
         return Ok(());
     }
     let (cfg, _) = config::Config::load_or_create(path)?;
-    let base = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(std::path::Path::new("."));
-    let port = cfg
-        .server
-        .listen
-        .rsplit(':')
-        .next()
-        .unwrap_or("8080")
-        .to_string();
+    let base = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let port = cfg.server.listen.rsplit(':').next().unwrap_or("8080").to_string();
     tray::start(
         tray::TrayInfo {
             url: launch::local_url(port.parse().unwrap_or(8080), cfg.server.https_port),
@@ -292,11 +263,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_target(false)
-                .with_ansi(use_color()),
-        )
+        .with(tracing_subscriber::fmt::layer().with_target(false).with_ansi(use_color()))
         .with(tracing_subscriber::filter::LevelFilter::INFO)
         .with(logs::LogLayer)
         .init();
@@ -322,13 +289,8 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     };
     config::private_file(&path);
     // Logs, statistics and AI models live next to the config file.
-    let data_dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(std::path::Path::new("."))
-        .join("nvr-data");
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating {}", data_dir.display()))?;
+    let data_dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).join("nvr-data");
+    std::fs::create_dir_all(&data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
     // GAZE is running: a "closed on purpose" mark for the watchdog no longer holds.
     watchdog_ctl::clear_quit(&data_dir);
     logs::buffer().set_file(data_dir.join("nvr.log"));
@@ -411,10 +373,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     }
     if caps.ffmpeg_version.is_empty() {
         getffmpeg::MISSING.store(true, std::sync::atomic::Ordering::SeqCst);
-        warn!(
-            "ffmpeg not found at \"{}\" — install ffmpeg or set the path in Settings",
-            cfg.server.ffmpeg_path
-        );
+        warn!("ffmpeg not found at \"{}\" — install ffmpeg or set the path in Settings", cfg.server.ffmpeg_path);
     } else {
         info!("{}", caps.ffmpeg_version);
         // Video on the graphics card where possible (Settings → GPU
@@ -435,11 +394,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
             }
         }
     }
-    info!(
-        "{} camera(s); recordings in {}",
-        cfg.cameras.len(),
-        cfg.storage.dir.display()
-    );
+    info!("{} camera(s); recordings in {}", cfg.cameras.len(), cfg.storage.dir.display());
 
     let listen = cfg.server.listen.clone();
     let legacy_login = !cfg.server.password.is_empty();
@@ -517,8 +472,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         tray::start(
             tray::TrayInfo {
                 url: launch::local_url(port.parse().unwrap_or(8080), cfg.server.https_port),
-                recordings: std::path::absolute(&cfg.storage.dir)
-                    .unwrap_or(cfg.storage.dir.clone()),
+                recordings: std::path::absolute(&cfg.storage.dir).unwrap_or(cfg.storage.dir.clone()),
                 log: std::path::absolute(mgr.data_dir.join("nvr.log")).unwrap_or_default(),
                 config: mgr.cfg_path.clone(),
                 companion: false,
@@ -577,8 +531,7 @@ async fn os_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]
     {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler");
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("install SIGTERM handler");
         tokio::select! {
             _ = ctrl_c => {}
             _ = term.recv() => {}
@@ -616,9 +569,6 @@ fn remove_smart_search_files(mgr: &manager::Manager) {
         }
     }
     if freed > 0 {
-        tracing::info!(
-            "removed the old smart search files ({} MB freed)",
-            freed / 1_048_576
-        );
+        tracing::info!("removed the old smart search files ({} MB freed)", freed / 1_048_576);
     }
 }
