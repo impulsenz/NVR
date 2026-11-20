@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Time-lapse previews are made for footage in deep storage too.** The background job only looked at recordings on the local disk, so older footage that had moved to deep storage never got a time-lapse. It now pictures those recordings (and their light timeline copies) as well, newest first, while the computer is quiet.
+
 ## 1.7.12 — November 2026
 - **Timeline previews rebuilt from scratch.** The time-lapse you see while dragging along the timeline (and the blue line under each camera) is now kept per camera per clock hour, on a fixed grid, instead of per recording file. The page no longer tracks files, retries and states: the picture for any moment is one lookup, and the blue line is drawn from what the server has. The server fills the grid from the pictures motion detection keeps as it records, and reads older footage one recording at a time (newest first, only while the computer is quiet). Fainter blue: on the server, arriving as needed; solid blue: in this browser's memory.
 - **Long-term time-lapse (server side).** One picture a day per camera at a time you choose, kept until you delete it, and a video made from them on request (`/api/longlapse`). Set it up in **Settings → Long-term time-lapse**: choose a camera and a time, see the pictures taken, take one now, and make a video of any range at 5–24 pictures a second.

@@ -389,9 +389,13 @@ async fn fill_from_file(m: &Manager, c: &CameraRuntime, file: &Path, start_ms: i
 
 /// Footage worth picturing: the light timeline copies, and the recordings of any time without one.
 fn candidates(c: &CameraRuntime) -> Vec<(&'static str, crate::storage::Recording)> {
-    let copies = crate::library::timeline_recordings(c);
+    // The light copies and the recordings, on the local disk and in deep storage alike: the older footage is
+    // pictured too (`storage::resolve` finds a file wherever it is).
+    let tl_dir = crate::storage::timeline_dir(&c.dir);
+    let mut copies = crate::library::timeline_recordings(c);
+    copies.extend(crate::storage::list_archived(&tl_dir));
     let mut v: Vec<(&'static str, crate::storage::Recording)> = copies.iter().cloned().map(|r| ("tl", r)).collect();
-    for r in crate::library::recordings(c) {
+    for r in crate::library::recordings_all(c) {
         let spanned = copies.iter().any(|t| t.start <= r.start + chrono::Duration::seconds(5) && t.end >= r.end - chrono::Duration::seconds(5));
         if !spanned {
             v.push(("rec", r));
