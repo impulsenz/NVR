@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.8 — November 2026
 - **The full-quality (HD) double-check looks at more pictures.** It used one HD picture, so it sometimes missed what the sub-stream had found correctly (the person turned, blurred, half hidden). It now takes up to 4 (set per camera under AI, 1 to 8) half a second apart, looks at each both close up and wider, and the first one that shows the object confirms it. It stops as soon as everything is confirmed, and never keeps the alert waiting more than a few seconds.
 - **Ready phrases: four more**: "This is private property.", "The police have been notified.", "This is private property, leave immediately." and "You're on video being recorded." (added once to existing lists; delete any you don't want). The siren already sounded for 60 seconds by default; the box under Settings → Voice shows what is saved on your system.
 - **Live tiles have the camera's controls.** Hovering a tile of a camera that pans / tilts / zooms shows its pan, tilt, zoom and preset controls, and a camera with a speaker also shows Siren and a box to type what it should say, with the ready phrases (also in full screen).
