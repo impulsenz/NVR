@@ -1,5 +1,12 @@
 # What's new in GAZE
 
+## Unreleased
+- **Settings → Cameras: clicking a camera opens its settings** (the picture, name or details), not its live feed. The "▶ Live" button still opens the feed.
+- **Export setup can include the Evidence Locker.** A new option (off by default, shows how many cases and how much space) adds every case with its notes, videos and pictures to the backup. Importing puts back the cases that aren't here and leaves existing ones exactly as they are. Backups are now written to a file and streamed, and imports are streamed too, so a large locker no longer has to fit in memory.
+- **Floor plan: no camera names written on the map.** Each camera's name was drawn under its icon and flooded the plan with text; it now shows only when you hover over the icon.
+- **Heat map redesigned.** Controls grouped in one place (movement, what the AI recognised, cameras to show, display), a time range switch, camera pictures at a size you choose with an adjustable heat strength, a 24-hour "when it happens" chart and the busiest hour for every camera, and a one-camera view with a breakdown of every object seen (click one to see only where it was). Cameras can be switched on and off.
+- **Heat map: areas ignored in the Motion settings are left out by default.** A branch or flag you painted as an ignore area no longer heats the map, as it no longer raises alerts. Their data is still logged: tick "Include areas ignored in the Motion settings" to see it again (the camera cards say how much of the heat lay inside the ignored areas).
+
 ## 1.7.5 — November 2026
 - **Scrubbing the timeline: fewer stalls.** Only the first two time-lapse pages of each file are loaded ahead of time (1.7.3), so dragging into a later page froze the picture on every camera until its ~3 MB arrived (often, with a short picture interval such as 5 s). While you drag, the pages next to the one shown are now fetched at once, both ways and two ahead in the direction you're moving.
 - **AI keeps working when Windows resets the graphics card.** After a driver timeout ("The GPU device instance has been suspended", 887A0005) the AI model on the GPU is dead and every picture failed until GAZE was restarted. GAZE now notices, loads the AI models again on the processor, and tries the GPU again after 30 minutes. Settings → Tasks shows why the models are on the CPU. Recording was never affected.

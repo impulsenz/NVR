@@ -274,6 +274,51 @@ pub fn safe_part(s: &str) -> String {
     if t.is_empty() { "item".into() } else { t }
 }
 
+/// What a backup of the locker holds: every case, and each item's files that
+/// exist, as (name in the backup, path). Also the files' total size.
+pub fn backup_files() -> (Vec<Case>, Vec<(String, PathBuf)>, u64) {
+    let g = LOCKER.locked();
+    let Some(l) = g.as_ref() else { return (Vec::new(), Vec::new(), 0) };
+    let (mut files, mut bytes) = (Vec::new(), 0u64);
+    for c in &l.cases {
+        for f in c.items.iter().flat_map(|i| [i.video.as_ref(), i.picture.as_ref()]).flatten() {
+            let path = l.dir.join(&c.id).join(f);
+            if let Ok(md) = std::fs::metadata(&path)
+                && md.is_file()
+            {
+                bytes += md.len();
+                files.push((format!("locker/{}/{}", c.id, f), path));
+            }
+        }
+    }
+    (l.cases.clone(), files, bytes)
+}
+
+/// (cases, items, bytes) the locker holds, for Settings → Backup.
+pub fn stats() -> (usize, usize, u64) {
+    let (cases, _, bytes) = backup_files();
+    (cases.len(), cases.iter().map(|c| c.items.len()).sum(), bytes)
+}
+
+/// Add a case from a backup. A case that is already here is left exactly as
+/// it is (evidence is never overwritten): `None`. Otherwise the folder for
+/// its files, which the caller fills.
+pub fn import_case(c: Case) -> Result<Option<PathBuf>> {
+    if c.id != safe_part(&c.id) || c.id.is_empty() {
+        bail!("a case in the backup has an unusable id");
+    }
+    with(|l| {
+        if l.cases.iter().any(|x| x.id == c.id) {
+            return Ok(None);
+        }
+        let dir = l.dir.join(&c.id);
+        std::fs::create_dir_all(&dir)?;
+        l.cases.push(c);
+        save(l)?;
+        Ok(Some(dir))
+    })
+}
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -448,6 +493,24 @@ mod tests {
             export_zip(&list(), &out, &|_| false).unwrap();
             let z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
             assert!(z.file_names().all(|n| !n.unwrap().contains("v.mp4")));
+        }
+        // Backup: every case and each item's existing files; a case that is here
+        // already is never replaced, a new one gets a folder, a bad id is refused.
+        {
+            let (cases, files, bytes) = backup_files();
+            assert_eq!(cases.len(), 1);
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].0, format!("locker/{}/v.mp4", c.id));
+            assert_eq!(bytes, 5);
+            assert_eq!(stats(), (1, 1, 5));
+            assert!(import_case(cases[0].clone()).unwrap().is_none());
+            let mut other = Case { id: "case-restored".into(), items: Vec::new(), ..cases[0].clone() };
+            let d = import_case(other.clone()).unwrap().expect("a new case is added");
+            assert!(d.is_dir());
+            assert_eq!(list().len(), 2);
+            other.id = "../evil".into();
+            assert!(import_case(other).is_err());
+            delete("case-restored").unwrap();
         }
         // Unprotected: the footage is free again, and the item can go.
         update_item(&c.id, &it.id, Some(false), None, None).unwrap();

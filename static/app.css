@@ -1773,7 +1773,6 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .pl-cam circle { fill: var(--panel); stroke: var(--accent); stroke-width: calc(2 * var(--u, 1)); cursor: pointer; }
 .pl-cam.sel circle { fill: var(--accent); }
 .pl-ico { pointer-events: none; }
-.pl-label { fill: var(--text); paint-order: stroke; stroke: var(--panel); stroke-width: calc(4 * var(--u, 1)); pointer-events: none; }
 .pl-path { fill: none; stroke: var(--accent); stroke-width: calc(5 * var(--u, 1)); stroke-linecap: round; stroke-linejoin: round; }
 .pl-path.faint { stroke: var(--muted); stroke-width: calc(2.5 * var(--u, 1)); opacity: .5; }
 .pl-path.hop { stroke-width: calc(3 * var(--u, 1)); stroke-dasharray: 2 9; opacity: .9; }
@@ -1856,15 +1855,45 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .syn-chip:hover { background: var(--accent); color: #fff; }
 
 /* Heat map page: a soft colour ramp over each camera's picture */
-.heat-kinds { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
-.heat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
-.heat-grid.one { grid-template-columns: minmax(0, 1fr); max-width: calc((100vh - 260px) * 16 / 9); }
-.heat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+#heat-root { --heat-min: 340px; --heat-op: .85; }
+.heat-ctl { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+.heat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.heat-lab { width: 150px; flex: none; color: var(--muted); font-size: 12.5px; }
+.heat-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.heat-cam { border-radius: 14px; padding: 2px 11px; font-size: 12.5px; background: var(--panel2); color: var(--muted); }
+.heat-cam.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.heat-slide { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.heat-slide input { width: 120px; }
+.heat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--heat-min)), 1fr)); gap: 14px; }
+.heat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.heat-card.quiet .heat-stage { opacity: .75; }
 .heat-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex-wrap: wrap; }
 .heat-stage { position: relative; aspect-ratio: 16 / 9; background: var(--tl-thumb-bg); overflow: hidden; }
 .heat-stage img, .heat-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .heat-stage img { object-fit: fill; }
-.heat-cv { filter: blur(6px); transform: scale(1.04); pointer-events: none; }
+.heat-cv { filter: blur(6px); transform: scale(1.04); pointer-events: none; opacity: var(--heat-op); }
 .heat-mask { image-rendering: pixelated; pointer-events: none; }
+.heat-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 14px; color: var(--muted); font-size: 12.5px; pointer-events: none; }
+.heat-foot { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+.heat-stats { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); }
+.heat-stats.col { flex-direction: column; }
+.heat-stat { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; }
+.heat-stat b { color: var(--text); }
+.heat-stat.ign { color: var(--heat-5); }
+.heat-hours .hh-bars { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
+.heat-hours.big .hh-bars { height: 80px; }
+.heat-hours i { flex: 1; min-height: 1px; background: var(--heat-2); border-radius: 2px 2px 0 0; opacity: .8; }
+.heat-hours i.peak { background: var(--heat-5); opacity: 1; }
+.hh-ax { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+.heat-detail { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+.heat-detail .heat-card { max-width: calc((100vh - 120px) * 16 / 9); }
+.heat-side { display: flex; flex-direction: column; gap: 10px; }
+.heat-side h3 { margin: 0 0 8px; font-size: 13.5px; }
+.heat-bar { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 8px; margin-bottom: 4px; text-align: left; overflow: hidden; background: var(--panel2); }
+.heat-bar i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--heat-3); }
+.heat-bar.on { border-color: var(--accent); }
+.heat-bar span, .heat-bar em { position: relative; font-style: normal; }
+.heat-bar em { color: var(--muted); font-size: 12px; }
+@media (max-width: 900px) { .heat-detail { grid-template-columns: minmax(0, 1fr); } .heat-lab { width: 100%; } }
 .heat-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .heat-ramp { width: 220px; max-width: 50%; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--heat-1), var(--heat-2), var(--heat-3), var(--heat-4), var(--heat-5)); }

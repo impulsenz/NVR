@@ -20,6 +20,13 @@
 //! Counts are "looks": about a second of something being there per look, so a
 //! person who stands still for a minute weighs more than one who walks past.
 //!
+//! The areas painted as "ignore" in a camera's Motion settings are **not**
+//! applied when logging (the data is always kept). The page decides when it
+//! reads: by default the cells those areas cover are left out (what is
+//! ignored for alerts is ignored here), and the user can tick them back in.
+//! It is applied with the camera's *current* areas, so changing them changes
+//! old data's view too, and nothing is ever lost by ignoring.
+//!
 //! Recording, detection and alerts never read any of it; a failure here
 //! drops data, never delays them.
 
@@ -27,7 +34,7 @@ use crate::detect::MotionObject;
 use crate::events::Event;
 use crate::manager::Manager;
 use crate::sync::MutexExt;
-use chrono::{DateTime, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, Local, NaiveDate, TimeZone, Timelike};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -203,6 +210,67 @@ pub struct Raw {
     pub hours: usize,
     /// Alerts whose boxes stood in for hours before the log started.
     pub alerts_used: usize,
+    /// Label → boxes by hour of the day (local time), after the ignore areas.
+    pub hourly: HashMap<String, [u32; 24]>,
+    /// Label → (heat inside the ignore areas, all heat), before they were left out.
+    pub ignored: HashMap<String, [u64; 2]>,
+}
+
+/// Which heat cells the ignore areas of a camera's Motion settings cover (a
+/// cell counts when at least half of it is painted), or None when there are
+/// none. `mask` is the setting as stored.
+pub fn ignore_cells(mask: &str) -> Option<Vec<bool>> {
+    use crate::config::{MASK_H, MASK_W};
+    let m = crate::config::decode_mask(mask)?;
+    let mut out = vec![false; COLS * ROWS];
+    for r in 0..ROWS {
+        for c in 0..COLS {
+            let (x0, x1) = (c * MASK_W / COLS, ((c + 1) * MASK_W).div_ceil(COLS));
+            let (y0, y1) = (r * MASK_H / ROWS, ((r + 1) * MASK_H).div_ceil(ROWS));
+            let (mut on, mut all) = (0usize, 0usize);
+            for y in y0..y1.min(MASK_H) {
+                for x in x0..x1.min(MASK_W) {
+                    all += 1;
+                    on += m[y * MASK_W + x] as usize;
+                }
+            }
+            out[r * COLS + c] = all > 0 && on * 2 >= all;
+        }
+    }
+    out.iter().any(|v| *v).then_some(out)
+}
+
+fn local_hour(hour: i64) -> usize {
+    Local.timestamp_opt(hour * 3600, 0).single().map(|t| t.hour() as usize).unwrap_or(0)
+}
+
+/// Add one label's cells for one hour, leaving out the cells under `ignore`.
+/// The count of boxes is scaled to what is left (a box can't be split by
+/// cell, so it is an estimate whenever something was left out).
+fn take(raw: &mut Raw, label: &str, hour: i64, cells: &[(usize, u32)], ignore: Option<&[bool]>) {
+    let (mut counter, mut kept, mut ign) = (0u32, 0u64, 0u64);
+    let mut keep = Vec::with_capacity(cells.len() + 1);
+    for &(i, v) in cells {
+        if i == COLS * ROWS {
+            counter = v;
+        } else if ignore.is_some_and(|m| m.get(i) == Some(&true)) {
+            ign += v as u64;
+        } else {
+            kept += v as u64;
+            keep.push((i, v));
+        }
+    }
+    let total = kept + ign;
+    if ign > 0 && total > 0 {
+        counter = ((counter as u64 * kept + total / 2) / total) as u32;
+    }
+    keep.push((COLS * ROWS, counter));
+    add_into(raw, label, keep.into_iter());
+    let h = raw.hourly.entry(label.to_string()).or_insert([0; 24]);
+    h[local_hour(hour)] = h[local_hour(hour)].saturating_add(counter);
+    let e = raw.ignored.entry(label.to_string()).or_default();
+    e[0] += ign;
+    e[1] += total;
 }
 
 fn add_into(raw: &mut Raw, label: &str, cells: impl Iterator<Item = (usize, u32)>) {
@@ -216,7 +284,7 @@ fn add_into(raw: &mut Raw, label: &str, cells: impl Iterator<Item = (usize, u32)
 
 /// What was logged for `cam` in `from..=to`, plus the boxes stored with
 /// `events` for the time before the log began.
-pub fn read(data: &Path, cam: &str, from: DateTime<Local>, to: DateTime<Local>, events: &[Event]) -> Raw {
+pub fn read(data: &Path, cam: &str, from: DateTime<Local>, to: DateTime<Local>, events: &[Event], ignore: Option<&[bool]>) -> Raw {
     let mut raw = Raw::default();
     let (from_h, to_h) = (from.timestamp().div_euclid(3600), to.timestamp().div_euclid(3600));
     let mut hours_seen = std::collections::HashSet::new();
@@ -237,7 +305,8 @@ pub fn read(data: &Path, cam: &str, from: DateTime<Local>, to: DateTime<Local>, 
                 }
                 hours_seen.insert(h);
                 for (label, cells) in labels {
-                    add_into(&mut raw, &label, cells.into_iter().map(|[i, v]| (i as usize, v)));
+                    let cells: Vec<(usize, u32)> = cells.into_iter().map(|[i, v]| (i as usize, v)).collect();
+                    take(&mut raw, &label, h, &cells, ignore);
                 }
             }
             day = day.succ_opt().unwrap_or(to.date_naive() + chrono::Duration::days(1));
@@ -251,7 +320,8 @@ pub fn read(data: &Path, cam: &str, from: DateTime<Local>, to: DateTime<Local>, 
         hours_seen.insert(*h);
         first_logged = Some(first_logged.map_or(*h, |f| f.min(*h)));
         for (label, g) in labels {
-            add_into(&mut raw, label, g.iter().enumerate().map(|(i, v)| (i, *v)));
+            let cells: Vec<(usize, u32)> = g.iter().enumerate().filter(|(_, v)| **v > 0).map(|(i, v)| (i, *v)).collect();
+            take(&mut raw, label, *h, &cells, ignore);
         }
     }
     raw.hours = hours_seen.len();
@@ -263,7 +333,8 @@ pub fn read(data: &Path, cam: &str, from: DateTime<Local>, to: DateTime<Local>, 
             let label = crate::ai::canon(&b.label);
             let mut g = vec![0; GRID];
             if add_box(&mut g, [b.x, b.y, b.w, b.h]) {
-                add_into(&mut raw, label, g.iter().enumerate().map(|(i, v)| (i, *v)));
+                let cells: Vec<(usize, u32)> = g.iter().enumerate().filter(|(_, v)| **v > 0).map(|(i, v)| (i, *v)).collect();
+                take(&mut raw, label, e.start.timestamp().div_euclid(3600), &cells, ignore);
                 any = true;
             }
         }
@@ -350,6 +421,13 @@ pub struct Heatmap {
     pub alerts_used: usize,
     /// Every kind of recognised object seen in the period, the most first.
     pub labels: Vec<String>,
+    /// How many of each (same order as `labels`).
+    pub counts: Vec<u32>,
+    /// Boxes by hour of the day (local time) for this kind.
+    pub hourly: Vec<u32>,
+    /// How much of this kind's heat lay inside the camera's ignore areas
+    /// (0 to 1), whether or not they were left out.
+    pub ignored_share: f32,
 }
 
 fn p95(cells: &[u32]) -> u32 {
@@ -386,7 +464,20 @@ pub fn unexplained(motion: &[u32], objects: &[u32]) -> Vec<u32> {
 pub fn select(raw: &Raw, kind: &Kind) -> Heatmap {
     let mut cells = vec![0u32; COLS * ROWS];
     let mut detections = 0u32;
+    let (mut hourly, mut ign) = (vec![0u32; 24], [0u64; 2]);
+    let mut count_hours = |l: &str| {
+        if let Some(h) = raw.hourly.get(l) {
+            for (a, b) in hourly.iter_mut().zip(h.iter()) {
+                *a = a.saturating_add(*b);
+            }
+        }
+        if let Some(e) = raw.ignored.get(l) {
+            ign[0] += e[0];
+            ign[1] += e[1];
+        }
+    };
     if *kind == Kind::Unexplained {
+        count_hours("motion");
         let zero = vec![0; GRID];
         let m = raw.grids.get("motion").unwrap_or(&zero);
         let mut obj = vec![0u32; COLS * ROWS];
@@ -402,6 +493,7 @@ pub fn select(raw: &Raw, kind: &Kind) -> Heatmap {
     } else {
         for (l, g) in &raw.grids {
             if kind.takes(l) {
+                count_hours(l);
                 for (c, v) in cells.iter_mut().zip(g.iter()) {
                     *c = c.saturating_add(*v);
                 }
@@ -411,7 +503,11 @@ pub fn select(raw: &Raw, kind: &Kind) -> Heatmap {
     }
     let mut labels: Vec<(&String, u64)> = raw.grids.iter().filter(|(l, _)| l.as_str() != "motion").map(|(l, g)| (l, g[COLS * ROWS] as u64)).filter(|(_, n)| *n > 0).collect();
     labels.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let counts: Vec<u32> = labels.iter().map(|(_, n)| (*n).min(u32::MAX as u64) as u32).collect();
     Heatmap {
+        ignored_share: if ign[1] > 0 { ign[0] as f32 / ign[1] as f32 } else { 0.0 },
+        hourly,
+        counts,
         cols: COLS,
         rows: ROWS,
         max: cells.iter().copied().max().unwrap_or(0),
@@ -478,7 +574,7 @@ mod tests {
         // Some of it already on disk, some still waiting: both count, and the second write adds to the first.
         flush(&data);
         motion(cam, ms, &[mo(0.0, 0.0, 0.25, 0.25)]);
-        let raw = read(&data, cam, now - chrono::Duration::hours(2), now + chrono::Duration::hours(1), &[]);
+        let raw = read(&data, cam, now - chrono::Duration::hours(2), now + chrono::Duration::hours(1), &[], None);
         let all = select(&raw, &Kind::Motion);
         assert_eq!(all.detections, 3, "two on disk, one waiting");
         assert_eq!(all.cells[0], 3);
@@ -498,8 +594,8 @@ mod tests {
         }
         assert!(!labels.contains(&"motion".to_string()));
         // Another period or another camera has none of it.
-        assert_eq!(select(&read(&data, cam, now - chrono::Duration::days(10), now - chrono::Duration::days(5), &[]), &Kind::Motion).detections, 0);
-        assert_eq!(select(&read(&data, "back", now - chrono::Duration::hours(2), now + chrono::Duration::hours(1), &[]), &Kind::Motion).detections, 0);
+        assert_eq!(select(&read(&data, cam, now - chrono::Duration::days(10), now - chrono::Duration::days(5), &[], None), &Kind::Motion).detections, 0);
+        assert_eq!(select(&read(&data, "back", now - chrono::Duration::hours(2), now + chrono::Duration::hours(1), &[], None), &Kind::Motion).detections, 0);
         let _ = std::fs::remove_dir_all(&data);
     }
 
@@ -510,13 +606,13 @@ mod tests {
         let now = Local::now();
         // No log at all: the alerts' boxes are used.
         let evs = [event(now - chrono::Duration::hours(30), vec![("person", 0.4, 0.4, 0.2, 0.2), ("motion", 0.0, 0.0, 0.1, 0.1)])];
-        let raw = read(&data, cam, now - chrono::Duration::days(3), now, &evs);
+        let raw = read(&data, cam, now - chrono::Duration::days(3), now, &evs, None);
         assert_eq!((raw.alerts_used, select(&raw, &Kind::People).detections, select(&raw, &Kind::Motion).detections), (1, 1, 1));
         // The log starts now: an older alert still counts, one from inside the logged time does not (it was logged already).
         motion(cam, now.timestamp_millis(), &[mo(0.5, 0.5, 0.1, 0.1)]);
         flush(&data);
         let evs = [event(now - chrono::Duration::hours(30), vec![("person", 0.4, 0.4, 0.2, 0.2)]), event(now + chrono::Duration::minutes(5), vec![("person", 0.4, 0.4, 0.2, 0.2)])];
-        let raw = read(&data, cam, now - chrono::Duration::days(3), now + chrono::Duration::hours(1), &evs);
+        let raw = read(&data, cam, now - chrono::Duration::days(3), now + chrono::Duration::hours(1), &evs, None);
         assert_eq!(select(&raw, &Kind::People).detections, 1, "only the old one");
         let _ = std::fs::remove_dir_all(&data);
     }
@@ -543,6 +639,38 @@ mod tests {
         assert!(tree > 800, "the tree should stand out: {tree}");
         assert!(path < 200, "the path is explained by the people on it: {path}");
         assert_eq!(u[30 * COLS + 5], 0, "nothing where nothing moved");
+    }
+
+    #[test]
+    fn the_areas_ignored_for_motion_are_left_out_by_default_but_always_logged() {
+        let data = scratch("ignore");
+        let cam = "yard";
+        let now = Local::now();
+        let ms = now.timestamp_millis();
+        // The top half of the picture is painted as ignored (a swaying branch).
+        let mask = "160x90:0,7200,7200";
+        let cells = ignore_cells(mask).expect("some cells are ignored");
+        assert!(cells[0] && cells[(ROWS / 2 - 1) * COLS], "top is ignored");
+        assert!(!cells[(ROWS / 2 + 1) * COLS] && !cells[COLS * ROWS - 1], "bottom is not");
+        assert!(ignore_cells("").is_none(), "no mask, nothing ignored");
+        motion(cam, ms, &[mo(0.0, 0.0, 0.25, 0.25), mo(0.0, 0.0, 0.25, 0.25), mo(0.6, 0.7, 0.2, 0.2)]);
+        flush(&data);
+        let (from, to) = (now - chrono::Duration::hours(2), now + chrono::Duration::hours(1));
+        // Left out: only the bottom box is there.
+        let left_out = select(&read(&data, cam, from, to, &[], Some(&cells)), &Kind::Motion);
+        assert_eq!(left_out.detections, 1);
+        assert_eq!(left_out.cells[0], 0);
+        assert!(left_out.cells.iter().any(|c| *c > 0));
+        assert_eq!(left_out.hourly.iter().sum::<u32>(), 1);
+        // Two boxes of 16×9 cells inside the ignored area, one of 13×8 outside: 288 of 392 cells.
+        assert!((left_out.ignored_share - 288.0 / 392.0).abs() < 0.03, "{}", left_out.ignored_share);
+        // Ticked back in: the logged data was never lost.
+        let all = select(&read(&data, cam, from, to, &[], None), &Kind::Motion);
+        assert_eq!(all.detections, 3);
+        assert_eq!(all.cells[0], 2);
+        assert_eq!(all.hourly.iter().sum::<u32>(), 3);
+        assert_eq!(all.ignored_share, 0.0, "nothing was marked when nothing is left out");
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]

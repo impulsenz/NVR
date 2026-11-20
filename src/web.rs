@@ -158,7 +158,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/alerts/seen-all", post(alerts_seen_all))
         .route("/api/alerts/unseen", post(alerts_unseen))
         .route("/api/config/export", post(export_config))
-        .route("/api/config/import", post(import_config).layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
+        .route("/api/config/locker", get(locker_size))
+        .route("/api/config/import", post(import_config).layer(DefaultBodyLimit::disable()))
         .route("/api/cameras", get(list_cameras).post(add_camera))
         .route(
             "/api/cameras/{id}",
@@ -857,6 +858,11 @@ struct HeatQuery {
     kind: String,
     /// One camera (default: every camera the account can see).
     camera: Option<String>,
+    /// Count what happened inside the areas ignored in the camera's Motion
+    /// settings too. Off by default: those areas are left out (the data is
+    /// still logged, so this can be switched on at any time).
+    #[serde(default)]
+    include_ignored: bool,
 }
 
 /// Each camera's heat map for the period and kind, with its ignore areas.
@@ -877,13 +883,17 @@ async fn heatmaps(State(m): App, user: Option<axum::Extension<CurrentUser>>, Que
             continue;
         }
         let events = rt.events.between(from, now);
-        let (d, cam, kind) = (data.clone(), id.clone(), kind.clone());
-        let heat = tokio::task::spawn_blocking(move || crate::heatmap::select(&crate::heatmap::read(&d, &cam, from, now, &events), &kind)).await;
-        let Ok(heat) = heat else { continue };
         let mask = cfg.cameras.iter().find(|c| c.id == *id).map(|c| c.detect.mask.clone()).unwrap_or_default();
-        out.push(json!({ "camera": id, "name": rt.cfg.name, "mask": mask, "heat": heat }));
+        // The cells the ignore areas cover: left out unless asked for.
+        let cells = crate::heatmap::ignore_cells(&mask);
+        let has_ignore = cells.is_some();
+        let leave_out = if q.include_ignored { None } else { cells };
+        let (d, cam, kind) = (data.clone(), id.clone(), kind.clone());
+        let heat = tokio::task::spawn_blocking(move || crate::heatmap::select(&crate::heatmap::read(&d, &cam, from, now, &events, leave_out.as_deref()), &kind)).await;
+        let Ok(heat) = heat else { continue };
+        out.push(json!({ "camera": id, "name": rt.cfg.name, "mask": mask, "has_ignore": has_ignore, "heat": heat }));
     }
-    Json(json!({ "days": days, "cameras": out })).into_response()
+    Json(json!({ "days": days, "include_ignored": q.include_ignored, "cameras": out })).into_response()
 }
 
 // ---------- daily summary (synopsis.rs) ----------
@@ -1572,6 +1582,12 @@ async fn put_dashboard(
     }
 }
 
+/// What the Evidence Locker holds, for the backup page (admin only: /api/config/).
+async fn locker_size() -> Response {
+    let (cases, items, bytes) = tokio::task::spawn_blocking(crate::cases::stats).await.unwrap_or_default();
+    Json(json!({ "cases": cases, "items": items, "bytes": bytes })).into_response()
+}
+
 #[derive(Deserialize)]
 struct ExportCfgQuery {
     /// The password of the account asking (admin): a backup holds the
@@ -1592,6 +1608,31 @@ struct ExportCfgQuery {
     /// What GAZE has learned along the way: which alerts have been viewed.
     #[serde(default = "yes")]
     learned: bool,
+    /// The Evidence Locker: every case with its notes, videos and pictures.
+    /// Off by default (it can be many gigabytes).
+    #[serde(default)]
+    locker: bool,
+}
+
+/// A file that is deleted once it has been sent (or the connection ends).
+struct TempDownload {
+    stream: Option<tokio_util::io::ReaderStream<tokio::fs::File>>,
+    path: PathBuf,
+}
+impl futures_util::Stream for TempDownload {
+    type Item = std::io::Result<Bytes>;
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        match self.stream.as_mut() {
+            Some(s) => std::pin::Pin::new(s).poll_next(cx),
+            None => std::task::Poll::Ready(None),
+        }
+    }
+}
+impl Drop for TempDownload {
+    fn drop(&mut self) {
+        self.stream = None; // closed first (Windows can't delete an open file)
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Backup format (manifest.json in the .zip). Version 1 (before 0.6.89)
@@ -1623,9 +1664,13 @@ async fn export_config(
     if !q.passwords {
         cfg.remove_secrets();
     }
-    let res = (|| {
+    // Written to a file (the Evidence Locker can be many gigabytes), then sent.
+    let tmp = m.data_dir.join("tmp").join(format!("backup-{}.zip", Local::now().format("%Y%m%d%H%M%S%3f")));
+    let (m2, tmp2) = (m.clone(), tmp.clone());
+    let res = tokio::task::spawn_blocking(move || {
         use std::io::Write;
-        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let _ = std::fs::create_dir_all(tmp2.parent().unwrap_or(std::path::Path::new(".")));
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&tmp2)?);
         let opt = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         let mut parts = Vec::new();
         if q.settings {
@@ -1635,15 +1680,15 @@ async fn export_config(
         }
         if q.users {
             z.start_file("users.json", opt)?;
-            z.write_all(&m.users.export(q.passwords))?;
+            z.write_all(&m2.users.export(q.passwords))?;
             parts.push("users");
         }
         if q.people {
-            let (known, photos) = m.known.export();
+            let (known, photos) = m2.known.export();
             z.start_file("known.json", opt)?;
             z.write_all(&known)?;
             // Photos are JPEGs already: stored as they are.
-            let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(true);
             for (name, b) in photos {
                 z.start_file(name, stored)?;
                 z.write_all(&b)?;
@@ -1653,12 +1698,24 @@ async fn export_config(
         if q.learned {
             // (Whitelisted small files of the data folder.)
             for f in ["alerts-seen.json"] {
-                if let Ok(b) = std::fs::read(m.data_dir.join(f)) {
+                if let Ok(b) = std::fs::read(m2.data_dir.join(f)) {
                     z.start_file(format!("data/{f}"), opt)?;
                     z.write_all(&b)?;
                 }
             }
             parts.push("learned");
+        }
+        if q.locker {
+            // Videos and pictures are compressed already: stored as they are.
+            let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(true);
+            let (cases, files, _) = crate::cases::backup_files();
+            z.start_file("locker/cases.json", opt)?;
+            z.write_all(&serde_json::to_vec_pretty(&cases)?)?;
+            for (name, path) in files {
+                z.start_file(name, stored)?;
+                std::io::copy(&mut std::fs::File::open(path)?, &mut z)?;
+            }
+            parts.push("locker");
         }
         z.start_file("manifest.json", opt)?;
         z.write_all(
@@ -1671,21 +1728,39 @@ async fn export_config(
             }))?
             .as_bytes(),
         )?;
-        anyhow::Ok(z.finish()?.into_inner())
-    })();
+        z.finish()?;
+        anyhow::Ok(())
+    })
+    .await;
+    let res = match res {
+        Ok(r) => r,
+        Err(e) => Err(anyhow::anyhow!("{e}")),
+    };
     match res {
-        Ok(bytes) => {
+        Ok(()) => {
             let name = format!("gaze-backup-{}.zip", Local::now().format("%Y-%m-%d"));
+            let (file, len) = match tokio::fs::File::open(&tmp).await {
+                Ok(f) => {
+                    let len = f.metadata().await.map(|x| x.len()).unwrap_or(0);
+                    (f, len)
+                }
+                Err(e) => return bad(e.into()),
+            };
+            let body = Body::from_stream(TempDownload { stream: Some(tokio_util::io::ReaderStream::new(file)), path: tmp });
             (
                 [
                     (header::CONTENT_TYPE, "application/zip".to_string()),
                     (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+                    (header::CONTENT_LENGTH, len.to_string()),
                 ],
-                bytes,
+                body,
             )
                 .into_response()
         }
-        Err(e) => bad(e),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            bad(e)
+        }
     }
 }
 
@@ -1700,35 +1775,108 @@ fn yes() -> bool {
 
 /// Restore a backup: the .zip from Export, or an older settings-only .toml.
 /// Passwords the backup left out are kept from the settings in use.
-async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: Bytes) -> Response {
-    let res = async {
-        // Every file in the backup (at most 500 MB unpacked).
-        let is_zip = body.starts_with(b"PK");
-        let mut files: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
-        if is_zip {
-            use std::io::Read;
-            let mut z = zip::ZipArchive::new(std::io::Cursor::new(body.to_vec()))?;
-            let mut total = 0u64;
-            for i in 0..z.len() {
-                let f = z.by_index(i)?;
-                if !f.is_file() {
-                    continue;
-                }
-                let name = f.name()?.to_string();
-                let mut b = Vec::new();
-                f.take(500 * 1024 * 1024 - total).read_to_end(&mut b)?;
-                total += b.len() as u64;
-                anyhow::ensure!(total < 500 * 1024 * 1024, "the backup is too big");
-                files.insert(name, b);
+async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: Body) -> Response {
+    // The upload goes to a file first (a backup with an Evidence Locker can be
+    // many gigabytes), and is read from there.
+    let tmp = m.data_dir.join("tmp").join(format!("import-{}.zip", Local::now().format("%Y%m%d%H%M%S%3f")));
+    let res = import_config_inner(&m, q, body, &tmp).await;
+    let _ = std::fs::remove_file(&tmp);
+    match res {
+        Ok((n, restart, what)) => {
+            Json(json!({ "ok": true, "cameras": n, "restart_required": restart, "message": format!("Imported {what}.") })).into_response()
+        }
+        Err(e) => bad(e),
+    }
+}
+
+/// Put the Evidence Locker of a backup (`locker/…`) back: cases already here
+/// are left as they are (evidence is never overwritten). Returns what was
+/// added and skipped.
+fn import_locker(zip_path: &std::path::Path) -> anyhow::Result<Option<(usize, usize)>> {
+    use std::io::Read;
+    let mut z = zip::ZipArchive::new(std::fs::File::open(zip_path)?)?;
+    let cases: Vec<crate::cases::Case> = {
+        let Ok(f) = z.by_name("locker/cases.json") else { return Ok(None) };
+        let mut b = Vec::new();
+        f.take(64 * 1024 * 1024).read_to_end(&mut b)?;
+        serde_json::from_slice(&b)?
+    };
+    let (mut added, mut skipped) = (0, 0);
+    for c in cases {
+        let id = c.id.clone();
+        let wanted: Vec<String> = c.items.iter().flat_map(|i| [i.video.clone(), i.picture.clone()]).flatten().collect();
+        let Some(dir) = crate::cases::import_case(c)? else {
+            skipped += 1;
+            continue;
+        };
+        for name in wanted {
+            // Only the files the case's items name, never a path.
+            if name.contains(['/', '\\']) || name.contains("..") {
+                continue;
+            }
+            if let Ok(mut f) = z.by_name(&format!("locker/{id}/{name}")) {
+                std::io::copy(&mut f, &mut std::fs::File::create(dir.join(&name))?)?;
             }
         }
+        added += 1;
+    }
+    Ok(Some((added, skipped)))
+}
+
+async fn import_config_inner(m: &Arc<Manager>, q: ImportQuery, body: Body, tmp: &std::path::Path) -> anyhow::Result<(usize, bool, String)> {
+    {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let _ = std::fs::create_dir_all(tmp.parent().unwrap_or(std::path::Path::new(".")));
+        let mut out = tokio::fs::File::create(tmp).await?;
+        let mut s = body.into_data_stream();
+        while let Some(chunk) = s.next().await {
+            out.write_all(&chunk.map_err(|e| anyhow::anyhow!("the upload stopped: {e}"))?).await?;
+        }
+        out.flush().await?;
+    }
+    let res = async {
+        // Every file in the backup except the locker's (at most 500 MB unpacked).
+        let tp = tmp.to_path_buf();
+        let (is_zip, files, plain) = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut head = [0u8; 2];
+            let n = std::fs::File::open(&tp)?.read(&mut head)?;
+            let is_zip = n == 2 && &head == b"PK";
+            let mut files: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+            let mut plain = Vec::new();
+            if is_zip {
+                let mut z = zip::ZipArchive::new(std::fs::File::open(&tp)?)?;
+                let mut total = 0u64;
+                for i in 0..z.len() {
+                    let f = z.by_index(i)?;
+                    if !f.is_file() {
+                        continue;
+                    }
+                    let name = f.name()?.to_string();
+                    if name.starts_with("locker/") {
+                        continue;
+                    }
+                    let mut b = Vec::new();
+                    f.take(500 * 1024 * 1024 - total).read_to_end(&mut b)?;
+                    total += b.len() as u64;
+                    anyhow::ensure!(total < 500 * 1024 * 1024, "the backup is too big");
+                    files.insert(name, b);
+                }
+            } else {
+                std::fs::File::open(&tp)?.take(64 * 1024 * 1024).read_to_end(&mut plain)?;
+            }
+            anyhow::Ok((is_zip, files, plain))
+        })
+        .await??;
+        let body = plain;
         let read = |name: &str| files.get(name).cloned();
         let manifest: Option<serde_json::Value> = read("manifest.json").and_then(|b| serde_json::from_slice(&b).ok());
         let text = match read("settings.toml") {
             Some(b) => Some(String::from_utf8(b)?),
             None if manifest.is_some() => None,
             None if is_zip => anyhow::bail!("this .zip isn't a GAZE backup (no settings.toml in it)"),
-            None => Some(String::from_utf8(body.to_vec()).map_err(|_| anyhow::anyhow!("choose the backup file made by Export (.zip or .toml)"))?),
+            None => Some(String::from_utf8(body.clone()).map_err(|_| anyhow::anyhow!("choose the backup file made by Export (.zip or .toml)"))?),
         };
         let users = read("users.json");
         let known = read("known.json");
@@ -1766,15 +1914,19 @@ async fn import_config(State(m): App, Query(q): Query<ImportQuery>, body: Bytes)
             restart = true;
             parts.push("which alerts were viewed".to_string());
         }
+        if is_zip {
+            let tp = tmp.to_path_buf();
+            if let Some((added, skipped)) = tokio::task::spawn_blocking(move || import_locker(&tp)).await?? {
+                parts.push(format!(
+                    "{added} Evidence Locker case(s){}",
+                    if skipped > 0 { format!(" ({skipped} already here, left as they are)") } else { String::new() }
+                ));
+            }
+        }
         anyhow::Ok((n, restart, parts.join(", ")))
     }
     .await;
-    match res {
-        Ok((n, restart, what)) => {
-            Json(json!({ "ok": true, "cameras": n, "restart_required": restart, "message": format!("Imported {what}.") })).into_response()
-        }
-        Err(e) => bad(e),
-    }
+    res
 }
 
 // ---------- cameras ----------
