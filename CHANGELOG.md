@@ -1,6 +1,7 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Time-lapse scrubbing over days: a zoomed-out level.** Zoomed out past half a day, scrubbing used a different page of pictures for almost every step. Now each camera has one small overview page per day (a picture every 15 minutes, made from the existing pages and kept beside them in the camera's `.scrub` folder): one download of about 100–200 KB per camera per day. The hour being recorded is added once it is over; until then (and wherever the overview has no picture) the normal pages are used, so nothing is lost. Zoomed in, nothing changes.
 - **Scrubbing the time-lapse over days:** pages nobody is looking at any more are cancelled (only the newest few stay coming), and the neighbouring pages are not prefetched when zoomed out past half a day, so a long sweep no longer queues up behind pages it has already passed.
 
 ## 1.7.24 — November 2026

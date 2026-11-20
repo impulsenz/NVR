@@ -2270,7 +2270,62 @@ const scrubPageReady = (url) => { const im = scrub.pages.get(url); return !!(im 
 // shown in its own shape, centred. A page that hasn't arrived isn't shown (the
 // previous picture stays rather than blinking black) and is drawn when it
 // arrives. Returns the picture's offsets in the box, or null.
+// ---- The zoomed-out level: one small page per camera per day (see scrub.rs, "overview") ----
+// Zoomed out past half a day, a picture every 15 minutes is plenty, and one download
+// covers the whole day instead of a page for every hour passed.
+const DAY_MS = 86400000;
+scrub.ov = new Map();
+const OV_ZOOM = 43200;
+// What the day's pages were made from, so a changed page gives a new overview (the hour still being recorded is left out: it changes all the time).
+function ovVersion(cam, block) {
+  const e = scrub.cams.get(cam); if (!e) return 0;
+  const cur = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+  let v = 0, n = 0;
+  for (let h = block; h < block + DAY_MS && h < cur; h += HOUR_MS) {
+    const m = e.hours.get(h); if (!m) continue;
+    n++; v = (v * 31 + (m.pv || []).reduce((a, x) => a + (x % 1000003), 0) + 7) % 1000000000000;
+  }
+  return n ? v + 1 : 0;
+}
+function ovAsk(cam, block) {
+  const key = cam + '|' + block, v = ovVersion(cam, block), cur = scrub.ov.get(key);
+  if (!v) return cur;
+  if (cur && (cur.v === v || cur.asking) && (cur.st !== 'none' || Date.now() - cur.at < 60000)) return cur;
+  const st = {v, st: 'ask', asking: true, at: Date.now()};
+  scrub.ov.set(key, st);
+  api(`media/${enc(cam)}/scrub-ov/${block}-${v}.json`, {signal: pageNet.signal}).then(o => {
+    st.o = o; st.asking = false; st.st = 'ready';
+    st.url = `media/${enc(cam)}/scrub-ov/${o.name}`;
+    st.im = new Image(); st.im.src = st.url;
+    st.im.addEventListener('load', () => stripsSoon(), {once: true});
+  }).catch(() => { st.asking = false; st.st = 'none'; });
+  return st;
+}
+// Draw the overview's picture for moment T (like scrubStyle). Null: not ready, or no picture near T here.
+function ovStyle(el, cam, T, W, H, fill) {
+  const block = Math.floor(T / DAY_MS) * DAY_MS, st = ovAsk(cam, block);
+  if (!st || st.st !== 'ready') return null;
+  const o = st.o, j0 = Math.max(0, Math.min(95, Math.floor((T - block) / 900000)));
+  const j = o.have[j0] ? j0 : o.have[j0 + 1] ? j0 + 1 : o.have[j0 - 1] ? j0 - 1 : -1;
+  if (j < 0) return null;
+  const im = st.im;
+  el._want = [cam, T, W, H, fill];
+  if (!(im.complete && im.naturalWidth)) {
+    im.addEventListener('load', () => { const w = el._want; if (w && w[0] === cam && w[1] === T && scrubStyle(el, ...w)) el.hidden = false; }, {once: true});
+    return null;
+  }
+  const col = j % 10, row = Math.floor(j / 10), a = o.aspect || o.tw / o.th;
+  const dw = fill ? W : Math.min(W, H * a), dh = fill ? H : Math.min(H, W / a), ox = (W - dw) / 2, oy = (H - dh) / 2;
+  el.style.boxSizing = 'border-box';
+  el.style.border = 'solid #000';
+  el.style.borderWidth = `${Math.floor(oy)}px ${Math.floor(ox)}px`;
+  el.style.backgroundImage = `url("${st.url}")`;
+  el.style.backgroundSize = `${10 * dw}px ${10 * dh}px`;
+  el.style.backgroundPosition = `${-col * dw}px ${-row * dh}px`;
+  return {ox, oy};
+}
 function scrubStyle(el, cam, T, W, H, fill) {
+  if (page === 'recordings' && tl.zoom > OV_ZOOM) { const r = ovStyle(el, cam, T, W, H, fill); if (r) return r; }
   const f = scrubFind(cam, T); if (!f) return null;
   const {m, e} = f, url = scrubUrl(cam, m, f.n), im = scrubPage(url);
   el._want = [cam, T, W, H, fill];
@@ -7340,6 +7395,7 @@ async function prefetchSprites() {
   await Promise.all(tl.data.map(c => scrubLoad(c.camera, a, b)));
   if (gen !== tl.pfGen) return;
   paintPreviewStrips();
+  if (tl.zoom > OV_ZOOM) for (const c of tl.data) for (let d = Math.floor(a / DAY_MS) * DAY_MS; d < b; d += DAY_MS) ovAsk(c.camera, d);
   // (Zoomed out past a day: pictures are fetched as they are hovered, not all warmed.)
   if (tl.zoom <= 86400) for (const c of tl.data) scrubWarm(c.camera, a, b, tl.T ?? (a + b) / 2);
 }

@@ -70,7 +70,6 @@ impl Meta {
     }
 
     /// The slot holding a picture nearest to `slot` (None: the hour is empty).
-    #[cfg(test)]
     pub fn nearest(&self, slot: u32) -> Option<u32> {
         let i = self.have.partition_point(|r| r[1] < slot);
         let after = self.have.get(i).map(|r| r[0].max(slot));
@@ -571,6 +570,113 @@ pub fn describe(camera: &str, camera_dir: &Path, from: i64, to: i64) -> serde_js
     serde_json::json!({ "cols": COLS, "per_page": PER_PAGE, "hours": list(camera, camera_dir, from, to).iter().map(|m| (**m).clone()).collect::<Vec<Meta>>() })
 }
 
+// ---------- the zoomed-out level: one small page per camera per day ----------
+//
+// Scrubbing over days used to need a different page of pictures for almost every
+// step (each hour has its own pages). For a block of 24 hours a single overview page
+// holds a small picture every 15 minutes, made from the pages that already exist
+// and kept beside them: one download of about 100-200 KB for the whole day.
+
+/// Length of an overview block, and its pictures (one every 15 minutes).
+pub const BLOCK_MS: i64 = 86_400_000;
+pub const OV_SLOTS: u32 = 96;
+const OV_STEP_MS: i64 = 900_000;
+const OV_TW: u32 = 128;
+
+/// What the page needs to draw from an overview page.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Overview {
+    /// File name (in the camera's `.scrub` folder, served as `media/<id>/scrub-ov/<name>`).
+    pub name: String,
+    /// Per slot: 1 when the page holds a picture for that quarter hour.
+    pub have: Vec<u8>,
+    pub tw: u32,
+    pub th: u32,
+    pub aspect: f64,
+}
+
+pub fn overview_file(camera_dir: &Path, name: &str) -> Option<PathBuf> {
+    let stem = name.strip_suffix(".jpg").or_else(|| name.strip_suffix(".json"))?;
+    let ok = !stem.is_empty() && stem.len() < 48 && stem.chars().all(|c| c.is_ascii_digit() || c == '-');
+    ok.then(|| dir(camera_dir).join(format!("ov-{name}")))
+}
+
+static OV_BUILD: Mutex<()> = Mutex::new(());
+
+/// The overview of the 24 hours from `block` (a multiple of an hour), built if this version of it isn't on disk yet.
+/// `v` identifies what it was made from (the page changes it when the hours' pages change); older versions are removed.
+/// None: no pictures in these hours.
+pub fn overview(camera: &str, camera_dir: &Path, block: i64, v: u64) -> Result<Option<Overview>> {
+    anyhow::ensure!(block % HOUR_MS == 0, "not on the hour");
+    let stem = format!("{block}-{v}");
+    let (jpg, side) = (dir(camera_dir).join(format!("ov-{stem}.jpg")), dir(camera_dir).join(format!("ov-{stem}.json")));
+    if let Some(o) = std::fs::read(&side).ok().and_then(|b| serde_json::from_slice::<Overview>(&b).ok())
+        && jpg.is_file()
+    {
+        return Ok(Some(o));
+    }
+    // One at a time: building reads a lot of pages.
+    let _one = OV_BUILD.locked();
+    let metas: Vec<Option<Arc<Meta>>> = (0..BLOCK_MS / HOUR_MS).map(|i| meta(camera, camera_dir, block + i * HOUR_MS).filter(|m| !m.have.is_empty())).collect();
+    let Some(first) = metas.iter().flatten().next() else { return Ok(None) };
+    let aspect = if first.aspect > 0.2 { first.aspect } else { first.tw as f64 / first.th.max(1) as f64 };
+    let th = (((OV_TW as f64 / aspect).round() as u32).max(2)) & !1;
+    let (w, h) = (COLS * OV_TW, (OV_SLOTS / COLS + 1) * th);
+    let mut sheet = vec![0u8; (w * h * 3) as usize];
+    let mut have = vec![0u8; OV_SLOTS as usize];
+    let mut pages: HashMap<(i64, u32), Option<crate::imgutil::Frame>> = HashMap::new();
+    for j in 0..OV_SLOTS {
+        let t = block + j as i64 * OV_STEP_MS;
+        let Some(m) = &metas[((t - block) / HOUR_MS) as usize] else { continue };
+        let s0 = m.slot_of(t);
+        let Some(s) = m.nearest(s0) else { continue };
+        // A picture from far away isn't a picture of this moment (a gap in the footage).
+        if (s as i64 - s0 as i64).unsigned_abs() * m.interval as u64 * 1000 > 600_000 {
+            continue;
+        }
+        let n = s / PER_PAGE;
+        let page = pages.entry((m.h, n)).or_insert_with(|| std::fs::read(page_path(camera_dir, m.h, n)).ok().and_then(|b| crate::imgutil::decode_jpeg(&b).ok()));
+        let Some(f) = page else { continue };
+        let k = s % PER_PAGE;
+        let (cx, cy) = ((k % COLS) * m.tw, (k / COLS) * m.th);
+        if cx + m.tw > f.width || cy + m.th > f.height {
+            continue;
+        }
+        let mut tile = Vec::with_capacity((m.tw * m.th * 3) as usize);
+        for y in 0..m.th {
+            let o = (((cy + y) * f.width + cx) * 3) as usize;
+            tile.extend_from_slice(&f.rgb[o..o + (m.tw * 3) as usize]);
+        }
+        let small = crate::imgutil::resize_rgb(&tile, m.tw, m.th, OV_TW, th);
+        let (dx, dy) = ((j % COLS) * OV_TW, (j / COLS) * th);
+        for y in 0..th {
+            let d = (((dy + y) * w + dx) * 3) as usize;
+            let sidx = (y * OV_TW * 3) as usize;
+            sheet[d..d + (OV_TW * 3) as usize].copy_from_slice(&small[sidx..sidx + (OV_TW * 3) as usize]);
+        }
+        have[j as usize] = 1;
+    }
+    if !have.contains(&1) {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(dir(camera_dir))?;
+    let tmp = jpg.with_extension("jpg.tmp");
+    std::fs::write(&tmp, crate::imgutil::encode_jpeg(&sheet, w, h, 72)?)?;
+    std::fs::rename(&tmp, &jpg)?;
+    let o = Overview { name: format!("{stem}.jpg"), have, tw: OV_TW, th, aspect };
+    std::fs::write(&side, serde_json::to_vec(&o)?)?;
+    // Older versions of this day are no use now.
+    if let Ok(rd) = std::fs::read_dir(dir(camera_dir)) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with(&format!("ov-{block}-")) && !n.starts_with(&format!("ov-{stem}.")) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    Ok(Some(o))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +762,36 @@ mod tests {
         assert!(!covered("covcam", &cam, h, h + 1_200_000), "the next 10 minutes are not");
         assert!(!covered("covcam", &cam, h + HOUR_MS, h + HOUR_MS + 60_000), "no hour at all");
         let _ = std::fs::remove_dir_all(&cam);
+    }
+
+    #[test]
+    fn an_overview_holds_a_picture_every_quarter_hour() {
+        let dir = std::env::temp_dir().join(format!("gaze-ov-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let block = 20_000 * BLOCK_MS;
+        // Pictures in hours 2 and 3 of the block, every 10 s.
+        for hh in [2, 3] {
+            let h = block + hh * HOUR_MS;
+            let mut o = Open::new(h, 10, (64, 36), 16.0 / 9.0);
+            for s in 0..360 {
+                assert!(o.put(h + s * 10_000, &tile_jpeg(s as u8, 64, 36)));
+            }
+            o.flush("ovcam", &dir).unwrap();
+        }
+        let ov = overview("ovcam", &dir, block, 7).unwrap().expect("an overview");
+        // Slots 8..16 are hours 2 and 3 (4 a hour); nothing elsewhere.
+        assert_eq!(ov.have.iter().map(|x| *x as u32).sum::<u32>(), 8);
+        assert!(ov.have[8..16].iter().all(|x| *x == 1) && ov.have[..8].iter().all(|x| *x == 0));
+        assert_eq!((ov.tw, ov.th), (128, 72));
+        assert!(dir.join(".scrub").join(format!("ov-{block}-7.jpg")).is_file());
+        // The same version again reads what is there; a new version replaces it.
+        assert_eq!(overview("ovcam", &dir, block, 7).unwrap().unwrap(), ov);
+        overview("ovcam", &dir, block, 8).unwrap().unwrap();
+        assert!(!dir.join(".scrub").join(format!("ov-{block}-7.jpg")).exists());
+        // A day with nothing: none.
+        assert!(overview("ovcam", &dir, block + 5 * BLOCK_MS, 1).unwrap().is_none());
+        assert!(overview_file(&dir, "../x.jpg").is_none() && overview_file(&dir, "123-4.jpg").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

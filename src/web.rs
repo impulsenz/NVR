@@ -235,6 +235,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/media/{id}/thumb/{name}", get(recording_thumb))
         .route("/media/{id}/play/{kind}/{name}", get(play_converted))
         .route("/media/{id}/scrub/{h}/{n}", get(scrub_page))
+        .route("/media/{id}/scrub-ov/{name}", get(scrub_overview))
         .route("/live/{id}/stream.mjpeg", get(live_mjpeg))
         .route("/live/{id}/audio.mp3", get(live_audio))
         .route("/live/{id}/frame.jpg", get(live_frame))
@@ -4572,6 +4573,37 @@ async fn scrub_hours(State(m): App, Path(id): Path<String>, Query(q): Query<Scru
     let c = camera!(m, id);
     let out = tokio::task::spawn_blocking(move || crate::scrub::describe(&c.cfg.id, &c.dir, q.from, q.to)).await.unwrap_or_default();
     Json(out).into_response()
+}
+
+/// The zoomed-out level: `<block>-<version>.json` says what the day's overview page holds (building it the first
+/// time), `<block>-<version>.jpg` is the page itself.
+async fn scrub_overview(State(m): App, Path((id, name)): Path<(String, String)>, req: Request) -> Response {
+    let c = camera!(m, id);
+    let Some(file) = crate::scrub::overview_file(&c.dir, &name) else { return err(StatusCode::NOT_FOUND, "no such page") };
+    let mut res = if name.ends_with(".json") {
+        let stem = name.trim_end_matches(".json").to_string();
+        let (block, v) = match stem.split_once('-').and_then(|(a, b)| Some((a.parse::<i64>().ok()?, b.parse::<u64>().ok()?))) {
+            Some(x) => x,
+            None => return err(StatusCode::BAD_REQUEST, "bad name"),
+        };
+        let (cid, dir) = (c.cfg.id.clone(), c.dir.clone());
+        drop(c);
+        match tokio::task::spawn_blocking(move || crate::scrub::overview(&cid, &dir, block, v)).await {
+            Ok(Ok(Some(o))) => Json(o).into_response(),
+            Ok(Ok(None)) => return err(StatusCode::NOT_FOUND, "no pictures"),
+            Ok(Err(e)) => return bad(e),
+            Err(e) => return bad(anyhow::anyhow!("{e}")),
+        }
+    } else {
+        if !file.is_file() {
+            return err(StatusCode::NOT_FOUND, "no such page");
+        }
+        serve_file(file, req, None, false).await
+    };
+    if name.ends_with(".jpg") {
+        res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=31536000, immutable"));
+    }
+    res
 }
 
 /// One page of pictures (its address carries the page's version, so it is cached for good).
