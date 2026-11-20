@@ -425,7 +425,7 @@ button.save-bad { animation: savebad .6s ease; border-color: var(--red, #e74c3c)
 .tl-row.merged .lane { border: 1px solid var(--border); border-radius: 6px; }
 .tl-row.merged .seg { top: auto; bottom: 12px; height: 18px; border-radius: 3px; background: linear-gradient(180deg, #3f7f56, #2d5a3a); min-width: 2px; }
 .tl-row.merged .seg.clip { background: linear-gradient(180deg, #8b6fd6, #6a4fb8); }
-.tl-row.merged .ev { top: auto; bottom: 21px; height: 9px; min-width: 3px; border-radius: 0; background: var(--evc, #f59e0b); opacity: .95; }
+.tl-row.merged .ev { top: auto; bottom: 15px; height: 12px; min-width: 3px; border-radius: 2px; border: 0; box-shadow: none; background: var(--evc, #f59e0b); opacity: .95; }
 .tl-row.merged .ev.cat-person { --evc: var(--cat-person); } .tl-row.merged .ev.cat-vehicle { --evc: #fbbf24; } .tl-row.merged .ev.cat-animal { --evc: #34d399; } .tl-row.merged .ev.cat-package { --evc: #f472b6; } .tl-row.merged .ev.cat-motion { --evc: #f59e0b; }
 .tl-row.merged .evt { top: 6px; width: 178px; height: 100px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
 .tl-row .ev .ic { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); font-size: 15px; cursor: pointer; padding: 2px; }
