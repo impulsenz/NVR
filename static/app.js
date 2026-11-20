@@ -1004,7 +1004,6 @@ function overlayHtml(c, q, noFs, opts = {}) {
   else if (opts.tools == null) {
     // Live sound: speaker (click: on/off; hover: volume).
     if (c.sound !== false) row.push(`<span class="snd-wrap"><button type="button" class="fsbtn snd" data-cam="${esc(c.id)}" title="Sound on/off">${soundCam === c.id ? '🔊' : '🔇'}</button><input type="range" class="snd-vol" min="0" max="1" step="0.05" value="${soundVolume()}" title="Volume"></span>`);
-    row.push(`<button type="button" class="fsbtn sbtn" title="${q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).'}">${q === 'main' ? 'S1' : 'S2'}</button>`);
   }
   // (No full-screen button on the pictures: double-click a picture, or use
   // Full screen at the top of the page.)
@@ -1100,8 +1099,18 @@ function switchStream(surface) {
     if (img) unbinders.set(c.id, bindLive(img, c.id, q));
     updateOverlay(surface, c, q);
   }
+  paintStreamBtns(c);
   updateSubscriptions();
   toast(`${c.name}: ${q === 'main' ? 'stream 1 (main, full quality)' : 'stream 2 (sub-stream)'}`);
+}
+// Every Stream 1 / Stream 2 button of a camera shows what's on screen.
+function paintStreamBtns(c) {
+  const q = (document.fullscreenElement && document.fullscreenElement.id === 'focus-surface') || focusId === c.id ? feedQ(c, 'focus') : feedQ(c, 'grid');
+  document.querySelectorAll('.p-stream').forEach(b => {
+    b.textContent = q === 'main' ? 'S1 · Stream 1' : 'S2 · Stream 2';
+    b.classList.toggle('on', q === 'main');
+    b.title = q === 'main' ? 'Showing stream 1 (main, full quality). Click for stream 2 (sub-stream, lighter).' : 'Showing stream 2 (sub-stream). Click for stream 1 (main, full quality).';
+  });
 }
 function updateOverlay(surface, c, q) {
   // Rebuild when the camera's or the global on-screen display settings changed.
@@ -4976,7 +4985,7 @@ async function playItem(it, card) {
       ${e.boxes && e.boxes.length ? `<label class="check" style="margin:-2px 0 8px"><input type="checkbox" class="bx-toggle" ${showBoxes ? 'checked' : ''}> Show detection boxes</label>` : ''}` : ''}
     ${e && e.faces && e.faces.length ? `<div class="faces"><div class="muted small">Faces</div>${e.faces.map((f, i) => `<div class="face"><img src="media/${enc(it.camera)}/events/${enc(f.file)}" alt="">
       ${f.name ? `<b>${esc(f.name)}</b>${f.confirmed ? '<span class="muted small" title="Added to this person’s faces">✓ confirmed</span>' : `<button type="button" class="op-only face-ok" data-face="${i}" title="Right person: add this face to ${esc(f.name)}’s faces, so GAZE knows them better">✓ Right</button>`}<button type="button" class="op-only face-fix" data-face="${i}" title="Wrong person? Choose who it really is, or make a new person">✎ Wrong?</button>` : ''}
-      <select class="who op-only" data-face="${i}" ${f.name ? 'hidden' : ''}><option value="">${f.name ? `Not ${esc(f.name)}? Who is it?` : 'Who is this?'}</option>${knownPeople.filter(k => k.name !== f.name).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">New person…</option>${f.name ? '<option value="none">Not anyone I know</option>' : ''}</select></div>`).join('')}</div>` : ''}
+      <select class="who op-only" data-face="${i}" ${f.name ? 'hidden' : ''}><option value="">${f.name ? `Not ${esc(f.name)}? Who is it?` : 'Who is this?'}</option>${knownPeople.filter(k => k.name !== f.name).map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="+">New person…</option>${f.name ? '<option value="none">Not anyone I know</option>' : ''}<option value="discard">? Unknown — discard this face</option></select></div>`).join('')}</div>` : ''}
     ${e && e.items && e.items.length ? `<div class="items">${e.items.map(x => `<div class="item"><div class="muted small">${esc(x.zone)}: before → after</div><div class="row"><img src="media/${enc(it.camera)}/events/${enc(x.before)}" alt=""><span>→</span><img src="media/${enc(it.camera)}/events/${enc(x.after)}" alt=""></div></div>`).join('')}</div>` : ''}
     ${e && e.plates && e.plates.length ? `<div class="plates">${e.plates.map(p => `<span class="plate">${esc(p)}</span>`).join('')}</div>` : ''}
     <dl><dt>Camera</dt><dd>${esc(it.camera_name)}</dd><dt>Time</dt><dd>${fmtDate(it.start)}</dd><dt>Length</dt><dd>${fmtDur(dur)}</dd>
@@ -5009,7 +5018,7 @@ async function playItem(it, card) {
     try {
       const r = await api(`api/known/${enc(id)}/learn`, {method: 'POST', json: {camera: it.camera, event: e.id, face: +sel.dataset.face}});
       toast(r.message); await loadKnownPeople();
-      e.faces[+sel.dataset.face].name = id === 'none' ? null : (knownPeople.find(k => k.id === id) || {}).name;
+      e.faces[+sel.dataset.face].name = (id === 'none' || id === 'discard') ? null : (knownPeople.find(k => k.id === id) || {}).name;
       e.faces[+sel.dataset.face].confirmed = true;
       // Keep the alert's notes in step (what the server now has).
       if (r.notes) e.notes = r.notes;
@@ -6256,7 +6265,7 @@ function drawTimeline() {
     }
     const nEv = evs.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
     const lane = solidBars(pieces, 15000 / span * 100, 'div', 'seg') + evMarks(evs, pct, '', '', lanePx, tl.groups, 126);
-    rows = `<div class="tl-row merged"><span class="label"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">All cameras</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</span><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}<div class="tl-buf"></div></div></div></div>`;
+    rows = `<div class="tl-row merged"><span class="label"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">All cameras</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</span><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}<div class="tl-buf"></div></div><div class="tlp" data-cam="*" title="Time-lapse previews of the cameras shown — blue: ready to scrub · striped: loading · grey: not loaded yet"></div></div></div>`;
   }
   for (const c of mergedNow ? [] : shownCams) {
     let lane = '';
@@ -6550,6 +6559,7 @@ function liveFsBar(el, camId, inline = false) {
       <select class="p-pspeed play-only">${[0.5, 1, 2, 4, 8, 16].map(x => `<option value="${x}" ${x === 1 ? 'selected' : ''}>${x}×</option>`).join('')}</select>
       <span class="timecode p-time"></span><span class="spacer"></span>
       ${c.talk && me && me.role !== 'viewer' ? '<button type="button" class="p-talk live-only" title="Hold to talk through the camera (tap to keep talking)"><span>Push to talk</span></button><button type="button" class="p-say live-only" title="Type words for the camera to say">💬 Say…</button><button type="button" class="p-siren siren-btn live-only" title="Sound the siren">🚨 Siren</button>' : ''}
+      <button type="button" class="p-stream live-only"></button>
       <a class="btn p-snap live-only" title="Save a full-quality picture">📷 Snapshot</a>
       <button type="button" class="p-in" title="The clip starts here">${CLIP_IN}</button><button type="button" class="p-out" title="The clip ends here">${CLIP_OUT}</button>
       <a class="btn p-clip" hidden>⇩ Download clip</a>
@@ -6585,6 +6595,11 @@ function liveFsBar(el, camId, inline = false) {
     fsIdle(el, bar);
   }
   const p2 = (n) => String(n).padStart(2, '0'), stamp = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}`;
+  // Stream 1 / Stream 2 switch: shows the stream on screen (full screen
+  // opens on stream 1) and flips it, here or on the picture's own button.
+  const sw = q('.p-stream');
+  sw.onclick = () => switchStream(inView ? $('focus-surface') : el);
+  paintStreamBtns(c);
   const snap = q('.p-snap');
   snap.href = 'snapshot/' + enc(camId);
   snap.onclick = () => { snap.download = `${c.name} ${stamp(new Date())}.jpg`; };
@@ -7112,6 +7127,13 @@ function segMs(x) { if (x._a == null) { x._a = Date.parse(x.start); x._b = Date.
 function paintPreviewStrips() {
   const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
   for (const el of document.querySelectorAll('#tl .tlp')) {
+    if (el.dataset.cam === '*') {
+      // All cameras in one row: every camera's pictures, ready ones on top.
+      const rank = ['s-none', 's-wait', 's-loading', 's-server', 's-ready'];
+      const all = tl.data.filter(x => !tl.onlyCam || x.camera === tl.onlyCam).flatMap(c => stripPieces(c.camera, W0, span, c.segments));
+      el.innerHTML = rank.map(k => solidBars(all.filter(p => p.cls === k), 15000 / span * 100, 'i')).join('');
+      continue;
+    }
     const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
     el.innerHTML = solidBars(stripPieces(c.camera, W0, span, c.segments), 15000 / span * 100, 'i');
   }
@@ -8088,7 +8110,7 @@ async function openCameraDialog(id, clone) {
       show_detections: true, detections_corner: 'bl', show_fps: false, fps_corner: 'tl', text: '', text_corner: 'br'},
     view: {grid_quality: 'auto', grid_fps: 0, hd_fps: 0},
     ptz: {enabled: false, host: '', port: 80, username: '', password: '', speed: 0.5, invert_pan: false, invert_tilt: false},
-    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','vehicle'], min_confidence: 0.7, trigger: 'objects', pre_seconds: 3, post_seconds: 15, join_seconds: 30, fps: 5, ai_interval: 1, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
+    detect: {motion: true, min_contrast: 24, min_object_px: 300, make_time_ms: 500, min_travel_px: 0, mask: '', ai: false, objects: ['person','vehicle'], min_confidence: 0.7, trigger: 'objects', pre_seconds: 3, post_seconds: 15, join_seconds: 120, fps: 5, ai_interval: 0.5, hd_frames: 8, ignore_parked: true, ignore_animals: true, ai_ignores_mask: true, parked_seconds: 60}};
   if (clone) c.name = c.name + ' (copy)';
   const q = parseUrl(c.url) || {};
   // A new camera: the login of the camera added last (most cameras in one
@@ -8227,7 +8249,7 @@ async function openCameraDialog(id, clone) {
         <label for="d-post">Record after activity stops</label>
         <div class="row"><input type="number" id="d-post" min="3" max="600" value="${c.detect.post_seconds}" style="width:110px"><span class="muted">seconds</span></div>
         <label for="d-join">Join alerts within</label>
-        <div class="row"><input type="number" id="d-join" min="0" max="600" value="${c.detect.join_seconds ?? 30}" style="width:110px"><span class="muted">seconds — if it triggers again within this time, it's added to the same alert: one longer video instead of lots of short ones. The timer starts again with each trigger (an alert is at most 10 minutes).</span></div>
+        <div class="row"><input type="number" id="d-join" min="0" max="600" value="${c.detect.join_seconds ?? 120}" style="width:110px"><span class="muted">seconds — if it triggers again within this time, it's added to the same alert: one longer video instead of lots of short ones. The timer starts again with each trigger (an alert is at most 10 minutes). 2 minutes (the standard) keeps someone lingering in one alert.</span></div>
         <label for="d-fps">Analysis frame rate</label>
         <div class="row"><input type="number" id="d-fps" min="1" max="15" value="${c.detect.fps}" style="width:110px"><span class="muted">pictures per second checked for motion</span></div>
       </div>
@@ -8274,9 +8296,9 @@ async function openCameraDialog(id, clone) {
             <option value="drop" ${c.detect.hd_check === 'drop' ? 'selected' : ''}>On — leave out what HD doesn't confirm</option>
             <option value="off" ${c.detect.hd_check === 'off' ? 'selected' : ''}>Off</option>
           </select>
-          <div class="row" style="margin-top:6px"><span class="muted">Look at up to</span><input type="number" id="d-hdframes" min="1" max="8" value="${c.detect.hd_frames || 4}" style="width:70px"><span class="muted">full-quality pictures, half a second apart${tip('One picture can miss what the sub-stream saw: the person turned away, blurred, half hidden. GAZE takes up to this many, one after another, and the first that shows it confirms it (it stops as soon as everything is confirmed). More catches more, and takes a few seconds longer; 4 suits most cameras.')}</span></div>
+          <div class="row" style="margin-top:6px"><span class="muted">Look at up to</span><input type="number" id="d-hdframes" min="1" max="8" value="${c.detect.hd_frames || 8}" style="width:70px"><span class="muted">full-quality pictures, half a second apart${tip('One picture can miss what the sub-stream saw: the person turned away, blurred, half hidden. GAZE takes up to this many, one after another, and the first that shows it confirms it (it stops as soon as everything is confirmed). More catches more, and takes a few seconds longer; 8 suits most cameras.')}</span></div>
 </div>
-        <label for="d-int">AI looks every${tip('How often the AI checks the picture while something is moving. Lower recognises things quicker but works the computer harder. Example: 1 second suits most cameras; 0.5 for a busy street.')}</label>
+        <label for="d-int">AI looks every${tip('How often the AI checks the picture while something is moving. Lower recognises things quicker but works the computer harder. Example: 0.5 seconds (the standard) suits most cameras; 1 second to save work.')}</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds while there's motion</span></div>
         <label>Stationary objects</label>
         <div><label class="check"><input type="checkbox" id="d-parked" ${c.detect.ignore_parked !== false ? 'checked' : ''}> Stop alerting for objects that stay in one place${tip('A car parked in the driveway alerts when it arrives, then stays quiet while it stands still (people walking past still alert). It alerts again as soon as it moves or drives off.')}</label>
@@ -8874,7 +8896,7 @@ function collectCamera() {
       speed: num('p-speed') / 100, invert_pan: chk('p-inv-pan'), invert_tilt: chk('p-inv-tilt'),
       patrol: $('p-patrol').dataset.loaded ? [...document.querySelectorAll('#p-patrol input:checked')].map(i => i.value) : ((cameraCfgs.find(x => x.id === editingId) || {ptz: {}}).ptz.patrol || []), patrol_seconds: Math.max(0, Math.round(num('p-patrol-s')) || 0), roam: chk('p-roam'),
       follow: chk('p-follow'), follow_objects: [...document.querySelectorAll('#p-follow-objs input:checked')].map(i => i.value)},
-    detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
+    detect: {defaults_version: 1, motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), join_seconds: Math.max(0, Math.round(num('d-join')) || 0), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), ignore_pets: chk('d-pets'), hd_check: val('d-hdcheck'), hd_frames: Math.max(1, Math.min(8, Math.round(num('d-hdframes')) || 4)), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
       parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked, #d-parked-more input:checked')].map(i => i.value), packages: camPkgKeep.packages, package_mask: camPkgKeep.package_mask, package_area: []},
@@ -9895,9 +9917,6 @@ async function renderSystemSettings(body) {
     <label for="y-port">Port${tip('The number after the colon in GAZE’s web address, e.g. http://192.168.1.10:8080. Only change it if another program already uses 8080.')}</label><div class="row"><input type="number" id="y-port" min="1" max="65535" value="${esc(port)}" style="width:110px"><span class="muted">1–65535 (default 8080)</span></div>
     <label for="y-bind">Reachable from${tip('Who can open GAZE. “Every device on my network” lets your phone and other computers at home use it. “Only this computer” keeps it private to this PC.')}</label><div><select id="y-bind"><option value="0.0.0.0">Every device on my network (all network adapters)</option><option value="127.0.0.1">Only this computer</option>
       ${addrs.map(a => `<option value="${esc(a)}">Only via ${esc(a)}</option>`).join('')}</select><div class="hint">Changing the port or this setting takes effect after the NVR restarts.</div></div>
-    <h3>Other GAZE servers${tip('See the cameras of another GAZE (a holiday house, the shop, a relative\u2019s) on this Live page. On that GAZE, make an API token (\u{1F464} menu \u2192 API tokens), then add its address and the token here. Its cameras show under your own; click one to open it there.')}</h3>
-    <span></span><div id="y-remotes"></div>
-    <span></span><div><button type="button" class="small" id="y-remote-add">＋ Add a server</button></div>
     <h3>Secure address (https)</h3>
     <label for="y-hport">Secure port${tip('GAZE also answers on a secure https address. Phones need it for the share menu and to install GAZE as an app, and it keeps passwords and video private on the way. 0 turns it off.')}</label><div class="row"><input type="number" id="y-hport" min="0" max="65535" value="${s.https_port ?? 8443}" style="width:110px"><span class="muted">0 = off (default 8443)</span></div>
     <label>Certificate${tip('Proves to browsers that this really is your GAZE. GAZE\u2019s own works straight away, but each browser warns once (\u201cAdvanced \u2192 Continue\u201d). A Tailscale certificate is trusted everywhere with no warning, and is also the easy, safe way to reach GAZE away from home.')}</label><div>
@@ -9906,6 +9925,9 @@ async function renderSystemSettings(body) {
       <div id="y-cert-ts" style="margin-top:6px" hidden><button type="button" id="y-ts">Get a certificate from Tailscale</button>
         <div class="hint">Needs Tailscale installed and signed in on this computer, with MagicDNS and HTTPS certificates turned on in the Tailscale admin page (DNS tab). Renewed by itself.</div></div>
       <div class="hint" id="y-https-st"></div></div>
+    <h3>Other GAZE servers${tip('See the cameras of another GAZE (a holiday house, the shop, a relative\u2019s) on this Live page. On that GAZE, make an API token (\u{1F464} menu \u2192 API tokens), then add its address and the token here. Its cameras show under your own; click one to open it there.')}</h3>
+    <span></span><div id="y-remotes"></div>
+    <span></span><div><button type="button" class="small" id="y-remote-add">＋ Add a server</button></div>
     <label for="y-ffmpeg">ffmpeg program${tip('ffmpeg is the free video tool GAZE uses to record and convert. Leave as “ffmpeg” unless it’s somewhere unusual; then give its full path, e.g. C:\\ffmpeg\\bin\\ffmpeg.exe (ffprobe must be in the same folder).')}</label><div><input type="text" id="y-ffmpeg" required value="${esc(s.ffmpeg_path)}"><div class="hint">The video tool GAZE uses. Leave as it is unless you were told otherwise.</div></div>
     <label for="y-engine">Streaming engine${tip('How GAZE connects to the cameras. FFmpeg (built in) is the normal way. go2rtc (to try out): go2rtc holds the one connection to each camera and GAZE records, detects and shows live from it — useful for cameras that drop connections. If go2rtc stops or can\u2019t start, the cameras connect directly again by themselves, so recording carries on either way.')}</label><div>
       <select id="y-engine"><option value="ffmpeg" ${((settings.streaming || {}).engine || 'ffmpeg') === 'ffmpeg' ? 'selected' : ''}>FFmpeg (built in, recommended)</option><option value="go2rtc" ${(settings.streaming || {}).engine === 'go2rtc' ? 'selected' : ''}>go2rtc (to try out)</option></select>
@@ -10316,14 +10338,14 @@ async function renderFaces(body) {
       <select id="fc-who"><option value="">Everyone</option>${names.map(n => `<option ${n === v.who ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
       <select id="fc-days">${[[1, 'Today and yesterday'], [7, 'Last 7 days'], [30, 'Last 30 days'], [90, 'Last 90 days']].map(([d, t]) => `<option value="${d}" ${d === v.days ? 'selected' : ''}>${t}</option>`).join('')}</select>
       ${v.show === 'check' && shown.length ? `<button type="button" class="op-only" id="fc-all" title="Confirm every face shown here is who GAZE says">✓ All ${shown.length} are right</button>` : ''}</div>
-    <p class="muted" style="margin-top:0">Every face GAZE found in alerts. <b>✓ Right</b> adds the face to that person, so GAZE knows them better; <b>✎ Wrong?</b> says who it really is (or nobody you know), and GAZE won't make that mistake again. Click a face to open its alert.</p>
+    <p class="muted" style="margin-top:0">Every face GAZE found in alerts. <b>✓ Right</b> adds the face to that person, so GAZE knows them better; <b>✎ Wrong?</b> says who it really is (or nobody you know), and GAZE won't make that mistake again. <b>? Unknown — discard</b> ignores a face you can't tell (or a bad picture) and takes it off this list. Click a face to open its alert.</p>
     ${shown.length ? '' : `<div class="hint">${v.show === 'check' ? 'Nothing to check — every named face here has been confirmed.' : 'No faces for these choices.'}</div>`}
     <div class="fc-grid">${shown.slice(0, 600).map((f, i) => `<div class="fc ${f.confirmed ? 'fc-done' : ''}" data-i="${i}">
         <a href="#alerts?open=${enc(f.camera)}~${enc(f.event)}" title="Open the alert"><img src="${esc(f.picture)}" alt="" loading="lazy"></a>
         <b>${f.name ? esc(f.name) : '<span class="muted">Not named</span>'}</b>
         <div class="muted small">${esc(f.camera_name)} · ${esc(fmtAgo(f.time))}</div>
         <div class="row op-only">${f.name && !f.confirmed ? '<button type="button" class="small fc-ok">✓ Right</button>' : f.confirmed ? '<span class="muted small">✓ confirmed</span>' : ''}
-          <select class="small fc-fix"><option value="">${f.name ? '✎ Wrong?' : 'Who is this?'}</option>${people.filter(p => p.name !== f.name).map(p => `<option value="${esc(p.id)}">${f.name ? "It's " : ''}${esc(p.name)}</option>`).join('')}<option value="+">New person…</option>${f.name ? '<option value="none">Not anyone I know</option>' : ''}</select></div></div>`).join('')}</div>
+          <select class="small fc-fix"><option value="">${f.name ? '✎ Wrong?' : 'Who is this?'}</option>${people.filter(p => p.name !== f.name).map(p => `<option value="${esc(p.id)}">${f.name ? "It's " : ''}${esc(p.name)}</option>`).join('')}<option value="+">New person…</option>${f.name ? '<option value="none">Not anyone I know</option>' : ''}</select><button type="button" class="small danger fc-unk" title="I don\u2019t know who this is (or it\u2019s a bad picture): ignore it and remove it from this list">? Unknown — discard</button></div></div>`).join('')}</div>
     ${shown.length > 600 ? `<div class="hint">Showing the newest 600 of ${shown.length}: choose fewer days or one person to see the rest.</div>` : ''}</div>`;
   $('fc-show').value = v.show;
   const redraw = () => renderFaces(body);
@@ -10338,6 +10360,10 @@ async function renderFaces(body) {
     if (ok) ok.onclick = async () => {
       const id = idOf(f.name); if (!id) { toast(`${f.name} isn't in People & vehicles any more`, true); return; }
       try { await learn(f, id); f.confirmed = true; el.classList.add('fc-done'); ok.outerHTML = '<span class="muted small">✓ confirmed</span>'; if (v.show === 'check') setTimeout(() => el.remove(), 400); }
+      catch (e) { toast(e.message, true); }
+    };
+    el.querySelector('.fc-unk').onclick = async () => {
+      try { await learn(f, 'discard'); el.remove(); const k = shown.indexOf(f); if (k >= 0) shown[k] = Object.assign(f, {confirmed: true}); }
       catch (e) { toast(e.message, true); }
     };
     el.querySelector('.fc-fix').onchange = async (ev) => {
@@ -10444,7 +10470,7 @@ function packageSection(box) {
   const chips = cfgs.map(c => `<button type="button" class="pkg-chip ${c.id === pkgCam ? 'sel' : ''} ${on(c) ? 'on' : ''}" data-id="${esc(c.id)}" title="${on(c) ? 'Watching for parcels' : 'Not watching for parcels'}">${on(c) ? '📦' : '○'} ${esc(c.name)}</button>`).join('');
   box.innerHTML = `<div class="card pkg-card"><h2>📦 Package delivery${tip('GAZE compares one spot of the picture before and after each visit. Nothing is learned in advance: it only needs the spot painted. Switched on per camera.')}</h2>
     <p class="muted" style="margin-top:0">Get told when a <b>parcel is left or taken</b>. Pick a camera, paint the spot where parcels are left (the doorstep or porch — just that spot) and switch it on.</p>
-    <ol class="pkg-how muted small"><li>After each visit, GAZE compares that spot with how it looked before.</li><li>Something new there for a full minute: <b>parcel left</b>. Something gone: <b>parcel taken</b>.</li><li>The alert has the before and after pictures.</li></ol>
+    <ol class="pkg-how muted small"><li>After each visit, GAZE compares that spot with how it looked before.</li><li>Something new there for a full minute: <b>parcel left</b>. Something gone: <b>parcel taken</b>.</li><li>Taught what the spot looks like <b>empty</b>, GAZE only counts a change from empty to something (or back) — and not a person, cat or bird that stays there.</li><li>The alert has the before and after pictures.</li></ol>
     <div class="pkg-chips">${chips}</div>
     <div class="pkg-edit"><label class="check"><input type="checkbox" id="pk-on" ${cur.detect.packages ? 'checked' : ''} ${admin ? '' : 'disabled'}> Notice parcels delivered or picked up on <b>${esc(cur.name)}</b></label>
       <div class="surface" id="d-pkg-area" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair;margin-top:6px">
@@ -10454,7 +10480,10 @@ function packageSection(box) {
         <div class="seg" id="d-pkg-tool"><button type="button" class="small on" data-v="paint">🖌 Paint</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
         <label class="muted small" style="margin:0">Brush <select id="d-pkg-brush" class="small"><option value="1">Fine</option><option value="3">Small</option><option value="7" selected>Medium</option><option value="15">Large</option></select></label>
         <button type="button" class="small" id="d-pkg-clear">Clear</button><span class="spacer"></span><button type="button" class="primary" id="pk-save">Save</button></div>` : '<div class="hint">Only an admin can change this.</div>'}
-      <div class="hint" id="pk-hint">The spot must stay changed for a minute to count. Needs motion detection on for the camera.</div></div></div>`;
+      <div class="hint" id="pk-hint">The spot must stay changed for a minute to count. Needs motion detection on for the camera.</div>
+      <h3 style="margin-top:14px">What it looks like empty${tip('Teach GAZE the spot with nothing on it: the bare doorstep in the morning, at night, in the rain, with the lights on. A change only counts when the spot goes from empty to not-empty (parcel left) or the other way (taken). Several pictures in different light work best — an empty spot is far easier to show than every kind of parcel.')}</h3>
+      <div class="muted small">Add a few pictures of the spot with <b>nothing</b> on it, in different light. Then shadows, rain or changing sun are never taken for a parcel, and a parcel is told from a person walking through, a cat at its bowl or a bird sitting there (anything GAZE sees as a person or animal in the spot, still there when the alert ends, is ignored).</div>
+      <div class="st-ex" id="pk-empty"></div></div></div>`;
   pkgCells = decodeMask(cur.detect.package_mask);
   if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; }
   const img = $('d-pkg-img'), m = $('d-pkg-area').querySelector('.msg');
@@ -10475,6 +10504,17 @@ function packageSection(box) {
       } catch (e) { toast(e.message, true); }
     };
   } else draw();
+  const paintEmpty = async () => {
+    const el = $('pk-empty'); if (!el) return;
+    let files = []; try { files = await api(`api/cameras/${enc(cur.id)}/package-empty`); } catch (e) {}
+    el.innerHTML = files.map(f => `<span class="st-thumb"><img src="api/cameras/${enc(cur.id)}/package-empty/${enc(f)}" alt="Empty spot">${admin ? `<button type="button" class="st-x" data-f="${esc(f)}" title="Remove this picture">×</button>` : ''}</span>`).join('')
+      + (admin ? `<button type="button" class="small" id="pk-empty-add">＋ Add a picture of it empty now</button>` : '')
+      + `<span class="muted small">${files.length ? files.length + ' picture' + (files.length === 1 ? '' : 's') : 'None yet: parcels are found by comparing before and after each visit.'}</span>`;
+    el.querySelectorAll('.st-x').forEach(x => x.onclick = async () => { try { await api(`api/cameras/${enc(cur.id)}/package-empty/${enc(x.dataset.f)}`, {method: 'DELETE'}); paintEmpty(); } catch (e) { toast(e.message, true); } });
+    const add = $('pk-empty-add');
+    if (add) add.onclick = async () => { add.disabled = true; try { await api(`api/cameras/${enc(cur.id)}/package-empty`, {method: 'POST', json: {}}); toast('Saved — make sure nothing is on the spot when you add more'); paintEmpty(); } catch (e) { toast(e.message, true); add.disabled = false; } };
+  };
+  paintEmpty();
   box.querySelectorAll('.pkg-chip').forEach(b => b.onclick = () => { pkgCam = b.dataset.id; packageSection(box); });
 }
 
@@ -10776,37 +10816,67 @@ function renderHeat() {
 // Long-term time-lapse: one picture a day per camera, kept for as long as you like, and a video made from them.
 async function renderLongLapse(body) {
   let list = []; try { list = await api('api/longlapse'); } catch (e) {}
-  const cams = status.cameras;
-  const camSel = (v) => `<select class="ll-cam">${cams.map(c => `<option value="${esc(c.id)}" ${c.id === v ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
-  const row = (e) => `<div class="ll-row" data-id="${esc(e.id || '')}">${camSel(e.camera)}<input type="time" class="ll-time" value="${esc(e.time || '12:00')}"><label class="check"><input type="checkbox" class="ll-on" ${e.enabled !== false ? 'checked' : ''}> On</label><button type="button" class="small ll-del" title="Stop taking pictures (the ones taken stay until you delete them in the gallery below)">Remove</button></div>`;
-  const gal = (x) => {
-    const e = x.entry, pics = x.pictures, id = enc(e.id), cam = (cams.find(c => c.id === e.camera) || {}).name || e.camera;
-    const first = pics[0] && pics[0].date, last = pics.length && pics[pics.length - 1].date;
-    return `<div class="card ll-card" data-id="${esc(e.id)}"><h2>${esc(cam)} · ${esc(e.time)} <span class="muted small">${pics.length} picture${pics.length === 1 ? '' : 's'}${first ? ` · ${esc(first)} → ${esc(last)}` : ''}</span></h2>
-      ${x.error ? `<p class="errc small">Last try: ${esc(x.error)}</p>` : x.last_ok ? `<p class="muted small">Last picture taken ${esc(fmtDate(new Date(x.last_ok)))}</p>` : ''}
-      <div class="ll-strip">${pics.slice(-60).reverse().map(p => `<a href="api/longlapse/${id}/pic/${enc(p.name)}" target="_blank" title="${esc(p.date)}"><img loading="lazy" alt="" src="api/longlapse/${id}/thumb/${enc(p.name)}"><span>${esc(p.date)}</span></a>`).join('') || '<span class="muted">No pictures yet: the first is taken at the time above, or press “Take one now”.</span>'}</div>
-      <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap"><button type="button" class="small ll-now">📷 Take one now</button>
-        <span class="muted small">Make a video</span> <input type="date" class="ll-from" value="${esc(first || '')}"> → <input type="date" class="ll-to" value="${esc(last || '')}">
-        <select class="ll-fps"><option value="5">5 pictures a second</option><option value="10" selected>10 a second</option><option value="15">15 a second</option><option value="24">24 a second</option></select>
-        <button type="button" class="small primary ll-make" ${x.making || pics.length < 2 ? 'disabled' : ''}>${x.making ? 'Making… (see Tasks)' : '🎞 Make video'}</button></div>
-      ${x.videos.length ? `<div class="ll-videos">${x.videos.map(v => `<div class="row"><a href="api/longlapse/${id}/videos/${enc(v.name)}" target="_blank">▶ ${esc(v.name)}</a><span class="muted small">${fmtBytes(v.size)}</span><a class="small" href="api/longlapse/${id}/videos/${enc(v.name)}?download=1">Download</a><button type="button" class="small danger ll-delv" data-n="${esc(v.name)}">Delete</button></div>`).join('')}</div>` : ''}</div>`;
+  const cams = status.cameras, camName = (id) => (cams.find(c => c.id === id) || {}).name || id;
+  const admin = isAdmin();
+  const lastPic = (x) => x.pictures[x.pictures.length - 1];
+  // One poster per camera, like a streaming service's shelf: the newest picture fills it.
+  const poster = (x) => {
+    const e = x.entry, pic = lastPic(x), on = e.enabled !== false;
+    return `<button type="button" class="ll-poster ${on ? '' : 'off'}" data-id="${esc(e.id)}" title="Open ${esc(camName(e.camera))}'s time-lapse">
+      ${pic ? `<img loading="lazy" alt="" src="api/longlapse/${enc(e.id)}/thumb/${enc(pic.name)}">` : '<span class="ll-empty">🎞</span>'}
+      <span class="ll-badge ${on ? 'on' : ''}">${x.making ? 'Making video…' : on ? 'Daily' : 'Paused'}</span>
+      <span class="ll-info"><b>${esc(camName(e.camera))}</b><small>${esc(e.time)} · ${x.pictures.length} picture${x.pictures.length === 1 ? '' : 's'}${x.videos.length ? ` · ${x.videos.length} video${x.videos.length === 1 ? '' : 's'}` : ''}</small></span></button>`;
   };
-  body.innerHTML = `<div class="card"><h2>Long-term time-lapse</h2>
-      <p class="muted" style="margin-top:0">Takes <b>one full-quality picture a day</b> from a camera at the time you choose, and keeps it until you delete it (about 0.3–2 MB a day). Then make a video of them to watch a garden grow, a building go up or the seasons change. If the camera can't be reached it is tried again every 5 minutes for 3 hours. Recording never depends on this.</p>
-      <div id="ll-rows">${(settings.longlapse || []).map(row).join('')}</div>
-      <div class="actions"><button type="button" id="ll-add">＋ Add a camera</button><button type="button" class="primary" id="ll-save">Save</button></div></div>
-    ${list.map(gal).join('')}`;
-  const collect = () => [...body.querySelectorAll('.ll-row')].map(r => ({id: r.dataset.id || '', camera: r.querySelector('.ll-cam').value, time: r.querySelector('.ll-time').value || '12:00', enabled: r.querySelector('.ll-on').checked}));
-  $('ll-add').onclick = () => { if (!cams.length) return toast('Add a camera first', true); $('ll-rows').insertAdjacentHTML('beforeend', row({camera: cams[0].id, time: '12:00'})); };
-  body.onclick = (ev) => { const d = ev.target.closest('.ll-del'); if (d) d.closest('.ll-row').remove(); };
-  $('ll-save').onclick = async () => { await saveSettings({longlapse: collect()}, 'Time-lapse saved'); renderLongLapse(body); };
-  body.querySelectorAll('.ll-card').forEach(card => {
-    const id = card.dataset.id, post = async (path, json, msg) => { try { await api(`api/longlapse/${enc(id)}/${path}`, {method: 'POST', json}); if (msg) toast(msg); renderLongLapse(body); } catch (e) { toast(e.message, true); } };
-    card.querySelector('.ll-now').onclick = () => post('capture', {}, 'Picture taken');
-    card.querySelector('.ll-make').onclick = () => post('video', {fps: +card.querySelector('.ll-fps').value, from: card.querySelector('.ll-from').value || null, to: card.querySelector('.ll-to').value || null}, 'Making the video… it appears here when done');
-    card.querySelectorAll('.ll-delv').forEach(b => b.onclick = async () => { if (!confirm('Delete this video? The pictures stay.')) return; try { await api(`api/longlapse/${enc(id)}/videos/${enc(b.dataset.n)}`, {method: 'DELETE'}); renderLongLapse(body); } catch (e) { toast(e.message, true); } });
-  });
-  if (list.some(x => x.making)) setTimeout(() => { if (page === 'settings' && section === 'longlapse') renderLongLapse(body); }, 5000);
+  body.innerHTML = `<div class="card"><div class="row" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;flex:1">Long-term time-lapse</h2>${admin ? '<button type="button" class="primary" id="ll-add">＋ Add a camera</button>' : ''}</div>
+      <p class="muted" style="margin:6px 0 14px">One full-quality picture a day from a camera, kept until you delete it (about 0.3–2 MB a day). Open a camera to change its time, look through its pictures and make a video — a garden growing, a building going up, the seasons changing. Recording never depends on this.</p>
+      <div class="ll-shelf">${list.map(poster).join('')}${admin ? '<button type="button" class="ll-poster ll-new" id="ll-add2"><span class="ll-empty">＋</span><span class="ll-info"><b>Add a camera</b><small>Pick a camera and a time</small></span></button>' : ''}</div>
+      ${list.length ? '' : '<div class="hint" style="margin-top:10px">Nothing yet: add a camera to start your long-term time-lapse.</div>'}</div>`;
+  const save = async (arr, msg) => { await saveSettings({longlapse: arr}, msg); renderLongLapse(body); };
+  const open = (x) => {
+    const isNew = !x, e = x ? x.entry : {id: '', camera: (cams[0] || {}).id, time: '12:00', enabled: true};
+    const pics = x ? x.pictures : [], id = enc(e.id || '-'), pic = pics[pics.length - 1];
+    const first = pics[0] && pics[0].date, last = pic && pic.date;
+    const dlg = document.createElement('dialog'); dlg.className = 'll-dlg';
+    dlg.innerHTML = `<div class="ll-hero">${pic ? `<img alt="" src="api/longlapse/${id}/pic/${enc(pic.name)}">` : '<span class="ll-empty">🎞</span>'}
+        <button type="button" class="small ll-close" data-x title="Close">✕</button>
+        <div class="ll-hero-t"><h2>${isNew ? 'Add a camera' : esc(camName(e.camera))}</h2><span>${isNew ? 'A picture each day at the time you choose' : `${pics.length} picture${pics.length === 1 ? '' : 's'}${first ? ` · ${esc(first)} → ${esc(last)}` : ''}`}</span></div></div>
+      <div class="ll-body">
+        ${x && x.error ? `<p class="errc small" style="margin-top:0">Last try: ${esc(x.error)}</p>` : x && x.last_ok ? `<p class="muted small" style="margin-top:0">Last picture taken ${esc(fmtDate(new Date(x.last_ok)))}</p>` : ''}
+        <div class="form">
+          <label for="ll-cam">Camera</label><div><select id="ll-cam" ${admin ? '' : 'disabled'}>${cams.map(c => `<option value="${esc(c.id)}" ${c.id === e.camera ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+          <label for="ll-time">Picture taken at${tip('Every day at this time (this computer’s clock). If the camera can’t be reached it is tried again every 5 minutes for 3 hours.')}</label><div><input type="time" id="ll-time" value="${esc(e.time || '12:00')}" ${admin ? '' : 'disabled'}></div>
+          <span></span><label class="check"><input type="checkbox" id="ll-on" ${e.enabled !== false ? 'checked' : ''} ${admin ? '' : 'disabled'}> Take a picture every day</label>
+        </div>
+        ${admin ? `<div class="actions"><button type="button" class="primary" id="ll-save">${isNew ? 'Add' : 'Save'}</button>${isNew ? '' : '<button type="button" class="small" id="ll-now">📷 Take one now</button><span class="spacer"></span><button type="button" class="small danger" id="ll-del" title="Stop taking pictures (the ones taken stay on disk)">Remove</button>'}</div>` : ''}
+        ${isNew ? '' : `<h3>Pictures</h3><div class="ll-strip">${pics.slice(-60).reverse().map(p => `<a href="api/longlapse/${id}/pic/${enc(p.name)}" target="_blank" title="${esc(p.date)}"><img loading="lazy" alt="" src="api/longlapse/${id}/thumb/${enc(p.name)}"><span>${esc(p.date)}</span></a>`).join('') || '<span class="muted small">No pictures yet: the first is taken at the time above, or press “Take one now”.</span>'}</div>
+        <h3>Video</h3><div class="row" style="gap:8px;flex-wrap:wrap"><input type="date" id="ll-from" value="${esc(first || '')}"> → <input type="date" id="ll-to" value="${esc(last || '')}">
+          <select id="ll-fps"><option value="5">5 pictures a second</option><option value="10" selected>10 a second</option><option value="15">15 a second</option><option value="24">24 a second</option></select>
+          <button type="button" class="small primary" id="ll-make" ${x.making || pics.length < 2 ? 'disabled' : ''}>${x.making ? 'Making… (see Tasks)' : '🎞 Make video'}</button></div>
+        ${x.videos.length ? `<div class="ll-videos">${x.videos.map(v => `<div class="row"><a href="api/longlapse/${id}/videos/${enc(v.name)}" target="_blank">▶ ${esc(v.name)}</a><span class="muted small">${fmtBytes(v.size)}</span><a class="small" href="api/longlapse/${id}/videos/${enc(v.name)}?download=1">Download</a><button type="button" class="small danger" data-delv="${esc(v.name)}">Delete</button></div>`).join('')}</div>` : ''}`}
+      </div>`;
+    (document.fullscreenElement || document.body).appendChild(dlg); dlg.showModal();
+    const close = () => { dlg.close(); dlg.remove(); };
+    dlg.querySelector('[data-x]').onclick = close; dlg.addEventListener('cancel', () => dlg.remove());
+    dlg.addEventListener('click', (ev) => { if (ev.target === dlg) close(); });
+    const all = (settings.longlapse || []);
+    const mine = () => ({id: e.id || '', camera: val('ll-cam'), time: val('ll-time') || '12:00', enabled: chk('ll-on')});
+    if (admin) {
+      $('ll-save').onclick = async () => { close(); await save(isNew ? [...all, mine()] : all.map(r => r.id === e.id ? {...r, ...mine()} : r), isNew ? 'Camera added' : 'Time-lapse saved'); };
+      if (!isNew) {
+        $('ll-now').onclick = async () => { try { await api(`api/longlapse/${enc(e.id)}/capture`, {method: 'POST', json: {}}); toast('Picture taken'); close(); renderLongLapse(body); } catch (err) { toast(err.message, true); } };
+        $('ll-del').onclick = async () => { if (!confirm('Stop this time-lapse? The pictures already taken stay on disk.')) return; close(); await save(all.filter(r => r.id !== e.id), 'Removed'); };
+      }
+    }
+    if (!isNew) {
+      $('ll-make').onclick = async () => { try { await api(`api/longlapse/${enc(e.id)}/video`, {method: 'POST', json: {fps: +val('ll-fps'), from: val('ll-from') || null, to: val('ll-to') || null}}); toast('Making the video… it appears here when done'); close(); renderLongLapse(body); } catch (err) { toast(err.message, true); } };
+      dlg.querySelectorAll('[data-delv]').forEach(b => b.onclick = async () => { if (!confirm('Delete this video? The pictures stay.')) return; try { await api(`api/longlapse/${enc(e.id)}/videos/${enc(b.dataset.delv)}`, {method: 'DELETE'}); close(); renderLongLapse(body); } catch (err) { toast(err.message, true); } });
+    }
+  };
+  const addNew = () => { if (!cams.length) return toast('Add a camera first', true); open(null); };
+  if ($('ll-add')) $('ll-add').onclick = addNew;
+  if ($('ll-add2')) $('ll-add2').onclick = addNew;
+  body.querySelectorAll('.ll-poster[data-id]').forEach(b => b.onclick = () => open(list.find(x => x.entry.id === b.dataset.id)));
+  if (list.some(x => x.making)) setTimeout(() => { if (page === 'settings' && section === 'longlapse' && !document.querySelector('.ll-dlg')) renderLongLapse(body); }, 5000);
 }
 async function renderSummarySettings(body) {
   if (!sysinfo) sysinfo = await api('api/system').catch(() => null);

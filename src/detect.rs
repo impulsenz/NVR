@@ -379,6 +379,9 @@ struct Active {
     /// For each of those areas: did the activity (something moving, or an
     /// object the AI found) reach it? Only those are checked afterwards.
     touched: Vec<bool>,
+    /// Per watched area: the last AI look found a person or animal there
+    /// (a bird sitting on the deck: what changed is not a parcel).
+    living_last: Vec<bool>,
     /// An area looked different once things went quiet: the alert is kept
     /// open a minute (since when, and how each area looked then) to see the
     /// change stays — a parcel left, not a shadow or something set down
@@ -389,6 +392,19 @@ struct Active {
 /// How long a change in a watched area must stay before it counts as an
 /// item left or taken.
 const ITEM_HOLD: Duration = Duration::from_secs(60);
+
+/// Pictures of the package spot with nothing on it (taught in Settings →
+/// Learned states → Package delivery), in a folder of the camera.
+pub const EMPTY_SPOT_DIR: &str = "package-empty";
+pub const EMPTY_SPOT_MAX: usize = 12;
+/// A spot this alike one of those pictures counts as empty.
+const EMPTY_ALIKE: f32 = 0.12;
+
+/// Is this person, pet or animal: something that comes and goes (or sits
+/// down for a while) and is never a parcel.
+fn is_living(label: &str) -> bool {
+    label == "person" || crate::ai::ANIMALS.contains(&label) || crate::ai::PETS.contains(&label)
+}
 
 impl Active {
     /// Something was seen at this box (normalized): mark the watched areas
@@ -847,6 +863,7 @@ impl Detector {
             motion_best: 0.0,
             seen: Vec::new(),
             touched: vec![false; zone_before.len()],
+            living_last: vec![false; zone_before.len()],
             zone_before,
             item_hold: None,
         }
@@ -933,6 +950,9 @@ impl Detector {
                 a.touch(x.x, x.y, x.w, x.h);
             }
             a.ai_looks += 1;
+            for (i, (z, ..)) in a.zone_before.iter().enumerate() {
+                a.living_last[i] = best.iter().any(|x| x.score >= 0.4 && is_living(&x.label) && z.reaches(x.x, x.y, x.w, x.h));
+            }
             let animal = best.iter().any(|x| {
                 let l = x.label.as_str();
                 x.score >= d.min_confidence.min(0.4)
@@ -1277,6 +1297,19 @@ impl Detector {
         }
     }
 
+    /// How the spot looks in each picture taught as "empty" (none taught: none).
+    fn empty_spot_signatures(&self, z: &Watched) -> Vec<Vec<f32>> {
+        let Some(dir) = self.store.dir().parent().map(|p| p.join(EMPTY_SPOT_DIR)) else { return Vec::new() };
+        let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+        rd.flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".jpg"))
+            .take(EMPTY_SPOT_MAX)
+            .filter_map(|e| std::fs::read(e.path()).ok())
+            .filter_map(|b| crate::imgutil::decode_jpeg(&b).ok())
+            .map(|f| z.signature(&f))
+            .collect()
+    }
+
     /// The watched areas the activity reached that look different now: how
     /// each looks (None: unchanged / not reached). None if none changed.
     fn changed_areas(&self, a: &Active) -> Option<Vec<Option<Vec<f32>>>> {
@@ -1290,7 +1323,7 @@ impl Detector {
             .enumerate()
             .map(|(zi, (z, before, _))| {
                 let sig = z.signature(&now);
-                (a.touched.get(zi).copied().unwrap_or(false) && crate::zones::area_change(before, &sig) > 0.12).then_some(sig)
+                (a.touched.get(zi).copied().unwrap_or(false) && !a.living_last.get(zi).copied().unwrap_or(false) && crate::zones::area_change(before, &sig) > 0.12).then_some(sig)
             })
             .collect();
         sigs.iter().any(Option::is_some).then_some(sigs)
@@ -1333,7 +1366,21 @@ impl Detector {
                 if !a.touched.get(zi).copied().unwrap_or(false) {
                     continue;
                 }
-                let change = crate::zones::area_change(before, &z.signature(&now));
+                if a.living_last.get(zi).copied().unwrap_or(false) {
+                    info!(target: "event", "[{}] {}: a person or animal is still there — not an item", self.cam.name, z.name);
+                    continue;
+                }
+                let now_sig = z.signature(&now);
+                let change = crate::zones::area_change(before, &now_sig);
+                // Taught what the spot looks like empty: a change from one
+                // empty look to another (shadows, light) is no parcel.
+                let empties = self.empty_spot_signatures(z);
+                let alike = |s: &[f32]| empties.iter().any(|e| crate::zones::area_change(e, s) < EMPTY_ALIKE);
+                let (was_empty, is_empty) = (alike(before), alike(&now_sig));
+                if !empties.is_empty() && was_empty && is_empty {
+                    info!(target: "event", "[{}] {}: empty before and after — not an item", self.cam.name, z.name);
+                    continue;
+                }
                 // Still different, and the same as a minute ago (it stayed:
                 // not something that came and went or moved on).
                 let stayed = match &a.item_hold {
@@ -1354,7 +1401,15 @@ impl Detector {
                     {
                         a.event.items.push(crate::events::ItemChange { zone: z.name.clone(), before: bn, after: an, checked: false });
                     }
-                    let note = if person { format!("Item left or taken in {} (possible delivery)", z.name) } else { format!("Item left or taken in {}", z.name) };
+                    let note = if !empties.is_empty() && is_empty {
+                        format!("Item taken from {}", z.name)
+                    } else if !empties.is_empty() && was_empty {
+                        format!("Item left in {}{}", z.name, if person { " (possible delivery)" } else { "" })
+                    } else if person {
+                        format!("Item left or taken in {} (possible delivery)", z.name)
+                    } else {
+                        format!("Item left or taken in {}", z.name)
+                    };
                     info!(target: "event", "[{}] {note} ({:.0}% of the area changed)", self.cam.name, change * 100.0);
                     a.event.notes.push(note);
                     if !a.event.labels.iter().any(|l| l.label == "package") {

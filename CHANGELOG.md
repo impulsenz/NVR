@@ -1,5 +1,15 @@
 # What's new in GAZE
 
+## Unreleased
+- **Timeline:** people are now violet (they were blue, the same as the time-lapse line); the time-lapse line is thicker, themed (day and night) and now also shows under the merged "All cameras" row and beside every vertical lane.
+- **Stream 1 / Stream 2:** the S1/S2 button is gone from the live pictures; full screen (which opens on stream 1) has the switch in its bottom bar, showing the stream on screen and switching both ways.
+- **AI defaults:** the sub-stream is looked at every 0.5 s (was 1 s), up to 8 full-quality pictures are checked (was 4), and activity within 120 s joins one alert (was 30 s). Cameras still on the old defaults move once (`defaults_version`); values you changed are kept.
+- **Package delivery:** teach the spot **empty** with several pictures (Settings → Learned states → Package delivery). A change only counts going from empty to not-empty or back; a person or animal still in the spot when the alert ends (a bird, a cat at its bowl) is ignored. Without pictures it works as before.
+- **Check faces:** "? Unknown — discard" ignores a face and removes it from the list (also in the alert's "Who is this?").
+- **Settings → System:** Other GAZE servers is below Secure address (https).
+- **Watchdog tray icon:** takes the colour of the Watchdog page's status pill (green watching, amber starting, red not running, grey off), updated every 4 s from the status file, so it works offline too.
+- **Long-term time-lapse:** a poster for each camera (newest picture); opening one (or adding a camera) shows a panel like the camera settings with its time-lapse settings, pictures and videos.
+
 ## 1.7.15 — November 2026
 - **Evidence Locker export: the videos now play in the review page.** The cause: a case keeps the camera's video as recorded, and many cameras record H.265, which Chrome and Firefox cannot play in a web page (the page showed an empty black box). The export dialog now has **Make the videos play in any web browser** (on by default): each video that isn't H.264 gets an H.264 copy (`….web.mp4`) beside the original, and the page plays that one; the original stays in the ZIP, unchanged and in the checksum list, along with the copy. Progress shows in Tasks. Where a video still can't play, the page now says why and what to do (the format, "extract the whole ZIP first" if it was opened from inside the ZIP, or open the original with VLC) instead of showing nothing. Tested with an H.265 clip in Chromium (`tools/e2e/case-export.js`).
 - **Moving along the timeline is smooth, and has no end.**

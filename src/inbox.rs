@@ -147,8 +147,11 @@ mod tests {
             "end": Local::now(), "labels": [], "motion": true
         }))
         .unwrap();
-        e.faces =
-            faces.into_iter().enumerate().map(|(i, (p, n))| FaceSeen { file: format!("{id}-{i}.jpg"), print: pack(p), name: n.map(String::from), confirmed: false }).collect();
+        e.faces = faces
+            .into_iter()
+            .enumerate()
+            .map(|(i, (p, n))| FaceSeen { file: format!("{id}-{i}.jpg"), print: pack(p), name: n.map(String::from), confirmed: false, ignored: false })
+            .collect();
         e.plates = plates.iter().map(|s| s.to_string()).collect();
         e
     }

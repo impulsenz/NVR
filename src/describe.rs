@@ -306,7 +306,7 @@ mod tests {
     fn recognised_people_and_plates_are_searchable_words() {
         let f = frame([150, 150, 150], None);
         let mut e = event(10, "person", [0.3, 0.2, 0.2, 0.6]);
-        e.faces = vec![crate::events::FaceSeen { file: "f.jpg".into(), print: String::new(), name: Some("Mum".into()), confirmed: true }];
+        e.faces = vec![crate::events::FaceSeen { file: "f.jpg".into(), print: String::new(), name: Some("Mum".into()), confirmed: true, ignored: false }];
         e.plates = vec!["ABC123".into()];
         let d = describe(&e, &f, "Front Door");
         assert!(["mum", "abc123", "front", "door", "person"].iter().all(|w| d.words.contains(&w.to_string())), "{:?}", d.words);

@@ -145,6 +145,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cameras/{id}", put(update_camera).delete(delete_camera))
         .route("/api/cameras/{id}/pause", post(pause))
         .route("/api/cameras/{id}/ptz/move", post(ptz_move))
+        .route("/api/cameras/{id}/package-empty", get(package_empty_list).post(package_empty_add))
+        .route("/api/cameras/{id}/package-empty/{file}", get(package_empty_file).delete(package_empty_delete))
         .route("/api/cameras/{id}/device", get(device_get))
         .route("/api/cameras/{id}/device/reboot", post(device_reboot))
         .route("/api/cameras/{id}/device/report", get(device_report))
@@ -1199,6 +1201,77 @@ async fn states_add_example(State(m): App, user: Option<axum::Extension<CurrentU
     }
 }
 
+// ---------- package delivery: pictures of the spot when empty ----------
+/// Where a camera's "empty spot" pictures are (see `detect.rs`, `empty_spot_pictures`).
+fn package_empty_dir(m: &Manager, id: &str) -> Option<std::path::PathBuf> {
+    let cfg = m.config();
+    cfg.cameras.iter().find(|c| c.id == id).map(|c| cfg.camera_dir(c).join(crate::detect::EMPTY_SPOT_DIR))
+}
+
+async fn package_empty_list(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>) -> Response {
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
+    }
+    let Some(dir) = package_empty_dir(&m, &id) else { return err(StatusCode::NOT_FOUND, "camera not found") };
+    let mut files: Vec<String> =
+        std::fs::read_dir(dir).map(|d| d.flatten().filter_map(|e| e.file_name().to_str().map(String::from)).filter(|n| n.ends_with(".jpg")).collect()).unwrap_or_default();
+    files.sort();
+    Json(files).into_response()
+}
+
+/// Take a picture of the spot as it is now, as one more "this is empty".
+async fn package_empty_add(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>) -> Response {
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
+    }
+    let (Some(dir), Some(rt)) = (package_empty_dir(&m, &id), m.camera(&id)) else { return err(StatusCode::NOT_FOUND, "camera not found") };
+    let frame = match crate::states::current_frame(&m, &rt).await {
+        Ok(f) => f,
+        Err(e) => return bad(e),
+    };
+    let have = std::fs::read_dir(&dir).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".jpg")).count()).unwrap_or(0);
+    if have >= crate::detect::EMPTY_SPOT_MAX {
+        return err(StatusCode::BAD_REQUEST, format!("{} pictures is plenty: remove one to add another", crate::detect::EMPTY_SPOT_MAX));
+    }
+    let res = (|| -> anyhow::Result<String> {
+        std::fs::create_dir_all(&dir)?;
+        let name = format!("empty-{}.jpg", chrono::Utc::now().timestamp_millis());
+        std::fs::write(dir.join(&name), frame.fit(640).jpeg(85)?)?;
+        Ok(name)
+    })();
+    match res {
+        Ok(name) => Json(json!({ "ok": true, "file": name })).into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+fn package_empty_name_ok(f: &str) -> bool {
+    f.ends_with(".jpg") && !f.contains(['/', '\\']) && !f.contains("..")
+}
+
+async fn package_empty_file(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, file)): Path<(String, String)>, req: Request) -> Response {
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
+    }
+    match package_empty_dir(&m, &id) {
+        Some(d) if package_empty_name_ok(&file) && d.join(&file).is_file() => serve_file(d.join(&file), req, None, false).await,
+        _ => err(StatusCode::NOT_FOUND, "not found"),
+    }
+}
+
+async fn package_empty_delete(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path((id, file)): Path<(String, String)>) -> Response {
+    if let Some(denied) = camera_denied(&user, &id) {
+        return denied;
+    }
+    match package_empty_dir(&m, &id) {
+        Some(d) if package_empty_name_ok(&file) => {
+            let _ = std::fs::remove_file(d.join(&file));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        _ => err(StatusCode::NOT_FOUND, "not found"),
+    }
+}
+
 async fn states_remove_example(State(m): App, Path((id, thumb)): Path<(String, String)>) -> Response {
     match m.states.remove_example(&id, &thumb) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -1299,13 +1372,14 @@ struct LearnReq {
 
 /// "This is …": name a face seen in an alert (and learn it), or correct a
 /// wrong name: the person it was wrongly taken for stops matching it. The
-/// id "none" means "not anyone I know".
+/// id "none" means "not anyone I know"; "discard" means "unknown: leave it out".
 async fn known_learn(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, Json(r): Json<LearnReq>) -> Response {
     if let Some(denied) = camera_denied(&user, &r.camera) {
         return denied;
     }
     let res = (|| {
-        let k = if id == "none" { None } else { Some(m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?) };
+        let discard = id == "discard";
+        let k = if id == "none" || discard { None } else { Some(m.known.get(&id).ok_or_else(|| anyhow::anyhow!("not found"))?) };
         let c = m.camera(&r.camera).ok_or_else(|| anyhow::anyhow!("camera not found"))?;
         let mut e = c.events.get(&r.event).ok_or_else(|| anyhow::anyhow!("alert not found"))?;
         let f = e.faces.get_mut(r.face).ok_or_else(|| anyhow::anyhow!("face not found"))?;
@@ -1327,6 +1401,7 @@ async fn known_learn(State(m): App, user: Option<axum::Extension<CurrentUser>>, 
             m.known.add(&k.id, Some(&print), None, photo.as_deref())?;
         }
         f.confirmed = true;
+        f.ignored = discard;
         f.name = new_name.clone();
         // The alert's notes: who was recognised, and whether a face is unknown.
         crate::identify::face_notes(&mut e);
@@ -1339,9 +1414,11 @@ async fn known_learn(State(m): App, user: Option<axum::Extension<CurrentUser>>, 
                 (Some(n), None) if again => format!("Already confirmed — this is {n}"),
                 (Some(n), None) if confirming => format!("Confirmed — this is {n}. Added to {n}'s faces, so GAZE knows them better."),
                 (Some(n), None) => format!("Learned — this is {n}. Added to {n}'s faces."),
+                (None, Some(o)) if discard => format!("Discarded — not {o}, and GAZE won't ask about this face again."),
                 (None, Some(o)) => {
                     format!("Corrected — not {o}. GAZE won't take this face for {o} again.")
                 }
+                (None, None) if discard => "Discarded — GAZE won't ask about this face again".to_string(),
                 (None, None) => "Marked as someone you don't know".to_string(),
             },
         ))
@@ -1408,6 +1485,9 @@ async fn all_faces(State(m): App, user: Option<axum::Extension<CurrentUser>>, Qu
     let mut out = Vec::new();
     for e in &evs {
         for (i, f) in e.faces.iter().enumerate() {
+            if f.ignored {
+                continue;
+            }
             out.push(json!({
                 "camera": e.camera,
                 "camera_name": names.get(&e.camera).cloned().unwrap_or_else(|| e.camera.clone()),
@@ -5888,6 +5968,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         || path == "/api/cameras"
         || path.ends_with("/device")
         || path.contains("/device/")
+        || path.contains("/package-empty")
         || (path.starts_with("/api/cameras/") && path.ends_with("/log"))
     {
         return false;
@@ -6420,15 +6501,17 @@ mod tests {
             "/api/known/{id}/learn",
             "/api/known/{id}/photo",
             "/api/known/{id}/photo/{name}",
-            "/api/preview/{token}",              // admin-only (setup preview)
-            "/api/states/{id}",                  // writes: admin only (`allowed`)
-            "/api/states/{id}/examples",         // handler: state_for() = visible() on the camera
-            "/api/states/{id}/examples/{thumb}", // handler: state_for() (read); delete: admin only
-            "/api/tts/downloads/{id}",           // admin-only
-            "/api/users/{name}",                 // admin-only
-            "/api/users/{name}/two-step-off",    // admin-only
-            "/remote/{i}/{cam}/frame.jpg",       // handler refuses restricted accounts
-            "/remote/{i}/{cam}/stream.mjpeg",    // handler refuses restricted accounts
+            "/api/preview/{token}",                   // admin-only (setup preview)
+            "/api/cameras/{id}/package-empty",        // admin-only
+            "/api/cameras/{id}/package-empty/{file}", // admin-only
+            "/api/states/{id}",                       // writes: admin only (`allowed`)
+            "/api/states/{id}/examples",              // handler: state_for() = visible() on the camera
+            "/api/states/{id}/examples/{thumb}",      // handler: state_for() (read); delete: admin only
+            "/api/tts/downloads/{id}",                // admin-only
+            "/api/users/{name}",                      // admin-only
+            "/api/users/{name}/two-step-off",         // admin-only
+            "/remote/{i}/{cam}/frame.jpg",            // handler refuses restricted accounts
+            "/remote/{i}/{cam}/stream.mjpeg",         // handler refuses restricted accounts
         ];
         let src = include_str!("web.rs");
         let mut seen = 0;

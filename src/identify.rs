@@ -143,7 +143,7 @@ async fn faces_in(mgr: &Manager, store: &EventStore, e: &mut Event, frame: &Fram
             let file = format!("{}-face{tag}{bi}-{}.jpg", e.id, e.faces.len());
             std::fs::write(store.dir().join(&file), pic.jpeg(85)?)?;
             e.faces.retain(|f| !(f.name.is_some() && f.name == name && crate::known::cosine(&crate::known::unpack(&f.print), &print) >= SAME_PERSON && f.file != file));
-            e.faces.push(FaceSeen { file, print: crate::known::pack(&print), name, confirmed: false });
+            e.faces.push(FaceSeen { file, print: crate::known::pack(&print), name, confirmed: false, ignored: false });
             found += 1;
         }
     }
@@ -164,7 +164,7 @@ pub fn face_notes(e: &mut Event) {
             e.notes.push(note);
         }
     }
-    let unknown = e.faces.iter().any(|f| f.name.is_none());
+    let unknown = e.faces.iter().any(|f| f.name.is_none() && !f.ignored);
     e.notes.retain(|n| n != "Unknown face");
     if unknown {
         e.notes.push("Unknown face".into());
@@ -545,7 +545,7 @@ mod tests {
     }
 
     fn face(p: &[f32], name: Option<&str>, confirmed: bool) -> FaceSeen {
-        FaceSeen { file: "f.jpg".into(), print: crate::known::pack(p), name: name.map(String::from), confirmed }
+        FaceSeen { file: "f.jpg".into(), print: crate::known::pack(p), name: name.map(String::from), confirmed, ignored: false }
     }
 
     #[test]

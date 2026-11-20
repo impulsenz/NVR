@@ -294,6 +294,9 @@ pub struct TtsConfig {
 
 /// Ready phrases added to everyone's list once (version 1: the four about private property, the police and recording).
 const PHRASES_VERSION: u32 = 1;
+/// Detection defaults: 1 = more AI looks (0.5 s, 8 full-quality pictures) and
+/// alerts joined for 120 s.
+const DETECT_DEFAULTS_VERSION: u32 = 1;
 const PHRASES_V1: [&str; 4] = ["This is private property.", "The police have been notified.", "This is private property, leave immediately.", "You're on video being recorded."];
 
 impl Default for TtsConfig {
@@ -1052,6 +1055,11 @@ pub struct DetectConfig {
     /// alert (one longer video instead of many short ones). The timer
     /// starts again with each new trigger. 0 = the "record after" time.
     pub join_seconds: u64,
+    /// Which newer defaults this camera's detection settings have been
+    /// moved to (see `Config::migrate`: a value still at the old default is
+    /// raised once; one the user changed is kept).
+    #[serde(default)]
+    pub defaults_version: u32,
     /// Frames per second analysed.
     pub fps: u32,
     /// Minimum seconds between AI checks for this camera.
@@ -1115,15 +1123,16 @@ impl Default for DetectConfig {
             trigger: "objects".into(),
             pre_seconds: 3,
             post_seconds: 15,
-            join_seconds: 30,
+            join_seconds: 120,
+            defaults_version: DETECT_DEFAULTS_VERSION,
             fps: 5,
-            ai_interval: 1.0,
+            ai_interval: 0.5,
             ignore_parked: true,
             ignore_animals: true,
             ignore_pets: false,
             ai_ignores_mask: true,
             hd_check: "mark".into(),
-            hd_frames: 4,
+            hd_frames: 8,
             parked_seconds: 60,
             parked_objects: crate::stationary::PARKING.iter().map(|s| s.to_string()).collect(),
             packages: false,
@@ -1735,6 +1744,21 @@ impl Config {
             }
         }
         for c in &mut self.cameras {
+            // Newer detection defaults: only values still at the old default move.
+            if c.detect.defaults_version < 1 {
+                let d = &mut c.detect;
+                if d.join_seconds == 30 {
+                    d.join_seconds = 120;
+                }
+                if d.ai_interval == 1.0 {
+                    d.ai_interval = 0.5;
+                }
+                if d.hd_frames == 4 {
+                    d.hd_frames = 8;
+                }
+                d.defaults_version = DETECT_DEFAULTS_VERSION;
+                changed = true;
+            }
             // Object recognition only runs on motion now.
             if c.detect.ai && !c.detect.motion {
                 c.detect.motion = true;

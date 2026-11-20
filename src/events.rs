@@ -166,6 +166,11 @@ pub struct FaceSeen {
     /// is in that person's profile.
     #[serde(default)]
     pub confirmed: bool,
+    /// "Unknown — discard": someone said they don't know who this is (or it
+    /// is a bad picture). It's left out of the Check faces list and no
+    /// longer makes an "unknown face" note.
+    #[serde(default)]
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

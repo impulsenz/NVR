@@ -285,7 +285,9 @@ mod imp {
     const TIMER: usize = 1;
 
     static CFG: OnceLock<TrayCfg> = OnceLock::new();
-    static ICON: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+    /// The icon for each state, as the status pill on GAZE's Watchdog page: green (watching), amber (starting), red (not running), grey (off).
+    static ICONS: [AtomicPtr<c_void>; 4] = [AtomicPtr::new(null_mut()), AtomicPtr::new(null_mut()), AtomicPtr::new(null_mut()), AtomicPtr::new(null_mut())];
+    static SHOWN: AtomicU32 = AtomicU32::new(0);
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
     /// What the status file says: (a line for the icon's tip and menu, is it fine).
@@ -305,6 +307,19 @@ mod imp {
         }
     }
 
+    /// 0 green, 1 amber, 2 red, 3 grey: the same colours as the status pill.
+    fn status_kind(data: &Path) -> usize {
+        let st: Option<serde_json::Value> = std::fs::read_to_string(super::super::dir_of(data).join("status.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
+        let fresh = st.as_ref().and_then(|s| s["updated"].as_i64()).is_some_and(|t| chrono::Utc::now().timestamp_millis() - t < 20_000);
+        let Some(st) = st.filter(|_| fresh) else { return 2 };
+        match st["state"].as_str().unwrap_or("") {
+            "watching" => 0,
+            "starting" | "waiting" | "updating" => 1,
+            "stopped" | "paused" => 3,
+            _ => 2,
+        }
+    }
+
     fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
         let mut d: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
         d.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -317,7 +332,10 @@ mod imp {
         let mut d = icon_data(hwnd);
         d.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         d.uCallbackMessage = WM_TRAY;
-        d.hIcon = ICON.load(Ordering::SeqCst);
+        if let Some(c) = CFG.get() {
+            SHOWN.store(status_kind(&c.data) as u32, Ordering::SeqCst);
+        }
+        d.hIcon = ICONS[SHOWN.load(Ordering::SeqCst) as usize].load(Ordering::SeqCst);
         if let Some(c) = CFG.get() {
             copy(&mut d.szTip, &format!("GAZE Watchdog — {}", status_line(&c.data)));
         }
@@ -328,6 +346,11 @@ mod imp {
         let Some(c) = CFG.get() else { return };
         let mut d = icon_data(hwnd);
         d.uFlags = NIF_TIP;
+        let kind = status_kind(&c.data);
+        if SHOWN.swap(kind as u32, Ordering::SeqCst) != kind as u32 {
+            d.uFlags |= NIF_ICON;
+            d.hIcon = ICONS[kind].load(Ordering::SeqCst);
+        }
         copy(&mut d.szTip, &format!("GAZE Watchdog — {}", status_line(&c.data)));
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
     }
@@ -456,10 +479,17 @@ mod imp {
             if hwnd.is_null() {
                 return;
             }
-            let png = include_bytes!("../../assets/watchdog-tray.png");
+            let pngs: [&[u8]; 4] = [
+                include_bytes!("../../assets/watchdog-tray-ok.png"),
+                include_bytes!("../../assets/watchdog-tray-warn.png"),
+                include_bytes!("../../assets/watchdog-tray-bad.png"),
+                include_bytes!("../../assets/watchdog-tray-off.png"),
+            ];
             let size = GetSystemMetrics(SM_CXSMICON).max(16);
-            let icon = CreateIconFromResourceEx(png.as_ptr(), png.len() as u32, 1, 0x0003_0000, size, size, LR_DEFAULTCOLOR);
-            ICON.store(icon, Ordering::SeqCst);
+            for (i, png) in pngs.iter().enumerate() {
+                let icon = CreateIconFromResourceEx(png.as_ptr(), png.len() as u32, 1, 0x0003_0000, size, size, LR_DEFAULTCOLOR);
+                ICONS[i].store(icon, Ordering::SeqCst);
+            }
             add_icon(hwnd);
             SetTimer(hwnd, TIMER, 4000, None);
             let mut msg: MSG = std::mem::zeroed();
