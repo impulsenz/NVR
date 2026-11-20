@@ -21,7 +21,8 @@ const fail = (m) => { console.error('FAIL: ' + m); process.exitCode = 1; };
   const cam = path.join(dir, 'recordings', 'front');
   fs.mkdirSync(path.join(cam, '.scrub'), { recursive: true });
   // The recording: the last 100 minutes (a short real video, its time stretched by the file's dates).
-  const now = Date.now(), start = new Date(now - 100 * 60000);
+  // (Pictures: the hour h0 and the next, h1. The recording starts 5 minutes into h0, so the moments below are inside it at any time of day.)
+  const now = Date.now(), h0 = Math.floor((now - 90 * 60000) / 3600000) * 3600000, start = new Date(h0 + 5 * 60000);
   const p2 = (n) => String(n).padStart(2, '0');
   const name = `front_${start.getFullYear()}-${p2(start.getMonth() + 1)}-${p2(start.getDate())}_${p2(start.getHours())}-${p2(start.getMinutes())}-${p2(start.getSeconds())}.mp4`;
   const mp4 = path.join(cam, name);
@@ -30,7 +31,7 @@ const fail = (m) => { console.error('FAIL: ' + m); process.exitCode = 1; };
   // Pictures: the hour of 90 minutes ago (all of it) and the hour before now (its first 20 minutes missing).
   const sheet = path.join(dir, 'sheet.jpg');
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=256x144:rate=10', '-vf', 'tile=10x10', '-frames:v', '1', sheet]);
-  const h0 = Math.floor((now - 90 * 60000) / HOUR) * HOUR, h1 = h0 + HOUR;
+  const h1 = h0 + HOUR;
   for (const [h, have] of [[h0, [[0, 359]]], [h1, [[120, 359]]]]) {
     const pv = [1, 2, 3, 4];
     for (let n = 0; n < 4; n++) fs.copyFileSync(sheet, path.join(cam, '.scrub', `${h}-${n}.jpg`));
