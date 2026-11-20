@@ -2066,6 +2066,18 @@ function pumpSprites() {
     im.src = url; spritePages.set(url, im);
   }
 }
+// While scrubbing, the pages next to the one being shown are fetched at
+// once (normal priority, both ways, two ahead in the direction of travel):
+// only the first pages of a file are loaded ahead of time, and a page that
+// is only asked for when the pointer reaches it freezes the picture until
+// its ~3 MB arrive.
+function spriteNear(el, sp, n) {
+  const i = sp.info, page = Math.floor(n / i.per_page), cur = spritePages.get(sp.url + page);
+  if (!cur || !cur.complete) return;  // this page first
+  const dir = el._spN == null || n === el._spN ? (el._spDir || 1) : Math.sign(n - el._spN);
+  el._spN = n; el._spDir = dir;
+  for (const p of [page + dir, page - dir, page + 2 * dir]) if (p >= 0 && p < i.pages && !spritePages.has(sp.url + p)) spritePage(sp.url + p);
+}
 function preloadSprite(sp) {
   if (!sp) return sp;
   for (let p = 0; p < Math.min(sp.info.pages, SPRITE_AHEAD_PAGES); p++) if (!spritePages.has(sp.url + p) && !spriteQ.includes(sp.url + p)) spriteQ.push(sp.url + p);
@@ -6937,7 +6949,9 @@ function previewAll() {
       if (info) markPreviewReady(src.url, info);
       if (!info || tl.T !== T) return;
       const off = (T - new Date(src.start).getTime()) / 1000;
-      if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) { sp.hidden = false; srcMark(el, 'tl'); }
+      const n = Math.floor(off / info.info.interval);
+      if (spriteStyle(sp, info, n, el.clientWidth, el.clientHeight, true)) { sp.hidden = false; srcMark(el, 'tl'); }
+      spriteNear(el, info, n);
     });
   }
 }
