@@ -1,6 +1,10 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Loading the timeline after GAZE has been idle: much lighter, and no cameras left empty.** Three causes, all in what happens the first time you open footage after a quiet spell (a refresh looked fine because everything was by then cached or indexed):
+  - **The page downloaded far too many time-lapse pages in the background** (up to 160 per camera, one camera's day after another: gigabytes, competing with the videos for the browser's few connections). It now fetches at most 8 per camera and 48 in all, nearest to the playhead first, one at a time with several cameras, never while a video is loading or you are dragging; every other page is still fetched the moment scrubbing reaches it, so scrubbing is unchanged.
+  - **Every recording in view was indexed in the middle of the request,** for every camera at once, reading headers across the network drive: playlists took tens of seconds and some timed out, leaving that camera empty. GAZE now keeps the last 24 hours of recordings indexed in the background (a few files at a time, newest first, only when quiet), so the playlist is quick.
+  - **Playlists are built four at a time** instead of all at once, and the page waits up to 60 s (it was 30 s) and tries again twice before giving up on a camera.
 - **Recordings: the Back button moved** up under the page title, above the camera selection.
 
 ## 1.7.13 — November 2026

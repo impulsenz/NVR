@@ -2299,18 +2299,31 @@ function videosLoading() {
   }
   return false;
 }
+// Only a few pages are fetched ahead of time, and the nearest to the playhead
+// first, across all cameras together (a queue per camera filled one camera's
+// whole day before the next camera's first page: gigabytes, competing with the
+// videos for the browser's few connections). Every other page is fetched the
+// moment scrubbing reaches it (scrubStyle / scrubNear), which is quick.
+const SCRUB_WARM_PER_CAM = 8, SCRUB_WARM_TOTAL = 48;
+scrub.want = new Map();
 function pumpScrub() {
-  if (page !== 'recordings' && page !== 'live') return;
-  while (scrub.busy < 2 && scrub.q.length) {
-    if (videosLoading()) { clearTimeout(pumpScrub.t); pumpScrub.t = setTimeout(pumpScrub, 400); return; }
-    const url = scrub.q.shift();
-    if (scrub.pages.has(url)) continue;
+  if ((page !== 'recordings' && page !== 'live') || document.hidden) return;
+  // One at a time with several cameras: the connections are the videos'.
+  const limit = scrub.want.size > 4 ? 1 : 2;
+  while (scrub.busy < limit) {
+    if (videosLoading() || tl.dragging) { clearTimeout(pumpScrub.t); pumpScrub.t = setTimeout(pumpScrub, 500); return; }
+    if (scrub.fetched >= SCRUB_WARM_TOTAL + (scrub.extra || 0)) return;
+    // The nearest page of any camera that isn't here yet.
+    let best = null;
+    for (const list of scrub.want.values()) for (const x of list) if (!scrub.pages.has(x[1]) && (!best || x[0] < best[0])) best = x;
+    if (!best) return;
+    scrub.fetched = (scrub.fetched || 0) + 1;
     scrub.busy++;
-    const im = scrubPage(url, true), done = () => { scrub.busy--; pumpScrub(); };
+    const im = scrubPage(best[1], true), done = () => { scrub.busy--; pumpScrub(); };
     im.addEventListener('load', done, {once: true}); im.addEventListener('error', done, {once: true});
   }
 }
-// The pages of everything in view (a..b ms), nearest to T first, are fetched ahead of time.
+// The pages of everything in view (a..b ms) nearest to T are the ones fetched ahead of time.
 function scrubWarm(cam, a, b, T) {
   const e = scrub.cams.get(cam); if (!e) return;
   const list = [];
@@ -2323,13 +2336,15 @@ function scrubWarm(cam, a, b, T) {
     }
   }
   list.sort((x, y) => x[0] - y[0]);
-  scrub.q = scrub.q.filter(u => scrub.pages.has(u) === false);
-  for (const [, u] of list.slice(0, 160)) if (!scrub.pages.has(u) && !scrub.q.includes(u)) scrub.q.push(u);
-  pumpScrub();
+  scrub.want.set(cam, list.slice(0, SCRUB_WARM_PER_CAM));
+  // A new place to look (not the same view asked again): a fresh allowance.
+  const key = Math.round(T / 600000);
+  if (scrub.warmKey !== key) { scrub.warmKey = key; scrub.fetched = 0; }
+  clearTimeout(scrubWarm.t); scrubWarm.t = setTimeout(pumpScrub, 1500);
 }
 // Stop pages still downloading (asked for again when needed).
 function cutScrubDownloads() {
-  scrub.q.length = 0;
+  scrub.want.clear(); clearTimeout(scrubWarm.t);
   for (const [u, im] of scrub.pages) if (!im.complete) { scrub.pages.delete(u); im.src = ''; }
   scrub.busy = 0;
 }
@@ -5615,7 +5630,7 @@ function hlsFor(el, cam) {
   // stepped over by the player itself, quickly, instead of waiting.
   const hls = new hlsLib({autoStartLoad: false, maxBufferLength: AHEAD_SECS, maxMaxBufferLength: AHEAD_SECS, maxBufferSize: 150e6, backBufferLength: 10, maxBufferHole: 2,
     highBufferWatchdogPeriod: 1, nudgeMaxRetry: 10, nudgeOffset: 0.2,
-    startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1, manifestLoadingTimeOut: 30000, levelLoadingTimeOut: 30000});
+    startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 2, levelLoadingMaxRetry: 2, manifestLoadingTimeOut: 60000, levelLoadingTimeOut: 60000});
   hls.attachMedia(el._hlsV);
   const h = el._h = {hls, cam, frags: [], ready: false};
   hls.on(hlsLib.Events.LEVEL_LOADED, (_, d) => {

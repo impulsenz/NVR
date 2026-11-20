@@ -3087,6 +3087,10 @@ async fn hls_playlist(State(m): App, user: Option<axum::Extension<CurrentUser>>,
     if to <= from || (to - from).num_hours() > 26 {
         return err(StatusCode::BAD_REQUEST, "bad time range");
     }
+    // A few playlists at a time: with many cameras opened at once, each one reading file headers from the
+    // drive made all of them slow, and the slowest timed out.
+    static PLAYLISTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+    let _turn = PLAYLISTS.acquire().await;
     let text = tokio::task::spawn_blocking(move || {
         let t = library::timeline(&m, std::slice::from_ref(&c.cfg.id), from, to);
         let mut segs: Vec<_> = t.into_iter().flat_map(|x| x.segments).filter(|s| s.kind != "clip" && s.stream == stream).collect();

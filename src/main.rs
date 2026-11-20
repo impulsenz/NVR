@@ -417,6 +417,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
         tokio::spawn(getffmpeg::fetch_and_use(mgr.clone()));
     }
     tokio::spawn(scrub::run(mgr.clone()));
+    tokio::spawn(hls::keep_indexed(mgr.clone()));
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));
     tokio::spawn(identify::run(mgr.clone()));

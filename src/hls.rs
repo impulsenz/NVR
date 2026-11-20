@@ -295,6 +295,57 @@ pub fn index_cached(path: &Path) -> Option<Arc<FileIndex>> {
     Some(ix)
 }
 
+/// A finished recording whose index is already made (kept in memory or saved), so a playlist over it is quick.
+fn indexed(path: &Path) -> bool {
+    let Ok((len, modified)) = crate::vstore::meta(path) else { return true };
+    // (Still being recorded: it is indexed as it grows, when a playlist asks.)
+    if modified.elapsed().is_ok_and(|e| e < std::time::Duration::from_secs(120)) || crate::vstore::is_growing(path, modified) {
+        return true;
+    }
+    stored(path, len).is_some_and(|f| f.exists())
+}
+
+/// Keep the indexes of the last day's recordings ready. Opening the timeline after GAZE has been idle used
+/// to index every file in view for every camera at once, reading their headers across the network drive in
+/// the middle of the request: playlists took tens of seconds, some timed out, and a camera stayed empty until
+/// the page was refreshed (by then the indexes were made). A few files at a time, newest first, when quiet.
+pub async fn keep_indexed(m: Arc<crate::manager::Manager>) {
+    tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+    loop {
+        let mut todo: Vec<(DateTime<Local>, PathBuf)> = Vec::new();
+        let since = Local::now() - chrono::Duration::hours(24);
+        for c in m.cameras() {
+            let (dir, tl_dir) = (c.dir.clone(), crate::storage::timeline_dir(&c.dir));
+            let (recs, copies) = (crate::library::recordings(&c), crate::library::timeline_recordings(&c));
+            let found = tokio::task::spawn_blocking(move || {
+                let mut v = Vec::new();
+                for (d, list) in [(dir, recs), (tl_dir, copies)] {
+                    for r in list.into_iter().filter(|r| r.end >= since) {
+                        let p = d.join(&r.name);
+                        if !indexed(&p) {
+                            v.push((r.start, p));
+                        }
+                    }
+                }
+                v
+            })
+            .await
+            .unwrap_or_default();
+            todo.extend(found);
+        }
+        todo.sort_by_key(|x| std::cmp::Reverse(x.0));
+        for (_, p) in todo.into_iter().take(12) {
+            crate::load::wait_for_cpu(85, std::time::Duration::from_secs(60)).await;
+            // Someone watching comes first.
+            if crate::vstore::watching() {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            let _ = tokio::task::spawn_blocking(move || index_cached(&p)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
+}
+
 /// Saved indexes of recordings deleted long ago: tidied now and then.
 pub fn tidy_store(max_age_days: u64) {
     let Some(d) = STORE.get() else { return };
