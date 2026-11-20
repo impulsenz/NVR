@@ -2243,6 +2243,19 @@ function scrubPage(url, low) {
     im.addEventListener('error', () => { if (scrub.pages.get(url) === im) scrub.pages.delete(url); }, {once: true});
     im.addEventListener('load', () => stripsSoon(), {once: true});
     im.src = url; scrub.pages.set(url, im);
+    // Scrubbing fast (a long stretch of time in one sweep) asks for a new page at almost every step. Pages nobody
+    // is looking at any more only hold the browser's few connections: the newest few are kept coming, the
+    // oldest still on their way are cancelled (asked for again if scrubbing returns there).
+    if (!low) {
+      const fl = scrub.flight || (scrub.flight = []);
+      fl.push(im);
+      const done = () => { const i = fl.indexOf(im); if (i >= 0) fl.splice(i, 1); };
+      im.addEventListener('load', done, {once: true}); im.addEventListener('error', done, {once: true});
+      while (fl.length > 3) {
+        const old = fl.shift();
+        if (!old.complete) { for (const [u, i] of scrub.pages) if (i === old) { scrub.pages.delete(u); break; } old.src = ''; }
+      }
+    }
     if (scrub.pages.size > 500) {
       const old = [...scrub.pages].sort((x, y) => (x[1]._use || 0) - (y[1]._use || 0)).slice(0, 100);
       for (const [u, i] of old) { if (i !== im) { scrub.pages.delete(u); i.src = ''; } }
@@ -2292,6 +2305,8 @@ async function scrubShow(el, cam, T, W, H, fill) {
 // While scrubbing: the pages either side of the one shown are fetched at
 // once, so the next picture is already there.
 function scrubNear(cam, f) {
+  // (Zoomed out past half a day one step moves across hours: the pages next to this one are no use.)
+  if (page === 'recordings' && tl.zoom > 43200) return;
   for (const n of [f.n + 1, f.n - 1]) {
     if (n < 0 || n >= f.m.pages || !f.m.have.some(r => Math.floor(r[1] / f.e.per) >= n && Math.floor(r[0] / f.e.per) <= n)) continue;
     const u = scrubUrl(cam, f.m, n); if (!scrub.pages.has(u)) scrubPage(u);

@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Scrubbing the time-lapse over days:** pages nobody is looking at any more are cancelled (only the newest few stay coming), and the neighbouring pages are not prefetched when zoomed out past half a day, so a long sweep no longer queues up behind pages it has already passed.
+
 ## 1.7.24 — November 2026
 - **Recordings feeds:** the coloured edge (recorded / HD / time-lapse) is there as soon as the page opens, taken from the footage at the playhead, instead of only after the first picture; it is half as thick; each feed has a soft drop shadow (lighter for the day theme, deeper for night).
 
