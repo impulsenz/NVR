@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.22 — November 2026
 - **Fix (broke 1.7.20/1.7.21):** the Recordings timeline failed to draw (a variable used before it was defined), which also stopped the + / − zoom and the video from loading after scrubbing.
 
 ## 1.7.21 — November 2026
