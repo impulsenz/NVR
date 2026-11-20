@@ -533,6 +533,41 @@ pub async fn watch_roots(m: std::sync::Arc<crate::manager::Manager>) {
     }
 }
 
+/// Is this folder on another computer (a NAS share) rather than a drive in
+/// this one? Only then is opening a recording slow enough to say "loading
+/// from deep storage". A network address, a mapped network drive (Windows) or
+/// an NFS / SMB / sshfs mount (Linux and macOS-like) count.
+pub fn is_network_path(p: &Path) -> bool {
+    let s = p.to_string_lossy();
+    if (s.starts_with("\\\\") || s.starts_with("//")) && !s.starts_with("\\\\?\\") && !s.starts_with("\\\\.\\") {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let abs = std::path::absolute(p).unwrap_or(p.to_path_buf());
+        let mut root = abs.components().next().map(|c| c.as_os_str().to_os_string()).unwrap_or_default();
+        root.push("\\");
+        let w: Vec<u16> = root.encode_wide().chain(std::iter::once(0)).collect();
+        // DRIVE_REMOTE = 4
+        return unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(w.as_ptr()) } == 4;
+    }
+    #[cfg(not(windows))]
+    {
+        let abs = std::fs::canonicalize(p).unwrap_or(p.to_path_buf());
+        let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else { return false };
+        mounts
+            .lines()
+            .filter_map(|l| {
+                let mut f = l.split_whitespace();
+                let (_, point, kind) = (f.next()?, f.next()?, f.next()?);
+                abs.starts_with(point).then_some((point.len(), kind))
+            })
+            .max_by_key(|(n, _)| *n)
+            .is_some_and(|(_, k)| ["nfs", "nfs4", "cifs", "smb3", "smbfs", "sshfs", "fuse.sshfs", "9p", "afs", "ceph", "glusterfs", "fuse.rclone"].contains(&k))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

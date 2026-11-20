@@ -2074,3 +2074,4 @@ dialog.ll-dlg::backdrop { background: rgba(0,0,0,.65); }
 .tl-axis i.mj.hr { width: 2px; height: 13px; opacity: 1; }
 .vax span.hr { font-size: 12.5px; font-weight: 700; }
 .vax i.vmj.hr { width: 11px; height: 2px; opacity: 1; }
+#tl-videos:not(.solo) .surface { cursor: pointer; }

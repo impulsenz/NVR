@@ -468,6 +468,8 @@ async fn status_value(m: &Arc<Manager>, user: &Option<axum::Extension<CurrentUse
         "problems": { "warnings": warnings, "errors": errors, "error_ids": logs::buffer().error_ids_since(Local::now() - chrono::Duration::days(1)) },
         "monitor": m.monitor.current(),
         "disk": disk.map(|(free, total)| json!({"free": free, "total": total})),
+        // Deep storage on another computer (a NAS): only then is "loading from deep storage" said.
+        "deep_remote": cfg.storage.archive.enabled && (!cfg.storage.archive.user.trim().is_empty() || crate::storage::is_network_path(&cfg.storage.archive.dir)),
         // The watchdog (Windows): in the title bar, red with a button to start it when it is down.
         "watchdog": crate::watchdog_ctl::summary(&std::path::absolute(&m.data_dir).unwrap_or(m.data_dir.clone())),
     })

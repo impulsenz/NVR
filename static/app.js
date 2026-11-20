@@ -2760,32 +2760,50 @@ class Player {
       scrubStyle(this.el.pimg, this.item.camera, W, w, h);
     });
   }
+  // The camera's sub-stream recordings around this footage: what the hover
+  // preview plays (light to decode and seek, never the HD file).
+  previewSegs() {
+    const it = this.item, key = it.camera + '|' + it.file_start;
+    if (this._psKey === key) return this._ps;
+    this._psKey = key; this._ps = null;
+    const w = new Date(it.file_start).getTime();
+    api(`api/timeline?cameras=${enc(it.camera)}&from=${enc(new Date(w - 3600000).toISOString())}&to=${enc(new Date(w + 4 * 3600000).toISOString())}`).then(r => {
+      if (this._psKey !== key) return;
+      this._ps = ((r[0] && r[0].segments) || []).filter(x => streamOf(x) === 'sub' && x.kind !== 'clip').map(x => ({url: x.url, a: new Date(x.start).getTime(), b: new Date(x.end).getTime()}));
+    }).catch(() => { if (this._psKey === key) this._ps = []; });
+    return null;
+  }
   previewVideo(t, place) {
-    if (this.tc || !this.item || !this.item.url) return;
+    if (!this.item) return;
+    const segs = this.previewSegs(), W = this.wallAt(t).getTime();
+    const seg = segs && segs.find(x => x.a <= W && W < x.b + 1000);
     let v = this.pvVideo;
+    if (!seg) { if (v) { v.style.visibility = 'hidden'; this.prevVideoOk = false; } return; }   // no sub-stream footage here: the time-lapse pictures
     if (!v) {
       v = this.pvVideo = document.createElement('video');
       v.muted = true; v.playsInline = true; v.preload = 'auto'; v.className = 'pv-v'; v.style.visibility = 'hidden';
       this.el.pimg.appendChild(v);
+      const seek = () => { this.pvBusy = true; if (v.fastSeek) v.fastSeek(this.pvTarget); else v.currentTime = this.pvTarget; };
+      this.pvSeek = seek;
       v.addEventListener('seeked', () => {
         this.pvBusy = false;
-        if (Math.abs(this.pvTarget - v.currentTime) > 0.08) { this.pvBusy = true; v.currentTime = this.pvTarget; return; }
+        if (Math.abs(this.pvTarget - v.currentTime) > 0.1) { seek(); return; }
         if (v.videoWidth) {
           this.prevAspect = v.videoWidth / v.videoHeight;
           const w = Math.round(Math.max(224, Math.min(this.surface.clientWidth / 3, 400))), h = Math.round(w / this.prevAspect);
           Object.assign(this.el.pimg.style, {width: w + 'px', height: h + 'px', border: '0'});
-          this.prevW = w; this.prevVideoOk = true; place(w);
+          this.prevW = w; this.prevVideoOk = true; this.pvPlace && this.pvPlace(w);
           v.style.visibility = 'visible';
         }
       });
     }
-    if (this.pvSrc !== this.item.url) {
-      this.pvSrc = this.item.url; this.prevVideoOk = false; v.style.visibility = 'hidden';
-      v.src = this.item.url;
-    }
-    this.pvTarget = t;
-    if (!this.pvBusy && v.readyState >= 1) { this.pvBusy = true; v.currentTime = t; }
-    else if (v.readyState < 1) v.addEventListener('loadedmetadata', () => { if (!this.pvBusy) { this.pvBusy = true; v.currentTime = this.pvTarget; } }, {once: true});
+    this.pvPlace = place;
+    this.pvTarget = (W - seg.a) / 1000;
+    if (this.pvSrc !== seg.url) {
+      this.pvSrc = seg.url; this.prevVideoOk = false; this.pvBusy = false; v.style.visibility = 'hidden';
+      v.src = seg.url;
+      v.addEventListener('loadedmetadata', () => { if (!this.pvBusy) this.pvSeek(); }, {once: true});
+    } else if (!this.pvBusy && v.readyState >= 1) this.pvSeek();
   }
   wireScrub() {
     const sc = this.el.scrub;
@@ -5562,7 +5580,7 @@ function buildTimelineVideos() {
     // Two players per camera: one plays while the next file loads in the
     // other, so moving from file to file doesn't blank the picture.
     el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video><video playsinline muted class="vid" data-hls style="position:absolute;inset:0;visibility:hidden"></video>
-      <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div><div class="deep-load" hidden><i class="spinner"></i><span>Loading from deep storage…</span></div>
+      <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div><div class="deep-load" hidden><i class="spinner"></i><span>Loading…</span></div>
       ${tlOverlay(c)}`;
     el.querySelectorAll('.fs-go').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(el); });
     el.querySelector('.tl-snd').onclick = (e) => {
@@ -5823,7 +5841,9 @@ setInterval(() => {
     const c = tl.data.find(x => x.camera === el.dataset.cam), seg = c && tl.T != null && segAt(c, tl.T), v = activeVideo(el);
     const loading = !v || el._pending != null || v.readyState < 3 || v.seeking;
     // Not while the timeline is being dragged: it goes away as you move and comes back when you stop on a moment.
+    // Footage moved to deep storage: a plain loading spinner; "from deep storage" only when that is a NAS.
     box.hidden = !(seg && seg.archived && loading && !tl.dragging);
+    const lbl = box.querySelector('span'); if (lbl) lbl.textContent = status && status.deep_remote ? 'Loading from deep storage…' : 'Loading…';
   }
 }, 120);
 const activeVideo = (el) => el._mode === 'hls' ? el._hlsV : el._vids[el._active];
@@ -6237,6 +6257,22 @@ function tlOnlyCamera(camId) {
   if (tl.T != null) tl.jump = tl.T + 3000;
   renderFilters(); loadTimeline();
 }
+// Click a camera's picture on the Recordings page: the same as choosing just
+// that camera in the list ("← All cameras" goes back to what you were doing).
+// A double-click (full screen) is left alone.
+(function wireQuickSelect() {
+  let t = null;
+  const box = $('tl-videos');
+  box.addEventListener('dblclick', () => clearTimeout(t));
+  box.addEventListener('click', (e) => {
+    const el = e.target.closest('.surface');
+    if (!el || e.target.closest('button, a, input, select, .rz, .tl-livebox') || document.fullscreenElement || tl.dragging) return;
+    const id = el.dataset.cam;
+    if (!id || (rec.cameras.size === 1 && rec.cameras.has(id)) || tl.solo === id) return;
+    clearTimeout(t);
+    t = setTimeout(() => tlOnlyCamera(id), 260);
+  });
+})();
 async function tlBackToAll() {
   const b = rec.backView;
   if (b) {
