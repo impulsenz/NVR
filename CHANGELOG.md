@@ -1,10 +1,8 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.21 — November 2026
 - **Recordings:** footage that comes back from deep storage on a drive in this computer just shows "Loading…"; "Loading from deep storage…" is said only when deep storage is on another computer (a network address or drive, or a share login is set).
 - **Recordings:** click a camera's picture to show just that camera, as choosing it in the list does; "← All cameras" goes back to what you were doing. Double-click still goes full screen.
-
-## Unreleased (cont.)
 - **Alert player hover preview:** plays the camera's **sub-stream** recording (never the HD clip), seeking as fast as the browser can; where there is no sub-stream footage it shows the time-lapse pictures instead.
 
 ## 1.7.20 — November 2026
