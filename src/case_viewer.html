@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evidence review</title>
+<style>
+:root{--bg:#f4f5f7;--panel:#fff;--text:#1d2230;--muted:#667085;--line:#d9dde5;--accent:#2563eb;--accent-t:#fff;--chip:#e8ecf4;--bar:#93b4f5;--bar-on:#2563eb;--warn:#b45309;--ok:#15803d;--shadow:0 1px 3px rgba(0,0,0,.12)}
+:root[data-theme=dark]{--bg:#0f131b;--panel:#171c27;--text:#e6e9f0;--muted:#97a1b5;--line:#2a3243;--accent:#5b8cff;--accent-t:#0b1020;--chip:#232b3b;--bar:#37507f;--bar-on:#6f9bff;--warn:#f5b45a;--ok:#4ade80;--shadow:none}
+*{box-sizing:border-box}html,body{margin:0}body{font:15px/1.45 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 20px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+header h1{font-size:19px;margin:0}header .sub{color:var(--muted);font-size:13px}header .sp{flex:1}
+button,select,input{font:inherit;color:var(--text)}
+button{background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}button:hover{border-color:var(--accent)}
+button.on{background:var(--accent);color:var(--accent-t);border-color:var(--accent)}
+input[type=search],input[type=date],input[type=time],select{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 9px;min-width:0}
+main{display:grid;grid-template-columns:300px 1fr;gap:18px;padding:18px 20px;max-width:1500px;margin:0 auto}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+aside{display:flex;flex-direction:column;gap:14px;align-self:start;position:sticky;top:12px}
+@media(max-width:860px){aside{position:static}}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow)}
+.box h3{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}
+.chips{display:flex;flex-wrap:wrap;gap:6px}.chips button{padding:4px 10px;font-size:13px;flex:none}
+label.l{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+.days{display:flex;align-items:flex-end;gap:2px;height:64px;overflow-x:auto;padding-bottom:2px}
+.days .d{flex:1 0 9px;max-width:28px;min-width:9px;background:var(--bar);border-radius:3px 3px 0 0;cursor:pointer;position:relative}
+.days .d.on{background:var(--bar-on)}.days .d.dim{opacity:.3}
+.hours{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;height:46px;align-items:end}
+.hours .h{background:var(--bar);border-radius:2px 2px 0 0;cursor:pointer;min-height:2px}.hours .h.on{background:var(--bar-on)}.hours .h.dim{opacity:.3}
+.axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:3px}
+.count{display:flex;align-items:center;gap:10px;margin:0 0 12px;flex-wrap:wrap}.count b{font-size:16px}.count .sp{flex:1}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+.card:hover,.card:focus-visible{border-color:var(--accent);outline:none}
+.card .m{aspect-ratio:16/9;background:#000;position:relative}.card .m video,.card .m img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+.card .m .k{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.65);color:#fff;border-radius:6px;padding:2px 7px;font-size:12px}
+.card .m .dur{position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.65);color:#fff;border-radius:6px;padding:1px 6px;font-size:12px}
+.card .b{padding:10px 12px;display:flex;flex-direction:column;gap:3px}.card h4{margin:0;font-size:15px}.card .t{color:var(--muted);font-size:13px}
+.card .n{font-size:13px;color:var(--text);opacity:.85;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.tag{display:inline-block;font-size:11px;border-radius:5px;padding:1px 6px;background:var(--chip);color:var(--muted);margin-right:4px}.tag.p{color:var(--ok)}
+.empty{padding:40px 10px;text-align:center;color:var(--muted)}
+.notes{white-space:pre-wrap;background:var(--chip);border-radius:8px;padding:10px;font-size:14px}
+dialog{border:0;border-radius:14px;padding:0;background:var(--panel);color:var(--text);width:min(1100px,96vw);max-height:94vh;box-shadow:0 10px 40px rgba(0,0,0,.45)}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.dlg{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr);max-height:94vh}
+@media(max-width:860px){.dlg{grid-template-columns:1fr;overflow:auto}}
+.dlg .pv{background:#000;display:flex;align-items:center;justify-content:center;min-height:240px}.dlg .pv video,.dlg .pv img{max-width:100%;max-height:78vh;display:block}
+.dlg .info{padding:16px;overflow:auto;display:flex;flex-direction:column;gap:10px}.dlg h2{margin:0;font-size:18px}
+table.kv{border-collapse:collapse;font-size:13px;width:100%}table.kv td{padding:3px 0;vertical-align:top}table.kv td:first-child{color:var(--muted);width:92px}
+code{font:12px ui-monospace,Consolas,monospace;word-break:break-all}
+.bar{display:flex;gap:6px;flex-wrap:wrap}.bar button{padding:4px 9px;font-size:13px}
+.how{font-size:13px;color:var(--muted)}.how summary{cursor:pointer;color:var(--text)}
+.kb{font-size:12px;color:var(--muted)}
+@media print{header button,aside,.bar,dialog,.count .sp,.count button{display:none!important}main{display:block;padding:0}.card{break-inside:avoid;box-shadow:none}.grid{display:block}.card .m{display:none}.card{margin-bottom:10px}.card .n{-webkit-line-clamp:unset}}
+</style></head><body>
+<header><div><h1 id="title"></h1><div class="sub" id="sub"></div></div><div class="sp"></div>
+<button id="theme" title="Day or night colours">◐ Theme</button><button onclick="print()" title="Print the list with its notes">🖨 Print</button></header>
+<main>
+<aside>
+ <div class="box"><h3>Find</h3><input type="search" id="q" placeholder="Search titles, notes, cameras…" style="width:100%">
+  <div id="casebox" hidden><label class="l">Case</label><select id="case" style="width:100%"></select></div></div>
+ <div class="box"><h3>Days <span id="dayinfo" style="text-transform:none;letter-spacing:0"></span></h3>
+  <div class="days" id="days"></div><div class="axis"><span id="d0"></span><span id="d1"></span></div>
+  <div class="row"><div><label class="l">From date</label><input type="date" id="df"></div><div><label class="l">To date</label><input type="date" id="dt"></div></div></div>
+ <div class="box"><h3>Time of day</h3><div class="hours" id="hours"></div><div class="axis"><span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+  <div class="row"><div><label class="l">From</label><input type="time" id="tf"></div><div><label class="l">To</label><input type="time" id="tt"></div></div>
+  <div class="kb">A range that ends before it starts (22:00 → 06:00) means overnight.</div>
+  <div class="chips" style="margin-top:8px"><button data-tod="0-6">Night 0–6</button><button data-tod="6-12">Morning</button><button data-tod="12-18">Afternoon</button><button data-tod="18-24">Evening</button></div></div>
+ <div class="box"><h3>Cameras</h3><div class="chips" id="cams"></div></div>
+ <div class="box"><h3>Show</h3><div class="chips" id="kinds"></div>
+  <label class="l">Sort by</label><select id="sort" style="width:100%"><option value="from">Time of the footage, oldest first</option><option value="fromd">Time of the footage, newest first</option><option value="added">When it was added to the case</option><option value="title">Title</option></select></div>
+ <button id="clear">Clear all filters</button>
+</aside>
+<section>
+ <div class="count"><b id="n"></b><span id="nn" style="color:var(--muted)"></span><span class="sp"></span><div class="chips"><button id="vgrid" class="on">Cards</button><button id="vlist">List</button></div></div>
+ <div class="box" id="casenotes" hidden><h3>Case notes</h3><div class="notes" id="cn"></div></div>
+ <div class="grid" id="grid" style="margin-top:14px"></div>
+ <details class="how box" style="margin-top:18px"><summary>How to check the files are unchanged</summary>
+  <p><b>manifest.txt</b> (next to this page) lists the SHA-256 of every video and picture as exported; each item's details show the same value. On Windows, open a terminal in the folder and run <code>certutil -hashfile "path\to\file.mp4" SHA256</code>; on Mac or Linux <code>shasum -a 256 file.mp4</code>. The result must match.</p>
+  <p>Times are as the NVR recorded them (<span id="tz"></span>). This page works offline and sends nothing anywhere.</p></details>
+</section></main>
+<dialog id="dlg"><div class="dlg"><div class="pv" id="pv"></div><div class="info" id="info"></div></div></dialog>
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+const D=JSON.parse(document.getElementById('data').textContent),$=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S={q:'',cam:new Set(),kind:new Set(),df:'',dt:'',tf:'',tt:'',sort:'from',view:'grid',case:'all',day:null,hour:null};
+// ---- the items, flattened ----
+let ITEMS=[];D.cases.forEach((c,ci)=>c.items.forEach(i=>ITEMS.push(Object.assign({},i,{camera_name:i.camera_name||i.camera,ci,case:c.name,_d:i.from_text.slice(0,10),_t:i.from_text.slice(11,16),_h:+i.from_text.slice(11,13)}))));
+const hasVideo=i=>i.files.some(f=>f.type==='video'),firstPic=i=>i.files.find(f=>f.type==='picture'),firstVid=i=>i.files.find(f=>f.type==='video');
+const url=p=>p.split('/').map(encodeURIComponent).join('/');
+const fmt=t=>{const [d,h]=t.split(' ');const dt=new Date(d+'T00:00:00');return dt.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short',year:'numeric'})+' '+(h||'')};
+const dur=s=>{s=Math.max(0,Math.round(s));const m=Math.floor(s/60);return m?m+'m '+String(s%60).padStart(2,'0')+'s':s+'s'};
+const kindOf=i=>hasVideo(i)?(i.kind==='alert'?'Alert video':'Video'):'Picture';
+function inTod(t,a,b){if(!a&&!b)return true;a=a||'00:00';b=b||'23:59';return a<=b?(t>=a&&t<=b):(t>=a||t<=b)}
+function match(i,skip){
+ if(S.case!=='all'&&String(i.ci)!==S.case)return false;
+ if(S.q){const h=(i.title+' '+i.notes+' '+i.camera_name+' '+i.case+' '+i.added_by).toLowerCase();if(!S.q.toLowerCase().split(/\s+/).every(w=>h.includes(w)))return false}
+ if(S.cam.size&&!S.cam.has(i.camera_name))return false;
+ if(S.kind.size){const k=[hasVideo(i)?'video':'picture',i.protected?'protected':'',i.notes.trim()?'notes':''].filter(Boolean);if(![...S.kind].every(x=>k.includes(x)))return false}
+ if(skip!=='date'&&((S.df&&i._d<S.df)||(S.dt&&i._d>S.dt)))return false;
+ if(skip!=='tod'&&!inTod(i._t,S.tf,S.tt))return false;
+ return true}
+const cmp={from:(a,b)=>a.from_text<b.from_text?-1:1,fromd:(a,b)=>a.from_text<b.from_text?1:-1,added:(a,b)=>a.added_text<b.added_text?-1:1,title:(a,b)=>a.title.localeCompare(b.title)};
+// ---- drawing ----
+function bars(){
+ const dayCount={};ITEMS.filter(i=>match(i,'date')).forEach(i=>dayCount[i._d]=(dayCount[i._d]||0)+1);
+ const all=[...new Set(ITEMS.map(i=>i._d))].sort();
+ if(all.length){const a=new Date(all[0]+'T00:00:00'),b=new Date(all[all.length-1]+'T00:00:00'),ds=[];
+  for(let d=new Date(a);d<=b&&ds.length<400;d.setDate(d.getDate()+1))ds.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'));
+  const mx=Math.max(1,...Object.values(dayCount));
+  $('days').innerHTML=ds.map(d=>{const n=dayCount[d]||0,on=(!S.df||d>=S.df)&&(!S.dt||d<=S.dt);return`<div class="d ${S.df&&on?'on':''} ${!n?'dim':''}" data-d="${d}" title="${esc(fmt(d))}: ${n} item${n==1?'':'s'}" style="height:${n?Math.max(8,n/mx*100):4}%"></div>`}).join('');
+  $('d0').textContent=all[0];$('d1').textContent=all[all.length-1]}
+ const hc=Array(24).fill(0);ITEMS.filter(i=>match(i,'tod')).forEach(i=>hc[i._h]++);const hm=Math.max(1,...hc);
+ $('hours').innerHTML=hc.map((n,h)=>{const t=String(h).padStart(2,'0')+':00',on=S.tf||S.tt?inTod(t,S.tf,S.tt)||inTod(String(h).padStart(2,'0')+':59',S.tf,S.tt):false;return`<div class="h ${on?'on':''}" data-h="${h}" title="${t}: ${n}" style="height:${n?Math.max(10,n/hm*100):4}%"></div>`}).join('')}
+function draw(){
+ const list=ITEMS.filter(i=>match(i)).sort(cmp[S.sort]);
+ $('n').textContent=list.length+' of '+ITEMS.filter(i=>S.case==='all'||String(i.ci)===S.case).length;$('nn').textContent=' items';
+ $('grid').className=S.view==='grid'?'grid':'';
+ $('grid').innerHTML=list.length?list.map(i=>{const v=firstVid(i),p=firstPic(i),med=v?`<video preload="metadata" muted playsinline ${p?`poster="${url(p.path)}" src="${url(v.path)}"`:`src="${url(v.path)}#t=0.5"`}></video>`:p?`<img loading="lazy" alt="" src="${url(p.path)}">`:'';
+  const d=(new Date(i.to)-new Date(i.from))/1000;
+  const body=`<div class="b"><h4>${esc(i.title)}</h4><div class="t">${esc(i.camera_name)} · ${esc(fmt(i.from_text))}</div><div class="n">${esc(i.notes.trim()||'')}</div><div>${i.protected?'<span class="tag p">🔒 protected</span>':''}${D.cases.length>1?`<span class="tag">${esc(i.case)}</span>`:''}${i.notes.trim()?'<span class="tag">notes</span>':''}</div></div>`;
+  return S.view==='grid'?`<div class="card" tabindex="0" data-id="${esc(i.id)}"><div class="m">${med}<span class="k">${kindOf(i)}</span>${v&&d>0?`<span class="dur">${dur(d)}</span>`:''}</div>${body}</div>`
+  :`<div class="card" tabindex="0" data-id="${esc(i.id)}" style="flex-direction:row;margin-bottom:8px">${body}</div>`}).join(''):'<div class="empty">Nothing matches these filters.<br><button id="clr2" style="margin-top:10px">Clear filters</button></div>';
+ bars();$('dayinfo').textContent=S.df||S.dt?'· '+(S.df||'…')+' → '+(S.dt||'…'):'';
+ $('clr2')&&($('clr2').onclick=clearAll)}
+// ---- the viewer ----
+let cur=[],pos=0;
+function open(id){cur=ITEMS.filter(i=>match(i)).sort(cmp[S.sort]);pos=Math.max(0,cur.findIndex(i=>i.id===id));show();if(!$('dlg').open)$('dlg').showModal()}
+function show(){const i=cur[pos];if(!i)return;const v=firstVid(i),p=firstPic(i);
+ $('pv').innerHTML=v?`<video controls autoplay playsinline src="${url(v.path)}"${p?` poster="${url(p.path)}"`:''}></video>`:p?`<img alt="" src="${url(p.path)}">`:'';
+ const vid=$('pv').querySelector('video');if(vid)vid.playbackRate=+(localStorage.getItem('rate')||1);
+ const files=i.files.map(f=>`<tr><td>${f.type==='video'?'Video':'Picture'}</td><td><a href="${url(f.path)}" download>${esc(f.path.split('/').pop())}</a><br><span style="color:var(--muted)">${f.size?(f.size/1048576).toFixed(1)+' MB · ':''}SHA-256</span> <code>${esc(f.sha256)}</code></td></tr>`).join('');
+ $('info').innerHTML=`<div class="bar"><button id="pr">← Previous</button><button id="nx">Next →</button><span style="flex:1"></span><button id="cl">Close ✕</button></div>
+ <h2>${esc(i.title)}</h2><div class="kb">${pos+1} of ${cur.length} in the current list</div>
+ ${vid?`<div class="bar" id="rates">${[.5,1,2,4,8].map(r=>`<button data-r="${r}">${r}×</button>`).join('')}<button id="fs">⛶ Full screen</button></div>`:''}
+ <table class="kv"><tr><td>Camera</td><td>${esc(i.camera_name)}</td></tr><tr><td>From</td><td>${esc(fmt(i.from_text))}</td></tr><tr><td>To</td><td>${esc(fmt(i.to_text))}</td></tr><tr><td>Length</td><td>${dur((new Date(i.to)-new Date(i.from))/1000)}</td></tr><tr><td>Type</td><td>${esc(kindOf(i))}</td></tr><tr><td>Added</td><td>${esc(fmt(i.added_text))}${i.added_by?' by '+esc(i.added_by):''}</td></tr><tr><td>Protected</td><td>${i.protected?'yes':'no'}</td></tr>${D.cases.length>1?`<tr><td>Case</td><td>${esc(i.case)}</td></tr>`:''}${files}</table>
+ <div><b>Notes</b></div><div class="notes">${esc(i.notes.trim()||'(none)')}</div>
+ <div class="kb">Keys: ← → previous / next · [ ] slower / faster · F full screen · Esc close</div>`;
+ $('pr').onclick=()=>step(-1);$('nx').onclick=()=>step(1);$('cl').onclick=()=>$('dlg').close();
+ document.querySelectorAll('#rates [data-r]').forEach(b=>b.onclick=()=>rate(+b.dataset.r));$('fs')&&($('fs').onclick=()=>vid.requestFullscreen&&vid.requestFullscreen());
+ paintRate()}
+function step(d){if(!cur.length)return;pos=(pos+d+cur.length)%cur.length;show()}
+function rate(r){localStorage.setItem('rate',r);const v=$('pv').querySelector('video');if(v)v.playbackRate=r;paintRate()}
+function paintRate(){const r=+(localStorage.getItem('rate')||1);document.querySelectorAll('#rates [data-r]').forEach(b=>b.classList.toggle('on',+b.dataset.r===r))}
+document.addEventListener('keydown',e=>{if(!$('dlg').open||/INPUT|SELECT|TEXTAREA/.test(e.target.tagName))return;
+ const v=$('pv').querySelector('video'),R=[.5,1,2,4,8],r=+(localStorage.getItem('rate')||1);
+ if(e.key==='ArrowRight'){step(1);e.preventDefault()}else if(e.key==='ArrowLeft'){step(-1);e.preventDefault()}
+ else if(e.key===']')rate(R[Math.min(R.length-1,R.indexOf(r)+1)]||2);else if(e.key==='[')rate(R[Math.max(0,R.indexOf(r)-1)]||1);
+ else if((e.key==='f'||e.key==='F')&&v&&v.requestFullscreen)v.requestFullscreen()});
+$('dlg').addEventListener('close',()=>{$('pv').innerHTML=''});
+$('dlg').addEventListener('click',e=>{if(e.target===$('dlg'))$('dlg').close()});
+// ---- controls ----
+function clearAll(){Object.assign(S,{q:'',df:'',dt:'',tf:'',tt:''});S.cam.clear();S.kind.clear();$('q').value='';['df','dt','tf','tt'].forEach(k=>$(k).value='');chips();draw()}
+function chips(){document.querySelectorAll('#cams button').forEach(b=>b.classList.toggle('on',S.cam.has(b.dataset.v)));document.querySelectorAll('#kinds button').forEach(b=>b.classList.toggle('on',S.kind.has(b.dataset.v)))}
+$('title').textContent=D.cases.length>1?'Evidence Locker — '+D.cases.length+' cases':D.cases[0].name;
+$('sub').textContent='Exported '+D.exported+' · '+ITEMS.length+' item'+(ITEMS.length==1?'':'s');$('tz').textContent=D.tz;document.title=$('title').textContent;
+if(D.cases.length>1){$('casebox').hidden=false;$('case').innerHTML='<option value="all">All cases</option>'+D.cases.map((c,i)=>`<option value="${i}">${esc(c.name)}</option>`).join('')}
+const notes=D.cases.filter(c=>c.notes.trim());if(notes.length){$('casenotes').hidden=false;$('cn').textContent=notes.map(c=>(D.cases.length>1?c.name+':\n':'')+c.notes.trim()).join('\n\n')}
+$('cams').innerHTML=[...new Set(ITEMS.map(i=>i.camera_name))].sort().map(c=>`<button data-v="${esc(c)}">📹 ${esc(c)}</button>`).join('');
+$('kinds').innerHTML=[['video','🎞 Videos'],['picture','🖼 Pictures'],['protected','🔒 Protected'],['notes','📝 With notes']].map(([k,l])=>`<button data-v="${k}">${l}</button>`).join('');
+$('cams').onclick=e=>{const v=e.target.dataset.v;if(!v)return;S.cam.has(v)?S.cam.delete(v):S.cam.add(v);chips();draw()};
+$('kinds').onclick=e=>{const v=e.target.dataset.v;if(!v)return;S.kind.has(v)?S.kind.delete(v):S.kind.add(v);chips();draw()};
+$('q').oninput=e=>{S.q=e.target.value.trim();draw()};
+for(const k of ['df','dt','tf','tt'])$(k).onchange=e=>{S[k]=e.target.value;draw()};
+$('sort').onchange=e=>{S.sort=e.target.value;draw()};$('case').onchange=e=>{S.case=e.target.value;draw()};
+$('days').onclick=e=>{const d=e.target.dataset.d;if(!d)return;if(S.df===d&&S.dt===d){S.df=S.dt=''}else if(e.shiftKey&&S.df&&d>S.df){S.dt=d}else{S.df=S.dt=d}$('df').value=S.df;$('dt').value=S.dt;draw()};
+$('hours').onclick=e=>{const h=e.target.dataset.h;if(h==null)return;const a=String(h).padStart(2,'0')+':00',b=String(h).padStart(2,'0')+':59';if(S.tf===a&&S.tt===b){S.tf=S.tt=''}else{S.tf=a;S.tt=b}$('tf').value=S.tf;$('tt').value=S.tt;draw()};
+document.querySelectorAll('[data-tod]').forEach(b=>b.onclick=()=>{const [x,y]=b.dataset.tod.split('-').map(Number);S.tf=String(x).padStart(2,'0')+':00';S.tt=y===24?'23:59':String(y).padStart(2,'0')+':00';$('tf').value=S.tf;$('tt').value=S.tt;draw()});
+$('clear').onclick=clearAll;
+$('vgrid').onclick=()=>{S.view='grid';$('vgrid').classList.add('on');$('vlist').classList.remove('on');draw()};$('vlist').onclick=()=>{S.view='list';$('vlist').classList.add('on');$('vgrid').classList.remove('on');draw()};
+$('grid').onclick=e=>{const c=e.target.closest('.card');if(c)open(c.dataset.id)};$('grid').onkeydown=e=>{if(e.key==='Enter'){const c=e.target.closest('.card');if(c)open(c.dataset.id)}};
+const th=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=th;
+$('theme').onclick=()=>{const n=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=n;localStorage.setItem('theme',n)};
+draw();
+</script></body></html>

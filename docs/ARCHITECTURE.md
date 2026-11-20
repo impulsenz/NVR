@@ -104,6 +104,9 @@ Footage is the light timeline copy where it covers a recording, else the recordi
 Scrub pictures live in `<camera folder>/.scrub/<hour>.json` and `<hour>-<page>.jpg` (hour = a multiple of 3 600 000 ms; slot n = the picture nearest hour + n × interval; pages of 10 × 10). `scrub::run` fills them: (1) every 15 s from `picturelog` (pictures kept by motion detection), (2) older recordings one at a time through `ffmpeg::sprite`, newest first, only while quiet. The page asks `GET /api/scrub/{camera}?from&to` (which slots exist, a version per page) and loads `/media/{camera}/scrub/{hour}/{page}?v=`; `scrubFind/scrubStyle` in `static/app.js` do the lookup. Recording never depends on it.
 `longlapse.rs`: Settings entries (`Config.longlapse`: camera + time of day) → one JPEG a day in `nvr-data/longlapse/<id>/YYYY-MM-DD.jpg`, tried again every 5 minutes for 3 hours, videos built with ffmpeg on request.
 
+## Evidence Locker export (`cases.rs`, `src/case_viewer.html`)
+`export_zip` writes one ZIP: each item's files (SHA-256 computed while streaming), notes, `manifest.txt`, and a single root `index.html` = `case_viewer.html` with the cases' data embedded as JSON (times as text, so filters have no time-zone surprises). With a password every entry is AES-256 (`zip` crate `aes-crypto`); the export form is POSTed so the browser streams the file and the password never appears in an address.
+
 ## Storage tiers
 
 ```

@@ -5009,6 +5009,28 @@ async function playItem(it, card) {
   }
 }
 // Safe mode: fix the settings file by hand (GAZE checks it before saving).
+// Export a case as a ZIP, optionally locked with a password. The dialog posts a plain form, so the
+// browser streams the download itself (a multi-gigabyte ZIP never sits in this page's memory) and the
+// password never appears in an address.
+function exportCaseDialog(action, name) {
+  const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg';
+  dlg.innerHTML = `<form method="post" action="${esc(action)}">
+    <div class="head"><h2>Export “${esc(name)}”</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
+    <div class="body"><p class="muted small" style="margin-top:0">One ZIP: every video and picture, the notes, a list of checksums, and <b>index.html</b>: a page anyone can open to review the case by day, time and camera, with nothing to install.</p>
+      <label class="ck"><input type="checkbox" id="ex-lock"> Lock the ZIP with a password</label>
+      <div id="ex-pw" hidden><input type="password" name="password" id="ex-pass" autocomplete="new-password" placeholder="Password" disabled style="width:100%;margin-top:8px">
+        <p class="muted small">Everything in the ZIP is encrypted (AES-256): the videos, the pictures and the review page. Whoever receives it needs the password and a program that opens AES ZIP files, such as <b>7-Zip</b>, WinRAR or Keka (Windows' own “Extract all” can't). Send the password another way, not with the file. GAZE does not keep it: <b>if it is lost, the ZIP cannot be opened.</b> Once someone extracts the files, they are ordinary files again.</p></div>
+      <div class="actions"><button type="button" data-x>Cancel</button><button type="submit" class="primary">⇩ Export</button></div></div></form>`;
+  document.body.appendChild(dlg); dlg.showModal();
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+  const lock = dlg.querySelector('#ex-lock'), pw = dlg.querySelector('#ex-pass');
+  lock.onchange = () => { dlg.querySelector('#ex-pw').hidden = !lock.checked; pw.disabled = !lock.checked; if (lock.checked) pw.focus(); };
+  dlg.querySelector('form').onsubmit = (e) => {
+    if (lock.checked && pw.value.length < 6) { e.preventDefault(); toast('Use a password of at least 6 characters', true); return; }
+    setTimeout(close, 400);
+  };
+}
 async function openSafeEditor() {
   let r; try { r = await api('api/safe-mode/config'); } catch (e) { toast(e.message, true); return; }
   const dlg = document.createElement('dialog'); dlg.className = 'wn-dlg safe-ed';
@@ -11196,7 +11218,7 @@ async function showEvidence() {
     main.innerHTML = `<div class="card ev-case" data-id="${esc(c.id)}">
       <div class="ev-head"><div style="flex:1;min-width:0"><h2 class="ev-name" title="${op ? 'Click to rename' : ''}">${esc(c.name)}</h2>
           <div class="ev-chips"><span>🗂 ${c.items.length} item${c.items.length === 1 ? '' : 's'}</span><span class="${prot ? 'prot' : ''}">🔒 ${prot} protected</span>${cams.length ? `<span>📹 ${esc(cams.join(', '))}</span>` : ''}${span ? `<span>🕒 ${esc(span)}</span>` : ''}<span class="muted">made ${t(c.created)}</span></div></div>
-        <div class="ev-tools"><a class="btn" href="api/cases/${enc(c.id)}/export" title="One ZIP with every video, picture and note in this case, ready to send to someone">⇩ Export ZIP</a>
+        <div class="ev-tools"><button type="button" class="btn ev-export" title="One ZIP with every video, picture and note in this case and a page to review them, ready to send to someone">⇩ Export ZIP</button>
           ${op && c.items.some(i => !i.protected) ? '<button type="button" class="ev-protall" title="Protect everything in this case">🔒 Protect all</button>' : ''}
           ${admin ? `<button type="button" class="danger ev-delcase" ${prot ? 'disabled title="Unprotect everything in it first"' : ''}>🗑 Delete case</button>` : ''}</div></div>
       <div class="ev-notes ev-case-notes"><label class="small muted">Case notes — what happened, who was involved, reference numbers <span class="ev-saved muted"></span></label>
@@ -11227,6 +11249,7 @@ async function showEvidence() {
       inp.onblur = save; inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { done = true; drawEvMain(); } };
     };
     evAutosave(main.querySelector('.ev-case-ta'), async (v) => { await api('api/cases/' + enc(c.id), {method: 'PUT', json: {name: c.name, notes: v}}); c.notes = v; });
+    const ex = main.querySelector('.ev-export'); if (ex) ex.onclick = () => exportCaseDialog(`api/cases/${enc(c.id)}/export`, c.name);
     const dc = main.querySelector('.ev-delcase');
     if (dc) dc.onclick = async () => {
       if (!confirm(`Delete the case “${c.name}” and the copies kept in it? The original footage isn't touched.`)) return;

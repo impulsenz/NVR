@@ -205,8 +205,8 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/timeline", get(timeline))
         .route("/api/export", get(export_clip))
         .route("/api/cases", get(cases_list).post(cases_create))
-        .route("/api/cases/export", get(cases_export_all))
-        .route("/api/cases/{id}/export", get(cases_export))
+        .route("/api/cases/export", get(cases_export_all).post(cases_export_all_post))
+        .route("/api/cases/{id}/export", get(cases_export).post(cases_export_post))
         .route("/api/cases/{id}", put(cases_update).delete(cases_delete))
         .route("/api/cases/{id}/items", post(cases_add_item))
         .route("/api/cases/{id}/items/{item}", put(cases_update_item).delete(cases_remove_item))
@@ -3634,7 +3634,7 @@ async fn cases_remove_item(user: Option<axum::Extension<CurrentUser>>, Path((id,
 }
 
 /// One case, or all of them, as a ZIP to hand to somebody.
-async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cases: Vec<crate::cases::Case>, name: String, req: Request) -> Response {
+async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cases: Vec<crate::cases::Case>, name: String, req: Request, password: Option<String>) -> Response {
     let vis = visible(user);
     let tmpdir = m.data_dir.join("tmp");
     let _ = std::fs::create_dir_all(&tmpdir);
@@ -3649,10 +3649,12 @@ async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cas
     }
     let out = tmpdir.join(format!("evidence-{}.zip", Local::now().format("%Y%m%d%H%M%S%3f")));
     let o2 = out.clone();
-    let res = tokio::task::spawn_blocking(move || crate::cases::export_zip(&cases, &o2, &|cam| vis.as_ref().is_none_or(|v| v.iter().any(|x| x == cam)))).await;
+    let locked = password.is_some();
+    let pw = password;
+    let res = tokio::task::spawn_blocking(move || crate::cases::export_zip(&cases, &o2, &|cam| vis.as_ref().is_none_or(|v| v.iter().any(|x| x == cam)), pw.as_deref())).await;
     match res {
         Ok(Ok(())) => {
-            tracing::info!("Evidence Locker: exported “{name}”");
+            tracing::info!("Evidence Locker: exported “{name}”{}", if locked { " (password protected)" } else { "" });
             let mut req = req;
             // Always a download.
             if let Ok(u) = format!("{}?download=1", req.uri().path()).parse() {
@@ -3672,7 +3674,7 @@ async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cas
 async fn cases_export(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, req: Request) -> Response {
     let Some(c) = crate::cases::get(&id) else { return err(StatusCode::NOT_FOUND, "no such case") };
     let name = c.name.clone();
-    cases_zip(&m, &user, vec![c], name, req).await
+    cases_zip(&m, &user, vec![c], name, req, None).await
 }
 
 async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUser>>, req: Request) -> Response {
@@ -3680,7 +3682,40 @@ async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUse
     if all.is_empty() {
         return err(StatusCode::NOT_FOUND, "no cases to export");
     }
-    cases_zip(&m, &user, all, "Evidence Locker".into(), req).await
+    cases_zip(&m, &user, all, "Evidence Locker".into(), req, None).await
+}
+
+/// The export form's fields: the password the ZIP is locked with (the page posts a form, so the browser streams
+/// the download itself; the password is never in an address).
+#[derive(Deserialize)]
+struct ExportForm {
+    #[serde(default)]
+    password: String,
+}
+
+/// A GET request for the same address, for serving the finished file.
+fn download_request(uri: &axum::http::Uri) -> Request {
+    Request::builder().uri(uri.clone()).body(Body::empty()).unwrap_or_default()
+}
+
+async fn cases_export_post(
+    State(m): App,
+    user: Option<axum::Extension<CurrentUser>>,
+    Path(id): Path<String>,
+    uri: axum::http::Uri,
+    axum::Form(f): axum::Form<ExportForm>,
+) -> Response {
+    let Some(c) = crate::cases::get(&id) else { return err(StatusCode::NOT_FOUND, "no such case") };
+    let name = c.name.clone();
+    cases_zip(&m, &user, vec![c], name, download_request(&uri), Some(f.password).filter(|p| !p.is_empty())).await
+}
+
+async fn cases_export_all_post(State(m): App, user: Option<axum::Extension<CurrentUser>>, uri: axum::http::Uri, axum::Form(f): axum::Form<ExportForm>) -> Response {
+    let all = crate::cases::list();
+    if all.is_empty() {
+        return err(StatusCode::NOT_FOUND, "no cases to export");
+    }
+    cases_zip(&m, &user, all, "Evidence Locker".into(), download_request(&uri), Some(f.password).filter(|p| !p.is_empty())).await
 }
 
 /// A file kept in a case (only the case's own files, by name).
@@ -5797,6 +5832,10 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
     // Operators may keep evidence: make cases and add to them (deleting a
     // case or an item, and unprotecting, is for administrators).
     if role == Operator && path.starts_with("/api/cases") && method != axum::http::Method::DELETE {
+        return true;
+    }
+    // Exporting a case (the export form posts, so the password isn't in the address): anyone who may read it.
+    if path.starts_with("/api/cases/") && (path.ends_with("/export") || path == "/api/cases/export") {
         return true;
     }
     // Operators: move cameras, pause recording, switch Home / Away / Night.

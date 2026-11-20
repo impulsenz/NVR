@@ -315,33 +315,80 @@ pub fn import_case(c: Case) -> Result<Option<PathBuf>> {
     })
 }
 
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+/// One file of an item, as the review page lists it.
+#[derive(serde::Serialize)]
+struct ViewFile {
+    /// From the top of the ZIP.
+    path: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    sha256: String,
+    size: u64,
+}
+
+#[derive(serde::Serialize)]
+struct ViewItem<'a> {
+    #[serde(flatten)]
+    item: &'a Item,
+    /// The times as recorded, "2026-11-20 14:03:22" (the page filters on these as text: no time zone surprises).
+    from_text: String,
+    to_text: String,
+    added_text: String,
+    files: Vec<ViewFile>,
+}
+
+#[derive(serde::Serialize)]
+struct ViewCase<'a> {
+    name: &'a str,
+    notes: &'a str,
+    items: Vec<ViewItem<'a>>,
+}
+
+/// The review page (`case_viewer.html`) with the cases' data in it. Nothing is loaded from anywhere: it works from a folder on a disk.
+fn viewer_html(cases: &[ViewCase]) -> Result<String> {
+    let data = serde_json::json!({
+        "exported": Local::now().format("%d %b %Y %H:%M").to_string(),
+        "tz": format!("UTC{}", Local::now().format("%:z")),
+        "cases": cases,
+    });
+    // (No "</script>" can end the data early.)
+    let json = serde_json::to_string(&data)?.replace('<', "\\u003c");
+    Ok(include_str!("case_viewer.html").replacen("/*DATA*/", &json, 1))
 }
 
 /// Everything in `cases` as one ZIP, for handing to somebody else.
 ///
 /// ```text
-/// <Case>/
-///   index.html          open it: every video with its notes beside it
+/// index.html            open it: filter by day, time, camera and type; play each video with its notes
+/// <Case>/               (only with several cases; with one, its files are at the top)
 ///   case-notes.txt      the notes about the case as a whole
 ///   manifest.txt        SHA-256 of every file
 ///   01 <item title>/
 ///     <video>.mp4  <picture>.jpg
 ///     notes.txt         the notes for this video, with when / where
 /// ```
-/// With several cases, each is a folder of its own. `allow` says which
-/// cameras the person exporting may see.
-pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool) -> Result<()> {
+/// `allow` says which cameras the person exporting may see. With a
+/// `password`, every file in the ZIP (the videos, the pictures and the review
+/// page) is encrypted with AES-256: nothing in it can be read without the
+/// password, and a program that supports AES ZIPs (7-Zip, WinRAR, Keka) is
+/// needed to open it. Once extracted, the files are of course plain.
+pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool, password: Option<&str>) -> Result<()> {
     use sha2::Digest;
     use std::io::{Read, Write};
     use zip::write::SimpleFileOptions;
+    let password = password.filter(|p| !p.is_empty());
     let l_dir = with(|l| Ok(l.dir.clone()))?;
     let mut z = zip::ZipWriter::new(std::io::BufWriter::new(std::fs::File::create(out)?));
-    let text = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).large_file(true);
-    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(true);
+    let lock = |o: SimpleFileOptions| match password {
+        Some(p) => o.with_aes_encryption(zip::AesMode::Aes256, p),
+        None => o,
+    };
+    let text = lock(SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).large_file(true));
+    let stored = lock(SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(true));
     let many = cases.len() > 1;
     let mut used = std::collections::HashSet::new();
+    let mut view: Vec<ViewCase> = Vec::new();
+    let when = |t: DateTime<Local>| t.format("%Y-%m-%d %H:%M:%S").to_string();
     for c in cases {
         let mut root = safe_part(&c.name);
         while !used.insert(root.clone()) {
@@ -350,18 +397,12 @@ pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool) -> R
         let prefix = if many { format!("{root}/") } else { String::new() };
         let items: Vec<&Item> = c.items.iter().filter(|i| allow(&i.camera)).collect();
         let mut manifest = String::new();
-        let mut html = format!(
-            "<!doctype html><meta charset=utf-8><title>{n}</title><style>body{{font:15px system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#222}}video,img{{max-width:100%;border-radius:6px;background:#000}}.i{{border-top:1px solid #ccc;padding:16px 0}}pre{{white-space:pre-wrap;font:inherit;background:#f4f4f4;padding:10px;border-radius:6px}}.m{{color:#666;font-size:13px}}</style><h1>{n}</h1><p class=m>Exported {now} · {k} item(s)</p><h2>Notes</h2><pre>{cn}</pre>",
-            n = esc(&c.name),
-            now = Local::now().format("%d %b %Y %H:%M"),
-            k = items.len(),
-            cn = if c.notes.trim().is_empty() { "(none)".into() } else { esc(&c.notes) },
-        );
+        let mut vitems = Vec::new();
         z.start_file(format!("{prefix}case-notes.txt"), text)?;
         write!(z, "{}\r\n\r\nCreated: {}\r\n\r\nNotes\r\n-----\r\n{}\r\n", c.name, c.created.format("%d %b %Y %H:%M:%S"), c.notes)?;
         for (n, i) in items.iter().enumerate() {
-            let folder = format!("{prefix}{:02} {}", n + 1, safe_part(&i.title));
             let rel_folder = format!("{:02} {}", n + 1, safe_part(&i.title));
+            let folder = format!("{prefix}{rel_folder}");
             z.start_file(format!("{folder}/notes.txt"), text)?;
             write!(
                 z,
@@ -376,15 +417,8 @@ pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool) -> R
                 if i.protected { "yes" } else { "no" },
                 i.notes
             )?;
-            html.push_str(&format!(
-                "<div class=i><h2>{}</h2><p class=m>{} · {} – {}</p>",
-                esc(&i.title),
-                esc(if i.camera_name.is_empty() { &i.camera } else { &i.camera_name }),
-                i.from.format("%d %b %Y %H:%M:%S"),
-                i.to.format("%H:%M:%S")
-            ));
-            let enc_path = |f: &str| format!("{}/{}", rel_folder.replace(' ', "%20"), f.replace(' ', "%20"));
-            for (file, is_video) in i.video.iter().map(|f| (f, true)).chain(i.picture.iter().map(|f| (f, false))) {
+            let mut files = Vec::new();
+            for (file, kind) in i.video.iter().map(|f| (f, "video")).chain(i.picture.iter().map(|f| (f, "picture"))) {
                 if file.contains('/') || file.contains('\\') || file.contains("..") {
                     continue;
                 }
@@ -392,29 +426,30 @@ pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool) -> R
                 let Ok(mut f) = std::fs::File::open(&src) else { continue };
                 z.start_file(format!("{folder}/{file}"), stored)?;
                 let mut h = sha2::Sha256::new();
+                let mut size = 0u64;
                 let mut buf = vec![0u8; 1 << 20];
                 loop {
                     let k = f.read(&mut buf)?;
                     if k == 0 {
                         break;
                     }
+                    size += k as u64;
                     h.update(&buf[..k]);
                     z.write_all(&buf[..k])?;
                 }
-                manifest.push_str(&format!("{}  {rel_folder}/{file}\r\n", h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()));
-                if is_video {
-                    html.push_str(&format!("<video controls preload=metadata src=\"{}\"></video>", enc_path(file)));
-                } else if i.video.is_none() {
-                    html.push_str(&format!("<img src=\"{}\" alt=\"\">", enc_path(file)));
-                }
+                let sum = h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>();
+                manifest.push_str(&format!("{sum}  {rel_folder}/{file}\r\n"));
+                files.push(ViewFile { path: format!("{folder}/{file}"), kind, sha256: sum, size });
             }
-            html.push_str(&format!("<h3>Notes for this video</h3><pre>{}</pre></div>", if i.notes.trim().is_empty() { "(none)".into() } else { esc(&i.notes) }));
+            // (The page's camera name is what the exporter sees, never an empty one.)
+            vitems.push(ViewItem { item: i, from_text: when(i.from), to_text: when(i.to), added_text: when(i.added), files });
         }
-        z.start_file(format!("{prefix}index.html"), text)?;
-        z.write_all(html.as_bytes())?;
         z.start_file(format!("{prefix}manifest.txt"), text)?;
         z.write_all(manifest.as_bytes())?;
+        view.push(ViewCase { name: &c.name, notes: &c.notes, items: vitems });
     }
+    z.start_file("index.html", text)?;
+    z.write_all(viewer_html(&view)?.as_bytes())?;
     z.finish()?.flush()?;
     Ok(())
 }
@@ -482,14 +517,34 @@ mod tests {
             })
             .unwrap();
             let out = dir.join("x.zip");
-            export_zip(&list(), &out, &|_| true).unwrap();
+            export_zip(&list(), &out, &|_| true, None).unwrap();
             let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
             let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().unwrap().to_string()).collect();
             assert!(names.iter().any(|n| n == "index.html"), "{names:?}");
             assert!(names.iter().any(|n| n.starts_with("01 ") && n.ends_with("/notes.txt")), "{names:?}");
             assert!(names.iter().any(|n| n.ends_with("/v.mp4")), "{names:?}");
+            // The review page carries every item's times, files and hash.
+            let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
+            let mut html = String::new();
+            std::io::Read::read_to_string(&mut z.by_name("index.html").unwrap(), &mut html).unwrap();
+            assert!(
+                html.contains("\"from_text\":") && html.contains("v.mp4") && html.contains("saw a man") && !html.contains("/*DATA*/"),
+                "{}",
+                &html[html.len().saturating_sub(600)..]
+            );
+            // With a password nothing opens without it, and everything does with it.
+            let sealed = dir.join("sealed.zip");
+            export_zip(&list(), &sealed, &|_| true, Some("hunter2-pass")).unwrap();
+            let mut z = zip::ZipArchive::new(std::fs::File::open(&sealed).unwrap()).unwrap();
+            assert!(z.by_name("index.html").is_err(), "a locked file opened without the password");
+            assert!(z.by_name_decrypt("index.html", b"wrong-password").is_err());
+            let mut got = Vec::new();
+            std::io::Read::read_to_end(&mut z.by_name_decrypt("index.html", b"hunter2-pass").unwrap(), &mut got).unwrap();
+            assert!(String::from_utf8_lossy(&got).contains("saw a man"));
+            let bytes = std::fs::read(&sealed).unwrap();
+            assert!(!bytes.windows(5).any(|w| w == b"video"), "the footage is readable in the locked file");
             // Someone who can't see the camera gets none of its items.
-            export_zip(&list(), &out, &|_| false).unwrap();
+            export_zip(&list(), &out, &|_| false, None).unwrap();
             let z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
             assert!(z.file_names().all(|n| !n.unwrap().contains("v.mp4")));
         }
