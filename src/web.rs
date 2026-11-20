@@ -4515,6 +4515,7 @@ async fn live_frame(State(m): App, Path(id): Path<String>, Query(q): Query<Quali
 // ---------- long-term time-lapse (longlapse.rs) ----------
 
 /// The entry an id names, when the account may see its camera.
+#[allow(clippy::result_large_err)]
 fn longlapse_entry(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, id: &str) -> Result<crate::config::LongLapse, Response> {
     let e = m.config().longlapse.into_iter().find(|e| e.id == id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such time-lapse"))?;
     match camera_denied(user, &e.camera) {
@@ -6288,6 +6289,11 @@ mod tests {
             "/api/cases/{id}/files/{name}",
             "/api/cases/{id}/items",
             "/api/cases/{id}/items/{item}",
+            "/api/longlapse/{id}/capture", // handler: longlapse_entry() = camera_denied() on the entry's camera
+            "/api/longlapse/{id}/video",
+            "/api/longlapse/{id}/pic/{name}",
+            "/api/longlapse/{id}/thumb/{name}",
+            "/api/longlapse/{id}/videos/{name}",
             "/api/known/{id}", // people and vehicles, not camera data
             "/api/known/{id}/learn",
             "/api/known/{id}/photo",

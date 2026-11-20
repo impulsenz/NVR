@@ -86,7 +86,7 @@ pub fn videos(data: &Path, id: &str) -> Vec<Video> {
             is_video_name(&name).then(|| Video { name, size: md.len(), made: md.modified().ok().map(DateTime::<Local>::from) })
         })
         .collect();
-    v.sort_by(|a, b| b.made.cmp(&a.made));
+    v.sort_by_key(|x| std::cmp::Reverse(x.made));
     v
 }
 

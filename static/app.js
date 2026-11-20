@@ -1912,7 +1912,7 @@ function route() {
   // (HD when both are).
   if (page === 'recordings' && lastPage !== 'recordings') pickRecordedStream();
   if (page !== lastPage) { cutPageDownloads(); lastPage = page; }
-  if (page === 'recordings') setTimeout(pumpSprites, 1500);  // the queued pictures carry on, after the video has started
+  if (page === 'recordings') setTimeout(pumpScrub, 1500);  // the queued pictures carry on, after the video has started
   unparkVideos($('page-' + page));
   if (page === 'live') showLive(sub ? decodeURIComponent(sub) : null);
   else if (page === 'recordings') showRecordings(sub ? decodeURIComponent(sub) : null, p0 === 'alerts' ? 'list' : 'timeline');
@@ -1931,9 +1931,9 @@ document.querySelector('nav a[data-page="recordings"]').addEventListener('click'
   if (page !== 'recordings' || rec.mode !== 'timeline') return;
   e.preventDefault();
   if (location.hash !== '#recordings' && !location.hash.startsWith('#recordings/timeline')) { location.hash = '#recordings'; return; }
-  cutSpriteDownloads();
-  for (const [u, x] of tl.sprites) if (x.failed) tl.sprites.delete(u);
-  tl.hd = null; tl.pv = new Map();
+  cutScrubDownloads();
+  scrub.cams.clear();
+  tl.hd = null;
   loadTimeline();
   toast('Recordings reloaded');
 });
@@ -1959,9 +1959,8 @@ function cutPageDownloads() {
 // when needed).
 function cutSpriteDownloads() {
   pageNet.abort(); pageNet = new AbortController();
-  tl.pfGen = (tl.pfGen || 0) + 1; camTl.pfGen++; clearTimeout(camTl.pfRetry);
-  for (const [u, e] of tl.sprites) if (!e.done) tl.sprites.delete(u);
-  for (const [u, im] of spritePages) if (!im.complete) { im._cut = true; spritePages.delete(u); im.src = ''; }
+  tl.pfGen = (tl.pfGen || 0) + 1; camTl.pfGen++;
+  cutScrubDownloads();
 }
 // A paused video that's still downloading keeps its connection: let go of
 // it (where it was is kept, and it's put back when the page is shown).
@@ -2161,102 +2160,195 @@ async function refreshStatus(pushed) {
   if (page === 'settings') settingsTick();
 }
 
-// Show sprite picture `n` (scrubbing preview) as the background of `el`
-// (W×H px). Sprites come in pages of pictures, each stretched to fill its
-// tile; `fill` stretches the picture over the whole box like the timeline's
-// videos, otherwise it's shown in its own shape (info.aspect), centred.
-// A page that hasn't loaded yet isn't shown (that blinked black): the
-// previous picture stays until it's ready. Returns the picture's offsets
-// in the box, or null while waiting.
-const spritePages = new Map();
-function spritePage(url) {
-  let im = spritePages.get(url);
+// ======================================================================
+// Time-lapse pictures for scrubbing (the server side is scrub.rs).
+// The server keeps each camera's pictures per clock hour on a fixed grid
+// (hour h, slot n = the picture nearest h + n × interval), in pages of
+// 10 × 10 pictures. So the picture for any moment is a lookup: no per-file
+// state. `scrub.cams` holds, per camera, which hours have pictures and which
+// slots of them; `scrub.pages` the page images in this browser's memory.
+// ======================================================================
+const HOUR_MS = 3600000;
+const scrub = {cams: new Map(), pages: new Map(), q: [], busy: 0};
+function scrubCam(cam) {
+  let e = scrub.cams.get(cam);
+  if (!e) scrub.cams.set(cam, e = {hours: new Map(), cols: 10, per: 100, asks: new Map()});
+  return e;
+}
+const scrubUrl = (cam, m, n) => `media/${enc(cam)}/scrub/${m.h}/${n}?v=${m.pv[n]}`;
+// Ask which hours have pictures between a and b (ms). The same ask is not
+// repeated within a few seconds; what comes back replaces what was known for
+// those hours (pages whose version didn't change stay cached).
+function scrubLoad(cam, a, b) {
+  if (!TIMELAPSE) return Promise.resolve();
+  const e = scrubCam(cam), now = Date.now();
+  a = Math.floor(a / HOUR_MS) * HOUR_MS; b = Math.min(Math.max(b, a), now + HOUR_MS);
+  const key = a + '-' + b, last = e.asks.get(key);
+  if (last && now - last.at < 8000) return last.p;
+  const p = api(`api/scrub/${enc(cam)}?from=${a}&to=${b}`, {signal: pageNet.signal}).then(r => {
+    e.cols = r.cols; e.per = r.per_page;
+    const got = new Map(r.hours.map(m => [m.h, m]));
+    for (let h = a; h <= Math.floor(b / HOUR_MS) * HOUR_MS; h += HOUR_MS) { if (got.has(h)) e.hours.set(h, got.get(h)); else e.hours.delete(h); }
+  }).catch(() => { e.asks.delete(key); });
+  e.asks.set(key, {at: now, p});
+  if (e.asks.size > 40) for (const [k, v] of e.asks) if (now - v.at > 60000) e.asks.delete(k);
+  return p;
+}
+// The slot holding a picture nearest `slot` in sorted [from, to] ranges.
+function nearestSlot(have, slot) {
+  let lo = 0, hi = have.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (have[mid][1] < slot) lo = mid + 1; else hi = mid; }
+  const after = lo < have.length ? Math.max(have[lo][0], slot) : null, before = lo > 0 ? have[lo - 1][1] : null;
+  if (before == null) return after;
+  if (after == null) return before;
+  return slot - before <= after - slot ? before : after;
+}
+// The picture to show for moment T of a camera: {m: the hour, slot, n: its page, k: place on it, e: the camera's record}, or null.
+function scrubFind(cam, T) {
+  const e = scrub.cams.get(cam); if (!e) return null;
+  const h0 = Math.floor(T / HOUR_MS) * HOUR_MS;
+  let best = null;
+  for (const h of [h0, h0 - HOUR_MS, h0 + HOUR_MS]) {
+    const m = e.hours.get(h); if (!m) continue;
+    const t = Math.max(h, Math.min(T, h + HOUR_MS - 1)), slot = Math.min(m.slots - 1, Math.floor((t - h) / (m.interval * 1000)));
+    const s = nearestSlot(m.have, slot); if (s == null) continue;
+    const d = Math.abs(h + s * m.interval * 1000 - T);
+    if (!best || d < best.d) best = {m, slot: s, d, e};
+    if (h === h0 && d <= m.interval * 1000) break;
+  }
+  // A picture far from the moment (a gap in the footage) isn't a picture of it.
+  if (!best || best.d > 120000 + best.m.interval * 1000) return null;
+  best.n = Math.floor(best.slot / e.per); best.k = best.slot % e.per;
+  return best;
+}
+// The page image (kept in memory while it's in use; the least recently used go first).
+function scrubPage(url, low) {
+  let im = scrub.pages.get(url);
   if (!im) {
     im = new Image();
-    // A page that failed to download is fetched afresh next time.
-    im.addEventListener('error', () => { if (spritePages.get(url) === im) spritePages.delete(url); }, {once: true});
-    im.src = url; spritePages.set(url, im);
+    if (low) im.fetchPriority = 'low';
+    // A page that failed to download is asked for afresh next time.
+    im.addEventListener('error', () => { if (scrub.pages.get(url) === im) scrub.pages.delete(url); }, {once: true});
+    im.addEventListener('load', () => stripsSoon(), {once: true});
+    im.src = url; scrub.pages.set(url, im);
+    if (scrub.pages.size > 500) {
+      const old = [...scrub.pages].sort((x, y) => (x[1]._use || 0) - (y[1]._use || 0)).slice(0, 100);
+      for (const [u, i] of old) { if (i !== im) { scrub.pages.delete(u); i.src = ''; } }
+    }
   }
+  im._use = Date.now();
   return im;
 }
-function spriteStyle(el, sp, n, W, H, fill) {
-  const i = sp.info;
-  n = Math.min(i.count - 1, Math.max(0, n));
-  const page = Math.floor(n / i.per_page), k = n % i.per_page;
-  const col = k % i.columns, row = Math.floor(k / i.columns), rows = Math.ceil(Math.min(i.per_page, i.count - page * i.per_page) / i.columns);
-  const url = sp.url + page, im = spritePage(url);
-  el._want = [sp, n, W, H, fill];
+const scrubPageReady = (url) => { const im = scrub.pages.get(url); return !!(im && im.complete && im.naturalWidth); };
+// Show the picture for moment T as the background of `el` (W×H px). `fill`
+// stretches it over the whole box like the timeline's videos; otherwise it's
+// shown in its own shape, centred. A page that hasn't arrived isn't shown (the
+// previous picture stays rather than blinking black) and is drawn when it
+// arrives. Returns the picture's offsets in the box, or null.
+function scrubStyle(el, cam, T, W, H, fill) {
+  const f = scrubFind(cam, T); if (!f) return null;
+  const {m, e} = f, url = scrubUrl(cam, m, f.n), im = scrubPage(url);
+  el._want = [cam, T, W, H, fill];
   if (!(im.complete && im.naturalWidth)) {
-    im.addEventListener('load', () => { const w = el._want; if (w && w[0] === sp && w[1] === n) spriteStyle(el, ...w); }, {once: true});
+    im.addEventListener('load', () => { const w = el._want; if (w && w[0] === cam && w[1] === T && scrubStyle(el, ...w)) el.hidden = false; }, {once: true});
     return null;
   }
-  const a = i.aspect || i.tile_width / i.tile_height;
-  const dw = fill ? W : Math.min(W, H * a), dh = fill ? H : Math.min(H, W / a);
+  scrubNear(cam, f);
+  const col = f.k % e.cols, row = Math.floor(f.k / e.cols), rows = Math.ceil(Math.min(e.per, m.slots - f.n * e.per) / e.cols);
+  const a = m.aspect || m.tw / m.th, dw = fill ? W : Math.min(W, H * a), dh = fill ? H : Math.min(H, W / a);
   const ox = (W - dw) / 2, oy = (H - dh) / 2;
   // Black bars around a picture that keeps its shape (a border, so the
-  // pictures next to it on the sheet never show at the sides).
+  // pictures next to it on the page never show at the sides).
   el.style.boxSizing = 'border-box';
-  el.style.border = `solid #000`;
+  el.style.border = 'solid #000';
   el.style.borderWidth = `${Math.floor(oy)}px ${Math.floor(ox)}px`;
   el.style.backgroundImage = `url("${url}")`;
-  el.style.backgroundSize = `${i.columns * dw}px ${rows * dh}px`;
+  el.style.backgroundSize = `${e.cols * dw}px ${rows * dh}px`;
   el.style.backgroundPosition = `${-col * dw}px ${-row * dh}px`;
   return {ox, oy};
 }
-// Time-lapse pages fetched ahead of time (for scrubbing) wait their turn:
-// a few at a time, low priority, and not while a camera's video is still
-// loading — the video you're watching comes first. (Hundreds at once
-// kept the disk and the connection busy, and the videos waited.)
-const spriteQ = []; let spriteQBusy = 0;
+// The hour of T is known (asked for if not), then the picture is shown.
+async function scrubNeed(cam, T) {
+  const e = scrubCam(cam), h = Math.floor(T / HOUR_MS) * HOUR_MS;
+  if (!e.hours.has(h)) await scrubLoad(cam, h - HOUR_MS, h + HOUR_MS);
+}
+async function scrubShow(el, cam, T, W, H, fill) {
+  let r = scrubStyle(el, cam, T, W, H, fill);
+  if (!r && !scrubFind(cam, T)) { await scrubNeed(cam, T); r = scrubStyle(el, cam, T, W, H, fill); }
+  return r;
+}
+// While scrubbing: the pages either side of the one shown are fetched at
+// once, so the next picture is already there.
+function scrubNear(cam, f) {
+  for (const n of [f.n + 1, f.n - 1]) {
+    if (n < 0 || n >= f.m.pages || !f.m.have.some(r => Math.floor(r[1] / f.e.per) >= n && Math.floor(r[0] / f.e.per) <= n)) continue;
+    const u = scrubUrl(cam, f.m, n); if (!scrub.pages.has(u)) scrubPage(u);
+  }
+}
+// Pages fetched ahead of time wait their turn: a few at a time, low priority,
+// and not while a camera's video is still loading (the video comes first).
 function videosLoading() {
   if (page !== 'recordings') return false;
   for (const el of document.querySelectorAll('#tl-videos .surface')) {
     if (!(el.classList.contains('src-sub') || el.classList.contains('src-hd'))) continue;
     const v = activeVideo(el);
     if (v && v.readyState < 3) return true;
-    // A playlist still being asked for counts too: the sprite pages (3 MB
-    // each) otherwise fill the browser's connections and it times out.
+    // A playlist still being asked for counts too: the pages otherwise fill the browser's connections and it times out.
     if (el._h && !el._h.ready && el._h.reqAt && Date.now() - el._h.reqAt < 40000) return true;
     if (el._mode === 'hls' && tl.playing && aheadSecs(el) < 8) return true;
   }
   return false;
 }
-// Only the first pages of a file's preview are fetched ahead of time (a page
-// is ~3 MB, a long file has dozens): the rest are fetched when scrubbing or
-// the time-lapse reaches them (spritePage). Background fetching also stays
-// on the Recordings page, where the pictures are used.
-const SPRITE_AHEAD_PAGES = 2;
-function pumpSprites() {
-  if (page !== 'recordings') return;
-  while (spriteQBusy < 2 && spriteQ.length) {
-    if (videosLoading()) { clearTimeout(pumpSprites.t); pumpSprites.t = setTimeout(pumpSprites, 400); return; }
-    const url = spriteQ.shift();
-    if (spritePages.has(url)) continue;
-    spriteQBusy++;
-    const im = new Image(); im.fetchPriority = 'low';
-    const done = () => { spriteQBusy--; pumpSprites(); };
-    im.addEventListener('load', done, {once: true});
-    im.addEventListener('error', () => { if (spritePages.get(url) === im) spritePages.delete(url); done(); }, {once: true});
-    im.src = url; spritePages.set(url, im);
+function pumpScrub() {
+  if (page !== 'recordings' && page !== 'live') return;
+  while (scrub.busy < 2 && scrub.q.length) {
+    if (videosLoading()) { clearTimeout(pumpScrub.t); pumpScrub.t = setTimeout(pumpScrub, 400); return; }
+    const url = scrub.q.shift();
+    if (scrub.pages.has(url)) continue;
+    scrub.busy++;
+    const im = scrubPage(url, true), done = () => { scrub.busy--; pumpScrub(); };
+    im.addEventListener('load', done, {once: true}); im.addEventListener('error', done, {once: true});
   }
 }
-// While scrubbing, the pages next to the one being shown are fetched at
-// once (normal priority, both ways, two ahead in the direction of travel):
-// only the first pages of a file are loaded ahead of time, and a page that
-// is only asked for when the pointer reaches it freezes the picture until
-// its ~3 MB arrive.
-function spriteNear(el, sp, n) {
-  const i = sp.info, page = Math.floor(n / i.per_page), cur = spritePages.get(sp.url + page);
-  if (!cur || !cur.complete) return;  // this page first
-  const dir = el._spN == null || n === el._spN ? (el._spDir || 1) : Math.sign(n - el._spN);
-  el._spN = n; el._spDir = dir;
-  for (const p of [page + dir, page - dir, page + 2 * dir]) if (p >= 0 && p < i.pages && !spritePages.has(sp.url + p)) spritePage(sp.url + p);
+// The pages of everything in view (a..b ms), nearest to T first, are fetched ahead of time.
+function scrubWarm(cam, a, b, T) {
+  const e = scrub.cams.get(cam); if (!e) return;
+  const list = [];
+  for (const m of e.hours.values()) {
+    if (m.h + HOUR_MS < a || m.h > b) continue;
+    for (let n = 0; n < m.pages; n++) {
+      if (!m.have.some(r => Math.floor(r[1] / e.per) >= n && Math.floor(r[0] / e.per) <= n)) continue;
+      const mid = m.h + (n + 0.5) * e.per * m.interval * 1000;
+      list.push([Math.abs(mid - T), scrubUrl(cam, m, n)]);
+    }
+  }
+  list.sort((x, y) => x[0] - y[0]);
+  scrub.q = scrub.q.filter(u => scrub.pages.has(u) === false);
+  for (const [, u] of list.slice(0, 160)) if (!scrub.pages.has(u) && !scrub.q.includes(u)) scrub.q.push(u);
+  pumpScrub();
 }
-function preloadSprite(sp) {
-  if (!sp) return sp;
-  for (let p = 0; p < Math.min(sp.info.pages, SPRITE_AHEAD_PAGES); p++) if (!spritePages.has(sp.url + p) && !spriteQ.includes(sp.url + p)) spriteQ.push(sp.url + p);
-  pumpSprites();
-  return sp;
+// Stop pages still downloading (asked for again when needed).
+function cutScrubDownloads() {
+  scrub.q.length = 0;
+  for (const [u, im] of scrub.pages) if (!im.complete) { scrub.pages.delete(u); im.src = ''; }
+  scrub.busy = 0;
+}
+// A camera's time-lapse as lines of time (ms): the parts in this browser's
+// memory (instant to scrub: 's-ready') and those only on the server ('s-server').
+function scrubRuns(cam, a, b) {
+  const e = scrub.cams.get(cam), out = [];
+  if (!e) return out;
+  for (const m of e.hours.values()) {
+    if (m.h + HOUR_MS < a || m.h > b) continue;
+    const step = m.interval * 1000;
+    for (const [s0, s1] of m.have) {
+      for (let n = Math.floor(s0 / e.per); n <= Math.floor(s1 / e.per); n++) {
+        const x0 = Math.max(s0, n * e.per), x1 = Math.min(s1, (n + 1) * e.per - 1);
+        out.push({a: m.h + x0 * step, b: m.h + (x1 + 1) * step, cls: scrubPageReady(scrubUrl(cam, m, n)) ? 's-ready' : 's-server'});
+      }
+    }
+  }
+  return out.sort((x, y) => x.a - y.a);
 }
 
 // ======================================================================
@@ -2360,7 +2452,7 @@ const fileStream = (c, url) => { const sg = c && c.segments.find(x => x.url === 
 class Player {
   constructor(video, controls, msgEl) {
     this.video = video; this.box = controls; this.msg = msgEl;
-    this.item = null; this.sprite = null; this.inT = null; this.outT = null; this.marks = [];
+    this.item = null; this.inT = null; this.outT = null; this.marks = [];
     // tc: playing a converted stream that starts at `base` seconds into the file.
     this.tc = false; this.base = 0;
     // A second, hidden player loads the next file near the end, so moving to
@@ -2485,8 +2577,8 @@ class Player {
     this.wireScrub();
   }
   dur() {
-    if (this.tc) return this.sprite ? this.sprite.info.duration : this.base + (isFinite(this.video.duration) ? this.video.duration : 0);
-    const d = this.video.duration; return isFinite(d) && d > 0 ? d : (this.sprite ? this.sprite.info.duration : 0);
+    if (this.tc) return this.base + (isFinite(this.video.duration) ? this.video.duration : 0);
+    const d = this.video.duration; return isFinite(d) && d > 0 ? d : 0;
   }
   // Position in the recording, in seconds.
   cur() { return this.base + this.video.currentTime; }
@@ -2510,7 +2602,7 @@ class Player {
   wallAt(t) { return new Date(new Date(this.item.file_start).getTime() + t * 1000); }
   async load(item, autoplay = true) {
     if (!this.el) this.build();
-    this.item = item; this.inT = this.outT = null; this.sprite = null;
+    this.item = item; this.inT = this.outT = null;
     if (this.msg) this.msg.hidden = true;
     const start = item.offset || 0;
     // Known not to play here: go straight to the converted stream.
@@ -2530,10 +2622,9 @@ class Player {
     this.marks = item.marks || [];
     this.buildOsd();
     this.paint();
-    this.lightSegs = [];
-    this.findLightCopies(item);
-    const kind = item.kind === 'clip' ? 'clip' : 'rec';
-    if (TIMELAPSE) try { this.sprite = preloadSprite(await api(`api/sprite/${enc(item.camera)}/${kind}/${enc(item.name)}`)); } catch (e) { this.sprite = null; }
+    // The time-lapse pictures around this footage (the timelines' own, by the clock).
+    const w0 = new Date(item.file_start).getTime();
+    if (TIMELAPSE && isFinite(w0)) { await scrubLoad(item.camera, w0 - HOUR_MS, w0 + 3 * HOUR_MS); scrubWarm(item.camera, w0, w0 + 2 * HOUR_MS, w0 + (item.offset || 0) * 1000); }
   }
   openFile(item, start, autoplay) {
     const v = this.video;
@@ -2562,35 +2653,13 @@ class Player {
     h.loadSource(url);
   }
   dropHls() { if (this._hls) { const h = this._hls; this._hls = null; h.destroy(); } }
-  // The light timeline copies around this file: their time-lapse has a
-  // picture every second, shown full size while dragging along the bar.
-  async findLightCopies(item) {
-    const a = new Date(item.file_start).getTime();
-    try {
-      const [t] = await api(`api/timeline?cameras=${enc(item.camera)}&from=${enc(new Date(a - 60000).toISOString())}&to=${enc(new Date(a + 3 * 3600000).toISOString())}`);
-      // The 24/7 recording's time-lapse (the blue line of the timelines),
-      // whichever stream it is.
-      if (this.item === item) this.lightSegs = previewSources((t && t.segments) || []);
-    } catch (e) {}
-  }
   // While dragging: the time-lapse picture of moment `t` over the whole
   // video (the full-quality video is loaded there on release).
-  // The time-lapse picture of moment `t` of this file: from the 24/7
-  // recording's time-lapse (already made, the one the timelines use), or
-  // this file's own. Resolves to [sprite, seconds into it] or null.
-  async tlapAt(t) {
-    const W = this.wallAt(t).getTime();
-    const seg = (this.lightSegs || []).find(x => segMs(x)._a <= W && W < (isGrowing(x) ? Date.now() : x._b) + 1000);
-    const sp = seg && await spriteFor(this.item.camera, seg);
-    if (sp) return [sp, (W - new Date(seg.start).getTime()) / 1000];
-    return this.sprite ? [this.sprite, t] : null;
-  }
   showTimelapse(t) {
     const ov = this.tlap; if (!ov || !this.item) return;
     const want = this.tlapWant = t;
-    this.tlapAt(t).then(r => {
-      if (!r || this.tlapWant !== want) return;
-      if (spriteStyle(ov, r[0], Math.floor(r[1] / r[0].info.interval), this.surface.clientWidth, this.surface.clientHeight, false)) ov.hidden = false;
+    scrubShow(ov, this.item.camera, this.wallAt(t).getTime(), this.surface.clientWidth, this.surface.clientHeight, false).then(r => {
+      if (r && this.tlapWant === want) ov.hidden = false;
     });
   }
   hideTimelapse() {
@@ -2649,13 +2718,15 @@ class Player {
     const want = this.prevWant = t;
     const place = (w) => { p.style.left = Math.min(Math.max(x, w / 2 + 4), this.el.scrub.clientWidth - w / 2 - 4) + 'px'; };
     place(this.prevW || 192);
-    this.tlapAt(t).then(r => {
-      if (!r || this.prevWant !== want) return;
-      const i = r[0].info, a = i.aspect || i.tile_width / i.tile_height || 16 / 9;
-      const w = Math.round(Math.max(192, Math.min(i.tile_width || 256, this.surface.clientWidth / 3, 480))), h = Math.round(w / a);
+    const W = this.wallAt(t).getTime();
+    scrubNeed(this.item.camera, W).then(() => {
+      const f = scrubFind(this.item.camera, W);
+      if (!f || this.prevWant !== want) return;
+      const m = f.m, a = m.aspect || m.tw / m.th || 16 / 9;
+      const w = Math.round(Math.max(192, Math.min(m.tw || 256, this.surface.clientWidth / 3, 480))), h = Math.round(w / a);
       Object.assign(this.el.pimg.style, {width: w + 'px', height: h + 'px'});
       this.prevW = w; place(w);
-      spriteStyle(this.el.pimg, r[0], Math.floor(r[1] / i.interval), w, h);
+      scrubStyle(this.el.pimg, this.item.camera, W, w, h);
     });
   }
   wireScrub() {
@@ -2720,8 +2791,6 @@ class Player {
       old.pause();
       this.dl.href = pre.url + '?download=1';
       this.paint();
-      const kind = 'rec';
-      if (TIMELAPSE) api(`api/sprite/${enc(this.item.camera)}/${kind}/${enc(pre.name)}`).then(sp => { this.sprite = preloadSprite(sp); }).catch(() => { this.sprite = null; });
       return;
     }
     const end = new Date(new Date(this.item.file_start).getTime() + this.dur() * 1000 - 2000);
@@ -3731,7 +3800,7 @@ const camTl = {
   id: null, data: null, zoom: 21600, end: null, loadedAt: 0, pv: new Map(), pfGen: 0,
   open(id) {
     hlsReady();  // for playing recordings (see Player.openHls)
-    this.id = id; this.zoom = +$('ctl-zoom').value; this.end = null; this.pv = new Map();
+    this.id = id; this.zoom = +$('ctl-zoom').value; this.end = null;
     this.load();
   },
   win() { const end = this.end || Date.now(); return [end - this.zoom * 1000, end]; },
@@ -3746,7 +3815,6 @@ const camTl = {
     } catch (e) {}
   },
   // The files the time-lapse comes from (the light stream 2 copies when kept).
-  sources() { return previewSources((this.data && this.data.segments) || []); },
   draw() {
     if (!this.data || this.dragging) return;
     const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
@@ -3776,46 +3844,17 @@ const camTl = {
   // Which parts of the time-lapse are ready to scrub.
   paintStrip() {
     const el = $('ctl-tlp'); if (!el || !this.data) return;
-    const [a, b] = this.win(), span = b - a, pct = (t) => (t - a) / span * 100;
-    const h = [];
-    for (const sg of this.sources()) {
-      const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
-      const st = this.pv.get(sg.url) || {state: 'wait'};
-      // A finished file's preview covers the whole file (its last picture can
-      // be up to one step before the end); a file still being recorded, up
-      // to its newest picture and one step more.
-      const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
-      const x0 = Math.max(0, pct(s0)), x1 = Math.min(100, pct(end));
-      if (x1 > 0 && x0 < 100 && x1 > x0) h.push({a: x0, b: x1, cls: 's-' + st.state});
-    }
-    el.innerHTML = solidBars(h, 15000 / span * 100, 'i');
+    const [a, b] = this.win();
+    el.innerHTML = solidBars(stripPieces(this.id, a, b - a), 15000 / (b - a) * 100, 'i');
   },
-  // Load the time-lapse of everything in view, newest first (up to now).
+  // The time-lapse of everything in view: which hours have pictures, then their pages in the background.
   async prefetch() {
-    if (!TIMELAPSE) return;
-    const gen = ++this.pfGen, id = this.id;
-    await knownPreviews(id, this.sources(), this.pv);
+    if (!TIMELAPSE || !this.id) return;
+    const gen = ++this.pfGen, id = this.id, [a, b] = this.win();
+    await scrubLoad(id, a, b);
     if (gen !== this.pfGen || id !== this.id) return;
     this.paintStrip();
-    const todo = this.sources().slice().sort((x, y) => new Date(y.start) - new Date(x.start)).slice(0, 300);
-    let i = 0, missing = 0;
-    const worker = async () => {
-      while (i < todo.length && gen === this.pfGen && id === this.id) {
-        const sg = todo[i++], had = this.pv.get(sg.url);
-        if (had && had.state === 'ready' && !(isGrowing(sg) && Date.now() - had.at > 30000)) continue;
-        if (spriteBackoff(sg.url)) { missing++; continue; }
-        if (!had || had.state !== 'ready') { this.pv.set(sg.url, {state: 'loading'}); this.paintStrip(); }
-        const sp = await previewReady(id, sg);
-        if (gen !== this.pfGen) break;
-        if (sp) pvAdd(this.pv, sg.url, sp);
-        else { missing++; if (!had || had.state !== 'ready') this.pv.set(sg.url, {state: isGrowing(sg) || (tl.sprites.get(sg.url) || {}).tries < 3 ? 'wait' : 'none'}); }
-        this.paintStrip();
-      }
-    };
-    await Promise.all([worker(), worker()]);
-    // Not ready yet: tried again shortly while this camera is still shown.
-    clearTimeout(this.pfRetry);
-    if (missing && gen === this.pfGen) this.pfRetry = setTimeout(() => { if (gen === this.pfGen && id === this.id && page === 'live' && !document.hidden) this.prefetch(); }, 6000);
+    scrubWarm(id, a, b, b);
   },
   // The white line: where the drag is, or what's playing.
   paintHead(T) {
@@ -3834,12 +3873,9 @@ const camTl = {
   async scrubTo(T) {
     const el = $('focus-sprite'), surf = $('focus-surface');
     el.querySelector('.scrub-t').textContent = fmtDate(new Date(T));
-    const sg = this.sources().find(s => segMs(s)._a <= T && T < (isGrowing(s) ? Date.now() + 5000 : s._b + 1000));
     if (Date.now() - T < 15000) { liveStill(el, this.id); el.hidden = false; return; }
-    if (!sg) return;
-    const sp = await spriteFor(this.id, sg);
-    if (!sp || this.scrubT !== T) return;
-    if (spriteStyle(el, sp, Math.floor((T - sg._a) / 1000 / sp.info.interval), surf.clientWidth, surf.clientHeight, true)) el.hidden = false;
+    const r = await scrubShow(el, this.id, T, surf.clientWidth, surf.clientHeight, true);
+    if (r && this.scrubT === T) el.hidden = false;
   },
   // Once per screen frame, for the newest position.
   scrubSoon(T) {
@@ -3871,15 +3907,14 @@ $('ctl-now').onclick = () => { camTl.end = null; camTl.load(); };
     pv.hidden = false;
     pv.style.left = Math.min(Math.max(x, 100), lane.clientWidth - 100) + 'px';
     pv.querySelector('.t').textContent = fmtDate(new Date(T));
-    const sg = camTl.segAt(T), im = pv.querySelector('.img');
-    if (!sg) { im.style.backgroundImage = ''; return; }
-    const sp = await spriteFor(camTl.id, sg);
-    if (sp) {
-      // As big as the time-lapse picture's detail (up to 384 px wide).
-      const i = sp.info, w = Math.round(Math.max(192, Math.min(i.tile_width || 256, 384))), h = Math.round(w / (i.aspect || i.tile_width / i.tile_height || 16 / 9));
-      Object.assign(im.style, {width: w + 'px', height: h + 'px'});
-      spriteStyle(im, sp, Math.floor((T - new Date(sg.start).getTime()) / 1000 / i.interval), w, h);
-    }
+    const im = pv.querySelector('.img');
+    await scrubNeed(camTl.id, T);
+    const f = scrubFind(camTl.id, T);
+    if (!f) { im.style.backgroundImage = ''; return; }
+    // As big as the time-lapse picture's detail (up to 384 px wide).
+    const m = f.m, w = Math.round(Math.max(192, Math.min(m.tw || 256, 384))), h = Math.round(w / (m.aspect || m.tw / m.th || 16 / 9));
+    Object.assign(im.style, {width: w + 'px', height: h + 'px'});
+    scrubStyle(im, camTl.id, T, w, h);
   };
   const down = (e) => {
     const pic = e.target.closest('.evt');
@@ -5370,7 +5405,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- multi-camera timeline ----------
-const tl = {badClips: new Set(), sound: store.get('tl-sound', false), soundCam: null, live: false, scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, sprites: new Map(), last: 0, jump: null, day: null};
+const tl = {badClips: new Set(), sound: store.get('tl-sound', false), soundCam: null, live: false, scrub: TIMELAPSE ? 'timelapse' : 'sub', quality: store.get('tl-quality', 'sub'), data: [], T: null, playing: false, speed: 1, zoom: 3600, winStart: null, inT: null, outT: null, last: 0, jump: null, day: null};
 
 // How long Recordings took to show, written to GAZE's log (Settings → Logs)
 // so a slow computer, disk or NAS can be told apart from GAZE itself: the
@@ -6810,19 +6845,11 @@ function drawVTimeline() {
 // Time-lapse readiness of each camera's footage, as a thin strip on the lane.
 function paintVStrips() {
   const box = $('vtl'); if (!box || box.hidden || tl.winStart == null) return;
-  const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100, gap = 15000 / span * 100;
+  const W0 = tl.winStart, span = tl.zoom * 1000, gap = 15000 / span * 100;
   for (const el of box.querySelectorAll('.vtlp')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
-    const h = [];
-    for (const sg of previewSources(c.segments)) {
-      const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
-      const st = (tl.pv && tl.pv.get(sg.url)) || {state: 'wait'};
-      const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
-      const a = Math.max(0, pct(s0)), b = Math.min(100, pct(end));
-      if (b > a && a < 100) h.push({a, b, cls: 's-' + st.state});
-    }
     const runs = [];
-    for (const p of h.sort((x, y) => x.a - y.a)) { const r = runs[runs.length - 1]; if (r && r.cls === p.cls && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p}); }
+    for (const p of stripPieces(c.camera, W0, span)) { const r = runs[runs.length - 1]; if (r && r.cls === p.cls && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p}); }
     el.innerHTML = runs.map(r => `<i class="${r.cls}" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></i>`).join('');
   }
 }
@@ -6967,213 +6994,59 @@ window.addEventListener('resize', layoutSoon);
 // The file still being recorded keeps growing: ask for its newer preview
 // every half minute (the old one stays in use meanwhile).
 const isGrowing = (seg) => Date.now() - new Date(seg.end).getTime() < 120000;
-// A file's preview (info + page addresses), or null. A failed try is asked
-// again after a pause that grows with each failure (5 s … 5 min); a file
-// still being recorded is refreshed every 30 s. While asking again, the
-// previous good preview keeps being used.
-async function spriteFor(cam, seg) {
-  if (!TIMELAPSE) return null;
-  const key = seg.url, have = tl.sprites.get(key), now = Date.now();
-  const again = !have || (have.done && ((isGrowing(seg) && now - have.at > 30000) || (have.failed && now >= have.retryAt)));
-  if (again) {
-    const tries = have && have.failed ? have.tries + 1 : 0;
-    const kind = {clip: 'clip', sub: 'tl'}[seg.kind] || 'rec';
-    const entry = {at: now, tries, ok: have && have.ok};
-    entry.p = Promise.race([api(`api/sprite/${enc(cam)}/${kind}/${enc(seg.name)}`, {signal: pageNet.signal}), new Promise((_, no) => setTimeout(() => no(new Error('timed out')), 120000))])
-      .then(preloadSprite).catch(() => null)
-      .then(sp => { entry.done = true; if (sp) { entry.ok = sp; entry.failed = false; } else spriteFailed(entry); return entry.ok || null; });
-    tl.sprites.set(key, entry);
-  }
-  const e = tl.sprites.get(key);
-  return e.ok || e.p;
-}
-// A file's preview with every page downloaded, or null (then asked again
-// later; a page that couldn't be downloaded is fetched afresh).
-const pagesDone = new Set();
-async function previewReady(cam, sg) {
-  const sp = await spriteFor(cam, sg);
-  if (!sp) return null;
-  const ok = await Promise.all([...Array(Math.min(sp.info.pages, SPRITE_AHEAD_PAGES)).keys()].map(p => pagesDone.has(sp.url + p) ? true :
-    new Promise(r => { const im = spritePage(sp.url + p);
-      const done = () => { if (im.naturalWidth) { pagesDone.add(sp.url + p); r(true); } else if (im._cut) r('cut'); else { if (spritePages.get(sp.url + p) === im) spritePages.delete(sp.url + p); r(false); } };
-      if (im.complete) done(); else { im.addEventListener('load', done, {once: true}); im.addEventListener('error', done, {once: true}); } })));
-  if (ok.every(x => x === true)) return sp;
-  if (ok.includes('cut')) return null;  // page left: not a failure
-  const e = tl.sprites.get(sg.url);
-  if (e) { e.ok = null; e.done = true; spriteFailed(e); }
-  return null;
-}
-// Previews already made for these files, asked in one go (nothing is made):
-// they show as ready at once, e.g. after the page is reloaded.
-async function knownPreviews(cam, segs, pv) {
-  const kindOf = (sg) => ({clip: 'clip', sub: 'tl'}[sg.kind] || 'rec');
-  // Already here: on the line at once.
-  for (const sg of segs) { const e = tl.sprites.get(sg.url); if (e && e.ok && pv === tl.pv) markPreviewReady(sg.url, e.ok); }
-  const want = segs.filter(sg => { const e = tl.sprites.get(sg.url); return !(e && e.ok); });
-  if (!TIMELAPSE || !want.length) return;
-  let r = {};
-  try { r = await api('api/sprites-ready', {method: 'POST', json: {camera: cam, files: want.map(sg => [kindOf(sg), sg.name])}}); } catch (_) { return; }
-  for (const sg of want) {
-    const sp = r[kindOf(sg) + '/' + sg.name]; if (!sp) continue;
-    preloadSprite(sp);
-    tl.sprites.set(sg.url, {at: Date.now(), done: true, ok: sp, p: Promise.resolve(sp), tries: 0});
-    pvAdd(pv, sg.url, sp);
-  }
-}
-function spriteFailed(entry) {
-  entry.failed = true;
-  entry.retryAt = Date.now() + Math.min(300000, 5000 * 2 ** Math.min(entry.tries || 0, 6));
-}
-// Waiting to ask again after a failure (and nothing loaded before).
-function spriteBackoff(key) {
-  const e = tl.sprites.get(key);
-  return !!(e && e.done && e.failed && !e.ok && Date.now() < e.retryAt);
-}
-// Prepare previews for every file in view (nearest to the playhead first),
-// showing progress, so scrubbing is instant.
-// The files the time-lapse of a camera comes from: the light timeline
-// copies, and the recordings of any time without a copy.
 // A file's start and end in ms (worked out once: scrubbing asks often).
 function segMs(x) { if (x._a == null) { x._a = Date.parse(x.start); x._b = Date.parse(x.end); } return x; }
-// (Kept per list of files: dragging along the timeline asks many times a second.)
-const pvSrcCache = new WeakMap();
-function previewSources(segs) {
-  const hit = pvSrcCache.get(segs); if (hit && hit.n === segs.length) return hit.v;
-  const subs = segs.filter(x => x.kind === 'sub').map(x => segMs(x)).sort((p, q) => p._a - q._a);
-  // Is [a, b] covered by one stream 2 file? (sorted: a binary search for
-  // the last one starting by a + 5 s)
-  const covered = (a, b) => {
-    let lo = 0, hi = subs.length - 1, k = -1;
-    while (lo <= hi) { const m = (lo + hi) >> 1; if (subs[m]._a <= a + 5000) { k = m; lo = m + 1; } else hi = m - 1; }
-    for (let i = k; i >= 0 && i > k - 4; i--) if (subs[i]._b >= b - 5000) return true;
-    return false;
-  };
-  const v = segs.filter(x => {
-    if (x.kind === 'sub') return true;
-    if (x.kind !== 'recording') return false;
-    segMs(x); return !covered(x._a, x._b);
-  });
-  pvSrcCache.set(segs, {n: segs.length, v});
-  return v;
-}
-// Under each camera's lane: which parts of the time-lapse are loaded and
-// ready to scrub (filled), still loading (striped) or not loaded yet.
+// Under each camera's lane: which parts of the time-lapse are in this
+// browser's memory (filled blue line: instant to scrub), or only on the
+// server (fainter: its pictures arrive as they're needed).
 function paintPreviewStrips() {
   const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
   for (const el of document.querySelectorAll('#tl .tlp')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
-    const h = [];
-    for (const sg of previewSources(c.segments)) {
-      const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
-      const st = (tl.pv && tl.pv.get(sg.url)) || {state: 'wait'};
-      // A finished file's preview covers the whole file (its last picture can
-      // be up to one step before the end); a file still being recorded, up
-      // to its newest picture and one step more.
-      const end = st.state === 'ready' && st.secs && isGrowing(sg) ? Math.min(Date.now(), s0 + (st.secs + (st.step || 0)) * 1000) : s1;
-      const a = Math.max(0, pct(s0)), b = Math.min(100, pct(end));
-      if (b <= 0 || a >= 100 || b <= a) continue;
-      h.push({a, b, cls: 's-' + st.state});
-    }
-    el.innerHTML = solidBars(h, 15000 / span * 100, 'i');
+    el.innerHTML = solidBars(stripPieces(c.camera, W0, span), 15000 / span * 100, 'i');
   }
   paintVStrips();
+  if (typeof camTl !== 'undefined' && page === 'live') camTl.paintStrip();
 }
-// The blue line means "this part of the time-lapse is in this browser's
-// memory: scrubbing it is instant". A preview the server has made but that
-// hasn't arrived yet is a fainter line ('server'); it becomes solid once its
-// pictures have been downloaded (only the first pages of each file are
-// fetched ahead of time, see SPRITE_AHEAD_PAGES).
-function inMemory(sp) {
-  for (let p = 0; p < Math.min(sp.info.pages, SPRITE_AHEAD_PAGES); p++) { const im = spritePages.get(sp.url + p); if (!(im && im.complete && im.naturalWidth)) return false; }
-  return true;
-}
-const serverPending = [];
-function pvEntry(sp) { return {state: inMemory(sp) ? 'ready' : 'server', at: Date.now(), secs: sp.info.count * sp.info.interval, step: sp.info.interval, sp}; }
-function pvAdd(pv, url, sp) { const e = pvEntry(sp); pv.set(url, e); if (e.state === 'server') serverPending.push([pv, url, sp]); }
-setInterval(() => {
-  if (!serverPending.length) return;
-  let any = false;
-  for (let i = serverPending.length - 1; i >= 0; i--) {
-    const [pv, url, sp] = serverPending[i], cur = pv.get(url);
-    if (!cur || cur.state !== 'server' || cur.sp !== sp) { serverPending.splice(i, 1); continue; }
-    if (inMemory(sp)) { pv.set(url, {...cur, state: 'ready', at: Date.now()}); serverPending.splice(i, 1); any = true; }
+// The camera's time-lapse as {a, b, cls} in percent of the window.
+function stripPieces(cam, W0, span) {
+  const h = [];
+  for (const r of scrubRuns(cam, W0, W0 + span)) {
+    const a = Math.max(0, (r.a - W0) / span * 100), b = Math.min(100, (r.b - W0) / span * 100);
+    if (b > a) h.push({a, b, cls: r.cls});
   }
-  if (any) stripsSoon();
-}, 500);
-// A file's time-lapse showed while scrubbing: its part of the blue line
-// fills in now, not only after letting go.
-let stripsQueued = false;
-function stripsSoon() { if (stripsQueued) return; stripsQueued = true; requestAnimationFrame(() => { stripsQueued = false; paintPreviewStrips(); }); }
-function markPreviewReady(url, sp) {
-  tl.pv = tl.pv || new Map();
-  const had = tl.pv.get(url);
-  if (had && had.state === 'ready') return;
-  pvAdd(tl.pv, url, sp);
-  stripsSoon();
+  return h;
 }
-// While the timeline slides along (dragging past its end): what's already
-// made in the part coming into view, asked a few times a second.
+// A page arrived: its part of the blue line fills in now.
+let stripsQueued = false;
+function stripsSoon() { if (stripsQueued) return; stripsQueued = true; requestAnimationFrame(() => { stripsQueued = false; if (page === 'recordings' || page === 'live') paintPreviewStrips(); }); }
+// While the timeline slides along (dragging past its end): the hours coming into view, asked a few times a second.
 let knownSoonT = 0;
 function knownPreviewsSoon() {
   if (knownSoonT) return;
   knownSoonT = setTimeout(async () => {
     knownSoonT = 0;
     const a = tl.winStart, b = a + tl.zoom * 1000;
-    tl.pv = tl.pv || new Map();
-    await Promise.all(tl.data.map(c => knownPreviews(c.camera, previewSources(c.segments).filter(sg => segMs(sg)._b >= a && sg._a <= b), tl.pv)));
+    await Promise.all(tl.data.map(c => scrubLoad(c.camera, a, b)));
     stripsSoon();
   }, 250);
 }
-async function prefetchSprites(isRetry) {
-  if (!TIMELAPSE) return;
-  if (!isRetry) tl.pfRetryN = 0;
-  const gen = tl.pfGen = (tl.pfGen || 0) + 1;
-  tl.pv = tl.pv || new Map();
-  {
-    const a0 = tl.winStart, b0 = a0 + tl.zoom * 1000;
-    // Every camera asked at once (one after another took a while with many).
-    await Promise.all(tl.data.map(c => knownPreviews(c.camera, previewSources(c.segments).filter(sg => new Date(sg.end).getTime() >= a0 && new Date(sg.start).getTime() <= b0), tl.pv)));
-    if (gen !== tl.pfGen) return;
-    paintPreviewStrips();
-  }
-  const a = tl.winStart, b = a + tl.zoom * 1000;
-  const list = [];
-  for (const c of tl.data) for (const sg of previewSources(c.segments)) {
-    const s0 = new Date(sg.start).getTime(), s1 = new Date(sg.end).getTime();
-    if (s1 >= a && s0 <= b) list.push({cam: c.camera, sg, d: Math.abs((s0 + s1) / 2 - tl.T)});
-  }
-  list.sort((x, y) => x.d - y.d);
-  const todo = list.slice(0, 300);
-  tl.pv = tl.pv || new Map();
-  let i = 0, missing = 0;
-  const worker = async () => {
-    while (i < todo.length && gen === tl.pfGen) {
-      // (Making missing previews waits while a camera's video is loading.)
-      while (videosLoading() && gen === tl.pfGen) await new Promise(r => setTimeout(r, 500));
-      if (gen !== tl.pfGen) break;
-      const job = todo[i++], key = job.sg.url, had = tl.pv.get(key);
-      // Already loaded (and not still growing): nothing to do.
-      if (had && had.state === 'ready' && !(isGrowing(job.sg) && Date.now() - had.at > 30000)) continue;
-      // Failed a moment ago: asked again later.
-      if (spriteBackoff(key)) { missing++; continue; }
-      if (!had || had.state !== 'ready') { tl.pv.set(key, {state: 'loading'}); paintPreviewStrips(); }
-      const sp = await previewReady(job.cam, job.sg), ok = !!sp;
-      if (gen !== tl.pfGen) break;
-      if (ok) pvAdd(tl.pv, key, sp);
-      else if (!had || had.state !== 'ready') { missing++; tl.pv.set(key, {state: isGrowing(job.sg) || (tl.sprites.get(key) || {}).tries < 3 ? 'wait' : 'none'}); }
-      else missing++;
-      paintPreviewStrips();
-    }
-  };
-  // Anything not ready yet is tried again shortly (as long as this view is
-  // still the one shown), so gaps fill in by themselves.
-  Promise.all([worker(), worker()]).then(() => {
-    clearTimeout(tl.pfRetry);
-    // Still missing ones are asked for again, less and less often (6 s, 12 s … up to 2 minutes): each ask can make the
-    // server build a preview, and an idle page shouldn't keep doing that every few seconds.
-    if (missing && gen === tl.pfGen) tl.pfRetry = setTimeout(() => { if (gen === tl.pfGen && page === 'recordings' && !document.hidden) prefetchSprites(true); }, Math.min(120000, 6000 * 2 ** Math.min(tl.pfRetryN++, 5)));
-  });
+// The pictures of every camera in view: which hours have them, then their pages
+// (nearest to the playhead first) in the background, so scrubbing is instant.
+async function prefetchSprites() {
+  if (!TIMELAPSE || tl.winStart == null) return;
+  const gen = tl.pfGen = (tl.pfGen || 0) + 1, a = tl.winStart, b = a + tl.zoom * 1000;
+  await Promise.all(tl.data.map(c => scrubLoad(c.camera, a, b)));
+  if (gen !== tl.pfGen) return;
+  paintPreviewStrips();
+  for (const c of tl.data) scrubWarm(c.camera, a, b, tl.T ?? (a + b) / 2);
 }
+// What the server has made so far is asked for again every 15 s while a timeline is shown (the newest hour keeps growing).
+setInterval(() => {
+  if (document.hidden) return;
+  if (page === 'recordings' && rec.mode === 'timeline' && tl.winStart != null && !tl.dragging) prefetchSprites();
+  else if (page === 'live' && typeof camTl !== 'undefined' && camTl.id) camTl.prefetch();
+}, 15000);
 // A camera's current picture as the preview (scrubbing up to now).
 function liveStill(sp, cam) {
   const now = Date.now();
@@ -7221,12 +7094,10 @@ let previewQueued = false;
 function previewSoon() { if (previewQueued) return; previewQueued = true; requestAnimationFrame(() => { previewQueued = false; if (tl.dragging || tl.T != null) previewAll(); }); }
 function previewOne(el, T) {
   const c = tl.data.find(x => x.camera === el.dataset.cam), sp = el.querySelector('.sprite');
-  const ps = c && previewSources(c.segments).find(x => x._a <= T && T < (isGrowing(x) ? Date.now() : x._b) + 1000);
-  if (!ps) return;
-  spriteFor(c.camera, ps).then(info => {
-    if (!info || !el.classList.contains('stalled')) return;
-    const off = (T - new Date(ps.start).getTime()) / 1000;
-    if (spriteStyle(sp, info, Math.floor(off / info.info.interval), el.clientWidth, el.clientHeight, true)) { sp.hidden = false; el._stallPv = true; srcMark(el, 'tl'); }
+  if (!c) return;
+  scrubShow(sp, c.camera, T, el.clientWidth, el.clientHeight, true).then(r => {
+    if (!r || !el.classList.contains('stalled')) return;
+    sp.hidden = false; el._stallPv = true; srcMark(el, 'tl');
   });
 }
 function previewAll() {
@@ -7240,10 +7111,9 @@ function previewAll() {
     // stream is chosen: dragging shows it even where the chosen stream (say
     // Main stream, recorded only for alerts) has no footage; letting go
     // there says so.
-    const ps = c && previewSources(c.segments).find(x => x._a <= T && T < (isGrowing(x) ? Date.now() : x._b) + 1000);
     // (The pictures don't depend on how the video plays: also for cameras
     // whose HD footage plays converted.)
-    const s = (c && segAt(c, T)) || (tl.scrub === 'timelapse' ? ps : null), sp = el.querySelector('.sprite');
+    const s = (c && segAt(c, T)) || (tl.scrub === 'timelapse' && c && scrubFind(c.camera, T)), sp = el.querySelector('.sprite');
     if (sp.classList.contains('fading')) { sp._gen = (sp._gen || 0) + 1; sp.classList.remove('fading'); }
     { const m = el.querySelector('.msg'); m.hidden = !!s; if (!s) m.textContent = noFootageMsg(); }
     if (!s) [...el._vids, el._hlsV].forEach(x => x.style.visibility = 'hidden');
@@ -7257,14 +7127,8 @@ function previewAll() {
     }
     // The last moments (newer than the preview): the live picture.
     if (Date.now() - T < 15000) { liveStill(sp, c.camera); sp.hidden = false; srcMark(el, 'tl'); continue; }
-    const src = ps || s;
-    spriteFor(c.camera, src).then(info => {
-      if (info) markPreviewReady(src.url, info);
-      if (!info || tl.T !== T) return;
-      const off = (T - new Date(src.start).getTime()) / 1000;
-      const n = Math.floor(off / info.info.interval);
-      if (spriteStyle(sp, info, n, el.clientWidth, el.clientHeight, true)) { sp.hidden = false; srcMark(el, 'tl'); }
-      spriteNear(el, info, n);
+    scrubShow(sp, c.camera, T, el.clientWidth, el.clientHeight, true).then(r => {
+      if (r && tl.T === T) { sp.hidden = false; srcMark(el, 'tl'); }
     });
   }
 }
@@ -7513,7 +7377,7 @@ $('wipe-btn').onclick = async () => {
   try {
     const r = await api('api/maintenance/delete-footage', {method: 'POST'});
     toast(r.message);
-    tl.sprites.clear(); if (tl.pv) tl.pv.clear();
+    scrub.cams.clear(); scrub.pages.clear();
     refreshStatus();
     if (page === 'recordings' || page === 'alerts') reloadRec();
   } catch (e) { toast(e.message, true); }
