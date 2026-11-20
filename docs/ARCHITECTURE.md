@@ -100,6 +100,10 @@ Footage is the light timeline copy where it covers a recording, else the recordi
 
 `GET /api/summaries` lists cards and what is queued or running (restricted accounts see only their cameras). Camera routes are under `camera_in_path`; operators may make summaries (CPU cost), viewers only watch. Recording, detection and alerts never read any of it.
 
+## Timeline previews (`scrub.rs`) and long-term time-lapse (`longlapse.rs`)
+Scrub pictures live in `<camera folder>/.scrub/<hour>.json` and `<hour>-<page>.jpg` (hour = a multiple of 3 600 000 ms; slot n = the picture nearest hour + n × interval; pages of 10 × 10). `scrub::run` fills them: (1) every 15 s from `picturelog` (pictures kept by motion detection), (2) older recordings one at a time through `ffmpeg::sprite`, newest first, only while quiet. The page asks `GET /api/scrub/{camera}?from&to` (which slots exist, a version per page) and loads `/media/{camera}/scrub/{hour}/{page}?v=`; `scrubFind/scrubStyle` in `static/app.js` do the lookup. Recording never depends on it.
+`longlapse.rs`: Settings entries (`Config.longlapse`: camera + time of day) → one JPEG a day in `nvr-data/longlapse/<id>/YYYY-MM-DD.jpg`, tried again every 5 minutes for 3 hours, videos built with ffmpeg on request.
+
 ## Storage tiers
 
 ```
