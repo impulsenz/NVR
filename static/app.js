@@ -6317,7 +6317,7 @@ function drawTimeline() {
   paintQualityChoice();
   const {axis, grid} = timeMarks(W0, span, pct);
   paintTlZoomBtns();
-  box.classList.toggle('nolabel', tlMerged() && !tl.solo && shownCams.length > 1);
+  box.classList.toggle('nolabel', tlMerged() && !tl.solo && tl.data.filter(x => !tl.onlyCam || x.camera === tl.onlyCam).length > 1);
   const lw = parseFloat(getComputedStyle(box).getPropertyValue('--tl-label')), lanePx = box.clientWidth - (isNaN(lw) ? 160 : lw);
   tl.groups = [];
   let rows = '';

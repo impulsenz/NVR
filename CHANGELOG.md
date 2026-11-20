@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Fix (broke 1.7.20/1.7.21):** the Recordings timeline failed to draw (a variable used before it was defined), which also stopped the + / − zoom and the video from loading after scrubbing.
+
 ## 1.7.21 — November 2026
 - **Recordings:** footage that comes back from deep storage on a drive in this computer just shows "Loading…"; "Loading from deep storage…" is said only when deep storage is on another computer (a network address or drive, or a share login is set).
 - **Recordings:** click a camera's picture to show just that camera, as choosing it in the list does; "← All cameras" goes back to what you were doing. Double-click still goes full screen.
