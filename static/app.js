@@ -887,7 +887,7 @@ function legendHtml(kind, data) {
   const cats = new Set(evs.map(evCat));
   for (const [k, t] of [['person', 'People'], ['vehicle', 'Vehicles'], ['animal', 'Animals'], ['package', 'Packages'], ['other', 'Other'], ['motion', 'Motion only']])
     if (cats.has(k)) bars.push([`<i class="lg-bar ev cat-${k}"></i>`, t]);
-  if (TIMELAPSE) bars.push(['<i class="lg-bar tlr"></i>', 'Time-lapse in memory (instant)'], ['<i class="lg-bar tls"></i>', 'Time-lapse on the server (loading)']);
+  if (TIMELAPSE) bars.push(['<i class="lg-bar tlr"></i>', 'Time-lapse in memory (instant)'], ['<i class="lg-bar tls"></i>', 'Time-lapse on the server (pulsing: loading from the drive or deep storage)'], ['<i class="lg-bar tlg"></i>', 'Time-lapse being generated (striped)']);
   // (The strip under the footage: what's in the browser already.)
   bars.push(['<i class="lg-bar loaded" title="Footage already loaded into this browser: ahead of the playhead it plays without waiting; behind it, what was just played"></i>', 'Loaded']);
   return bars.map(([i, t]) => `<span>${i}${t}</span>`).join('')
@@ -3845,7 +3845,7 @@ const camTl = {
   paintStrip() {
     const el = $('ctl-tlp'); if (!el || !this.data) return;
     const [a, b] = this.win();
-    el.innerHTML = solidBars(stripPieces(this.id, a, b - a), 15000 / (b - a) * 100, 'i');
+    el.innerHTML = solidBars(stripPieces(this.id, a, b - a, this.data.segments), 15000 / (b - a) * 100, 'i');
   },
   // The time-lapse of everything in view: which hours have pictures, then their pages in the background.
   async prefetch() {
@@ -5762,9 +5762,10 @@ setInterval(() => {
     const box = el.querySelector('.deep-load'); if (!box) continue;
     const c = tl.data.find(x => x.camera === el.dataset.cam), seg = c && tl.T != null && segAt(c, tl.T), v = activeVideo(el);
     const loading = !v || el._pending != null || v.readyState < 3 || v.seeking;
-    box.hidden = !(seg && seg.archived && loading);
+    // Not while the timeline is being dragged: it goes away as you move and comes back when you stop on a moment.
+    box.hidden = !(seg && seg.archived && loading && !tl.dragging);
   }
-}, 300);
+}, 120);
 const activeVideo = (el) => el._mode === 'hls' ? el._hlsV : el._vids[el._active];
 // Make player `i` the active one, showing it once it has a picture (the
 // other one keeps showing its last picture meanwhile).
@@ -6883,7 +6884,7 @@ function paintVStrips() {
   for (const el of box.querySelectorAll('.vtlp')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
     const runs = [];
-    for (const p of stripPieces(c.camera, W0, span)) { const r = runs[runs.length - 1]; if (r && r.cls === p.cls && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p}); }
+    for (const p of stripPieces(c.camera, W0, span, c.segments)) { const r = runs[runs.length - 1]; if (r && r.cls === p.cls && p.a - r.b <= gap) r.b = Math.max(r.b, p.b); else runs.push({...p}); }
     el.innerHTML = runs.map(r => `<i class="${r.cls}" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></i>`).join('');
   }
 }
@@ -7037,19 +7038,45 @@ function paintPreviewStrips() {
   const W0 = tl.winStart, span = tl.zoom * 1000, pct = (t) => (t - W0) / span * 100;
   for (const el of document.querySelectorAll('#tl .tlp')) {
     const c = tl.data.find(x => x.camera === el.dataset.cam); if (!c) continue;
-    el.innerHTML = solidBars(stripPieces(c.camera, W0, span), 15000 / span * 100, 'i');
+    el.innerHTML = solidBars(stripPieces(c.camera, W0, span, c.segments), 15000 / span * 100, 'i');
   }
   paintVStrips();
   if (typeof camTl !== 'undefined' && page === 'live') camTl.paintStrip();
 }
-// The camera's time-lapse as {a, b, cls} in percent of the window.
-function stripPieces(cam, W0, span) {
-  const h = [];
-  for (const r of scrubRuns(cam, W0, W0 + span)) {
-    const a = Math.max(0, (r.a - W0) / span * 100), b = Math.min(100, (r.b - W0) / span * 100);
+// The camera's time-lapse as {a, b, cls} in percent of the window: pictures in
+// this browser's memory ('s-ready'), on the server and arriving ('s-server': it
+// pulses while it loads from the drive or deep storage), and footage the server
+// has not made pictures of yet ('s-loading': the animated stripes mean it is being generated).
+function stripPieces(cam, W0, span, segs) {
+  const h = [], pc = (t) => (t - W0) / span * 100, runs = scrubRuns(cam, W0, W0 + span), W1 = W0 + span;
+  for (const r of runs) {
+    const a = Math.max(0, pc(r.a)), b = Math.min(100, pc(r.b));
     if (b > a) h.push({a, b, cls: r.cls});
   }
-  return h;
+  if (TIMELAPSE && segs && segs.length) {
+    // The footage (the 24/7 recording, whichever file it is in), joined where it runs on.
+    const foot = [];
+    for (const sg of segs.filter(x => x.kind !== 'clip').map(x => segMs(x)).sort((x, y) => x._a - y._a)) {
+      const a = Math.max(W0, sg._a), b = Math.min(W1, isGrowing(sg) ? Date.now() : sg._b);
+      if (b <= a) continue;
+      const l = foot[foot.length - 1];
+      if (l && a <= l[1] + 5000) l[1] = Math.max(l[1], b); else foot.push([a, b]);
+    }
+    // What has pictures (a gap of up to 30 s is no gap: pictures are every few seconds).
+    const have = [];
+    for (const r of runs) { const l = have[have.length - 1]; if (l && r.a <= l[1] + 30000) l[1] = Math.max(l[1], r.b); else have.push([r.a, r.b]); }
+    for (const [a, b] of foot) {
+      let t = a;
+      for (const [x, y] of have) {
+        if (y <= t) continue;
+        if (x >= b) break;
+        if (x - t > 30000) h.push({a: Math.max(0, pc(t)), b: Math.min(100, pc(x)), cls: 's-loading'});
+        t = Math.max(t, y);
+      }
+      if (b - t > 30000) h.push({a: Math.max(0, pc(t)), b: Math.min(100, pc(b)), cls: 's-loading'});
+    }
+  }
+  return h.filter(p => p.b > p.a).sort((x, y) => x.a - y.a);
 }
 // A page arrived: its part of the blue line fills in now.
 let stripsQueued = false;

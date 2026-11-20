@@ -1043,7 +1043,8 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .tlp i.s-ready { background: linear-gradient(90deg, #38bdf8, #22d3ee); opacity: 1; box-shadow: 0 0 6px rgba(56,189,248,.5); }
 .tlp i.s-loading { background: linear-gradient(90deg, rgba(56,189,248,.12) 0%, rgba(56,189,248,.85) 50%, rgba(56,189,248,.12) 100%);
   background-size: 200% 100%; animation: tlp-shimmer 1.1s linear infinite; }
-.tlp i.s-server { background: rgba(56,189,248,.35); }
+.tlp i.s-server { background: rgba(56,189,248,.35); animation: tlp-pulse 1.2s ease-in-out infinite; }
+@keyframes tlp-pulse { 50% { opacity: .45; } }
 .tlp i.s-wait { background: var(--tl-wait); }
 .tlp i.s-none { background: rgba(239,68,68,.45); }
 @keyframes tlp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
@@ -1071,6 +1072,7 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .lg-bar.clip { background: linear-gradient(180deg, #8b6fd6, #543c96); }
 .lg-bar.ev { background: var(--evbg); border-left: 2px solid var(--evc); }
 .lg-bar.tls { height: 4px; background: rgba(56,189,248,.35); }
+.lg-bar.tlg { height: 4px; background: repeating-linear-gradient(135deg, rgba(56,189,248,.8) 0 4px, rgba(56,189,248,.2) 4px 8px); }
 .lg-bar.tlr { height: 4px; background: linear-gradient(90deg, #38bdf8, #22d3ee); box-shadow: 0 0 6px rgba(56,189,248,.5); }
 .tl { --tl-label: 160px; }
 @media (max-width: 760px) { .tl { --tl-label: 96px; } .tl-row .label .n { display: none; } }
@@ -1633,7 +1635,7 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .vtlp { position: absolute; left: 0; width: 4px; top: 0; bottom: 0; }
 .vtlp i { position: absolute; left: 0; right: 0; }
 .vtlp i.s-ready { background: #38bdf8; } .vtlp i.s-loading { background: repeating-linear-gradient(135deg, rgba(56,189,248,.8) 0 4px, rgba(56,189,248,.2) 4px 8px); }
-.vtlp i.s-server { background: rgba(56,189,248,.35); }
+.vtlp i.s-server { background: rgba(56,189,248,.35); animation: tlp-pulse 1.2s ease-in-out infinite; }
 .vtlp i.s-wait { background: rgba(255,255,255,.1); } .vtlp i.s-none { background: rgba(239,68,68,.5); }
 .vbuf { position: absolute; left: 4px; right: 0; top: 0; bottom: 0; pointer-events: none; }
 .vbuf i { position: absolute; left: 0; right: 0; background: rgba(255,255,255,.28); }

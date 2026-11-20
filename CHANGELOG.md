@@ -1,6 +1,8 @@
 # What's new in GAZE
 
 ## Unreleased
+- **The blue time-lapse line shows what is happening.** Footage the server has not made pictures of yet is striped and animated (being generated); pictures on the server that are still arriving pulse (loading from the drive or deep storage); solid blue is ready in memory. Before, unpictured footage simply had no line, which looked like part of it never loaded.
+- **The deep-storage spinner waits for you to stop.** It disappears while you drag along the timeline and comes back when you stop on a moment.
 - **Time-lapse previews are made for footage in deep storage too.** The background job only looked at recordings on the local disk, so older footage that had moved to deep storage never got a time-lapse. It now pictures those recordings (and their light timeline copies) as well, newest first, while the computer is quiet.
 
 ## 1.7.12 — November 2026
