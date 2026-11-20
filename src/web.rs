@@ -3638,7 +3638,15 @@ async fn cases_remove_item(user: Option<axum::Extension<CurrentUser>>, Path((id,
 }
 
 /// One case, or all of them, as a ZIP to hand to somebody.
-async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cases: Vec<crate::cases::Case>, name: String, req: Request, password: Option<String>) -> Response {
+async fn cases_zip(
+    m: &Manager,
+    user: &Option<axum::Extension<CurrentUser>>,
+    cases: Vec<crate::cases::Case>,
+    name: String,
+    req: Request,
+    password: Option<String>,
+    playable: bool,
+) -> Response {
     let vis = visible(user);
     let tmpdir = m.data_dir.join("tmp");
     let _ = std::fs::create_dir_all(&tmpdir);
@@ -3652,10 +3660,78 @@ async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cas
         }
     }
     let out = tmpdir.join(format!("evidence-{}.zip", Local::now().format("%Y%m%d%H%M%S%3f")));
+    // Each video's format; with "playable", a copy any web browser can play of those that aren't (H.265 is not
+    // played by Chrome or Firefox: the review page's videos stayed empty). The original stays in the ZIP too.
+    let mut prep = crate::cases::Prepared::default();
+    let ffmpeg_path = m.config().server.ffmpeg_path;
+    let tmp_copies: Vec<PathBuf> = {
+        let mut todo = Vec::new();
+        for c in &cases {
+            let Some(dir) = crate::cases::case_dir(&c.id) else { continue };
+            for i in c.items.iter().filter(|i| vis.as_ref().is_none_or(|v| v.contains(&i.camera))) {
+                let Some(file) = i.video.clone().filter(|f| !f.contains(['/', '\\']) && !f.contains("..")) else { continue };
+                let src = dir.join(&file);
+                if let Some(codec) = ffmpeg::video_codec(&ffmpeg_path, &src).await {
+                    if playable && codec != "h264" {
+                        todo.push((c.id.clone(), file.clone(), src));
+                    }
+                    prep.codecs.insert((c.id.clone(), file), codec);
+                }
+            }
+        }
+        let mut made = Vec::new();
+        if !todo.is_empty() {
+            let job = crate::jobs::start("maintenance", format!("Evidence export: making {} video(s) playable in any browser", todo.len()));
+            let total = todo.len();
+            job.total(total as u64);
+            for (n, (cid, file, src)) in todo.into_iter().enumerate() {
+                job.step(format!("{file} ({} of {total})", n + 1));
+                let dst = tmpdir.join(format!("evidence-web-{}-{n}.mp4", Local::now().format("%H%M%S%3f")));
+                let ok = crate::load::cmd(&ffmpeg_path)
+                    .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+                    .arg(&src)
+                    .args([
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "0:a:0?",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-crf",
+                        "23",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-movflags",
+                        "+faststart",
+                    ])
+                    .arg(&dst)
+                    .status()
+                    .await
+                    .is_ok_and(|s| s.success());
+                if ok {
+                    prep.web.insert((cid, file), dst.clone());
+                    made.push(dst);
+                } else {
+                    let _ = std::fs::remove_file(&dst);
+                    tracing::warn!("Evidence Locker export: {file} could not be converted for web browsers");
+                }
+                job.done_one();
+            }
+        }
+        made
+    };
     let o2 = out.clone();
     let locked = password.is_some();
     let pw = password;
-    let res = tokio::task::spawn_blocking(move || crate::cases::export_zip(&cases, &o2, &|cam| vis.as_ref().is_none_or(|v| v.iter().any(|x| x == cam)), pw.as_deref())).await;
+    let res =
+        tokio::task::spawn_blocking(move || crate::cases::export_zip(&cases, &o2, &|cam| vis.as_ref().is_none_or(|v| v.iter().any(|x| x == cam)), pw.as_deref(), &prep)).await;
+    for t in &tmp_copies {
+        let _ = std::fs::remove_file(t);
+    }
     match res {
         Ok(Ok(())) => {
             tracing::info!("Evidence Locker: exported “{name}”{}", if locked { " (password protected)" } else { "" });
@@ -3678,7 +3754,7 @@ async fn cases_zip(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, cas
 async fn cases_export(State(m): App, user: Option<axum::Extension<CurrentUser>>, Path(id): Path<String>, req: Request) -> Response {
     let Some(c) = crate::cases::get(&id) else { return err(StatusCode::NOT_FOUND, "no such case") };
     let name = c.name.clone();
-    cases_zip(&m, &user, vec![c], name, req, None).await
+    cases_zip(&m, &user, vec![c], name, req, None, false).await
 }
 
 async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUser>>, req: Request) -> Response {
@@ -3686,7 +3762,7 @@ async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUse
     if all.is_empty() {
         return err(StatusCode::NOT_FOUND, "no cases to export");
     }
-    cases_zip(&m, &user, all, "Evidence Locker".into(), req, None).await
+    cases_zip(&m, &user, all, "Evidence Locker".into(), req, None, false).await
 }
 
 /// The export form's fields: the password the ZIP is locked with (the page posts a form, so the browser streams
@@ -3695,6 +3771,9 @@ async fn cases_export_all(State(m): App, user: Option<axum::Extension<CurrentUse
 struct ExportForm {
     #[serde(default)]
     password: String,
+    /// "1": make videos a web browser can't play (H.265) playable.
+    #[serde(default)]
+    playable: String,
 }
 
 /// A GET request for the same address, for serving the finished file.
@@ -3711,7 +3790,7 @@ async fn cases_export_post(
 ) -> Response {
     let Some(c) = crate::cases::get(&id) else { return err(StatusCode::NOT_FOUND, "no such case") };
     let name = c.name.clone();
-    cases_zip(&m, &user, vec![c], name, download_request(&uri), Some(f.password).filter(|p| !p.is_empty())).await
+    cases_zip(&m, &user, vec![c], name, download_request(&uri), Some(f.password).filter(|p| !p.is_empty()), f.playable == "1").await
 }
 
 async fn cases_export_all_post(State(m): App, user: Option<axum::Extension<CurrentUser>>, uri: axum::http::Uri, axum::Form(f): axum::Form<ExportForm>) -> Response {
@@ -3719,7 +3798,7 @@ async fn cases_export_all_post(State(m): App, user: Option<axum::Extension<Curre
     if all.is_empty() {
         return err(StatusCode::NOT_FOUND, "no cases to export");
     }
-    cases_zip(&m, &user, all, "Evidence Locker".into(), download_request(&uri), Some(f.password).filter(|p| !p.is_empty())).await
+    cases_zip(&m, &user, all, "Evidence Locker".into(), download_request(&uri), Some(f.password).filter(|p| !p.is_empty()), f.playable == "1").await
 }
 
 /// A file kept in a case (only the case's own files, by name).

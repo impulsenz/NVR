@@ -324,6 +324,12 @@ struct ViewFile {
     kind: &'static str,
     sha256: String,
     size: u64,
+    /// The video's format as recorded ("h264", "hevc"…), when known.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    codec: String,
+    /// A copy any web browser can play (H.264), made at export when the original's format can't be: the page plays this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    web: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -356,6 +362,14 @@ fn viewer_html(cases: &[ViewCase]) -> Result<String> {
     Ok(include_str!("case_viewer.html").replacen("/*DATA*/", &json, 1))
 }
 
+/// What the export prepared beforehand (see `web::cases_zip`): each video's format and the browser-playable
+/// copy made of it, both by (case id, file name).
+#[derive(Default)]
+pub struct Prepared {
+    pub codecs: std::collections::HashMap<(String, String), String>,
+    pub web: std::collections::HashMap<(String, String), PathBuf>,
+}
+
 /// Everything in `cases` as one ZIP, for handing to somebody else.
 ///
 /// ```text
@@ -372,7 +386,7 @@ fn viewer_html(cases: &[ViewCase]) -> Result<String> {
 /// page) is encrypted with AES-256: nothing in it can be read without the
 /// password, and a program that supports AES ZIPs (7-Zip, WinRAR, Keka) is
 /// needed to open it. Once extracted, the files are of course plain.
-pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool, password: Option<&str>) -> Result<()> {
+pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool, password: Option<&str>, prep: &Prepared) -> Result<()> {
     use sha2::Digest;
     use std::io::{Read, Write};
     use zip::write::SimpleFileOptions;
@@ -439,7 +453,34 @@ pub fn export_zip(cases: &[Case], out: &Path, allow: &dyn Fn(&str) -> bool, pass
                 }
                 let sum = h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>();
                 manifest.push_str(&format!("{sum}  {rel_folder}/{file}\r\n"));
-                files.push(ViewFile { path: format!("{folder}/{file}"), kind, sha256: sum, size });
+                // The browser-playable copy, beside the original (which stays as it was recorded).
+                let mut web = None;
+                if kind == "video"
+                    && let Some(wp) = prep.web.get(&(c.id.clone(), file.clone()))
+                    && let Ok(mut wf) = std::fs::File::open(wp)
+                {
+                    let wname = format!("{}.web.mp4", file.trim_end_matches(".mp4"));
+                    z.start_file(format!("{folder}/{wname}"), stored)?;
+                    let mut wh = sha2::Sha256::new();
+                    loop {
+                        let k = wf.read(&mut buf)?;
+                        if k == 0 {
+                            break;
+                        }
+                        wh.update(&buf[..k]);
+                        z.write_all(&buf[..k])?;
+                    }
+                    manifest.push_str(&format!("{}  {rel_folder}/{wname}  (copy for web browsers)\r\n", wh.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()));
+                    web = Some(format!("{folder}/{wname}"));
+                }
+                files.push(ViewFile {
+                    path: format!("{folder}/{file}"),
+                    kind,
+                    sha256: sum,
+                    size,
+                    codec: prep.codecs.get(&(c.id.clone(), file.clone())).cloned().unwrap_or_default(),
+                    web,
+                });
             }
             // (The page's camera name is what the exporter sees, never an empty one.)
             vitems.push(ViewItem { item: i, from_text: when(i.from), to_text: when(i.to), added_text: when(i.added), files });
@@ -517,7 +558,7 @@ mod tests {
             })
             .unwrap();
             let out = dir.join("x.zip");
-            export_zip(&list(), &out, &|_| true, None).unwrap();
+            export_zip(&list(), &out, &|_| true, None, &Prepared::default()).unwrap();
             let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
             let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().unwrap().to_string()).collect();
             assert!(names.iter().any(|n| n == "index.html"), "{names:?}");
@@ -534,7 +575,7 @@ mod tests {
             );
             // With a password nothing opens without it, and everything does with it.
             let sealed = dir.join("sealed.zip");
-            export_zip(&list(), &sealed, &|_| true, Some("hunter2-pass")).unwrap();
+            export_zip(&list(), &sealed, &|_| true, Some("hunter2-pass"), &Prepared::default()).unwrap();
             let mut z = zip::ZipArchive::new(std::fs::File::open(&sealed).unwrap()).unwrap();
             assert!(z.by_name("index.html").is_err(), "a locked file opened without the password");
             assert!(z.by_name_decrypt("index.html", b"wrong-password").is_err());
@@ -544,7 +585,7 @@ mod tests {
             let bytes = std::fs::read(&sealed).unwrap();
             assert!(!bytes.windows(5).any(|w| w == b"video"), "the footage is readable in the locked file");
             // Someone who can't see the camera gets none of its items.
-            export_zip(&list(), &out, &|_| false, None).unwrap();
+            export_zip(&list(), &out, &|_| false, None, &Prepared::default()).unwrap();
             let z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
             assert!(z.file_names().all(|n| !n.unwrap().contains("v.mp4")));
         }

@@ -5032,6 +5032,7 @@ function exportCaseDialog(action, name) {
   dlg.innerHTML = `<form method="post" action="${esc(action)}">
     <div class="head"><h2>Export “${esc(name)}”</h2><span class="spacer"></span><button type="button" class="small" data-x>✕</button></div>
     <div class="body"><p class="muted small" style="margin-top:0">One ZIP: every video and picture, the notes, a list of checksums, and <b>index.html</b>: a page anyone can open to review the case by day, time and camera, with nothing to install.</p>
+      <label class="ck"><input type="checkbox" name="playable" value="1" checked> Make the videos play in any web browser <span class="muted small">(many cameras record H.265, which Chrome and Firefox can\'t play; a copy is made for the review page and the original stays beside it. Takes longer.)</span></label>
       <label class="ck"><input type="checkbox" id="ex-lock"> Lock the ZIP with a password</label>
       <div id="ex-pw" hidden><input type="password" name="password" id="ex-pass" autocomplete="new-password" placeholder="Password" disabled style="width:100%;margin-top:8px">
         <p class="muted small">Everything in the ZIP is encrypted (AES-256): the videos, the pictures and the review page. Whoever receives it needs the password and a program that opens AES ZIP files, such as <b>7-Zip</b>, WinRAR or Keka (Windows' own “Extract all” can't). Send the password another way, not with the file. GAZE does not keep it: <b>if it is lost, the ZIP cannot be opened.</b> Once someone extracts the files, they are ordinary files again.</p></div>

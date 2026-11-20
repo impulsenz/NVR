@@ -49,6 +49,7 @@ code{font:12px ui-monospace,Consolas,monospace;word-break:break-all}
 .bar{display:flex;gap:6px;flex-wrap:wrap}.bar button{padding:4px 9px;font-size:13px}
 .how{font-size:13px;color:var(--muted)}.how summary{cursor:pointer;color:var(--text)}
 .kb{font-size:12px;color:var(--muted)}
+.noplay{position:absolute;left:12px;right:12px;bottom:12px;background:rgba(0,0,0,.8);color:#fff;border-radius:8px;padding:10px 12px;font-size:13px}.dlg .pv{position:relative}
 @media print{header button,aside,.bar,dialog,.count .sp,.count button{display:none!important}main{display:block;padding:0}.card{break-inside:avoid;box-shadow:none}.grid{display:block}.card .m{display:none}.card{margin-bottom:10px}.card .n{-webkit-line-clamp:unset}}
 </style></head><body>
 <header><div><h1 id="title"></h1><div class="sub" id="sub"></div></div><div class="sp"></div>
@@ -85,7 +86,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
 const S={q:'',cam:new Set(),kind:new Set(),df:'',dt:'',tf:'',tt:'',sort:'from',view:'grid',case:'all',day:null,hour:null};
 // ---- the items, flattened ----
 let ITEMS=[];D.cases.forEach((c,ci)=>c.items.forEach(i=>ITEMS.push(Object.assign({},i,{camera_name:i.camera_name||i.camera,ci,case:c.name,_d:i.from_text.slice(0,10),_t:i.from_text.slice(11,16),_h:+i.from_text.slice(11,13)}))));
-const hasVideo=i=>i.files.some(f=>f.type==='video'),firstPic=i=>i.files.find(f=>f.type==='picture'),firstVid=i=>i.files.find(f=>f.type==='video');
+const play=f=>f.web||f.path,hasVideo=i=>i.files.some(f=>f.type==='video'),firstPic=i=>i.files.find(f=>f.type==='picture'),firstVid=i=>i.files.find(f=>f.type==='video');
 const url=p=>p.split('/').map(encodeURIComponent).join('/');
 const fmt=t=>{const [d,h]=t.split(' ');const dt=new Date(d+'T00:00:00');return dt.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short',year:'numeric'})+' '+(h||'')};
 const dur=s=>{s=Math.max(0,Math.round(s));const m=Math.floor(s/60);return m?m+'m '+String(s%60).padStart(2,'0')+'s':s+'s'};
@@ -115,7 +116,7 @@ function draw(){
  const list=ITEMS.filter(i=>match(i)).sort(cmp[S.sort]);
  $('n').textContent=list.length+' of '+ITEMS.filter(i=>S.case==='all'||String(i.ci)===S.case).length;$('nn').textContent=' items';
  $('grid').className=S.view==='grid'?'grid':'';
- $('grid').innerHTML=list.length?list.map(i=>{const v=firstVid(i),p=firstPic(i),med=v?`<video preload="metadata" muted playsinline ${p?`poster="${url(p.path)}" src="${url(v.path)}"`:`src="${url(v.path)}#t=0.5"`}></video>`:p?`<img loading="lazy" alt="" src="${url(p.path)}">`:'';
+ $('grid').innerHTML=list.length?list.map(i=>{const v=firstVid(i),p=firstPic(i),med=v?`<video preload="metadata" muted playsinline ${p?`poster="${url(p.path)}" src="${url(play(v))}"`:`src="${url(play(v))}#t=0.5"`}></video>`:p?`<img loading="lazy" alt="" src="${url(p.path)}">`:'';
   const d=(new Date(i.to)-new Date(i.from))/1000;
   const body=`<div class="b"><h4>${esc(i.title)}</h4><div class="t">${esc(i.camera_name)} · ${esc(fmt(i.from_text))}</div><div class="n">${esc(i.notes.trim()||'')}</div><div>${i.protected?'<span class="tag p">🔒 protected</span>':''}${D.cases.length>1?`<span class="tag">${esc(i.case)}</span>`:''}${i.notes.trim()?'<span class="tag">notes</span>':''}</div></div>`;
   return S.view==='grid'?`<div class="card" tabindex="0" data-id="${esc(i.id)}"><div class="m">${med}<span class="k">${kindOf(i)}</span>${v&&d>0?`<span class="dur">${dur(d)}</span>`:''}</div>${body}</div>`
@@ -126,9 +127,9 @@ function draw(){
 let cur=[],pos=0;
 function open(id){cur=ITEMS.filter(i=>match(i)).sort(cmp[S.sort]);pos=Math.max(0,cur.findIndex(i=>i.id===id));show();if(!$('dlg').open)$('dlg').showModal()}
 function show(){const i=cur[pos];if(!i)return;const v=firstVid(i),p=firstPic(i);
- $('pv').innerHTML=v?`<video controls autoplay playsinline src="${url(v.path)}"${p?` poster="${url(p.path)}"`:''}></video>`:p?`<img alt="" src="${url(p.path)}">`:'';
- const vid=$('pv').querySelector('video');if(vid)vid.playbackRate=+(localStorage.getItem('rate')||1);
- const files=i.files.map(f=>`<tr><td>${f.type==='video'?'Video':'Picture'}</td><td><a href="${url(f.path)}" download>${esc(f.path.split('/').pop())}</a><br><span style="color:var(--muted)">${f.size?(f.size/1048576).toFixed(1)+' MB · ':''}SHA-256</span> <code>${esc(f.sha256)}</code></td></tr>`).join('');
+ $('pv').innerHTML=v?`<video controls autoplay playsinline src="${url(play(v))}"${p?` poster="${url(p.path)}"`:''}></video>`:p?`<img alt="" src="${url(p.path)}">`:'';
+ const vid=$('pv').querySelector('video');if(vid){vid.playbackRate=+(localStorage.getItem('rate')||1);vid.addEventListener('error',()=>noPlay(i,v),{once:true})}
+ const files=i.files.map(f=>`<tr><td>${f.type==='video'?'Video':'Picture'}</td><td><a href="${url(f.path)}" download>${esc(f.path.split('/').pop())}</a>${f.codec?` <span class="tag">${esc(f.codec.toUpperCase())}</span>`:''}${f.web?`<br><span style="color:var(--muted)">Plays from a browser copy: </span><a href="${url(f.web)}" download>${esc(f.web.split('/').pop())}</a>`:''}<br><span style="color:var(--muted)">${f.size?(f.size/1048576).toFixed(1)+' MB · ':''}SHA-256</span> <code>${esc(f.sha256)}</code></td></tr>`).join('');
  $('info').innerHTML=`<div class="bar"><button id="pr">← Previous</button><button id="nx">Next →</button><span style="flex:1"></span><button id="cl">Close ✕</button></div>
  <h2>${esc(i.title)}</h2><div class="kb">${pos+1} of ${cur.length} in the current list</div>
  ${vid?`<div class="bar" id="rates">${[.5,1,2,4,8].map(r=>`<button data-r="${r}">${r}×</button>`).join('')}<button id="fs">⛶ Full screen</button></div>`:''}
@@ -138,6 +139,11 @@ function show(){const i=cur[pos];if(!i)return;const v=firstVid(i),p=firstPic(i);
  $('pr').onclick=()=>step(-1);$('nx').onclick=()=>step(1);$('cl').onclick=()=>$('dlg').close();
  document.querySelectorAll('#rates [data-r]').forEach(b=>b.onclick=()=>rate(+b.dataset.r));$('fs')&&($('fs').onclick=()=>vid.requestFullscreen&&vid.requestFullscreen());
  paintRate()}
+// A video the browser can't play: why, and what to do (instead of an empty black box).
+function noPlay(i,v){const el=document.createElement('div');el.className='noplay';
+ const odd=v.codec&&!/^(h264|vp8|vp9|av1)$/.test(v.codec);
+ el.innerHTML='<b>This browser cannot play this video.</b><br>'+(location.protocol==='file:'&&/\.zip[\\/]/i.test(decodeURIComponent(location.href))?'It looks like this page was opened from inside the ZIP: <b>extract the whole ZIP to a folder first</b>, then open index.html there.<br>':'')+(odd?'It was recorded as <b>'+esc(v.codec.toUpperCase())+'</b>, which Chrome and Firefox do not play'+(v.web?'':' (this export has no browser copy)')+'. ':'')+'The original file is in the item\'s folder next to this page: open it with <b>VLC</b> or Windows Media Player / Photos, or click it below to download.';
+ $('pv').appendChild(el)}
 function step(d){if(!cur.length)return;pos=(pos+d+cur.length)%cur.length;show()}
 function rate(r){localStorage.setItem('rate',r);const v=$('pv').querySelector('video');if(v)v.playbackRate=r;paintRate()}
 function paintRate(){const r=+(localStorage.getItem('rate')||1);document.querySelectorAll('#rates [data-r]').forEach(b=>b.classList.toggle('on',+b.dataset.r===r))}
