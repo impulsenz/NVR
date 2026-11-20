@@ -47,6 +47,7 @@ another. Defaults were not re-evaluated one by one (not done).
 | Area | Struct | Applied in |
 |---|---|---|
 | Server (listen, https, ffmpeg path, update repo) | `ServerConfig`, `UpdateConfig` | `main.rs`, `tls.rs`, `update.rs` |
+| Long-term time-lapse (`longlapse`: camera, time, on) | `LongLapse` | `longlapse.rs` |
 | Storage (folders, retention, limits, time-lapse) | `StorageConfig` | `storage.rs`, `picturelog.rs` |
 | Deep storage | `StorageConfig.archive` (`ArchiveConfig`), `CameraConfig.archive_*` | `archive.rs`, `Config::archive_for` |
 | Backup | `CloudConfig` | `cloud.rs` |

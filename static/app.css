@@ -2008,3 +2008,10 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .wd-chip.ok { color: var(--green); }
 .wd-chip.bad { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
 .wd-ask { width: min(540px, calc(100vw - 16px)); }
+
+/* Long-term time-lapse (Settings) */
+.ll-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.ll-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.ll-strip a { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; color: var(--muted); text-decoration: none; }
+.ll-strip img { height: 70px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); }
+.ll-videos { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
