@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Long-term time-lapse:** add several cameras at once, each at several times of day (tick cameras, add times or use the 06:00 / 09:00 / 12:00 / 15:00 / 18:00 buttons). Pairs that already exist are skipped.
+
 ## 1.7.18 — November 2026
 - **Seek-bar hover preview:** real moving frames from the recording (a small hidden player follows the pointer) in the video's own shape, instead of low-rate stills with a black bar.
 - **Long-term time-lapse:** adding a camera (or saving one) works again — the panel was closed before its form was read.

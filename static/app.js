@@ -10861,7 +10861,7 @@ async function renderLongLapse(body) {
       <span class="ll-badge ${on ? 'on' : ''}">${x.making ? 'Making video…' : on ? 'Daily' : 'Paused'}</span>
       <span class="ll-info"><b>${esc(camName(e.camera))}</b><small>${esc(e.time)} · ${x.pictures.length} picture${x.pictures.length === 1 ? '' : 's'}${x.videos.length ? ` · ${x.videos.length} video${x.videos.length === 1 ? '' : 's'}` : ''}</small></span></button>`;
   };
-  body.innerHTML = `<div class="card"><div class="row" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;flex:1">Long-term time-lapse</h2>${admin ? '<button type="button" class="primary" id="ll-add">＋ Add a camera</button>' : ''}</div>
+  body.innerHTML = `<div class="card"><div class="row" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;flex:1">Long-term time-lapse</h2>${admin ? '<button type="button" class="primary" id="ll-add">＋ Add cameras</button>' : ''}</div>
       <p class="muted" style="margin:6px 0 14px">One full-quality picture a day from a camera, kept until you delete it (about 0.3–2 MB a day). Open a camera to change its time, look through its pictures and make a video — a garden growing, a building going up, the seasons changing. Recording never depends on this.</p>
       <div class="ll-shelf">${list.map(poster).join('')}${admin ? '<button type="button" class="ll-poster ll-new" id="ll-add2"><span class="ll-empty">＋</span><span class="ll-info"><b>Add a camera</b><small>Pick a camera and a time</small></span></button>' : ''}</div>
       ${list.length ? '' : '<div class="hint" style="margin-top:10px">Nothing yet: add a camera to start your long-term time-lapse.</div>'}</div>`;
@@ -10873,12 +10873,16 @@ async function renderLongLapse(body) {
     const dlg = document.createElement('dialog'); dlg.className = 'll-dlg';
     dlg.innerHTML = `<div class="ll-hero">${pic ? `<img alt="" src="api/longlapse/${id}/pic/${enc(pic.name)}">` : '<span class="ll-empty">🎞</span>'}
         <button type="button" class="small ll-close" data-x title="Close">✕</button>
-        <div class="ll-hero-t"><h2>${isNew ? 'Add a camera' : esc(camName(e.camera))}</h2><span>${isNew ? 'A picture each day at the time you choose' : `${pics.length} picture${pics.length === 1 ? '' : 's'}${first ? ` · ${esc(first)} → ${esc(last)}` : ''}`}</span></div></div>
+        <div class="ll-hero-t"><h2>${isNew ? 'Add cameras' : esc(camName(e.camera))}</h2><span>${isNew ? 'A picture each day at the times you choose' : `${pics.length} picture${pics.length === 1 ? '' : 's'}${first ? ` · ${esc(first)} → ${esc(last)}` : ''}`}</span></div></div>
       <div class="ll-body">
         ${x && x.error ? `<p class="errc small" style="margin-top:0">Last try: ${esc(x.error)}</p>` : x && x.last_ok ? `<p class="muted small" style="margin-top:0">Last picture taken ${esc(fmtDate(new Date(x.last_ok)))}</p>` : ''}
         <div class="form">
-          <label for="ll-cam">Camera</label><div><select id="ll-cam" ${admin ? '' : 'disabled'}>${cams.map(c => `<option value="${esc(c.id)}" ${c.id === e.camera ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
-          <label for="ll-time">Picture taken at${tip('Every day at this time (this computer’s clock). If the camera can’t be reached it is tried again every 5 minutes for 3 hours.')}</label><div><input type="time" id="ll-time" value="${esc(e.time || '12:00')}" ${admin ? '' : 'disabled'}></div>
+          ${isNew ? `<label>Cameras${tip('Tick as many as you like: each gets a picture at every time below.')}</label><div><div class="ll-cams">${cams.map(c => `<label class="check"><input type="checkbox" class="ll-camck" value="${esc(c.id)}" ${c.id === e.camera ? 'checked' : ''}> ${esc(c.name)}</label>`).join('')}</div>
+            <div class="row" style="gap:6px;margin-top:4px"><button type="button" class="small" id="ll-allc">Select all</button><button type="button" class="small" id="ll-noc">None</button></div></div>
+          <label>Picture taken at${tip('Every day at each of these times (this computer’s clock). Several times a day make a day-long set. If a camera can’t be reached it is tried again every 5 minutes for 3 hours.')}</label><div><div class="ll-times" id="ll-times"></div>
+            <div class="row" style="gap:6px;margin-top:6px"><input type="time" id="ll-newt" value="12:00"><button type="button" class="small" id="ll-addt">＋ Add this time</button>${['06:00', '09:00', '12:00', '15:00', '18:00'].map(t => `<button type="button" class="small ll-pre" data-t="${t}">${t}</button>`).join('')}</div></div>`
+          : `<label for="ll-cam">Camera</label><div><select id="ll-cam" ${admin ? '' : 'disabled'}>${cams.map(c => `<option value="${esc(c.id)}" ${c.id === e.camera ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+          <label for="ll-time">Picture taken at${tip('Every day at this time (this computer’s clock). If the camera can’t be reached it is tried again every 5 minutes for 3 hours.')}</label><div><input type="time" id="ll-time" value="${esc(e.time || '12:00')}" ${admin ? '' : 'disabled'}></div>`}
           <span></span><label class="check"><input type="checkbox" id="ll-on" ${e.enabled !== false ? 'checked' : ''} ${admin ? '' : 'disabled'}> Take a picture every day</label>
         </div>
         ${admin ? `<div class="actions"><button type="button" class="primary" id="ll-save">${isNew ? 'Add' : 'Save'}</button>${isNew ? '' : '<button type="button" class="small" id="ll-now">📷 Take one now</button><span class="spacer"></span><button type="button" class="small danger" id="ll-del" title="Stop taking pictures (the ones taken stay on disk)">Remove</button>'}</div>` : ''}
@@ -10894,8 +10898,30 @@ async function renderLongLapse(body) {
     dlg.addEventListener('click', (ev) => { if (ev.target === dlg) close(); });
     const all = (settings.longlapse || []);
     const mine = () => ({id: e.id || '', camera: val('ll-cam'), time: val('ll-time') || '12:00', enabled: chk('ll-on')});
+    // Adding: any number of cameras, at any number of times a day.
+    const times = new Set(['12:00']);
+    const paintTimes = () => { const el = $('ll-times'); if (!el) return; el.innerHTML = [...times].sort().map(t => `<span class="chip">${esc(t)} <button type="button" class="ll-rmt" data-t="${t}" title="Remove">×</button></span>`).join('') || '<span class="muted small">Add at least one time</span>'; el.querySelectorAll('.ll-rmt').forEach(b => b.onclick = () => { times.delete(b.dataset.t); paintTimes(); }); };
+    if (isNew) {
+      paintTimes();
+      $('ll-addt').onclick = () => { if ($('ll-newt').value) { times.add($('ll-newt').value); paintTimes(); } };
+      dlg.querySelectorAll('.ll-pre').forEach(b => b.onclick = () => { times.add(b.dataset.t); paintTimes(); });
+      $('ll-allc').onclick = () => dlg.querySelectorAll('.ll-camck').forEach(c => c.checked = true);
+      $('ll-noc').onclick = () => dlg.querySelectorAll('.ll-camck').forEach(c => c.checked = false);
+    }
     if (admin) {
-      $('ll-save').onclick = async () => { const m = mine(); close(); await save(isNew ? [...all, m] : all.map(r => r.id === e.id ? {...r, ...m} : r), isNew ? 'Camera added' : 'Time-lapse saved'); };
+      $('ll-save').onclick = async () => {
+        if (isNew) {
+          const chosen = [...dlg.querySelectorAll('.ll-camck:checked')].map(c => c.value), on = chk('ll-on');
+          if (!chosen.length) return toast('Tick at least one camera', true);
+          if (!times.size) return toast('Add at least one time', true);
+          const fresh = chosen.flatMap(camera => [...times].sort().map(time => ({id: '', camera, time, enabled: on})))
+            .filter(n => !all.some(r => r.camera === n.camera && r.time === n.time));
+          if (!fresh.length) return toast('Those cameras already take a picture at those times', true);
+          close(); await save([...all, ...fresh], `${fresh.length} time-lapse${fresh.length === 1 ? '' : 's'} added`);
+          return;
+        }
+        const m = mine(); close(); await save(all.map(r => r.id === e.id ? {...r, ...m} : r), 'Time-lapse saved');
+      };
       if (!isNew) {
         $('ll-now').onclick = async () => { try { await api(`api/longlapse/${enc(e.id)}/capture`, {method: 'POST', json: {}}); toast('Picture taken'); close(); renderLongLapse(body); } catch (err) { toast(err.message, true); } };
         $('ll-del').onclick = async () => { if (!confirm('Stop this time-lapse? The pictures already taken stay on disk.')) return; close(); await save(all.filter(r => r.id !== e.id), 'Removed'); };
