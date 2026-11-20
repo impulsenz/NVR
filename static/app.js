@@ -6520,7 +6520,11 @@ function paintLoaded() {
     // arrives isn't "lost"; it goes after 1½ s without a picture.)
     const pic = v && v.readyState >= 2 && v.style.visibility !== 'hidden';
     if (pic) el._picAt = Date.now();
-    srcMark(el, sp && !sp.hidden ? 'tl' : pic || Date.now() - (el._picAt || 0) < 1500 ? (pic ? 'rec' : el.classList.contains('src-hd') ? 'hd' : el.classList.contains('src-sub') ? 'sub' : null) : null);
+    // Until there is a picture the colour is the stream that is about to show (from the footage at the playhead),
+    // so it is there as soon as the page opens, not only after the first frame.
+    const cc = tl.data.find(x => x.camera === el.dataset.cam), sgNow = cc && tl.T != null ? segAt(cc, tl.T) : null;
+    const coming = sgNow ? (streamOf(sgNow) === 'main' ? 'hd' : 'sub') : null;
+    srcMark(el, sp && !sp.hidden ? 'tl' : pic || Date.now() - (el._picAt || 0) < 1500 ? (pic ? 'rec' : el.classList.contains('src-hd') ? 'hd' : el.classList.contains('src-sub') ? 'sub' : coming) : coming);
   }
 }
 setInterval(paintLoaded, 400);

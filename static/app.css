@@ -10,7 +10,7 @@
   --tl-band: rgba(255,255,255,.022); --tl-grid: rgba(255,255,255,.06); --tl-grid-day: rgba(196,181,253,.55); --tl-rowline: rgba(255,255,255,.05);
   --tl-chip: #0f1218; --tl-thumb-bg: #0b0d12; --tl-stack: #1b2030; --tl-shadow: rgba(0,0,0,.55);
   --tl-head: #fff; --tl-head-glow: rgba(255,255,255,.55); --tl-head-em-bg: #fff; --tl-head-em-fg: #0b0d12; --tl-hover-line: rgba(255,255,255,.35);
-  --cat-person: #a78bfa; --tl-lapse: #38bdf8; --tl-lapse2: #22d3ee; --tl-lapse-glow: rgba(56,189,248,.5);
+  --feed-shadow: 0 3px 14px rgba(0,0,0,.6), 0 1px 3px rgba(0,0,0,.5); --cat-person: #a78bfa; --tl-lapse: #38bdf8; --tl-lapse2: #22d3ee; --tl-lapse-glow: rgba(56,189,248,.5);
   --tl-wait: rgba(255,255,255,.07); --gg-grid: rgba(255,255,255,.06); --gg-grid0: rgba(255,255,255,.14); --gg-cursor: rgba(255,255,255,.4); --gg-dot: #0f1218;
   color-scheme: dark;
 }
@@ -27,7 +27,7 @@
   --tl-band: rgba(15,23,42,.035); --tl-grid: rgba(15,23,42,.08); --tl-grid-day: rgba(109,40,217,.45); --tl-rowline: rgba(15,23,42,.08);
   --tl-chip: #ffffff; --tl-thumb-bg: #dfe4ec; --tl-stack: #c9d1de; --tl-shadow: rgba(15,23,42,.28);
   --tl-head: #1e293b; --tl-head-glow: rgba(30,41,59,.3); --tl-head-em-bg: #1e293b; --tl-head-em-fg: #ffffff; --tl-hover-line: rgba(30,41,59,.4);
-  --cat-person: #7c3aed; --tl-lapse: #0284c7; --tl-lapse2: #0891b2; --tl-lapse-glow: rgba(2,132,199,.35);
+  --feed-shadow: 0 3px 12px rgba(15,23,42,.2), 0 1px 3px rgba(15,23,42,.16); --cat-person: #7c3aed; --tl-lapse: #0284c7; --tl-lapse2: #0891b2; --tl-lapse-glow: rgba(2,132,199,.35);
   --tl-wait: rgba(15,23,42,.09); --gg-grid: rgba(15,23,42,.09); --gg-grid0: rgba(15,23,42,.2); --gg-cursor: rgba(15,23,42,.45); --gg-dot: #ffffff;
   color-scheme: light;
 }
@@ -43,7 +43,7 @@
     --tl-band: rgba(15,23,42,.035); --tl-grid: rgba(15,23,42,.08); --tl-grid-day: rgba(109,40,217,.45); --tl-rowline: rgba(15,23,42,.08);
     --tl-chip: #ffffff; --tl-thumb-bg: #dfe4ec; --tl-stack: #c9d1de; --tl-shadow: rgba(15,23,42,.28);
     --tl-head: #1e293b; --tl-head-glow: rgba(30,41,59,.3); --tl-head-em-bg: #1e293b; --tl-head-em-fg: #ffffff; --tl-hover-line: rgba(30,41,59,.4);
-    --cat-person: #7c3aed; --tl-lapse: #0284c7; --tl-lapse2: #0891b2; --tl-lapse-glow: rgba(2,132,199,.35);
+    --feed-shadow: 0 3px 12px rgba(15,23,42,.2), 0 1px 3px rgba(15,23,42,.16); --cat-person: #7c3aed; --tl-lapse: #0284c7; --tl-lapse2: #0891b2; --tl-lapse-glow: rgba(2,132,199,.35);
   --tl-wait: rgba(15,23,42,.09); --gg-grid: rgba(15,23,42,.09); --gg-grid0: rgba(15,23,42,.2); --gg-cursor: rgba(15,23,42,.45); --gg-dot: #ffffff;
     color-scheme: light;
   }
@@ -1461,12 +1461,12 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
 
 /* Recordings: each camera's outline says what it shows, so it can be read at a glance —
    blue: the time-lapse (scrubbing), green: the recorded video, purple: full quality (HD) video. */
-#tl-videos .surface { --src: transparent; --src-glow: transparent; }
+#tl-videos .surface { --src: transparent; --src-glow: transparent; box-shadow: var(--feed-shadow); }
 #tl-videos .surface.src-tl { --src: #0ea5e9; --src-glow: rgba(14, 165, 233, .55); }
 #tl-videos .surface.src-sub { --src: #22c55e; --src-glow: rgba(34, 197, 94, .5); }
 #tl-videos .surface.src-hd { --src: #a855f7; --src-glow: rgba(168, 85, 247, .55); }
-#tl-videos .surface::after { content: ''; position: absolute; inset: 0; border: 4px solid var(--src); border-radius: inherit; pointer-events: none; z-index: 6; box-shadow: inset 0 0 22px var(--src-glow); transition: border-color .25s ease, box-shadow .25s ease; }
-#tl-videos .surface::before { content: ''; position: absolute; left: 4px; bottom: 4px; z-index: 7; padding: 2px 9px 2px 8px; border-radius: 0 8px 0 0; background: var(--src); color: #fff; font: 700 11px/1.3 var(--font, system-ui, sans-serif); letter-spacing: .06em; pointer-events: none; opacity: 0; transition: opacity .25s ease; }
+#tl-videos .surface::after { content: ''; position: absolute; inset: 0; border: 2px solid var(--src); border-radius: inherit; pointer-events: none; z-index: 6; box-shadow: inset 0 0 14px var(--src-glow); transition: border-color .25s ease, box-shadow .25s ease; }
+#tl-videos .surface::before { content: ''; position: absolute; left: 2px; bottom: 2px; z-index: 7; padding: 2px 9px 2px 8px; border-radius: 0 8px 0 0; background: var(--src); color: #fff; font: 700 11px/1.3 var(--font, system-ui, sans-serif); letter-spacing: .06em; pointer-events: none; opacity: 0; transition: opacity .25s ease; }
 #tl-videos .surface.src-tl::before { content: '⏩ TIME-LAPSE'; opacity: 1; }
 #tl-videos .surface.src-sub::before { content: '● RECORDED'; opacity: 1; }
 #tl-videos .surface.src-hd::before { content: '● RECORDED · HD'; opacity: 1; }
