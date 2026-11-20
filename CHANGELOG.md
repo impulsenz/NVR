@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.16 — November 2026
 - **Timeline:** people are now violet (they were blue, the same as the time-lapse line); the time-lapse line is thicker, themed (day and night) and now also shows under the merged "All cameras" row and beside every vertical lane.
 - **Stream 1 / Stream 2:** the S1/S2 button is gone from the live pictures; full screen (which opens on stream 1) has the switch in its bottom bar, showing the stream on screen and switching both ways.
 - **AI defaults:** the sub-stream is looked at every 0.5 s (was 1 s), up to 8 full-quality pictures are checked (was 4), and activity within 120 s joins one alert (was 30 s). Cameras still on the old defaults move once (`defaults_version`); values you changed are kept.
