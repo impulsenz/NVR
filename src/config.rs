@@ -299,6 +299,11 @@ pub struct TtsConfig {
     pub volume: u32,
     /// Ready phrases shown under the text box.
     pub phrases: Vec<String>,
+    /// Which ready phrases have been added to this list already (see
+    /// `Config::migrate`: files from before have none, so they get the newer
+    /// ones once, and one that is deleted afterwards stays deleted).
+    #[serde(default)]
+    pub phrases_version: u32,
     /// A short chime before speaking, to get attention.
     pub chime: bool,
     /// Siren: how long it sounds (seconds).
@@ -308,6 +313,10 @@ pub struct TtsConfig {
     /// Siren: speak the warnings (off: only the alarm).
     pub siren_voice: bool,
 }
+
+/// Ready phrases added to everyone's list once (version 1: the four about private property, the police and recording).
+const PHRASES_VERSION: u32 = 1;
+const PHRASES_V1: [&str; 4] = ["This is private property.", "The police have been notified.", "This is private property, leave immediately.", "You're on video being recorded."];
 
 impl Default for TtsConfig {
     fn default() -> Self {
@@ -320,7 +329,12 @@ impl Default for TtsConfig {
                 "Please leave the parcel at the door.".into(),
                 "This area is under video surveillance.".into(),
                 "Please leave now.".into(),
+                "This is private property.".into(),
+                "The police have been notified.".into(),
+                "This is private property, leave immediately.".into(),
+                "You're on video being recorded.".into(),
             ],
+            phrases_version: PHRASES_VERSION,
             chime: false,
             siren_seconds: 60,
             siren_messages: vec![
@@ -1106,6 +1120,10 @@ pub struct DetectConfig {
     /// (main stream) picture: "off", "mark" (not confirmed: marked as such)
     /// or "drop" (not confirmed: left out of the alert).
     pub hd_check: String,
+    /// How many full-quality pictures that check may take, a moment apart,
+    /// to find what the sub-stream found (1 to 8): the first that shows it
+    /// confirms it.
+    pub hd_frames: u32,
     /// Seconds without moving before something counts as parked.
     pub parked_seconds: u32,
     /// Kinds of objects that stop alerting while they stand still.
@@ -1151,6 +1169,7 @@ impl Default for DetectConfig {
             ignore_pets: false,
             ai_ignores_mask: true,
             hd_check: "mark".into(),
+            hd_frames: 4,
             parked_seconds: 60,
             parked_objects: crate::stationary::PARKING
                 .iter()
@@ -1751,6 +1770,16 @@ impl Config {
 
     fn migrate(&mut self) -> bool {
         let mut changed = false;
+        // 1.7.8: more ready phrases for the Say box (added once; deleting one afterwards sticks).
+        if self.tts.phrases_version < 1 {
+            for p in PHRASES_V1 {
+                if !self.tts.phrases.iter().any(|x| x == p) {
+                    self.tts.phrases.push(p.into());
+                }
+            }
+            self.tts.phrases_version = PHRASES_VERSION;
+            changed = true;
+        }
         // 0.5.9: object detection is off or built in (the AI servers and
         // cloud services are gone).
         if !AI_PROVIDERS.contains(&self.ai.provider.as_str()) {
@@ -2325,6 +2354,24 @@ mod tests {
         assert!(cells[(MASK_H * 3 / 4) * MASK_W + MASK_W / 4]); // inside the old zone
         assert!(!cells[(MASK_H / 4) * MASK_W + MASK_W * 3 / 4]); // outside it
         assert!(!cfg.migrate()); // only once
+    }
+
+    #[test]
+    fn new_ready_phrases_are_added_once_to_older_settings() {
+        // A file from before: its own phrases, no version.
+        let (mut cfg, _) = Config::from_toml("[tts]\nphrases = [\"Hello\", \"This is private property.\"]\n").unwrap();
+        assert_eq!(cfg.tts.phrases_version, 1, "from_toml migrates");
+        assert_eq!(cfg.tts.phrases[0], "Hello");
+        for p in PHRASES_V1 {
+            assert_eq!(cfg.tts.phrases.iter().filter(|x| *x == p).count(), 1, "{p} is there once");
+        }
+        // Deleted afterwards: stays deleted.
+        cfg.tts.phrases.retain(|x| x != "The police have been notified.");
+        let again = cfg.migrate();
+        assert!(!again && !cfg.tts.phrases.iter().any(|x| x == "The police have been notified."));
+        // A new install has them all, and a siren of 60 seconds.
+        let d = TtsConfig::default();
+        assert_eq!((d.siren_seconds, d.phrases.len(), d.phrases_version), (60, 8, 1));
     }
 
     #[test]

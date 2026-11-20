@@ -253,10 +253,33 @@ fn same_spot(d: &Detection, b: [f32; 4]) -> bool {
 /// the sub-stream saw it (the AI looks at a small picture: only a close-up
 /// gains from the detail).
 async fn hd_verify(ai: &crate::ai::Ai, f: &Frame, label: &str, b: [f32; 4], min_conf: f32, watched: &[String]) -> HdVerdict {
+    // A close-up first, then a wider look around the spot (the object may have moved, or
+    // fill the close-up differently from how the sub-stream saw it).
+    let mut best = hd_verify_at(ai, f, label, b, min_conf, watched, 2.2).await;
+    if !matches!(best, HdVerdict::Confirmed(_)) {
+        let wide = hd_verify_at(ai, f, label, b, min_conf, watched, 4.5).await;
+        best = better_verdict(best, wide);
+    }
+    best
+}
+
+/// The more convincing of two answers about the same object: confirmed (the surer
+/// one), then a different watched object, then not seen, then couldn't be checked.
+fn better_verdict(a: HdVerdict, b: HdVerdict) -> HdVerdict {
+    let rank = |v: &HdVerdict| match v {
+        HdVerdict::Confirmed(s) => (3, *s),
+        HdVerdict::Relabel(_, s) => (2, *s),
+        HdVerdict::NotSeen => (1, 0.0),
+        HdVerdict::Failed => (0, 0.0),
+    };
+    if rank(&b).0 > rank(&a).0 || (rank(&b).0 == rank(&a).0 && rank(&b).1 > rank(&a).1) { b } else { a }
+}
+
+async fn hd_verify_at(ai: &crate::ai::Ai, f: &Frame, label: &str, b: [f32; 4], min_conf: f32, watched: &[String], scale: f32) -> HdVerdict {
     let (fw, fh) = (f.width as f32, f.height as f32);
     let (cx, cy) = ((b[0] + b[2] / 2.0) * fw, (b[1] + b[3] / 2.0) * fh);
-    let cw = (b[2] * fw * 2.2).max(320.0).min(fw);
-    let ch = (b[3] * fh * 2.2).max(320.0).min(fh);
+    let cw = (b[2] * fw * scale).max(320.0).min(fw);
+    let ch = (b[3] * fh * scale).max(320.0).min(fh);
     let (x0, y0) = ((cx - cw / 2.0).clamp(0.0, fw - cw), (cy - ch / 2.0).clamp(0.0, fh - ch));
     let crop = crate::recog::crop(f, x0, y0, cw, ch);
     let Ok(dets) = ai.detect(&crop).await else { return HdVerdict::Failed };
@@ -332,6 +355,9 @@ pub fn captioned(f: &Frame, text: &str) -> Frame {
     crate::draw::caption(&mut px, f.width, f.height, x, y, text, scale);
     Frame { width: f.width, height: f.height, rgb: Arc::new(px) }
 }
+
+/// How long between the full-quality pictures of one check.
+const HD_GAP: Duration = Duration::from_millis(500);
 
 /// A full-quality picture of this moment (at most 1920 px wide).
 async fn hd_frame(relay: &crate::relay::Relay, ffmpeg: &str) -> anyhow::Result<Frame> {
@@ -1227,35 +1253,57 @@ impl Detector {
             let (min_conf, watched) = (d.min_confidence, d.objects.clone());
             let cam = self.cam.clone();
             let hd_checks = if check { hd_checks } else { Vec::new() };
+            // (Only the face picture to take: one.)
+            let frames = if hd_checks.is_empty() { 1 } else { d.hd_frames.clamp(1, 8) as usize };
             tokio::spawn(async move {
-                let mut checks = Vec::new();
-                match hd_frame(&relay, &ffmpeg).await {
-                    Ok(mut f) => {
-                        // (The face picture: as the camera sees it.)
-                        if let Some((_, name, dir)) = &snap {
-                            let path = dir.join(name);
-                            let pic = f.clone();
-                            let saved = tokio::task::spawn_blocking(move || pic.jpeg(92).and_then(|j| Ok(std::fs::write(&path, j)?))).await;
-                            if !matches!(saved, Ok(Ok(()))) {
-                                tracing::debug!("[{}] HD face picture not saved", cam.name);
+                // Several full-quality pictures, a moment apart (a single one can catch the object
+                // turned away, blurred or half hidden): each find is confirmed by the first picture
+                // that shows it. The alert waits for this at most a few seconds.
+                let started = Instant::now();
+                let mut verdicts: Vec<HdVerdict> = hd_checks.iter().map(|_| HdVerdict::Failed).collect();
+                for attempt in 0..frames {
+                    if attempt > 0 {
+                        if !verdicts.is_empty() && verdicts.iter().all(|v| matches!(v, HdVerdict::Confirmed(_))) || started.elapsed() > Duration::from_secs(12) {
+                            break;
+                        }
+                        tokio::time::sleep(HD_GAP).await;
+                    }
+                    match hd_frame(&relay, &ffmpeg).await {
+                        Ok(mut f) => {
+                            // (The face picture: as the camera sees it.)
+                            if attempt == 0
+                                && let Some((_, name, dir)) = &snap
+                            {
+                                let path = dir.join(name);
+                                let pic = f.clone();
+                                let saved = tokio::task::spawn_blocking(move || pic.jpeg(92).and_then(|j| Ok(std::fs::write(&path, j)?))).await;
+                                if !matches!(saved, Ok(Ok(()))) {
+                                    tracing::debug!("[{}] HD face picture not saved", cam.name);
+                                }
+                            }
+                            // Privacy areas are black here too.
+                            if !cam.privacy.is_empty() {
+                                let mut px = (*f.rgb).clone();
+                                cam.paint_privacy(&mut px, f.width, f.height);
+                                f.rgb = Arc::new(px);
+                            }
+                            for (i, (label, b)) in hd_checks.iter().enumerate() {
+                                if matches!(verdicts[i], HdVerdict::Confirmed(_)) {
+                                    continue;
+                                }
+                                let v = hd_verify(&ai, &f, label, *b, min_conf, &watched).await;
+                                verdicts[i] = better_verdict(std::mem::replace(&mut verdicts[i], HdVerdict::Failed), v);
                             }
                         }
-                        // Privacy areas are black here too.
-                        if !cam.privacy.is_empty() {
-                            let mut px = (*f.rgb).clone();
-                            cam.paint_privacy(&mut px, f.width, f.height);
-                            f.rgb = Arc::new(px);
+                        Err(e) => {
+                            tracing::debug!("full-quality check: {e:#}");
+                            if attempt == 0 {
+                                break; // no picture at all: nothing to say (the check couldn't be made)
+                            }
                         }
-                        for (label, b) in hd_checks {
-                            let v = hd_verify(&ai, &f, &label, b, min_conf, &watched).await;
-                            checks.push((label, b, v));
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!("full-quality check: {e:#}");
-                        checks = hd_checks.into_iter().map(|(l, b)| (l, b, HdVerdict::Failed)).collect();
                     }
                 }
+                let checks: Vec<(String, [f32; 4], HdVerdict)> = hd_checks.into_iter().zip(verdicts).map(|((l, b), v)| (l, b, v)).collect();
                 if check {
                     let _ = tx.send(HdResult { event: id, checks }).await;
                 }
@@ -1978,6 +2026,19 @@ impl MotionDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_later_full_quality_picture_can_confirm_what_an_earlier_one_missed() {
+        use HdVerdict::*;
+        // Picture 1 saw nothing, picture 2 confirmed: confirmed. A confirmed find is never lost to a later miss.
+        assert_eq!(better_verdict(NotSeen, Confirmed(0.5)), Confirmed(0.5));
+        assert_eq!(better_verdict(Confirmed(0.5), NotSeen), Confirmed(0.5));
+        assert_eq!(better_verdict(Confirmed(0.5), Confirmed(0.7)), Confirmed(0.7), "the surer one");
+        // Seen as something else watched for beats not seen; a failed grab is the weakest.
+        assert_eq!(better_verdict(NotSeen, Relabel("dog".into(), 0.6)), Relabel("dog".into(), 0.6));
+        assert_eq!(better_verdict(Failed, NotSeen), NotSeen);
+        assert_eq!(better_verdict(Relabel("dog".into(), 0.6), Confirmed(0.4)), Confirmed(0.4));
+    }
 
     fn frame(w: u32, h: u32, square: Option<(u32, u32, u32)>) -> Vec<u8> {
         let mut v = vec![60u8; (w * h * 3) as usize];

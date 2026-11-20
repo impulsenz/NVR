@@ -51,7 +51,7 @@ another. Defaults were not re-evaluated one by one (not done).
 | Deep storage | `StorageConfig.archive` (`ArchiveConfig`), `CameraConfig.archive_*` | `archive.rs`, `Config::archive_for` |
 | Backup | `CloudConfig` | `cloud.rs` |
 | Cameras (stream, recording, detection, PTZ, privacy, audio) | `CameraConfig` and children | `manager.rs` → `recorder.rs`, `relay.rs`, `detect.rs` … |
-| AI | `AiConfig` (`device`, `accelerator`, `openvino_device`), per camera `DetectConfig` | `ai.rs`, `infer.rs`, `detect.rs` |
+| AI | `AiConfig` (`device`, `accelerator`, `openvino_device`), per camera `DetectConfig` (incl. `hd_check` and `hd_frames`, the full-quality double-check and how many pictures it may take; `TtsConfig.phrases_version` marks which ready phrases were added to the list) | `ai.rs`, `infer.rs`, `detect.rs` |
 | Live view and display | `LiveConfig`, `DisplayConfig`, `OsdConfig`, `ViewConfig`, `DashboardConfig` | page (`app.js`) and `live.rs` |
 | Modes | `ModesConfig` | `notify.rs`, `manager.rs::privacy_watch` |
 | Notifications (ntfy + email), MQTT, webhooks, voice, siren | `NotifyConfig` (`.email`: `EmailConfig`, `.digest`: `DigestConfig`), `MqttConfig`, `Webhook`, `TtsConfig` | `notify.rs` (`send`: both channels), `mail.rs`, `digest.rs`, `mqtt.rs`, `hooks.rs`, `tts.rs`, `siren.rs` |

@@ -1528,13 +1528,11 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .tl-h1::after { content: ""; position: absolute; top: 40%; height: 26px; left: 4px; width: 6px; border-radius: 3px; background: var(--amber); box-shadow: 0 0 0 1px #111; }
 
 /* Evidence Locker */
-.ev-case .ev-head { gap: 8px; align-items: flex-start; }
 .ev-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-top: 10px; }
 .ev-item { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--panel2); }
 .ev-item.prot { border-color: var(--amber); }
 .ev-media video, .ev-media img { width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #000; border-radius: 6px; display: block; }
 .ev-acts { gap: 6px; flex-wrap: wrap; margin-top: 4px; }
-.ev-prot.on { background: rgba(245,158,11,.18); border-color: var(--amber); }
 .ev-pick { width: min(520px, calc(100vw - 16px)); }
 .ev-pick-list { display: grid; gap: 4px; max-height: 50vh; overflow: auto; }
 .ev-pick-list .check { display: flex; align-items: center; gap: 6px; }
@@ -1936,3 +1934,46 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 /* Settings → System → Drive health: installing smartmontools */
 .dr-install { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: var(--panel2); }
 .dr-install code { background: var(--panel3); padding: 1px 6px; border-radius: 4px; }
+
+/* Controls on a live tile: pan / tilt / zoom, siren, say something */
+.tile-ctl { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 6; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: calc(100% - 16px); opacity: 0; pointer-events: none; transition: opacity .15s; }
+.tile:hover .tile-ctl, .tile-ctl:focus-within { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .tile-ctl { opacity: 1; pointer-events: auto; } }
+.tile-ctl > div { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 10px; background: rgba(10, 12, 16, .78); backdrop-filter: blur(4px); }
+.tile-ctl button, .tile-ctl select, .tile-ctl input { font-size: 12px; padding: 3px 7px; min-height: 0; background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.22); border-radius: 6px; }
+.tile-ctl .tc-ud { display: flex; flex-direction: column; gap: 2px; }
+.tile-ctl .tc-ud button { padding: 0 8px; line-height: 14px; }
+.tile-ctl .tc-text { width: 170px; }
+.tile-ctl .tc-text::placeholder { color: rgba(255,255,255,.6); }
+.tile-ctl select option { color: #000; }
+.tile-ctl .siren-on { background: #dc2626; border-color: #dc2626; }
+
+/* Evidence Locker: the cases on the left, the open case on the right */
+.ev-how { margin: 0 0 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 8px 14px; }
+.ev-how summary { cursor: pointer; font-weight: 600; }
+.ev-steps { list-style: none; counter-reset: ev; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; padding: 0; margin: 10px 0 4px; }
+.ev-steps li { counter-increment: ev; position: relative; padding: 8px 10px 8px 40px; background: var(--panel2); border-radius: 8px; }
+.ev-steps li::before { content: counter(ev); position: absolute; left: 10px; top: 9px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 12px; }
+.ev-steps b { display: block; }
+.ev-steps span { font-size: 12.5px; color: var(--muted); }
+.ev-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 14px; align-items: start; }
+.ev-side { position: sticky; top: 64px; display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 90px); overflow-y: auto; }
+.ev-side input[type=search] { width: 100%; box-sizing: border-box; }
+.ev-case-btn { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 2px; width: 100%; padding: 8px 10px; border-radius: 8px; background: var(--panel); margin-bottom: 6px; }
+.ev-case-btn.on { border-color: var(--accent); background: var(--accent2); }
+.ev-head { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.ev-name { margin: 0; cursor: text; text-transform: none; letter-spacing: normal; font-size: 20px; }
+.ev-name:hover { text-decoration: underline dotted; }
+.ev-name-in { font-size: 20px; font-weight: 600; width: 100%; max-width: 480px; }
+.ev-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; font-size: 12.5px; margin-top: 6px; }
+.ev-chips span { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 1px 9px; }
+.ev-chips .prot { border-color: var(--amber); }
+.ev-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.ev-filter { margin: 8px 0; }
+.ev-media { position: relative; }
+.ev-lock { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; padding: 0; border-radius: 50%; background: rgba(10, 12, 16, .72); border: 1px solid rgba(255, 255, 255, .25); font-size: 15px; }
+.ev-lock.on { background: var(--amber); border-color: var(--amber); }
+.ev-note summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.ev-empty { text-align: center; padding: 34px 16px; }
+.ev-empty-ic { font-size: 40px; }
+@media (max-width: 900px) { .ev-layout { grid-template-columns: minmax(0, 1fr); } .ev-side { position: static; max-height: 240px; } }

@@ -877,6 +877,57 @@ function osdFor(c) {
 // screen. `opts.rec`: a recording (the clock shows its time and a ▶
 // PLAYBACK tag stands where live shows REC); `opts.tools`: that view's own
 // sound button(s) instead of the live one; `opts.extra`: a class for the boxes.
+// ---------- Controls on each live tile ----------
+// A camera that pans / tilts / zooms gets its controls on its tile (and in full
+// screen), and one with a speaker gets Siren and a box to type what it should
+// say, with the ready phrases: the same things the opened camera has, one
+// click nearer. They show when the pointer is over the tile (always on a touch screen).
+function wireTileControls(el, c) {
+  const canPtz = !!c.ptz && me && me.role !== 'viewer', canSay = !!c.talk && me && me.role !== 'viewer';
+  if (!canPtz && !canSay) return;
+  const phrases = (status && status.say_phrases) || [];
+  const box = document.createElement('div');
+  box.className = 'tile-ctl';
+  box.innerHTML = `${canPtz ? `<div class="tc-ptz"><button type="button" data-ptz="-1,0,0" title="Pan left">◀</button><span class="tc-ud"><button type="button" data-ptz="0,1,0" title="Tilt up">▲</button><button type="button" data-ptz="0,-1,0" title="Tilt down">▼</button></span><button type="button" data-ptz="1,0,0" title="Pan right">▶</button>
+        <button type="button" data-ptz="0,0,1" title="Zoom in">＋</button><button type="button" data-ptz="0,0,-1" title="Zoom out">－</button>
+        <select class="tc-presets" title="Go to a saved position"><option value="">Presets…</option></select></div>` : ''}
+    ${canSay ? `<div class="tc-say"><button type="button" class="tc-siren siren-btn" title="Sound a loud siren with spoken warnings through the camera's speaker">🚨 Siren</button>
+        <input type="text" class="tc-text" maxlength="400" placeholder="Type what ${esc(c.name)} should say…" autocomplete="off">
+        <button type="button" class="tc-send primary" title="Say it through the camera's speaker">🔊</button>
+        ${phrases.length ? `<select class="tc-phr" title="Ready phrases"><option value="">Phrases…</option>${phrases.map(t => `<option>${esc(t)}</option>`).join('')}</select>` : ''}</div>` : ''}`;
+  el.appendChild(box);
+  // The tile itself must not take these clicks (it opens the camera, or goes full screen).
+  for (const ev of ['click', 'dblclick', 'pointerdown', 'wheel']) box.addEventListener(ev, (e) => e.stopPropagation());
+  const err = (e) => toast(e.message, true);
+  if (canPtz) {
+    box.querySelectorAll('[data-ptz]').forEach(b => {
+      const v = b.dataset.ptz.split(',').map(Number);
+      let held = false;
+      b.onpointerdown = (e) => { e.preventDefault(); held = true; b.setPointerCapture(e.pointerId); api(`api/cameras/${enc(c.id)}/ptz/move`, {method: 'POST', json: {pan: v[0], tilt: v[1], zoom: v[2]}}).catch(err); };
+      b.onpointerup = b.onpointercancel = b.onlostpointercapture = () => { if (held) { held = false; api(`api/cameras/${enc(c.id)}/ptz/stop`, {method: 'POST'}).catch(() => {}); } };
+    });
+    const sel = box.querySelector('.tc-presets');
+    let loaded = false;
+    el.addEventListener('pointerenter', async () => {
+      if (loaded) return; loaded = true;
+      try { const p = await api(`api/cameras/${enc(c.id)}/ptz/presets`); sel.innerHTML = `<option value="">Presets (${p.length})…</option>` + p.map(x => `<option value="${esc(x.token)}">${esc(x.name)}</option>`).join(''); } catch (_) { loaded = false; }
+    });
+    sel.onchange = () => { const t = sel.value; sel.value = ''; if (t) api(`api/cameras/${enc(c.id)}/ptz/goto`, {method: 'POST', json: {token: t}}).catch(err); };
+  }
+  if (canSay) {
+    setupSirenButton(c, box.querySelector('.tc-siren'));
+    const inp = box.querySelector('.tc-text');
+    const send = async (text) => {
+      text = text.trim(); if (!text) return;
+      inp.value = '';
+      try { await api(`api/cameras/${enc(c.id)}/say`, {method: 'POST', json: {text}}); toast(`${c.name}: “${text.length > 40 ? text.slice(0, 40) + '…' : text}”`); } catch (e) { err(e); }
+    };
+    box.querySelector('.tc-send').onclick = () => send(inp.value);
+    inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); send(inp.value); } };
+    const phr = box.querySelector('.tc-phr');
+    if (phr) phr.onchange = () => { const t = phr.value; phr.value = ''; if (t) send(t); };
+  }
+}
 function overlayHtml(c, q, noFs, opts = {}) {
   const d = status.display, o = osdFor(c), rec = !!opts.rec;
   const parts = Object.fromEntries(SPOTS.map(([k]) => [k, []]));
@@ -2781,6 +2832,7 @@ function renderDash() {
     unbinders.set(c.id, bindLive(img, c.id, q));
     offlineAfter(el.querySelector('.msg'), img);
     wireOverlay(el);
+    if (!editing) wireTileControls(el, c);
     el.onclick = singleClick(() => {
       if (editing || document.fullscreenElement === el) return;
       if (wall) { wallSolo = wallSolo ? null : c.id; renderDash(); updateSubscriptions(); }
@@ -8043,6 +8095,7 @@ async function openCameraDialog(id, clone) {
             <option value="drop" ${c.detect.hd_check === 'drop' ? 'selected' : ''}>On — leave out what HD doesn't confirm</option>
             <option value="off" ${c.detect.hd_check === 'off' ? 'selected' : ''}>Off</option>
           </select>
+          <div class="row" style="margin-top:6px"><span class="muted">Look at up to</span><input type="number" id="d-hdframes" min="1" max="8" value="${c.detect.hd_frames || 4}" style="width:70px"><span class="muted">full-quality pictures, half a second apart${tip('One picture can miss what the sub-stream saw: the person turned away, blurred, half hidden. GAZE takes up to this many, one after another, and the first that shows it confirms it (it stops as soon as everything is confirmed). More catches more, and takes a few seconds longer; 4 suits most cameras.')}</span></div>
 </div>
         <label for="d-int">AI looks every${tip('How often the AI checks the picture while something is moving. Lower recognises things quicker but works the computer harder. Example: 1 second suits most cameras; 0.5 for a busy street.')}</label>
         <div class="row"><input type="number" id="d-int" min="0.2" max="60" step="0.1" value="${c.detect.ai_interval}" style="width:110px"><span class="muted">seconds while there's motion</span></div>
@@ -8644,7 +8697,7 @@ function collectCamera() {
       follow: chk('p-follow'), follow_objects: [...document.querySelectorAll('#p-follow-objs input:checked')].map(i => i.value)},
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
-      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), join_seconds: Math.max(0, Math.round(num('d-join')) || 0), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), ignore_pets: chk('d-pets'), hd_check: val('d-hdcheck'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
+      trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), join_seconds: Math.max(0, Math.round(num('d-join')) || 0), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), ignore_pets: chk('d-pets'), hd_check: val('d-hdcheck'), hd_frames: Math.max(1, Math.min(8, Math.round(num('d-hdframes')) || 4)), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
       parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked, #d-parked-more input:checked')].map(i => i.value), packages: camPkgKeep.packages, package_mask: camPkgKeep.package_mask, package_area: []},
   };
 }
@@ -11021,56 +11074,95 @@ applyDataSaver();
 // ======================================================================
 // Evidence Locker: cases of protected clips and pictures
 // ======================================================================
-let evCases = [], evOpen = new Set(store.get('ev-open', []));
+// ---------- Evidence Locker ----------
+// A list of cases on the left and the open case on the right: its notes,
+// and every video and picture in it as a card (lock, notes, downloads).
+let evCases = [], evSel = store.get('ev-sel', ''), evQ = '', evShow = 'all';
+const EV_HOW = `<ol class="ev-steps"><li><b>Find the footage</b><span>In Alerts or Recordings, open an alert or mark a clip.</span></li><li><b>Add it to a case</b><span>Press “🗄️ Add to case”. A copy is kept in the case.</span></li><li><b>It is protected</b><span>The original can't be deleted anywhere in GAZE, not even by the automatic clean-up, until you unprotect it here.</span></li><li><b>Share it</b><span>Export a case as one ZIP: every video, picture and note.</span></li></ol>`;
 async function showEvidence() {
   const box = $('ev-list');
   try { evCases = await api('api/cases'); } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   const admin = me && me.role === 'admin', op = me && me.role !== 'viewer';
-  if (!evCases.length) { box.innerHTML = '<div class="empty">No cases yet. Make one with ＋ New case, or add an alert to a case straight from the alert.</div>'; return; }
   const t = (d) => fmtDate(new Date(d));
-  box.innerHTML = evCases.map(c => {
-    const prot = c.items.filter(i => i.protected).length, open = evOpen.has(c.id);
-    return `<div class="card ev-case" data-id="${esc(c.id)}">
-      <div class="row ev-head"><button type="button" class="small ev-tog" title="Show or hide what's in this case">${open ? '▾' : '▸'}</button>
-        <div style="flex:1;min-width:0"><b class="ev-name">${esc(c.name)}</b> <span class="muted small">${c.items.length} item${c.items.length === 1 ? '' : 's'}${prot ? ` · 🔒 ${prot} protected` : ''} · made ${t(c.created)}</span>
-          </div>
-        <a class="btn small ev-export" href="api/cases/${enc(c.id)}/export" title="One ZIP with every video, picture and note in this case, ready to send to someone">⇩ Export all</a>
-        ${op ? '<button type="button" class="small ev-edit">✎ Rename</button>' : ''}
-        ${admin ? `<button type="button" class="small danger ev-delcase" ${prot ? 'disabled title="Unprotect everything in it first"' : ''}>🗑 Delete case</button>` : ''}</div>
-      <div class="ev-items" ${open ? '' : 'hidden'}>
-        <div class="ev-notes ev-case-notes"><label class="small muted">Notes <span class="ev-saved muted"></span></label>
-          <textarea class="ev-ta ev-case-ta" rows="3" placeholder="Notes about this case as a whole — what happened, who was involved, reference numbers…" ${op ? '' : 'readonly'}>${esc(c.notes || '')}</textarea></div>
-        ${c.items.length ? c.items.map(i => {
-        const f = (n) => `api/cases/${enc(c.id)}/files/${enc(n)}`;
-        return `<div class="ev-item ${i.protected ? 'prot' : ''}" data-item="${esc(i.id)}">
-          <div class="ev-media">${i.video ? `<video controls preload="metadata" playsinline ${i.picture ? `poster="${f(i.picture)}" src="${f(i.video)}"` : `src="${f(i.video)}#t=0.5"`}></video>` : i.picture ? `<img alt="" loading="lazy" src="${f(i.picture)}">` : ''}</div>
-          <div class="ev-meta"><b>${esc(i.title)}</b>
+  $('ev-how-body').innerHTML = EV_HOW;
+  $('ev-sub').textContent = evCases.length ? `${evCases.length} case${evCases.length === 1 ? '' : 's'} · ${evCases.reduce((n, c) => n + c.items.length, 0)} items · 🔒 ${evCases.reduce((n, c) => n + c.items.filter(i => i.protected).length, 0)} protected` : '';
+  $('ev-how').open = !evCases.length;
+  if (!evCases.length) {
+    box.innerHTML = `<div class="card ev-empty"><div class="ev-empty-ic">🗄️</div><h3>No cases yet</h3><p class="muted">A case keeps important footage safe and together — a break-in, a parcel theft, an incident to hand to the police or your insurer.</p>
+      ${op ? '<button type="button" class="primary" id="ev-first">＋ Make your first case</button>' : ''}</div>`;
+    const f = $('ev-first'); if (f) f.onclick = () => $('ev-new').click();
+    return;
+  }
+  if (!evCases.some(c => c.id === evSel)) evSel = evCases.slice().sort((a, b) => new Date(b.created) - new Date(a.created))[0].id;
+  box.innerHTML = `<div class="ev-layout"><aside class="ev-side"><input type="search" id="ev-q" placeholder="🔎 Find a case…" value="${esc(evQ)}"><div id="ev-cases"></div></aside><main id="ev-main"></main></div>`;
+  $('ev-q').oninput = () => { evQ = $('ev-q').value; drawEvSide(); };
+  const drawEvSide = () => {
+    const q = evQ.trim().toLowerCase();
+    const list = evCases.slice().sort((a, b) => new Date(b.created) - new Date(a.created))
+      .filter(c => !q || (c.name + ' ' + (c.notes || '') + ' ' + c.items.map(i => i.title + ' ' + (i.camera_name || '') + ' ' + (i.notes || '')).join(' ')).toLowerCase().includes(q));
+    $('ev-cases').innerHTML = list.map(c => { const prot = c.items.filter(i => i.protected).length;
+      return `<button type="button" class="ev-case-btn ${c.id === evSel ? 'on' : ''}" data-id="${esc(c.id)}"><b>${esc(c.name)}</b>
+        <span class="muted small">${c.items.length} item${c.items.length === 1 ? '' : 's'}${prot ? ` · 🔒 ${prot}` : ''} · ${esc(fmtDate(new Date(c.created), 'D MMM YYYY'))}</span></button>`; }).join('') || '<div class="muted small" style="padding:6px">No case matches.</div>';
+    $('ev-cases').querySelectorAll('.ev-case-btn').forEach(b => b.onclick = () => { evSel = b.dataset.id; store.set('ev-sel', evSel); evShow = 'all'; drawEvSide(); drawEvMain(); });
+  };
+  const drawEvMain = () => {
+    const c = evCases.find(x => x.id === evSel), main = $('ev-main'); if (!c) return;
+    const prot = c.items.filter(i => i.protected).length, vids = c.items.filter(i => i.video).length, pics = c.items.filter(i => !i.video && i.picture).length;
+    const cams = [...new Set(c.items.map(i => i.camera_name || i.camera))];
+    const times = c.items.flatMap(i => [new Date(i.from).getTime(), new Date(i.to).getTime()]).filter(x => x);
+    const span = times.length ? `${t(Math.min(...times))} – ${fmtDate(new Date(Math.max(...times)), 'D MMM HH:mm')}` : '';
+    const shown = c.items.filter(i => evShow === 'all' || (evShow === 'videos' && i.video) || (evShow === 'pictures' && !i.video) || (evShow === 'protected' && i.protected));
+    const f = (n) => `api/cases/${enc(c.id)}/files/${enc(n)}`;
+    const chip = (k, label, n) => `<button type="button" class="small ${evShow === k ? 'on' : ''}" data-s="${k}">${label} <span class="muted">${n}</span></button>`;
+    main.innerHTML = `<div class="card ev-case" data-id="${esc(c.id)}">
+      <div class="ev-head"><div style="flex:1;min-width:0"><h2 class="ev-name" title="${op ? 'Click to rename' : ''}">${esc(c.name)}</h2>
+          <div class="ev-chips"><span>🗂 ${c.items.length} item${c.items.length === 1 ? '' : 's'}</span><span class="${prot ? 'prot' : ''}">🔒 ${prot} protected</span>${cams.length ? `<span>📹 ${esc(cams.join(', '))}</span>` : ''}${span ? `<span>🕒 ${esc(span)}</span>` : ''}<span class="muted">made ${t(c.created)}</span></div></div>
+        <div class="ev-tools"><a class="btn" href="api/cases/${enc(c.id)}/export" title="One ZIP with every video, picture and note in this case, ready to send to someone">⇩ Export ZIP</a>
+          ${op && c.items.some(i => !i.protected) ? '<button type="button" class="ev-protall" title="Protect everything in this case">🔒 Protect all</button>' : ''}
+          ${admin ? `<button type="button" class="danger ev-delcase" ${prot ? 'disabled title="Unprotect everything in it first"' : ''}>🗑 Delete case</button>` : ''}</div></div>
+      <div class="ev-notes ev-case-notes"><label class="small muted">Case notes — what happened, who was involved, reference numbers <span class="ev-saved muted"></span></label>
+        <textarea class="ev-ta ev-case-ta" rows="2" placeholder="Write notes about this case…" ${op ? '' : 'readonly'}>${esc(c.notes || '')}</textarea></div>
+      <div class="ev-filter seg">${chip('all', 'All', c.items.length)}${chip('videos', '🎞 Videos', vids)}${chip('pictures', '🖼 Pictures', pics)}${chip('protected', '🔒 Protected', prot)}</div>
+      <div class="ev-items">${shown.length ? shown.map(i => `<div class="ev-item ${i.protected ? 'prot' : ''}" data-item="${esc(i.id)}">
+          <div class="ev-media">${i.video ? `<video controls preload="metadata" playsinline ${i.picture ? `poster="${f(i.picture)}" src="${f(i.video)}"` : `src="${f(i.video)}#t=0.5"`}></video>` : i.picture ? `<img alt="" loading="lazy" src="${f(i.picture)}">` : ''}
+            <button type="button" class="ev-lock ${i.protected ? 'on' : ''}" ${!i.protected && !op ? 'disabled' : ''} ${i.protected && !admin ? 'disabled title="Only an administrator can unprotect evidence"' : `title="${i.protected ? 'Protected: the original footage can\'t be deleted. Click to unprotect.' : 'Not protected: click to protect the original footage.'}"`}>${i.protected ? '🔒' : '🔓'}</button></div>
+          <div class="ev-meta"><b class="ev-title">${esc(i.title)}</b>
             <div class="muted small">${esc(i.camera_name || i.camera)} · ${i.kind === 'image' ? t(i.from) : `${t(i.from)} – ${fmtTime(new Date(i.to))}`}${i.added_by ? ` · added by ${esc(i.added_by)}` : ''}</div>
-            <div class="ev-notes"><label class="small muted">Notes <span class="ev-saved muted"></span></label>
-              <textarea class="ev-ta ev-item-ta" rows="3" placeholder="Notes for this video…" ${op ? '' : 'readonly'}>${esc(i.notes || '')}</textarea></div>
-            <div class="row ev-acts">
-              <button type="button" class="small ev-prot ${i.protected ? 'on' : ''}" ${!i.protected && !op ? 'disabled' : ''} ${i.protected && !admin ? 'disabled title="Only an administrator can unprotect evidence"' : ''}>${i.protected ? '🔒 Protected' : '🔓 Not protected'}</button>
-              ${i.video ? `<a class="btn small" href="${f(i.video)}?download=1">⇩ Video</a>` : ''}${i.picture ? `<a class="btn small" href="${f(i.picture)}?download=1">⇩ Picture</a>` : ''}
-              ${admin ? `<button type="button" class="small danger ev-rm" ${i.protected ? 'disabled title="Unprotect it first"' : ''}>Remove</button>` : ''}</div></div></div>`;
-      }).join('') : '<div class="muted" style="padding:8px">Nothing in this case yet.</div>'}</div></div>`;
-  }).join('');
-  box.querySelectorAll('.ev-case').forEach(el => {
-    const c = evCases.find(x => x.id === el.dataset.id);
-    el.querySelector('.ev-tog').onclick = () => { evOpen.has(c.id) ? evOpen.delete(c.id) : evOpen.add(c.id); store.set('ev-open', [...evOpen]); showEvidence(); };
-    const ed = el.querySelector('.ev-edit');
-    if (ed) ed.onclick = async () => {
-      const name = prompt('Case name:', c.name); if (name == null || !name.trim()) return;
-      try { await api('api/cases/' + enc(c.id), {method: 'PUT', json: {name, notes: c.notes || ''}}); showEvidence(); } catch (e) { toast(e.message, true); }
+            <details class="ev-note" ${i.notes ? 'open' : ''}><summary>${i.notes ? 'Notes' : (op ? '＋ Add a note' : 'No notes')}</summary><div class="ev-notes"><label class="small muted"><span class="ev-saved muted"></span></label>
+              <textarea class="ev-ta ev-item-ta" rows="2" placeholder="Notes for this ${i.video ? 'video' : 'picture'}…" ${op ? '' : 'readonly'}>${esc(i.notes || '')}</textarea></div></details>
+            <div class="row ev-acts">${i.video ? `<a class="btn small" href="${f(i.video)}?download=1">⇩ Video</a>` : ''}${i.picture ? `<a class="btn small" href="${f(i.picture)}?download=1">⇩ Picture</a>` : ''}<span class="spacer"></span>
+              ${admin ? `<button type="button" class="small danger ev-rm" ${i.protected ? 'disabled title="Unprotect it first"' : ''}>Remove</button>` : ''}</div></div></div>`).join('')
+        : `<div class="muted" style="padding:10px">${c.items.length ? 'Nothing of this kind in the case.' : 'Nothing in this case yet. Open an alert or a recording and press “🗄️ Add to case”.'}</div>`}</div></div>`;
+    main.querySelectorAll('.ev-filter [data-s]').forEach(b => b.onclick = () => { evShow = b.dataset.s; drawEvMain(); });
+    const nm = main.querySelector('.ev-name');
+    if (op) nm.onclick = () => {
+      const inp = document.createElement('input'); inp.type = 'text'; inp.className = 'ev-name-in'; inp.value = c.name; inp.maxLength = 120; nm.replaceWith(inp); inp.focus(); inp.select();
+      let done = false;
+      const save = async () => {
+        if (done) return; done = true;
+        const name = inp.value.trim();
+        if (!name || name === c.name) return drawEvMain();
+        try { await api('api/cases/' + enc(c.id), {method: 'PUT', json: {name, notes: c.notes || ''}}); c.name = name; drawEvSide(); } catch (e) { toast(e.message, true); }
+        drawEvMain();
+      };
+      inp.onblur = save; inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { done = true; drawEvMain(); } };
     };
-    evAutosave(el.querySelector('.ev-case-ta'), async (v) => { await api('api/cases/' + enc(c.id), {method: 'PUT', json: {name: c.name, notes: v}}); c.notes = v; });
-    const dc = el.querySelector('.ev-delcase');
+    evAutosave(main.querySelector('.ev-case-ta'), async (v) => { await api('api/cases/' + enc(c.id), {method: 'PUT', json: {name: c.name, notes: v}}); c.notes = v; });
+    const dc = main.querySelector('.ev-delcase');
     if (dc) dc.onclick = async () => {
       if (!confirm(`Delete the case “${c.name}” and the copies kept in it? The original footage isn't touched.`)) return;
       try { await api('api/cases/' + enc(c.id), {method: 'DELETE'}); toast('Case deleted'); showEvidence(); } catch (e) { toast(e.message, true); }
     };
-    el.querySelectorAll('.ev-item').forEach(row => {
+    const pa = main.querySelector('.ev-protall');
+    if (pa) pa.onclick = async () => {
+      const todo = c.items.filter(i => !i.protected);
+      if (!confirm(`Protect all ${todo.length} unprotected item${todo.length === 1 ? '' : 's'}? The footage they came from can't be deleted anywhere until you unprotect them.`)) return;
+      try { for (const i of todo) await api(`api/cases/${enc(c.id)}/items/${enc(i.id)}`, {method: 'PUT', json: {protected: true}}); toast('Everything is protected'); } catch (e) { toast(e.message, true); }
+      showEvidence();
+    };
+    main.querySelectorAll('.ev-item').forEach(row => {
       const i = c.items.find(x => x.id === row.dataset.item), url = `api/cases/${enc(c.id)}/items/${enc(i.id)}`;
-      row.querySelector('.ev-prot').onclick = async () => {
+      row.querySelector('.ev-lock').onclick = async () => {
         if (i.protected && !confirm(`Unprotect “${i.title}”? The footage it came from can then be deleted again (also by the automatic clean-up).`)) return;
         try { await api(url, {method: 'PUT', json: {protected: !i.protected}}); toast(i.protected ? 'Unprotected' : 'Protected'); showEvidence(); } catch (e) { toast(e.message, true); }
       };
@@ -11081,7 +11173,8 @@ async function showEvidence() {
         try { await api(url, {method: 'DELETE'}); showEvidence(); } catch (e) { toast(e.message, true); }
       };
     });
-  });
+  };
+  drawEvSide(); drawEvMain();
 }
 // A notes field that saves itself a moment after typing stops (no re-draw,
 // so a video playing next to it carries on).
@@ -11105,7 +11198,7 @@ $('ev-list').addEventListener('play', (e) => {
 }, true);
 $('ev-new').onclick = async () => {
   const name = prompt('Name of the new case (e.g. “Break-in 12 March”):'); if (!name || !name.trim()) return;
-  try { const c = await api('api/cases', {method: 'POST', json: {name, notes: ''}}); evOpen.add(c.id); store.set('ev-open', [...evOpen]); showEvidence(); toast('Case made'); } catch (e) { toast(e.message, true); }
+  try { const c = await api('api/cases', {method: 'POST', json: {name, notes: ''}}); evSel = c.id; store.set('ev-sel', evSel); evShow = 'all'; showEvidence(); toast('Case made'); } catch (e) { toast(e.message, true); }
 };
 // Choose a case (or make one) and add footage to it: `items` are request
 // bodies (kind, camera, event / from+to / at).
