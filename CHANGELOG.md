@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## 1.7.18 — November 2026
+- **Seek-bar hover preview:** real moving frames from the recording (a small hidden player follows the pointer) in the video's own shape, instead of low-rate stills with a black bar.
+- **Long-term time-lapse:** adding a camera (or saving one) works again — the panel was closed before its form was read.
+
 ## 1.7.17 — November 2026
 - **Recordings timeline:** bigger alert pictures on the merged row; Clip start / Clip end (and the case and export buttons) moved into the first controls row, giving the camera pictures the second row's height back.
 - **Floor plan: journeys now show up.** The page hid every journey that had no drawable path (cameras not calibrated, or a single point), so the list stayed empty while the numbers above it counted them. All journeys are listed now; those with no path say "not on the map".
