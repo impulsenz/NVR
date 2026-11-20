@@ -132,6 +132,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/plan/tracks", axum::routing::delete(plan_tracks_delete))
         .route("/api/smart", get(smart_get))
         .route("/api/smart/scan", post(smart_scan))
+        .route("/api/smart/install", post(smart_install))
         .route("/api/states", get(states_list).post(states_create))
         .route("/api/states/{id}", put(states_update).delete(states_delete))
         .route("/api/states/{id}/examples", post(states_add_example))
@@ -257,6 +258,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/hw-test", post(hw_test))
         .route("/api/ai/test", post(ai_test))
         .route("/api/cameras/{id}/motion", get(camera_motion))
+        .route("/api/cameras/{id}/log", get(camera_log))
         .route("/api/cloud/test", post(cloud_test))
         .route("/api/live/ws", get(live_ws))
         .route("/api/hls/{id}/{stream}", get(hls_playlist))
@@ -560,6 +562,54 @@ async fn monitor_now(State(m): App) -> Response {
         v["disk_total"] = json!(total);
     }
     Json(v).into_response()
+}
+
+#[derive(Deserialize)]
+struct CameraLogQuery {
+    /// "camera" (what the camera itself reported), "alert", "system" (connection, recording …) or all.
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// One camera's log: what the camera itself reported (ONVIF) with the lines
+/// of the system log about this camera, newest last. Admin only (the path
+/// ends in `/log`).
+async fn camera_log(State(m): App, Path(id): Path<String>, Query(q): Query<CameraLogQuery>) -> Response {
+    let c = camera!(m, id);
+    let limit = q.limit.unwrap_or(300).clamp(1, 1000);
+    let kind = q.kind.as_str();
+    let mut out: Vec<(DateTime<Local>, serde_json::Value)> = Vec::new();
+    if matches!(kind, "" | "camera" | "connection") {
+        for e in crate::camlog::list(&c.cfg.id, (!kind.is_empty()).then_some(kind), Some(&q.q), limit) {
+            out.push((e.time, json!({ "time": e.time, "kind": e.kind, "level": "info", "topic": e.topic, "message": e.message })));
+        }
+    }
+    if matches!(kind, "" | "alert" | "system" | "connection") {
+        let want = match kind {
+            "alert" => Some("event"),
+            "system" | "connection" => Some("system"),
+            _ => None,
+        };
+        let sys = crate::logs::buffer().query(&crate::logs::LogQuery {
+            level: Some("info".into()),
+            kind: want.map(String::from),
+            camera: Some(c.cfg.name.clone()),
+            q: Some(q.q.clone()),
+            limit: Some(limit),
+            ..Default::default()
+        });
+        for e in sys {
+            let message = e.message.split_once("] ").map(|x| x.1.to_string()).unwrap_or(e.message.clone());
+            out.push((e.time, json!({ "time": e.time, "kind": if e.kind == "event" { "alert" } else { "system" }, "level": e.level, "message": message })));
+        }
+    }
+    out.sort_by_key(|x| x.0);
+    let skip = out.len().saturating_sub(limit);
+    Json(json!({ "camera": c.cfg.name, "own_detection": c.cfg.onvif_events, "entries": out.into_iter().skip(skip).map(|x| x.1).collect::<Vec<_>>() })).into_response()
 }
 
 async fn usage(State(m): App, user: Option<axum::Extension<CurrentUser>>) -> Response {
@@ -1001,6 +1051,14 @@ async fn summaries_make(State(m): App, user: Option<axum::Extension<CurrentUser>
 
 async fn smart_get() -> Response {
     Json(crate::smart::overview()).into_response()
+}
+
+/// Install smartmontools (Windows), then check the drives. Admin only.
+async fn smart_install() -> Response {
+    match crate::smart::install().await {
+        Ok(o) => Json(o).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, format!("{e:#}")),
+    }
 }
 
 async fn smart_scan() -> Response {
@@ -6565,6 +6623,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         || path == "/api/cameras"
         || path.ends_with("/device")
         || path.contains("/device/")
+        || (path.starts_with("/api/cameras/") && path.ends_with("/log"))
     {
         return false;
     }

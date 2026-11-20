@@ -359,6 +359,8 @@ pub enum Kind {
     Objects,
     People,
     Vehicles,
+    /// Cats and dogs together.
+    Pets,
     Animals,
     /// Recognised things that are not people, vehicles or animals.
     Other,
@@ -374,6 +376,7 @@ impl Kind {
             "" | "motion" => Kind::Motion,
             "objects" | "all" => Kind::Objects,
             "people" | "person" => Kind::People,
+            "pets" | "cats and dogs" => Kind::Pets,
             "vehicles" | "vehicle" => Kind::Vehicles,
             "animals" | "animal" => Kind::Animals,
             "other" => Kind::Other,
@@ -399,6 +402,7 @@ impl Kind {
             Kind::Objects => SHOWN.contains(&label),
             Kind::People => label == "person",
             Kind::Vehicles => vehicle,
+            Kind::Pets => label == "cat" || label == "dog",
             Kind::Animals => animal,
             Kind::Other => label != "person" && !vehicle && !animal,
             Kind::Label(l) => label == l,
@@ -504,8 +508,14 @@ pub fn select(raw: &Raw, kind: &Kind) -> Heatmap {
             }
         }
     }
-    let mut labels: Vec<(&String, u64)> = raw.grids.iter().filter(|(l, _)| SHOWN.contains(&l.as_str())).map(|(l, g)| (l, g[COLS * ROWS] as u64)).filter(|(_, n)| *n > 0).collect();
-    labels.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    // The list of what was seen: cats and dogs are one entry ("pets").
+    let mut counted: BTreeMap<String, u64> = BTreeMap::new();
+    for (l, g) in raw.grids.iter().filter(|(l, _)| SHOWN.contains(&l.as_str())) {
+        let name = if l == "cat" || l == "dog" { "pets" } else { l.as_str() };
+        *counted.entry(name.to_string()).or_default() += g[COLS * ROWS] as u64;
+    }
+    let mut labels: Vec<(String, u64)> = counted.into_iter().filter(|(_, n)| *n > 0).collect();
+    labels.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let counts: Vec<u32> = labels.iter().map(|(_, n)| (*n).min(u32::MAX as u64) as u32).collect();
     Heatmap {
         ignored_share: if ign[1] > 0 { ign[0] as f32 / ign[1] as f32 } else { 0.0 },
@@ -519,7 +529,7 @@ pub fn select(raw: &Raw, kind: &Kind) -> Heatmap {
         detections,
         hours: raw.hours,
         alerts_used: raw.alerts_used,
-        labels: labels.into_iter().map(|(l, _)| l.clone()).collect(),
+        labels: labels.into_iter().map(|(l, _)| l).collect(),
     }
 }
 
@@ -533,6 +543,9 @@ mod tests {
         e.boxes = boxes.into_iter().map(|(l, x, y, w, h)| SeenBox { label: l.into(), score: 0.9, x, y, w, h }).collect();
         e
     }
+
+    /// The log's accumulator is shared by the whole program: tests that write to it take turns.
+    static SERIAL: Mutex<()> = Mutex::new(());
 
     fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("nvr-heat-{name}-{}", std::process::id()));
@@ -567,6 +580,7 @@ mod tests {
 
     #[test]
     fn what_is_seen_is_written_to_disk_added_up_and_read_back_by_period_and_kind() {
+        let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let data = scratch("roundtrip");
         let cam = "front";
         let now = Local::now();
@@ -589,10 +603,12 @@ mod tests {
         assert_eq!(select(&raw, &Kind::Other).detections, 1, "the chair");
         assert_eq!(select(&raw, &Kind::Objects).detections, 3, "a person, a truck and a cat: the chair is not shown, nor is motion");
         assert_eq!(select(&raw, &Kind::Label("cat".into())).detections, 1);
+        assert_eq!(select(&raw, &Kind::Pets).detections, 1, "the cat; a dog would count with it");
+        assert_eq!(Kind::parse("pets"), Some(Kind::Pets));
         assert_eq!(select(&raw, &Kind::Label("dog".into())).detections, 0);
         // Which kinds were seen, for the page's choices.
         let labels = select(&raw, &Kind::Objects).labels;
-        for l in ["person", "vehicle", "cat"] {
+        for l in ["person", "vehicle", "pets"] {
             assert!(labels.contains(&l.to_string()), "{labels:?}");
         }
         assert!(!labels.contains(&"chair".to_string()), "only person, vehicle, cat and dog are listed: {labels:?}");
@@ -605,6 +621,7 @@ mod tests {
 
     #[test]
     fn alerts_stand_in_for_the_time_before_the_log_began_and_not_after() {
+        let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let data = scratch("fallback");
         let cam = "side";
         let now = Local::now();
@@ -647,6 +664,7 @@ mod tests {
 
     #[test]
     fn the_areas_ignored_for_motion_are_left_out_by_default_but_always_logged() {
+        let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let data = scratch("ignore");
         let cam = "yard";
         let now = Local::now();

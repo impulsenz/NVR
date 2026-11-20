@@ -703,6 +703,7 @@ impl Manager {
     }
 
     pub async fn delete_camera(&self, id: &str, delete_recordings: bool) -> Result<()> {
+        crate::camlog::forget(id);
         let _g = self.edit.lock().await;
         let mut cfg = self.config();
         let before = cfg.cameras.len();

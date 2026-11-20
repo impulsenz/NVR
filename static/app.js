@@ -1115,6 +1115,7 @@ async function showPlan() {
   try {
     planUI.plan = await api('api/plan');
     planUI.jr = await api(`api/plan/journeys?hours=${planUI.hours}`);
+    drawableJourneys(planUI.jr);
   } catch (e) { root.innerHTML = `<div class="card errc">${esc(e.message)}</div>`; return; }
   renderPlan();
   stopPlanPoll();
@@ -1323,6 +1324,11 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => { if (e.key === ' ') planUI.space = false; });
 
 // ----- drawing the map -----
+// A journey with nothing to show on the map (no path on any calibrated camera) isn't listed.
+function drawableJourneys(jr) {
+  if (jr && jr.journeys) jr.journeys = jr.journeys.filter(j => journeyPolys(j).solid.length);
+  return jr;
+}
 function journeyPolys(j) {
   // Pieces of a path on the map: the walks on calibrated cameras, and dotted hops between cameras.
   const p = planUI.plan, solid = [], dotted = [];
@@ -1346,7 +1352,20 @@ function drawPlanSvg() {
   svg.style.setProperty('--u', u);
   let h = '';
   for (const l of p.links) { const a = p.cameras.find(c => c.id === l.a), b = p.cameras.find(c => c.id === l.b); if (a && b) h += `<line class="pl-link" x1="${a.x * PLAN_W}" y1="${a.y * planH()}" x2="${b.x * PLAN_W}" y2="${b.y * planH()}"/>`; }
-  for (const c of p.cameras) h += `<path class="pl-cone ${planUI.cam === c.id ? 'sel' : ''}" d="${coneD(c, walls)}"/>`;
+  // What each camera looks at: two lines from it at the angle set, and the space between them,
+  // fading out with distance (there is no defined distance, only a direction).
+  let defs = '';
+  p.cameras.forEach((c, i) => {
+    const cx = c.x * PLAN_W, cy = c.y * planH(), R = Math.min(c.range_m * planUnitsPerM(), PLAN_W * 0.6), sel = planUI.cam === c.id;
+    defs += `<radialGradient id="pl-g${i}" gradientUnits="userSpaceOnUse" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R.toFixed(1)}"><stop offset="0" class="pl-gs" stop-opacity="${sel ? .5 : .36}"/><stop offset="1" class="pl-gs" stop-opacity="0"/></radialGradient>`;
+    h += `<path class="pl-cone" fill="url(#pl-g${i})" d="${coneD(c, walls)}"/>`;
+    if (c.fov_deg < 359) for (const [k, sgn] of [[0, -1], [1, 1]]) {
+      const th = (c.rotation_deg + sgn * c.fov_deg / 2) * Math.PI / 180, ex = cx + Math.sin(th) * R, ey = cy - Math.cos(th) * R;
+      defs += `<linearGradient id="pl-l${i}-${k}" gradientUnits="userSpaceOnUse" x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ex.toFixed(1)}" y2="${ey.toFixed(1)}"><stop offset="0" class="pl-gs" stop-opacity="1"/><stop offset="1" class="pl-gs" stop-opacity="0"/></linearGradient>`;
+      h += `<line class="pl-edge ${sel ? 'sel' : ''}" stroke="url(#pl-l${i}-${k})" x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ex.toFixed(1)}" y2="${ey.toFixed(1)}"/>`;
+    }
+  });
+  h = `<defs>${defs}</defs>` + h;
   for (const w of walls) h += `<line class="pl-wall" x1="${w[0].toFixed(1)}" y1="${w[1].toFixed(1)}" x2="${w[2].toFixed(1)}" y2="${w[3].toFixed(1)}"/>`;
   const jrs = (planUI.jr && planUI.jr.journeys) || [];
   if (planUI.all) for (const j of jrs) if (j.id !== planUI.sel) { const {solid} = journeyPolys(j); for (const s of solid) h += `<polyline class="pl-path faint" points="${pl(s)}"/>`; }
@@ -6463,6 +6482,15 @@ function vBars(pieces, gap) {
   return runs.map(r => `<div class="vseg ${r.cls}" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%"></div>`).join('')
     + pieces.filter(x => x.live).map(r => `<div class="vseg ${r.cls} live" style="top:${r.a}%;height:${Math.max(r.b - r.a, 0.15)}%" title="Recording now"></div>`).join('');
 }
+// How wide the vertical timeline must at least be, and how its lines are drawn.
+const VGAP = 10;
+function vtlGeom() {
+  const cams = tl.data.filter(x => !tl.solo || x.camera === tl.solo);
+  const merged = tlMerged() || cams.length < 2, lanes = merged ? 1 : cams.length;
+  const LW = merged ? 48 : lanes > 10 ? 18 : lanes > 6 ? 24 : 30;
+  return {merged, lanes, LW, min: 58 + lanes * (LW + 4) + 8 + (merged ? 130 : 92) + 12};
+}
+let lastVtlW = 0;
 // Merged is the default (its own key, so an old choice of by camera doesn't keep the old default).
 const tlMerged = () => store.get('tl-merge', true) !== false;
 function drawVTimeline() {
@@ -6472,11 +6500,11 @@ function drawVTimeline() {
   const merged = tlMerged() || cams.length < 2;
   const lanes = merged ? [{camera: '', name: 'All cameras', list: cams}] : cams.map(c => ({camera: c.camera, name: c.name, list: [c]}));
   // Width: time scale, a lane for each camera, and a column for alert pictures.
-  // (Merged: one wide line and big alert pictures; by camera: a narrow line each.)
-  const LW = merged ? 40 : lanes.length > 10 ? 18 : lanes.length > 6 ? 24 : 30, THUMB = merged ? 156 : 92, TW = THUMB - 10, TH = Math.round(TW * 9 / 16);
+  // (Merged: one wide line; by camera: a narrow line each. The alert pictures take all the width left:
+  // layoutTlVideos gives this panel every bit of the page the camera pictures can't use.)
+  const geom = vtlGeom(), LW = geom.LW;
+  const TW = Math.max(60, Math.min(420, box.clientWidth - (58 + lanes.length * (LW + 4) + 8) - 12)), TH = Math.round(TW * 9 / 16);
   box.style.setProperty('--vt-w', TW + 'px'); box.style.setProperty('--vt-h', TH + 'px');
-  const wantW = 58 + lanes.length * (LW + 4) + 10 + THUMB;
-  $('rec-timeline').style.setProperty('--vtl-w', Math.min(Math.max(wantW, 190), 480) + 'px');
   const HEAD = 84, H = Math.max(200, box.clientHeight - HEAD - 28);
   const gap = 15000 / span * 100;
   // Time scale: bands, gridlines, minor ticks and labels.
@@ -6676,7 +6704,10 @@ function layoutTlVideos() {
   const mode = store.get('tl-layout', 'auto'), n = tl.solo ? 1 : els.length, gap = 8;
   box.classList.add('fit');
   box.style.gridTemplateColumns = '';
-  const W = box.clientWidth; if (W < 200) return;
+  const vert = root.classList.contains('vert'), geom = vert ? vtlGeom() : null;
+  // Vertical timeline: the pictures are laid out in what's left after its smallest width; whatever they
+  // can't use goes to the timeline (below).
+  const W = vert ? root.clientWidth - geom.min - VGAP : box.clientWidth; if (W < 200) return;
   // Height left for the pictures: the window, less what is above them and
   // the rest of the page (controls, timeline, key).
   let other = 0;
@@ -6694,6 +6725,12 @@ function layoutTlVideos() {
     if (!best || area > best.area * 1.001 || (Math.abs(area - best.area) < best.area * 0.001 && empty < best.empty)) best = {c, cw, area, empty};
   }
   box.style.gridTemplateColumns = `repeat(${best.c}, ${Math.floor(best.cw)}px)`;
+  if (vert) {
+    const used = best.c * Math.floor(best.cw) + gap * (best.c - 1);
+    const panel = Math.max(geom.min, Math.min(760, Math.floor(root.clientWidth - used - VGAP)));
+    root.style.setProperty('--vtl-w', panel + 'px');
+    if (panel !== lastVtlW) { lastVtlW = panel; requestAnimationFrame(() => drawVTimeline()); }
+  }
 }
 $('tl-layout').value = store.get('tl-layout', 'auto');
 $('tl-layout').onchange = () => { store.set('tl-layout', val('tl-layout')); layoutTlVideos(); };
@@ -7488,7 +7525,7 @@ async function loadLogs(incremental) {
   for (const r of rows) {
     if (box.querySelector('.empty')) box.innerHTML = '';
     logLast = Math.max(logLast, r.id);
-    box.insertAdjacentHTML('beforeend', `<div class="l ${r.kind}"><span class="muted">${fmtDate(r.time)}</span><span class="lv ${r.level}">${r.level.toUpperCase()}</span><span>${esc(r.camera || (r.kind === 'event' ? '' : 'System'))}</span><span class="msg">${esc(r.message.replace(/^\[[^\]]*\]\s*/, ''))}</span></div>`);
+    box.insertAdjacentHTML('beforeend', `<div class="l ${r.kind}"><span class="muted">${fmtDate(r.time)}</span><span class="lv lv-${r.level}">${r.level.toUpperCase()}</span><span>${esc(r.camera || (r.kind === 'event' ? '' : 'System'))}</span><span class="msg">${esc(r.message.replace(/^\[[^\]]*\]\s*/, ''))}</span></div>`);
   }
   while (box.children.length > 3000) box.firstChild.remove();
   if (atBottom || !incremental) box.scrollTop = box.scrollHeight;
@@ -7508,7 +7545,7 @@ async function loadSettings() { [settings, cameraCfgs] = await Promise.all([api(
 // ---------- searching the settings ----------
 // Every setting's name (from each settings page and the camera window's
 // tabs): [section, name, camera tab].
-const SETTINGS_INDEX = [["summary", "Daily summary"], ["summary", "Daily summary: what to show and when"], ["cameras", "Cameras"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Deep storage"], ["storage", "Keep on the local disk for"], ["storage", "Keep in deep storage for"], ["storage", "Each camera"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "Graphics API"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["watchdog", "Watchdog"], ["watchdog", "Restart GAZE if it crashes or stalls"], ["watchdog", "Start with Windows"], ["watchdog", "Checks every"], ["watchdog", "Restart after"], ["watchdog", "Too many restarts"], ["watchdog", "Watchdog updates"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Users, with their camera access and layouts"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["states", "Learned states"], ["states", "What to watch"], ["states", "Its states"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Daily digest"], ["notify", "Send a daily digest"], ["notify", "Send at"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Download voices"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Sounds for"], ["voice", "Warnings"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["voice", "Speak warnings between the wails (in the voice above)"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "Streaming engine"], ["system", "System"], ["system", "trust its own certificate"], ["system", "Other GAZE servers: bring in their cameras"], ["info", "About"], ["info", "Updates"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Where alerts happened", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Package delivery", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Notice parcels delivered or picked up", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "0) ? 'checked' : ''}> Roam between the ticked presets,", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
+const SETTINGS_INDEX = [["summary", "Daily summary"], ["summary", "Daily summary: what to show and when"], ["cameras", "Cameras"], ["storage", "Default file length"], ["storage", "Keep recordings for"], ["storage", "Deep storage"], ["storage", "Keep on the local disk for"], ["storage", "Keep in deep storage for"], ["storage", "Each camera"], ["storage", "Keep alerts for"], ["storage", "Maximum storage"], ["storage", "Keep free on disk"], ["storage", "Time-lapse pictures"], ["storage", "Recording & storage"], ["storage", "Where each camera saves"], ["storage", "🖼️ New time-lapse settings"], ["storage", "Move existing recordings to the new folder"], ["storage", "Time-lapse previews"], ["display", "Smoothness in the grid"], ["display", "Picture size in the grid"], ["display", "Smoothness when opened"], ["display", "Picture quality"], ["display", "Data saver (this browser)"], ["display", "Live pictures (this browser)"], ["display", "Preview"], ["display", "Date & time format"], ["display", "Live view"], ["display", "Keep HD streams ready in the background"], ["ai", "Run AI on"], ["ai", "Graphics API"], ["ai", "AI model"], ["ai", "Model file"], ["ai", "Picture size"], ["ai", "Class names"], ["ai", "Double-check alerts"], ["ai", "How GAZE's AI works"], ["ai", "Object recognition (AI)"], ["ai", "Search alerts by description"], ["ai", "Night boost"], ["hardware", "Video decoding"], ["hardware", "Video encoder"], ["hardware", "Graphics card device"], ["hardware", "Your graphics card"], ["hardware", "GPU acceleration"], ["hardware", "Choose automatically (recommended)"], ["hardware", "Share the work between graphics card and processor"], ["cloud", "Folder"], ["cloud", "NAS login"], ["cloud", "NAS address"], ["cloud", "Login"], ["cloud", "Step 1"], ["cloud", "Step 2"], ["cloud", "Step 3"], ["cloud", "Backup — cloud or NAS"], ["cloud", "Copy new recordings there automatically"], ["watchdog", "Watchdog"], ["watchdog", "Restart GAZE if it crashes or stalls"], ["watchdog", "Start with Windows"], ["watchdog", "Checks every"], ["watchdog", "Restart after"], ["watchdog", "Too many restarts"], ["watchdog", "Watchdog updates"], ["backup", "Export setup"], ["backup", "Import setup"], ["backup", "Users, with their camera access and layouts"], ["backup", "Include passwords, keys and tokens"], ["backup", "Keep this NVR's login and web address"], ["users", "Stay signed in for"], ["users", "Sign out when not used"], ["users", "User name"], ["users", "Password"], ["users", "Access"], ["users", "Cameras"], ["users", "Users"], ["users", "Signing in"], ["users", "Add a user"], ["known", "＋ Photo"], ["known", "New faces & number plates"], ["known", "People & vehicles"], ["known", "Known people and vehicles"], ["known", "Look for faces in alerts and name the people below"], ["known", "Read number plates of vehicles in alerts"], ["states", "Learned states"], ["states", "What to watch"], ["states", "Its states"], ["states", "Package delivery"], ["states", "Notice parcels delivered or picked up"], ["faces", "Check faces"], ["notify", "Topic"], ["notify", "ntfy server"], ["notify", "Access token"], ["notify", "Notify for"], ["notify", "Cameras"], ["notify", "How often"], ["notify", "At night"], ["notify", "Open GAZE at"], ["notify", "Phone notifications"], ["notify", "Daily digest"], ["notify", "Send a daily digest"], ["notify", "Send at"], ["notify", "Home, Away and Night"], ["notify", "Send notifications"], ["notify", "Warn me when something's wrong"], ["notify", "Send a summary when the alert is over"], ["notify", "While at Home, switch to Night by itself during the night hours above"], ["smarthome", "Broker address"], ["smarthome", "Login"], ["smarthome", "Topic prefix"], ["smarthome", "Private link (works without signing in — keep it to yourself)"], ["smarthome", "Home Assistant (MQTT)"], ["smarthome", "Webhooks"], ["smarthome", "Overview of all cameras"], ["smarthome", "Connect to an MQTT broker"], ["smarthome", "Add everything to Home Assistant automatically"], ["smarthome", "Include the alert picture"], ["smarthome", "Only cameras with something going on"], ["voice", "Voice"], ["voice", "Download voices"], ["voice", "Speed"], ["voice", "Loudness"], ["voice", "Ready phrases"], ["voice", "Try it"], ["voice", "Sounds for"], ["voice", "Warnings"], ["voice", "Voice & talking"], ["voice", "Play a short chime first, to get attention"], ["voice", "Speak warnings between the wails (in the voice above)"], ["tasks", "What the AI is doing"], ["tasks", "What runs where"], ["tasks", "Run again"], ["system", "Name of this system"], ["system", "Web address"], ["system", "Port"], ["system", "Reachable from"], ["system", "Secure port"], ["system", "Certificate"], ["system", "ffmpeg program"], ["system", "Streaming engine"], ["system", "System"], ["system", "trust its own certificate"], ["system", "Other GAZE servers: bring in their cameras"], ["info", "About"], ["info", "Updates"], ["info", "Install updates automatically"], ["camera", "Name", "general"], ["camera", "Camera brand", "general"], ["camera", "IP address", "general"], ["camera", "Camera login", "general"], ["camera", "Main stream (HD)", "general"], ["camera", "Sub-stream (low resolution)", "general"], ["camera", "Rotate picture", "general"], ["camera", "Privacy areas", "general"], ["camera", "Fisheye (360°) camera", "general"], ["camera", "Stream live", "general"], ["camera", "Connection type", "general"], ["camera", "Picture in the grid", "general"], ["camera", "Smoothness in the grid", "general"], ["camera", "Smoothness when opened", "general"], ["camera", "Camera enabled", "general"], ["camera", "Show a flat picture instead of the circle", "general"], ["camera", "Stream this camera live", "general"], ["camera", "Recording mode", "recording"], ["camera", "Schedule", "recording"], ["camera", "Recording frame rate", "recording"], ["camera", "File length", "recording"], ["camera", "Storage folder", "recording"], ["camera", "Keep recordings for", "recording"], ["camera", "Space for this camera", "recording"], ["camera", "Only record on a schedule", "recording"], ["camera", "Also record the sub-stream, for a quick timeline", "recording"], ["camera", "Convert recordings to H.264", "recording"], ["camera", "Move existing recordings to the new folder", "recording"], ["camera", "Sensitivity", "detection"], ["camera", "Smallest movement", "detection"], ["camera", "Must move for", "detection"], ["camera", "Must move at least", "detection"], ["camera", "Ignore areas", "detection"], ["camera", "Where alerts happened", "detection"], ["camera", "Brush", "detection"], ["camera", "Record before alert", "detection"], ["camera", "Record after activity stops", "detection"], ["camera", "Join alerts within", "detection"], ["camera", "Analysis frame rate", "detection"], ["camera", "Motion detection", "detection"], ["camera", "Recording", "audio"], ["camera", "Live sound", "audio"], ["camera", "Two-way audio", "audio"], ["camera", "Sound detection", "audio"], ["camera", "Sensitivity", "audio"], ["camera", "Record audio", "audio"], ["camera", "Speaker button on the live picture", "audio"], ["camera", "Talk through this camera's speaker", "audio"], ["camera", "Listen for sounds and alert on them", "audio"], ["camera", "Alert on", "ai"], ["camera", "How sure the AI must be", "ai"], ["camera", "What makes an alert", "ai"], ["camera", "Double-check in full quality (HD)", "ai"], ["camera", "AI looks every", "ai"], ["camera", "Stationary objects", "ai"], ["camera", "Brush", "ai"], ["camera", "Camera's own detection", "ai"], ["camera", "Object recognition (AI)", "ai"], ["camera", "Stop alerting for objects that stay in one place", "ai"], ["camera", "Use what the camera itself detects", "ai"], ["camera", "Also the camera's plain motion detection", "ai"], ["camera", "Preview", "osd"], ["camera", "Date & time format", "osd"], ["camera", "Use settings just for this camera", "osd"], ["camera", "Camera address", "ptz"], ["camera", "Control port", "ptz"], ["camera", "Control login", "ptz"], ["camera", "Speed", "ptz"], ["camera", "Patrol", "ptz"], ["camera", "This camera can pan, tilt or zoom", "ptz"], ["camera", "Reverse left/right", "ptz"], ["camera", "Reverse up/down", "ptz"], ["camera", "0) ? 'checked' : ''}> Roam between the ticked presets,", "ptz"], ["camera", "Follow people (auto-tracking)", "ptz"], ["camera", "ONVIF camera settings", "device"], ["camera", "Camera IP address and network (ONVIF)", "device"], ["camera", "Camera date & time / time zone", "device"], ["camera", "Camera video streams: resolution, frame rate, bitrate", "device"], ["camera", "Camera picture: brightness, contrast, day / night", "device"], ["camera", "Open the camera's web page", "device"]];
 const CAM_TABS = {general: 'General', recording: 'Recording', detection: 'Motion', ai: 'AI', audio: 'Audio', osd: 'On-screen display', ptz: 'Pan / tilt / zoom', device: 'ONVIF', zones: 'Zones'};
 function sectionName(sec) { const a = document.querySelector(`#side a[data-s="${sec}"]`); return a ? a.textContent.trim() : sec; }
 // Find a setting's row on the page (or in the camera window) and show it.
@@ -7582,6 +7619,7 @@ async function showSettings(sec) {
 }
 function drawSettings() {
   camPreviewUnbind.splice(0).forEach(u => u());
+  if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; }
   const body = $('settings-body');
   // The log view is kept, and lent to the Logs section while it's open.
   const lb = $('logs-box'); if (lb.parentElement !== $('page-logs')) $('page-logs').appendChild(lb);
@@ -7840,7 +7878,7 @@ async function openCameraDialog(id, clone) {
       ${id && !clone && cameraCfgs.length > 1 ? (() => { const i = cameraCfgs.findIndex(x => x.id === id); return `<span class="cam-nav"><button type="button" class="small" data-nav="-1" title="Previous camera">◀</button><span class="muted small">${i + 1} of ${cameraCfgs.length}</span><button type="button" class="small" data-nav="1" title="Next camera">▶</button></span>`; })() : ''}
       <button type="button" class="small" data-close>✕</button></div>
     <div class="body">
-      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">ONVIF</button><button type="button" data-t="zones">Zones</button></div>
+      <div class="tabs" id="c-tabs"><button type="button" data-t="general" class="active">General</button><button type="button" data-t="recording">Recording</button><button type="button" data-t="detection">Motion</button><button type="button" data-t="ai">AI</button><button type="button" data-t="audio">Audio</button><button type="button" data-t="osd">On-screen display</button><button type="button" data-t="ptz">Pan / tilt / zoom</button><button type="button" data-t="device">ONVIF</button><button type="button" data-t="zones">Zones</button>${id && !clone ? '<button type="button" data-t="log" title="This camera\u2019s own log: what the camera itself detects, its alerts, its connection">Log</button>' : ''}</div>
       <div data-tab="general" class="form">
         <label for="c-name">Name</label><div><input type="text" id="c-name" required value="${esc(c.name)}" placeholder="Front door"></div>
         <span></span><label class="check"><input type="checkbox" id="c-enabled" ${c.enabled ? 'checked' : ''}> Camera enabled</label>
@@ -8017,16 +8055,6 @@ async function openCameraDialog(id, clone) {
             return `<div class="chips" id="d-parked-objs" style="margin-top:4px">${objs.map(chip).join('')}</div>
               <details class="more-objs"><summary>More things to watch for…</summary><div class="chips" id="d-parked-more">${rest.map(chip).join('')}</div></details>`; })()}
 </div>
-        <label>Package delivery</label>
-        <div><label class="check"><input type="checkbox" id="d-pkg" ${c.detect.packages ? 'checked' : ''}> Notice parcels delivered or picked up</label>
-          <div class="surface" id="d-pkg-area" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair;margin-top:6px">
-            <img alt="" id="d-pkg-img" style="object-fit:fill"><div class="msg">${id && !clone ? '' : 'Save the camera first to see its picture here.'}</div>
-            <canvas id="d-pkg-grid" width="160" height="90" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated"></canvas></div>
-          <div class="row mask-tools" style="margin-top:6px">
-            <div class="seg" id="d-pkg-tool"><button type="button" class="small on" data-v="paint">🖌 Paint</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
-            <label class="muted small" style="margin:0">Brush <select id="d-pkg-brush" class="small"><option value="1">Fine</option><option value="3">Small</option><option value="7" selected>Medium</option><option value="15">Large</option></select></label>
-            <button type="button" class="small" id="d-pkg-clear">Clear</button></div>
-          <div class="hint" style="margin:4px 0 0" id="d-pkg-hint">Paint over where parcels are left (doorstep, porch) — just that spot. After each visit GAZE compares it with how it looked before, and notes a parcel left or taken, with before and after pictures in the alert. It must stay a minute to count.</div></div>
         <label>Camera's own detection</label>
         <div><label class="check"><input type="checkbox" id="c-onvif-ev" ${c.onvif_events ? 'checked' : ''}> Use what the camera itself detects${tip('Many cameras detect people, vehicles, line crossings or a doorbell press themselves (Tapo, Hikvision, Dahua, Reolink, Amcrest\u2026). With this on, those become alerts in GAZE too \u2014 a doorbell press always notifies. Uses ONVIF events, with the Control address, port and login on the Pan / tilt / zoom tab (the same as the video, unless you changed them).')}</label>
           <label class="check" style="margin-top:4px"><input type="checkbox" id="c-onvif-mo" ${c.onvif_motion ? 'checked' : ''}> Also the camera's plain motion detection${tip('Usually not needed: GAZE does its own motion detection. Turn on for a camera whose own motion detection works better (e.g. a battery or PIR camera).')}</label>
@@ -8061,6 +8089,12 @@ async function openCameraDialog(id, clone) {
         <span></span><div><button type="button" id="p-test">Test PTZ connection</button><div id="p-result" class="hint" style="margin-top:6px"></div></div>
       </div>
       <div data-tab="device" hidden><div id="dv-body"></div></div>
+      ${id && !clone ? `<div data-tab="log" hidden>
+        <div class="row" style="margin-bottom:8px"><div class="seg" id="cl-kind">${[['', 'All'], ['camera', 'What the camera detects'], ['alert', 'Alerts'], ['connection', 'Connection & recording']].map(([k, t], i) => `<button type="button" class="small ${i ? '' : 'on'}" data-k="${k}">${t}</button>`).join('')}</div>
+          <input type="search" id="cl-q" placeholder="Find…" style="width:160px"><span class="spacer"></span>
+          <label class="check small"><input type="checkbox" id="cl-auto" checked> Update by itself</label><button type="button" class="small" id="cl-refresh">↻</button></div>
+        <div class="hint" id="cl-hint" style="margin:0 0 8px"></div>
+        <div class="cl-list" id="cl-list"><span class="muted">Loading…</span></div></div>` : ''}
       <div data-tab="zones" hidden>
         <div class="row" style="margin-bottom:8px"><button type="button" id="z-add-area">＋ Area</button><button type="button" id="z-add-line">＋ Line</button>
           <span class="muted" id="z-msg">Click on the picture to place the corners; click the first corner (or Done) to finish.</span>${tip('Areas: alert only for things inside them, or when something stays too long (loitering). Lines: alert when something crosses, in one or both directions — e.g. a line across your gate. Each can be limited to some kinds of objects.')}<button type="button" id="z-done" hidden class="primary">Done</button></div>
@@ -8079,6 +8113,7 @@ async function openCameraDialog(id, clone) {
     f.querySelectorAll('[data-tab]').forEach(t => t.hidden = t.dataset.tab !== b.dataset.t);
     if (b.dataset.t === 'device' && !deviceLoaded) loadDeviceTab();
     if (b.dataset.t === 'zones') drawZones();
+    if (b.dataset.t === 'log') startCamLog(id); else stopCamLog();
   });
   deviceLoaded = false; deviceDirty = new Set(); saveDevice = null;
   setupRestartButton(id && !clone ? id : null);
@@ -8110,7 +8145,8 @@ async function openCameraDialog(id, clone) {
     });
   }
   setupZones(c, id && !clone ? id : null);
-  setupPackageArea(c, id && !clone ? id : null);
+  // Package delivery moved to Settings → Learned states: this window keeps what the camera has.
+  camPkgKeep = {packages: !!c.detect.packages, package_mask: c.detect.package_mask || ''};
   // Passwords hidden: in the stream addresses too, with an eye to show them.
   for (const x of ['c-url', 'c-live', 'c-talk-url']) if ($(x)) maskUrlInput($(x));
   for (const x of ['q-pass', 'p-pass', 'c-rtmp']) if ($(x)) eyeFor($(x));
@@ -8211,7 +8247,7 @@ async function openCameraDialog(id, clone) {
   if (!$('cam-dialog').open) $('cam-dialog').showModal();
 }
 function closeCameraDialog() { stopPreviews(); $('cam-dialog').close(); }
-$('cam-dialog').addEventListener('close', () => { if (privUnbind) { privUnbind(); privUnbind = null; } if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; } stopPreviews(); stopMotionMeter(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });
+$('cam-dialog').addEventListener('close', () => { if (privUnbind) { privUnbind(); privUnbind = null; } if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; } stopPreviews(); stopMotionMeter(); stopCamLog(); if (osdPrevUnbind) { osdPrevUnbind(); osdPrevUnbind = null; } if (zoneUnbind) { zoneUnbind(); zoneUnbind = null; } });
 
 // ---------- privacy areas: drawn on the picture ----------
 // Drawn with a brush on a grid (like the ignore areas); stored as boxes
@@ -8339,24 +8375,36 @@ function setupMaskEditor(mask, camId) {
     meterTimer = setInterval(() => updateMotionMeter(camId), 500);
   }
 }
-// Package delivery spot (camera → AI): painted on the camera picture like
-// the ignore areas.
-let pkgCells = [], pkgUnbind = null;
-function setupPackageArea(c, camId) {
-  pkgCells = decodeMask(c.detect.package_mask);
-  const paint = wirePainter({cv: $('d-pkg-grid'), cells: () => pkgCells, rgba: [255, 176, 32, 120], tools: $('d-pkg-tool'), brush: $('d-pkg-brush'), brushKey: 'pkgBrush', brushDefault: '7',
-    changed: () => { if (pkgCells.some(x => x)) $('d-pkg').checked = true; }});
-  $('d-pkg-clear').onclick = () => { pkgCells.fill(false); paint(); };
-  // The camera's live picture (light stream 2, as for the motion mask).
-  if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; }
-  if (camId) {
-    const img = $('d-pkg-img'), m = $('d-pkg-area').querySelector('.msg');
-    if (m) { m.textContent = 'Connecting…'; m.hidden = false; }
-    img.onload = () => { if (m) m.hidden = true; };
-    pkgUnbind = Live.bind(img, camId, 'sub');
-  }
+// ---------- Camera window → Log ----------
+// One camera's log: what the camera itself reported (person, vehicle, line
+// crossing, doorbell press, tampering … over ONVIF), its alerts, and its
+// connection / recording lines (camlog.rs + the system log). Admin only.
+let camLogTimer = null, camLogKind = '', camLogId = null;
+function stopCamLog() { clearInterval(camLogTimer); camLogTimer = null; }
+async function loadCamLog() {
+  const box = $('cl-list'); if (!box || !camLogId) return;
+  let r;
+  try { r = await api(`api/cameras/${enc(camLogId)}/log?kind=${enc(camLogKind)}&q=${enc(val('cl-q'))}&limit=300`); }
+  catch (e) { box.innerHTML = `<span class="errc">${esc(e.message)}</span>`; return; }
+  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  $('cl-hint').innerHTML = r.own_detection ? '' : 'The camera’s own detection is off, so nothing from the camera is logged. Turn on <b>Use what the camera itself detects</b> on the AI tab to log its person, vehicle, line crossing, doorbell press and tampering events here.';
+  const tag = {camera: ['📷', 'cl-cam', 'Camera'], alert: ['🔔', 'cl-alert', 'Alert'], connection: ['🔌', 'cl-sys', 'Connection'], system: ['⚙', 'cl-sys', 'System']};
+  box.innerHTML = r.entries.length ? r.entries.map(e => { const t = tag[e.kind] || tag.system;
+    return `<div class="cl-row ${e.level === 'error' ? 'err' : e.level === 'warn' ? 'warn' : ''}"><span class="cl-t">${esc(fmtDate(e.time, 'DD/MM HH:mm:ss'))}</span><span class="cl-k ${t[1]}" title="${t[2]}">${t[0]}</span><span class="cl-m">${esc(e.message)}${e.topic ? `<small title="${esc(e.topic)}"> · ${esc(e.topic.split('/').pop())}</small>` : ''}</span></div>`; }).join('')
+    : '<span class="muted">Nothing logged for this yet.</span>';
+  if (near) box.scrollTop = box.scrollHeight;
 }
-
+function startCamLog(id) {
+  camLogId = id; stopCamLog();
+  document.querySelectorAll('#cl-kind [data-k]').forEach(b => b.onclick = () => { camLogKind = b.dataset.k; document.querySelectorAll('#cl-kind [data-k]').forEach(x => x.classList.toggle('on', x === b)); loadCamLog(); });
+  $('cl-q').oninput = () => { clearTimeout($('cl-q')._t); $('cl-q')._t = setTimeout(loadCamLog, 250); };
+  $('cl-refresh').onclick = loadCamLog;
+  loadCamLog().then(() => { const b = $('cl-list'); if (b) b.scrollTop = b.scrollHeight; });
+  camLogTimer = setInterval(() => { if ($('cl-auto') && $('cl-auto').checked) loadCamLog(); }, 4000);
+}
+// Package delivery: kept by the camera dialog untouched (it is set up under Settings → Learned states).
+let camPkgKeep = {packages: false, package_mask: ''};
+let pkgCells = [], pkgUnbind = null;
 // A password box with an eye button that shows or hides what's typed.
 // (Every password box has its eye now — see addPasswordEyes.)
 function eyeFor(input) {
@@ -8597,7 +8645,7 @@ function collectCamera() {
     detect: {motion: chk('d-motion'), min_contrast: num('d-contrast'), min_object_px: Math.round(num('d-objpx')),
       make_time_ms: Math.round(num('d-make') * 1000), min_travel_px: Math.round(num('d-travel')), mask: maskValue(), ai: chk('d-ai'), objects, min_confidence: num('d-conf') / 100,
       trigger: val('d-trig'), pre_seconds: Math.round(num('d-pre')), post_seconds: Math.round(num('d-post')), join_seconds: Math.max(0, Math.round(num('d-join')) || 0), fps: Math.round(num('d-fps')), ai_interval: num('d-int'), ignore_parked: chk('d-parked'), ignore_animals: chk('d-animals'), ignore_pets: chk('d-pets'), hd_check: val('d-hdcheck'), ai_ignores_mask: chk('d-mask-ai'), parked_seconds: Math.max(10, Math.round(num('d-parked-s')) || 60),
-      parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked, #d-parked-more input:checked')].map(i => i.value), packages: chk('d-pkg') && pkgCells.some(x => x), package_mask: encodeCells(pkgCells), package_area: []},
+      parked_objects: [...document.querySelectorAll('#d-parked-objs input:checked, #d-parked-more input:checked')].map(i => i.value), packages: camPkgKeep.packages, package_mask: camPkgKeep.package_mask, package_area: []},
   };
 }
 // ---------- restart the camera over ONVIF ----------
@@ -9738,10 +9786,22 @@ async function renderSystemSettings(body) {
     const tag = (h) => h === 'ok' ? '<b class="ok">Healthy</b>' : h === 'warning' ? '<b class="warnc">Needs attention</b>' : h === 'failing' ? '<b class="errc">Failing</b>' : '<span class="muted">No data</span>';
     return `<div class="card" id="drives"><h2>Drive health${tip('Reads each drive’s own health report (SMART) through smartctl, which is installed separately (smartmontools). It checks every few hours and notifies you, under “Warn me when something’s wrong”, if a drive starts to fail, before the footage on it is lost.')}</h2>
       ${o.drives.length ? `<table class="users"><thead><tr><th>Drive</th><th>Type</th><th>Size</th><th>Temp</th><th>Age</th><th>Health</th></tr></thead><tbody>${o.drives.map(d => `<tr><td><b>${esc(d.model || d.name)}</b><div class="muted small">${esc(d.name)}</div></td><td>${esc(d.kind)}</td><td>${d.size_gb ? (d.size_gb >= 1000 ? (d.size_gb / 1000).toFixed(1) + ' TB' : d.size_gb + ' GB') : ''}</td><td>${d.temperature_c != null ? d.temperature_c + ' °C' : ''}</td><td>${d.power_on_hours != null ? Math.round(d.power_on_hours / 24) + ' days' : ''}</td><td>${tag(d.health)}${d.problems.map(x => `<div class="small">${esc(x)}</div>`).join('')}${d.note ? `<div class="muted small">${esc(d.note)}</div>` : ''}</td></tr>`).join('')}</tbody></table>` : `<p class="muted" style="margin-top:0">${esc(o.note || 'Not checked yet.')}</p>`}
+      ${o.installed ? '' : `<div class="dr-install"><b>Recommended: smartmontools</b>
+        <div class="muted small">A free, open-source program (smartmontools.org) that reads each drive's own health report — the standard tool for it. GAZE only reads from it; it never writes to your drives.</div>
+        ${o.can_install ? `<div class="row" style="margin-top:8px"><button type="button" class="primary" id="dr-install" ${o.installing ? 'disabled' : ''}>${o.installing ? 'Installing…' : '⬇ Install smartmontools'}</button>
+          <span class="muted small">Downloads the installer (1.4 MB), checks it is the genuine one, installs it quietly and checks your drives. Windows may ask for administrator permission.</span></div>`
+          : `<div class="small" style="margin-top:6px">Install it with: <code>${esc(o.install_hint || 'your package manager')}</code></div>`}</div>`}
       <div class="actions"><button type="button" id="dr-scan">Check now</button><span class="muted small" style="margin-left:auto">${o.checked ? 'Last checked ' + fmtDate(o.checked) : ''}</span></div></div>`;
   };
   body.insertAdjacentHTML('beforeend', await driveCard());
-  const wireDrives = () => { const b = $('dr-scan'); if (b) b.onclick = async () => { b.disabled = true; b.textContent = 'Checking…'; try { await api('api/smart/scan', {method: 'POST'}); } catch (e) { toast(e.message, true); } $('drives').outerHTML = await driveCard(); wireDrives(); }; };
+  const wireDrives = () => {
+    const ib = $('dr-install');
+    if (ib) ib.onclick = async () => {
+      ib.disabled = true; ib.textContent = 'Installing… (about a minute)';
+      try { await api('api/smart/install', {method: 'POST'}); toast('smartmontools installed'); } catch (e) { toast(e.message, true); }
+      $('drives').outerHTML = await driveCard(); wireDrives();
+    };
+    const b = $('dr-scan'); if (b) b.onclick = async () => { b.disabled = true; b.textContent = 'Checking…'; try { await api('api/smart/scan', {method: 'POST'}); } catch (e) { toast(e.message, true); } $('drives').outerHTML = await driveCard(); wireDrives(); }; };
   wireDrives();
 }
 
@@ -10098,8 +10158,10 @@ async function renderStates(body) {
       <label for="st-nm">What to watch</label><div><input type="text" id="st-nm" maxlength="40" placeholder="Garage door"></div>
       <label for="st-ls">Its states</label><div><input type="text" id="st-ls" placeholder="open, closed"><div class="hint">Separate with commas; you can add more later.</div></div>
     </div><div class="actions"><button type="button" class="primary" id="st-new">Create</button></div>` : '<p class="muted">Only an admin can change these.</p>'}</div>
-    ${list.map(card).join('') || '<div class="card muted">Nothing learned yet.</div>'}`;
+    ${list.map(card).join('') || '<div class="card muted">Nothing learned yet.</div>'}
+    <div id="pkg-sec"></div>`;
   const again = () => renderStates(body);
+  packageSection($('pkg-sec'));
   if (admin) $('st-new').onclick = async () => {
     const labels = val('st-ls').split(',').map(x => x.trim()).filter(Boolean);
     try { await api('api/states', {method: 'POST', json: {camera: val('st-cam'), name: val('st-nm'), labels}}); toast('Created — now add an example of each state'); again(); } catch (e) { toast(e.message, true); }
@@ -10132,6 +10194,55 @@ async function renderStates(body) {
       try { await api(`api/states/${enc(id)}`, {method: 'PUT', json: {name: el.querySelector('.st-name').value, region, interval_secs: Math.round(+el.querySelector('.st-int').value) || 10, notify: el.querySelector('.st-not').checked}}); toast('Saved'); again(); } catch (e) { toast(e.message, true); }
     };
   });
+}
+
+// ---------- Settings → Learned states → Package delivery ----------
+// Was on each camera's AI tab. Per camera: a painted spot (where parcels are
+// left) and a switch; the settings are the camera's `detect.packages` and
+// `detect.package_mask`, unchanged. See detect.rs.
+let pkgCam = null;
+function packageSection(box) {
+  if (!box) return;
+  const admin = isAdmin(), cfgs = cameraCfgs;
+  if (!cfgs.length) { box.innerHTML = ''; return; }
+  if (!cfgs.some(c => c.id === pkgCam)) pkgCam = (cfgs.find(c => c.detect.packages) || cfgs[0]).id;
+  const cur = cfgs.find(c => c.id === pkgCam);
+  const on = (c) => c.detect.packages && decodeMask(c.detect.package_mask).some(x => x);
+  const chips = cfgs.map(c => `<button type="button" class="pkg-chip ${c.id === pkgCam ? 'sel' : ''} ${on(c) ? 'on' : ''}" data-id="${esc(c.id)}" title="${on(c) ? 'Watching for parcels' : 'Not watching for parcels'}">${on(c) ? '📦' : '○'} ${esc(c.name)}</button>`).join('');
+  box.innerHTML = `<div class="card pkg-card"><h2>📦 Package delivery${tip('GAZE compares one spot of the picture before and after each visit. Nothing is learned in advance: it only needs the spot painted. Switched on per camera.')}</h2>
+    <p class="muted" style="margin-top:0">Get told when a <b>parcel is left or taken</b>. Pick a camera, paint the spot where parcels are left (the doorstep or porch — just that spot) and switch it on.</p>
+    <ol class="pkg-how muted small"><li>After each visit, GAZE compares that spot with how it looked before.</li><li>Something new there for a full minute: <b>parcel left</b>. Something gone: <b>parcel taken</b>.</li><li>The alert has the before and after pictures.</li></ol>
+    <div class="pkg-chips">${chips}</div>
+    <div class="pkg-edit"><label class="check"><input type="checkbox" id="pk-on" ${cur.detect.packages ? 'checked' : ''} ${admin ? '' : 'disabled'}> Notice parcels delivered or picked up on <b>${esc(cur.name)}</b></label>
+      <div class="surface" id="d-pkg-area" style="aspect-ratio:16/9;max-width:560px;touch-action:none;cursor:crosshair;margin-top:6px">
+        <img alt="" id="d-pkg-img" style="object-fit:fill"><div class="msg">Connecting…</div>
+        <canvas id="d-pkg-grid" width="160" height="90" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated"></canvas></div>
+      ${admin ? `<div class="row mask-tools" style="margin-top:6px">
+        <div class="seg" id="d-pkg-tool"><button type="button" class="small on" data-v="paint">🖌 Paint</button><button type="button" class="small" data-v="erase">⌫ Erase</button></div>
+        <label class="muted small" style="margin:0">Brush <select id="d-pkg-brush" class="small"><option value="1">Fine</option><option value="3">Small</option><option value="7" selected>Medium</option><option value="15">Large</option></select></label>
+        <button type="button" class="small" id="d-pkg-clear">Clear</button><span class="spacer"></span><button type="button" class="primary" id="pk-save">Save</button></div>` : '<div class="hint">Only an admin can change this.</div>'}
+      <div class="hint" id="pk-hint">The spot must stay changed for a minute to count. Needs motion detection on for the camera.</div></div></div>`;
+  pkgCells = decodeMask(cur.detect.package_mask);
+  if (pkgUnbind) { pkgUnbind(); pkgUnbind = null; }
+  const img = $('d-pkg-img'), m = $('d-pkg-area').querySelector('.msg');
+  img.onload = () => { m.hidden = true; };
+  pkgUnbind = Live.bind(img, cur.id, 'sub');
+  const draw = () => { const g = $('d-pkg-grid'); if (g) { const x = g.getContext('2d'); x.clearRect(0, 0, g.width, g.height); const [r, gg, b] = [255, 176, 32]; x.fillStyle = `rgba(${r}, ${gg}, ${b}, 0.47)`; pkgCells.forEach((v, i) => { if (v) x.fillRect(i % MASK_W, Math.floor(i / MASK_W), 1, 1); }); } };
+  if (admin) {
+    const paint = wirePainter({cv: $('d-pkg-grid'), cells: () => pkgCells, rgba: [255, 176, 32, 120], tools: $('d-pkg-tool'), brush: $('d-pkg-brush'), brushKey: 'pkgBrush', brushDefault: '7',
+      changed: () => { if (pkgCells.some(x => x)) $('pk-on').checked = true; }});
+    $('d-pkg-clear').onclick = () => { pkgCells.fill(false); paint(); };
+    $('pk-save').onclick = async () => {
+      const wanted = chk('pk-on');
+      if (wanted && !pkgCells.some(x => x)) return toast('Paint the spot where parcels are left first', true);
+      try {
+        await api(`api/cameras/${enc(cur.id)}?move_recordings=false`, {method: 'PUT', json: {...cur, detect: {...cur.detect, packages: wanted, package_mask: encodeCells(pkgCells)}}});
+        toast(wanted ? 'Watching for parcels on ' + cur.name : 'Package delivery is off for ' + cur.name);
+        await loadSettings(); await refreshStatus(); packageSection(box);
+      } catch (e) { toast(e.message, true); }
+    };
+  } else draw();
+  box.querySelectorAll('.pkg-chip').forEach(b => b.onclick = () => { pkgCam = b.dataset.id; packageSection(box); });
 }
 
 async function renderKnown(body) {
@@ -10245,7 +10356,7 @@ async function renderKnown(body) {
 const HEAT_KINDS = [['motion', 'Motion', 'Everything that moved.'],
   ['unexplained', 'Unexplained motion', 'Movement in which the AI never found a person, vehicle, animal or anything else: usually branches, flags, shadows or reflections. These are the places to paint as ignore areas to avoid motion alerts. (Tick "Include areas ignored in the Motion settings" to see the ones you have already painted.)'],
   ['objects', 'Everything the AI sees', 'People, vehicles, cats and dogs the AI recognised, whether or not they raise an alert.'],
-  ['people', 'People', ''], ['vehicles', 'Vehicles', 'Cars, trucks, buses, motorbikes and bicycles.'], ['label:cat', 'Cats', ''], ['label:dog', 'Dogs', '']];
+  ['people', 'People', ''], ['vehicles', 'Vehicles', 'Cars, trucks, buses, motorbikes and bicycles.'], ['pets', 'Cats and dogs', 'Cats and dogs together.']];
 const HEAT_SIZES = [['s', 'Small', 240], ['m', 'Medium', 340], ['l', 'Large', 520]];
 const HEAT_KIND_OK = (k) => HEAT_KINDS.some(x => x[0] === k);
 const heat = {days: +store.get('heat-days', 7) || 7, kind: HEAT_KIND_OK(store.get('heat-kind', 'motion')) ? store.get('heat-kind', 'motion') : 'motion', data: null, cam: null, timer: null,
@@ -10348,8 +10459,8 @@ function renderHeat() {
     if (c.has_ignore && pct > 0) chips.push(`<span class="heat-stat ign" title="${heat.incl ? 'This part of the heat is inside the areas painted as ignore in this camera’s Motion settings (counted, because “Include ignored areas” is ticked).' : 'This part of the heat was inside the areas painted as ignore in this camera’s Motion settings, and is left out. It is still logged: tick “Include areas ignored in the Motion settings” to see it.'}">${pct}% in ignored areas ${heat.incl ? '(included)' : '(left out)'}</span>`);
     return chips.join('');
   };
-  const stage = (c) => `<div class="heat-stage"><img alt="" src="live/${enc(c.camera)}/frame.jpg?t=${Date.now()}" onerror="this.style.visibility='hidden'"><canvas class="heat-cv" data-i="${esc(c.camera)}"></canvas>${heat.mask && c.has_ignore ? `<canvas class="heat-mask" width="${MASK_W}" height="${MASK_H}" data-m="${esc(c.camera)}"></canvas>` : ''}${c.heat.detections ? '' : `<div class="heat-empty">${c.heat.ignored_share > 0 && !heat.incl ? 'Everything logged here was inside an ignored area.<br>Tick “Include areas ignored in the Motion settings” to see it.' : 'Nothing logged for this yet.'}</div>`}</div>`;
-  const actions = (c) => `${isAdmin() ? `<button type="button" class="small" data-ign="${esc(c.camera)}" title="Open this camera’s Motion settings to paint areas to ignore">Ignore areas…</button><button type="button" class="small" data-edit="${esc(c.camera)}" title="Open this camera’s settings">Edit camera</button>` : ''}${heat.cam ? '' : `<a class="btn small" href="#heat/${enc(c.camera)}">Open</a>`}`;
+  const stage = (c) => `<div class="heat-stage ${heat.cam ? '' : 'openable'}" ${heat.cam ? '' : `data-open="${esc(c.camera)}" title="Click to open ${esc(c.name)}"`}><img alt="" src="live/${enc(c.camera)}/frame.jpg?t=${Date.now()}" onerror="this.style.visibility='hidden'"><canvas class="heat-cv" data-i="${esc(c.camera)}"></canvas>${heat.mask && c.has_ignore ? `<canvas class="heat-mask" width="${MASK_W}" height="${MASK_H}" data-m="${esc(c.camera)}"></canvas>` : ''}${c.heat.detections ? '' : `<div class="heat-empty">${c.heat.ignored_share > 0 && !heat.incl ? 'Everything logged here was inside an ignored area.<br>Tick “Include areas ignored in the Motion settings” to see it.' : 'Nothing logged for this yet.'}</div>`}</div>`;
+  const actions = (c) => `${isAdmin() ? `<button type="button" class="small" data-ign="${esc(c.camera)}" title="Open this camera’s Motion settings to paint areas to ignore">Ignore areas…</button><button type="button" class="small" data-edit="${esc(c.camera)}" title="Open this camera’s settings">Edit camera</button>` : ''}`;
   const card = (c) => `<article class="heat-card ${c.heat.detections ? '' : 'quiet'}" data-cam="${esc(c.camera)}">
       <div class="heat-head"><b>${esc(c.name)}</b><span class="spacer"></span>${actions(c)}</div>
       ${stage(c)}
@@ -10361,7 +10472,7 @@ function renderHeat() {
       <aside class="heat-side">
         <div class="card"><h3>This camera</h3><div class="heat-stats col">${stat(c)}</div></div>
         <div class="card"><h3>When it happens${tip('Detections by hour of the day, over the period chosen. The busiest hour is marked.')}</h3>${h.detections ? heatHours(h.hourly, true) : '<span class="muted small">Nothing yet.</span>'}</div>
-        <div class="card"><h3>What the AI saw${tip('Every kind of object recognised in the period. Click one to see only where it was.')}</h3>${top.length ? top.map((l, i) => `<button type="button" class="heat-bar ${one === l ? 'on' : ''}" data-l="${esc(l)}"><span>${labelIcon(l)} ${esc(l)}</span><i style="width:${Math.max(3, Math.round(h.counts[i] / mx * 100))}%"></i><em>${h.counts[i].toLocaleString()}</em></button>`).join('') : '<span class="muted small">No objects recognised yet.</span>'}</div>
+        <div class="card"><h3>What the AI saw${tip('Every kind of object recognised in the period. Click one to see only where it was.')}</h3>${top.length ? top.map((l, i) => `<button type="button" class="heat-bar ${(one === l || heat.kind === l) ? 'on' : ''}" data-l="${esc(l)}"><span>${l === 'pets' ? '🐾 cats and dogs' : `${labelIcon(l)} ${esc(l)}`}</span><i style="width:${Math.max(3, Math.round(h.counts[i] / mx * 100))}%"></i><em>${h.counts[i].toLocaleString()}</em></button>`).join('') : '<span class="muted small">No objects recognised yet.</span>'}</div>
       </aside></div>`;
   };
   root.style.setProperty('--heat-min', size[2] + 'px');
@@ -10399,7 +10510,8 @@ function renderHeat() {
   root.querySelectorAll('#ht-size [data-s]').forEach(b => b.onclick = () => { heat.size = b.dataset.s; store.set('heat-size', heat.size); renderHeat(); });
   root.querySelectorAll('.heat-cam').forEach(b => b.onclick = () => { const k = b.dataset.cam; heat.off.has(k) ? heat.off.delete(k) : heat.off.add(k); store.set('heat-off', [...heat.off]); renderHeat(); });
   if ($('ht-allcams')) $('ht-allcams').onclick = () => { heat.off.clear(); store.set('heat-off', []); renderHeat(); };
-  root.querySelectorAll('.heat-bar').forEach(b => b.onclick = () => { heat.kind = 'label:' + b.dataset.l; store.set('heat-kind', heat.kind); reload(); });
+  root.querySelectorAll('.heat-bar').forEach(b => b.onclick = () => { heat.kind = b.dataset.l === 'pets' ? 'pets' : 'label:' + b.dataset.l; store.set('heat-kind', heat.kind); reload(); });
+  root.querySelectorAll('[data-open]').forEach(el => el.onclick = () => { location.hash = '#heat/' + enc(el.dataset.open); });
   root.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openCameraDialog(b.dataset.edit));
   root.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => { await openCameraDialog(b.dataset.ign); const t = document.querySelector('#c-tabs [data-t="detection"]'); if (t) t.click(); });
 }

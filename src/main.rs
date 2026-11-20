@@ -47,6 +47,7 @@ mod picturelog;
 mod plan;
 mod piper;
 mod onvif_device;
+mod camlog;
 mod onvif_events;
 mod siren;
 mod sound;
@@ -332,6 +333,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     logs::buffer().set_file(data_dir.join("nvr.log"));
     // Before anything that may delete footage (retention) starts.
     cases::init(&data_dir);
+    camlog::init(&data_dir);
     if needs_save {
         cfg.save(&path)?;
         info!("wrote {}", path.display());

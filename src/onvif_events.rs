@@ -136,9 +136,12 @@ async fn watch(mgr: &Arc<Manager>, cam: &CameraConfig) -> Result<()> {
     let addr = tag_text(&sub, "Address").map(|a| c.fix(&a)).ok_or_else(|| anyhow::anyhow!("the camera didn't give a subscription address"))?;
     set(&cam.id, |s| { s.connected = true; s.error = None; });
     info!("[{}] listening to the camera's own detection (ONVIF events)", cam.name);
+    crate::camlog::add(&cam.id, "connection", None, "Listening to the camera's own detection (ONVIF events)");
     let mut renewed = std::time::Instant::now();
     // What's going on now, per topic (only a change from off to on counts).
     let mut on: HashMap<String, bool> = HashMap::new();
+    // Topics the camera sends that GAZE doesn't use: noted now and then, so the log shows what it can report.
+    let mut unused: HashMap<String, std::time::Instant> = HashMap::new();
     loop {
         if mgr.config().cameras.iter().find(|x| x.id == cam.id) != Some(cam) {
             let _ = c.call(&addr, "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/UnsubscribeRequest", "<wsnt:Unsubscribe/>").await;
@@ -158,12 +161,28 @@ async fn watch(mgr: &Arc<Manager>, cam: &CameraConfig) -> Result<()> {
             if !active || was {
                 continue;
             }
-            let Some((label, note)) = meaning(&topic, cam.onvif_motion) else { continue };
+            let Some((label, note)) = meaning(&topic, cam.onvif_motion) else {
+                if unused.get(&topic).is_none_or(|t| t.elapsed() > Duration::from_secs(600)) {
+                    unused.insert(topic.clone(), std::time::Instant::now());
+                    crate::camlog::add(&cam.id, "camera", Some(&topic), &format!("The camera reported {} (not used by GAZE)", topic.rsplit('/').next().unwrap_or(&topic)));
+                }
+                continue;
+            };
             set(&cam.id, |s| { s.last = Some(topic.clone()); s.last_at = Some(chrono::Local::now()); });
+            crate::camlog::add(&cam.id, "camera", Some(&topic), &camera_said(label, note));
             if let Some(d) = mgr.camera(&cam.id).and_then(|r| r.detector()) {
                 d.external(label, note);
             }
         }
+    }
+}
+
+/// What the camera reported, as a line for the camera's log.
+fn camera_said(label: &str, note: &str) -> String {
+    if note.is_empty() {
+        format!("Motion (the camera's own motion detection) → alert: {label}")
+    } else {
+        format!("{note} → alert: {label}")
     }
 }
 
@@ -192,6 +211,7 @@ pub async fn run(mgr: Arc<Manager>) {
                 loop {
                     if let Err(e) = watch(&m, &cam).await {
                         warn!("[{}] camera's own detection: {e:#} — trying again in {wait} s", cam.name);
+                        crate::camlog::add(&cam.id, "connection", None, &format!("Camera's own detection: {e:#} — trying again in {wait} s"));
                         set(&cam.id, |s| { s.connected = false; s.error = Some(format!("{e:#}")); });
                     } else if m.config().cameras.iter().find(|x| x.id == cam.id) != Some(&cam) {
                         return;

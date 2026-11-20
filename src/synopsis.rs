@@ -155,16 +155,60 @@ fn low_cmd(ffmpeg: &str) -> std::process::Command {
     c
 }
 
+/// Settings → Hardware, as they were when the summary being made started: the
+/// graphics card decodes the footage and encodes the video when one is set up
+/// (the processor otherwise, or if the card can't do it).
+static HW: Mutex<Option<crate::config::HardwareConfig>> = Mutex::new(None);
+
+fn hw() -> Option<crate::config::HardwareConfig> {
+    HW.locked().clone().filter(|h| h.uses_gpu())
+}
+
+/// Does this ffmpeg encode with this GPU encoder here? (tried once on a tiny picture)
+fn encoder_works(ffmpeg: &str, hw: &crate::config::HardwareConfig, encoder: &str) -> bool {
+    static TRIED: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(Default::default);
+    if let Some(r) = TRIED.locked().get(encoder) {
+        return *r;
+    }
+    let (pre, out) = crate::ffmpeg::encoder_args(encoder, hw, false);
+    let mut c = low_cmd(ffmpeg);
+    c.args(["-v", "error", "-nostdin"]).args(&pre).args(["-f", "lavfi", "-i", "color=c=black:s=256x144:r=5:d=0.6"]).args(&out).args(["-f", "null", "-"]);
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let ok = c.status().is_ok_and(|s| s.success());
+    TRIED.locked().insert(encoder.to_string(), ok);
+    ok
+}
+
 struct Decoder {
     child: Child,
     out: std::process::ChildStdout,
+    /// The first picture, already read to see that the graphics card could decode this.
+    first: Option<Vec<u8>>,
 }
 
 impl Decoder {
+    /// On the graphics card when one is set up, and it can read this file; the processor otherwise.
     fn open(ffmpeg: &str, s: &Source, fps: &str, keyframes: bool) -> Result<Decoder> {
+        if let Some(h) = hw() {
+            let args = crate::ffmpeg::decode_args(&h, false);
+            if !args.is_empty()
+                && let Ok(mut d) = Self::spawn(ffmpeg, s, fps, keyframes, &args)
+            {
+                let mut first = vec![0u8; W * H * 3];
+                if d.out.read_exact(&mut first).is_ok() {
+                    d.first = Some(first);
+                    return Ok(d);
+                }
+            }
+        }
+        Self::spawn(ffmpeg, s, fps, keyframes, &[])
+    }
+
+    fn spawn(ffmpeg: &str, s: &Source, fps: &str, keyframes: bool, hw_args: &[String]) -> Result<Decoder> {
         let vf = format!("fps={fps},scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black");
         let mut c = low_cmd(ffmpeg);
         c.args(["-v", "error", "-nostdin"]);
+        c.args(hw_args);
         if keyframes {
             c.args(["-skip_frame", "nokey"]);
         }
@@ -173,11 +217,15 @@ impl Decoder {
         c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
         let mut child = c.spawn().context("could not start ffmpeg")?;
         let out = child.stdout.take().context("no ffmpeg output")?;
-        Ok(Decoder { child, out })
+        Ok(Decoder { child, out, first: None })
     }
 
     /// The next picture into `buf`; false at the end.
     fn next(&mut self, buf: &mut [u8]) -> bool {
+        if let Some(f) = self.first.take() {
+            buf.copy_from_slice(&f);
+            return true;
+        }
         self.out.read_exact(buf).is_ok()
     }
 }
@@ -1059,8 +1107,26 @@ pub fn render(bg: &[u8], tubes: &[Tube], plan: &Plan, sink: &mut dyn FnMut(&[u8]
 fn encode_to(ffmpeg: &str, out: &Path, run: impl FnOnce(&mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()>) -> Result<()> {
     let tmp = out.with_extension("part.mp4");
     let mut c = low_cmd(ffmpeg);
-    c.args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", &format!("{W}x{H}"), "-r", &OUT_FPS.to_string(), "-i", "-"]);
-    c.args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]).arg(&tmp);
+    // The graphics card's H.264 encoder when one is set up and works here; libx264 otherwise.
+    let gpu = hw().and_then(|h| {
+        let enc = h.resolved_encoder().to_string();
+        (enc != "libx264" && encoder_works(ffmpeg, &h, &enc)).then(|| (crate::ffmpeg::encoder_args(&enc, &h, false), enc))
+    });
+    if let Some(((pre, _), _)) = &gpu {
+        c.args(["-y", "-v", "error"]).args(pre);
+    } else {
+        c.args(["-y", "-v", "error"]);
+    }
+    c.args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", &format!("{W}x{H}"), "-r", &OUT_FPS.to_string(), "-i", "-"]);
+    match &gpu {
+        Some(((_, out_args), enc)) => {
+            tracing::debug!("daily summary: encoding with {enc}");
+            c.args(out_args).args(["-movflags", "+faststart"]).arg(&tmp);
+        }
+        None => {
+            c.args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]).arg(&tmp);
+        }
+    }
     c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = c.spawn().context("could not start ffmpeg")?;
     let mut stdin = child.stdin.take().context("no ffmpeg input")?;
@@ -1454,6 +1520,7 @@ fn run_one(req: &Request, mgr: &Arc<Manager>, handle: &tokio::runtime::Handle, p
     let rt = mgr.camera(&req.camera).context("camera not found")?;
     let dir = dir_for(mgr, &req.camera).context("camera folder")?;
     let ffmpeg = mgr.config().server.ffmpeg_path.clone();
+    *HW.locked() = Some(mgr.config().hardware.clone());
     tidy(&dir, mgr.config().summary.keep_days);
     let sources = pick_sources(&rt, req.from, req.to);
     let mut classify = |rgb: &[u8]| -> Result<Vec<Det>> {
@@ -1641,6 +1708,37 @@ pub async fn run(mgr: Arc<Manager>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graphics_card_settings_that_do_not_work_fall_back_to_the_processor() {
+        let ff = "ffmpeg";
+        let dir = std::env::temp_dir().join(format!("nvr-syn-hw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("in.mp4");
+        let made = std::process::Command::new(ff).args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=5:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p"]).arg(&src).status();
+        if !made.is_ok_and(|s| s.success()) {
+            return; // no ffmpeg with libx264 here
+        }
+        // A decoder and an encoder this computer doesn't have: the picture and the video still come out.
+        *HW.locked() = Some(crate::config::HardwareConfig { hwaccel: "nosuchaccel".into(), encoder: "h264_nosuch".into(), ..Default::default() });
+        let source = Source { path: src, start: Local::now(), skip: 0.0, dur: 2.0 };
+        let mut d = Decoder::open(ff, &source, "5", false).unwrap();
+        let mut buf = vec![0u8; W * H * 3];
+        assert!(d.next(&mut buf), "decoded on the processor");
+        assert!(buf.iter().any(|b| *b != 0));
+        let out = dir.join("out.mp4");
+        encode_to(ff, &out, |sink| {
+            for _ in 0..10 {
+                sink(&buf)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(std::fs::metadata(&out).unwrap().len() > 100, "encoded with libx264");
+        *HW.locked() = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn solid(r: u8, g: u8, b: u8) -> Vec<u8> {
         let mut v = vec![0u8; W * H * 3];

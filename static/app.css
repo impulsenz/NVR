@@ -337,7 +337,7 @@ dialog .foot { padding: 12px 18px; border-top: 1px solid var(--border); display:
 .logs .l { display: grid; grid-template-columns: 150px 52px 130px minmax(0, 1fr); gap: 8px; padding: 3px 6px; border-bottom: 1px solid var(--border); }
 .logs .l:hover { background: var(--panel2); }
 .logs .lv { font-weight: 700; }
-.logs .lv.warn { color: var(--amber); } .logs .lv.error { color: var(--red); } .logs .lv.info { color: var(--muted); }
+.logs .lv-warn { color: var(--amber); } .logs .lv-error { color: var(--red); } .logs .lv-info { color: var(--muted); }  /* (not ".info": that is the (i) tooltip icon) */
 .logs .l.event .msg { color: #c9b8ff; }
 @media (max-width: 760px) { .logs .l { grid-template-columns: 1fr; gap: 0; } }
 
@@ -1173,11 +1173,11 @@ dialog.wn-dlg ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-
 .tl-mark1 { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--amber); box-shadow: 0 0 8px rgba(245,158,11,.7); z-index: 3; pointer-events: none; }
 /* Recordings: filters in a column on the left, the video gets the height */
 @media (min-width: 900px) {
-  #page-recordings.tl-mode { display: grid; grid-template-columns: 180px minmax(0, 1fr); column-gap: 16px; align-items: start; }
+  #page-recordings.tl-mode { display: grid; grid-template-columns: 140px minmax(0, 1fr); column-gap: 10px; align-items: start; }
   #page-recordings.tl-mode > .filters { grid-column: 1; grid-row: 1 / span 6; flex-direction: column; align-items: stretch; position: sticky; top: 64px; margin: 0; z-index: 8; /* above the players and timeline that follow, so the calendar and camera pop-ups aren't covered */ }
   #page-recordings.tl-mode > .filters .page-title { margin: 0 0 4px; }
   #page-recordings.tl-mode > .filters .spacer { display: none; }
-  #page-recordings.tl-mode > .filters .dropdown > button, #page-recordings.tl-mode > .filters > button { width: 100%; text-align: left; }
+  #page-recordings.tl-mode > .filters .dropdown > button, #page-recordings.tl-mode > .filters > button { width: 100%; text-align: left; white-space: normal; line-height: 1.25; }
   #page-recordings.tl-mode > :not(.filters) { grid-column: 2; }
 }
 
@@ -1579,7 +1579,7 @@ body.has-hw-bar main { padding-bottom: 52px; }
 /* Recordings: the timeline down the side */
 .vtl { display: none; }
 @media (min-width: 901px) {
-  #rec-timeline.vert { display: grid; grid-template-columns: minmax(0, 1fr) var(--vtl-w, 260px); column-gap: 14px; align-items: start; }
+  #rec-timeline.vert { display: grid; grid-template-columns: minmax(0, 1fr) var(--vtl-w, 260px); column-gap: 10px; align-items: start; }
   #rec-timeline.vert > .tl-videos { grid-column: 1; grid-row: 1; }
   #rec-timeline.vert > .vtl { display: block; grid-column: 2; grid-row: 1 / span 8; position: sticky; top: 64px; height: calc(100vh - 80px); min-height: 420px; user-select: none; touch-action: none;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -1772,8 +1772,10 @@ body.has-hw-bar main { padding-bottom: 52px; }
 .pl-fields > #tu-labels, .pl-fields > input[type=text] { grid-column: 1 / -1; }
 .pl-det > summary { cursor: pointer; font-weight: 600; margin-bottom: 6px; }
 .pl-det[open] > summary { margin-bottom: 10px; }
-.pl-cone { fill: var(--accent2); stroke: var(--accent); stroke-width: calc(1 * var(--u, 1)); opacity: .8; }
-.pl-cone.sel { fill: var(--accent); fill-opacity: .25; stroke-width: calc(2 * var(--u, 1)); }
+.pl-cone { stroke: none; }
+.pl-gs { stop-color: var(--accent); }
+.pl-edge { stroke-width: calc(2 * var(--u, 1)); stroke-linecap: round; }
+.pl-edge.sel { stroke-width: calc(3 * var(--u, 1)); }
 .pl-wall { stroke: var(--text); stroke-width: calc(4 * var(--u, 1)); stroke-linecap: round; }
 .pl-wall.prev { stroke: var(--amber); stroke-dasharray: 6 5; opacity: .9; }
 .pl-wend { fill: var(--panel); stroke: var(--text); stroke-width: calc(1.5 * var(--u, 1)); }
@@ -1885,6 +1887,8 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .heat-stage img { object-fit: fill; }
 .heat-cv { filter: blur(6px); transform: scale(1.04); pointer-events: none; opacity: var(--heat-op); }
 .heat-mask { image-rendering: pixelated; pointer-events: none; }
+.heat-stage.openable { cursor: pointer; }
+.heat-stage.openable:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
 .heat-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 14px; color: var(--muted); font-size: 12.5px; pointer-events: none; }
 .heat-foot { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
 .heat-stats { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); }
@@ -1909,3 +1913,26 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 @media (max-width: 900px) { .heat-detail { grid-template-columns: minmax(0, 1fr); } .heat-lab { width: 100%; } }
 .heat-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .heat-ramp { width: 220px; max-width: 50%; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--heat-1), var(--heat-2), var(--heat-3), var(--heat-4), var(--heat-5)); }
+
+/* Settings → Learned states → Package delivery */
+.pkg-card { border-left: 3px solid var(--accent); }
+.pkg-how { margin: 0 0 10px; padding-left: 20px; }
+.pkg-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.pkg-chip { border-radius: 14px; padding: 3px 12px; font-size: 12.5px; background: var(--panel2); color: var(--muted); }
+.pkg-chip.on { color: var(--text); }
+.pkg-chip.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Camera window → Log */
+.cl-list { max-height: 52vh; min-height: 160px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); font-size: 12.5px; }
+.cl-row { display: flex; gap: 10px; align-items: baseline; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.cl-row:last-child { border-bottom: 0; }
+.cl-row.warn { color: var(--warn, #d99a06); }
+.cl-row.err { color: var(--heat-5); }
+.cl-t { flex: none; width: 104px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cl-k { flex: none; width: 20px; text-align: center; }
+.cl-m { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cl-m small { color: var(--muted); }
+
+/* Settings → System → Drive health: installing smartmontools */
+.dr-install { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: var(--panel2); }
+.dr-install code { background: var(--panel3); padding: 1px 6px; border-radius: 4px; }

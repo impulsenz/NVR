@@ -1,5 +1,15 @@
 # What's new in GAZE
 
+## Unreleased
+- **Package delivery moved to Settings → Learned states**, in a section of its own that explains how it works: pick a camera, paint the spot where parcels are left, switch it on. A chip for each camera shows where it is on. (It was on each camera's AI tab; the settings themselves are unchanged.)
+- **Every camera has a Log tab** (Edit camera → Log). It shows what the camera itself reported (person, vehicle, line crossing, doorbell press, tampering … over ONVIF, once "Use what the camera itself detects" is on, with a note for things the camera sends that GAZE doesn't use), together with that camera's alerts and its connection and recording lines. Filter by kind, search, updates by itself. Kept per camera (the last 1,000 entries) and survives a restart.
+- **Drive health: install smartmontools from the page.** When `smartctl` isn't installed, the card recommends smartmontools (the free standard tool for reading a drive's own health report) and, on Windows, has an "Install smartmontools" button: it downloads the official installer, checks its fingerprint, installs it quietly and checks the drives. Elsewhere it shows the command.
+- **Daily summary uses the graphics card.** The footage is decoded and the video encoded on the GPU set up under Settings → Hardware (with the AI step it already used it), and each falls back to the processor by itself if the card can't do it.
+- **Recordings: more room for the alert pictures.** The side column is narrower, and the vertical timeline takes all the width the camera pictures can't use, so its alert pictures are as big as that allows (up to about 420 px wide).
+- **Heat map: click a camera's picture to open it** (no more "Open" button). **Cats and dogs are one entry**, "Cats and dogs".
+- **Floor plan: each camera's view is two lines that fade out with distance, with the space between fading too** (no arc, no fixed distance), and journeys that have nothing to show on the map are no longer listed.
+- **Logs: the INFO label no longer gets a circle** around it (it was drawn like an (i) help icon).
+
 ## 1.7.7 — November 2026
 - **Heat map: one camera open fits the page.** Its picture is as big as the space below the controls allows (no scrolling down; the details beside it scroll on their own), the controls take less height there, and a "← All cameras" button at the top goes back to every camera.
 - **Heat map: an "Edit camera" button** next to "Ignore areas…" on every camera.

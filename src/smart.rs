@@ -41,9 +41,22 @@ pub struct Overview {
     pub checked: Option<DateTime<Local>>,
     /// Why there is nothing to show, when there isn't.
     pub note: String,
+    /// GAZE can install smartmontools itself (Windows).
+    pub can_install: bool,
+    /// Elsewhere: the command that installs it.
+    pub install_hint: String,
+    /// An install is running.
+    pub installing: bool,
 }
 
 pub static STATUS: Mutex<Option<Overview>> = Mutex::new(None);
+
+/// smartmontools 7.4 for Windows, from the project's own download address
+/// (smartmontools.org links to it); it is only run if it matches this
+/// SHA-256 fingerprint.
+const WIN_INSTALLER_URL: &str = "https://downloads.sourceforge.net/project/smartmontools/smartmontools/7.4/smartmontools-7.4-1.win32-setup.exe";
+const WIN_INSTALLER_SHA256: &str = "76880e7303403667739066782b1c458ede2b4462a8ebd6aeacf97efecd4bdde7";
+static INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn overview() -> Overview {
     STATUS.locked().clone().unwrap_or_default()
@@ -156,13 +169,16 @@ async fn smartctl(args: &[&str]) -> Result<String> {
 
 /// Look at every drive smartctl can see.
 pub async fn scan() -> Overview {
-    let mut o = Overview { checked: Some(Local::now()), ..Default::default() };
+    let mut o = Overview { checked: Some(Local::now()), can_install: cfg!(windows), installing: INSTALLING.load(std::sync::atomic::Ordering::Relaxed), ..Default::default() };
+    if !cfg!(windows) {
+        o.install_hint = "sudo apt install smartmontools   (or your distribution's package manager)".into();
+    }
     let list = match smartctl(&["--scan", "-j"]).await {
         Ok(t) => t,
         Err(e) => {
             let missing = e.root_cause().to_string().to_lowercase().contains("no such file") || e.root_cause().to_string().to_lowercase().contains("cannot find");
             o.note = if missing {
-                "smartctl isn't installed. Install smartmontools (Linux: your package manager; Windows: smartmontools.org) to see drive health.".into()
+                "smartctl isn't installed. smartmontools is the free, standard program that reads a drive's own health report.".into()
             } else {
                 format!("{e:#}")
             };
@@ -188,6 +204,62 @@ pub async fn scan() -> Overview {
         }
     }
     o
+}
+
+/// Install smartmontools (Windows): download the installer, check its
+/// fingerprint, run it quietly, then look at the drives. Elsewhere the
+/// system's package manager does it (the page shows the command).
+pub async fn install() -> Result<Overview> {
+    use std::sync::atomic::Ordering;
+    if !cfg!(windows) {
+        anyhow::bail!("install smartmontools with your system's package manager, e.g. sudo apt install smartmontools");
+    }
+    if INSTALLING.swap(true, Ordering::SeqCst) {
+        anyhow::bail!("it is being installed already");
+    }
+    let res = install_windows().await;
+    INSTALLING.store(false, Ordering::SeqCst);
+    res?;
+    Ok(refresh().await)
+}
+
+async fn install_windows() -> Result<()> {
+    use sha2::Digest;
+    let file = std::env::temp_dir().join("gaze-smartmontools-setup.exe");
+    let job = crate::jobs::start("download", "Installing smartmontools (drive health)");
+    let part = file.with_extension("part");
+    let mut resp = crate::jobs::download_client()?.get(WIN_INSTALLER_URL).send().await.context("can't reach the smartmontools download")?.error_for_status()?;
+    let total = resp.content_length().unwrap_or(0);
+    let mut out = tokio::fs::File::create(&part).await?;
+    let (mut got, mut hash) = (0u64, sha2::Sha256::new());
+    while let Some(chunk) = resp.chunk().await? {
+        tokio::io::AsyncWriteExt::write_all(&mut out, &chunk).await?;
+        hash.update(&chunk);
+        got += chunk.len() as u64;
+        job.bytes(got, total);
+    }
+    tokio::io::AsyncWriteExt::flush(&mut out).await?;
+    drop(out);
+    let print: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    if print != WIN_INSTALLER_SHA256 {
+        let _ = std::fs::remove_file(&part);
+        anyhow::bail!("the download isn't the smartmontools installer GAZE expects (its fingerprint differs): nothing was run");
+    }
+    tokio::fs::rename(&part, &file).await?;
+    job.step("Running the installer (it may ask for administrator permission)");
+    // /S: no questions asked. Installs to C:\Program Files\smartmontools.
+    let run = tokio::time::timeout(Duration::from_secs(240), crate::load::cmd(&file).arg("/S").kill_on_drop(true).status()).await;
+    let _ = std::fs::remove_file(&file);
+    match run {
+        Err(_) => anyhow::bail!("the installer didn't finish (it may be waiting for administrator permission on the screen of this computer)"),
+        Ok(Err(e)) => anyhow::bail!("the installer couldn't start: {e}"),
+        Ok(Ok(_)) => {}
+    }
+    if smartctl(&["--version"]).await.map(|t| t.contains("smartctl")).unwrap_or(false) {
+        Ok(())
+    } else {
+        anyhow::bail!("the installer ran but smartctl isn't there: it needs administrator rights. Run GAZE as administrator, or install smartmontools from smartmontools.org yourself")
+    }
 }
 
 /// Rescan now (the page's button) and keep the answer.
