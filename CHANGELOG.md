@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.15 — November 2026
 - **Evidence Locker export: the videos now play in the review page.** The cause: a case keeps the camera's video as recorded, and many cameras record H.265, which Chrome and Firefox cannot play in a web page (the page showed an empty black box). The export dialog now has **Make the videos play in any web browser** (on by default): each video that isn't H.264 gets an H.264 copy (`….web.mp4`) beside the original, and the page plays that one; the original stays in the ZIP, unchanged and in the checksum list, along with the copy. Progress shows in Tasks. Where a video still can't play, the page now says why and what to do (the format, "extract the whole ZIP first" if it was opened from inside the ZIP, or open the original with VLC) instead of showing nothing. Tested with an H.265 clip in Chromium (`tools/e2e/case-export.js`).
 - **Moving along the timeline is smooth, and has no end.**
   - **Smooth:** sliding the window (dragging past the top or bottom, the wheel) used to rebuild the whole timeline, horizontal one included though it was hidden, and every alert picture, on each frame: about 25 ms a frame with 8 cameras, with the odd 70 ms. Only the visible timeline is redrawn now, once per screen frame, and alert pictures are moved instead of being recreated: a steady 16.7 ms (60 frames a second) in the same test. Speed follows the clock instead of the frame rate, and the wheel moves by how far you turned it (a touchpad no longer jumps by a fixed step for each tiny event).
