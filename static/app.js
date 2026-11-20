@@ -1435,9 +1435,9 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => { if (e.key === ' ') planUI.space = false; });
 
 // ----- drawing the map -----
-// A journey with nothing to show on the map (no path on any calibrated camera) isn't listed.
+// A journey with no path on any calibrated camera is still listed (marked "not on the map").
 function drawableJourneys(jr) {
-  if (jr && jr.journeys) jr.journeys = jr.journeys.filter(j => journeyPolys(j).solid.length);
+  // Every journey is listed (the stats count them all); only those on calibrated cameras have a path to draw.
   return jr;
 }
 function journeyPolys(j) {
@@ -1565,7 +1565,7 @@ function planViewPanel() {
   const hist = st.by_hour, mx = Math.max(1, ...hist);
   const cams = st.cameras.map(c => `<tr><td>${esc(camName(c.cam))}</td><td>${c.walks}</td><td>${fmtDur(c.avg_seconds)}</td></tr>`).join('');
   const when = (t) => fmtDate(t, planUI.hours > 24 ? 'D MMM HH:mm' : 'HH:mm:ss');
-  const list = jr.journeys.slice().reverse().map(j => `<button type="button" class="pl-j ${planUI.sel === j.id ? 'on' : ''}" data-id="${esc(j.id)}"><span><b>${esc(when(j.start))}</b> · ${fmtDur(j.seconds)}${j.metres ? ' · ' + j.metres.toFixed(0) + ' m' : ''}${j.speed_mps ? ' · ' + (j.speed_mps * 3.6).toFixed(1) + ' km/h' : ''}</span><span class="muted small">${j.cameras.map(camName).map(esc).join(' → ')}${j.segments.length > 1 ? ` · ${Math.round(j.confidence * 100)}% sure` : ''}</span></button>`).join('');
+  const list = jr.journeys.slice().reverse().map(j => `<button type="button" class="pl-j ${planUI.sel === j.id ? 'on' : ''}" data-id="${esc(j.id)}"><span><b>${esc(when(j.start))}</b> · ${fmtDur(j.seconds)}${journeyPolys(j).solid.length ? '' : ' · not on the map'}${j.metres ? ' · ' + j.metres.toFixed(0) + ' m' : ''}${j.speed_mps ? ' · ' + (j.speed_mps * 3.6).toFixed(1) + ' km/h' : ''}</span><span class="muted small">${j.cameras.map(camName).map(esc).join(' → ')}${j.segments.length > 1 ? ` · ${Math.round(j.confidence * 100)}% sure` : ''}</span></button>`).join('');
   const sel = jr.journeys.find(j => j.id === planUI.sel);
   const play = sel ? `<div class="pl-play"><button type="button" class="small" id="pl-playbtn">▶ Play</button><input type="range" id="pl-slider" min="0" max="${Math.round(sel.seconds * 10)}" value="0" style="flex:1"><span class="muted small" id="pl-clock">0 s</span></div>` : '';
   return `<div class="card"><h2>${planUI.hours >= 24 ? 'Activity' : 'Recent activity'}</h2>
@@ -2026,15 +2026,18 @@ function paintWatchdog(w) {
   if (!w || !w.installed) { chip.hidden = true; if (w && w.ask_install && !wdAsked && isAdmin()) { wdAsked = true; askInstallWatchdog(); } return; }
   chip.hidden = false;
   const admin = isAdmin();
-  chip.classList.toggle('ok', !!w.running); chip.classList.toggle('bad', !w.running);
-  chip.textContent = w.running ? '🛡' : (w.stopped_on_purpose ? '🛡 Watchdog stopped' : '🛡 Watchdog down');   // (short: the title bar is crowded)
+  // The same state, colour and words as the status pill on the Watchdog page.
+  const st = w.status || {};
+  const [cls, label] = !w.running ? ['bad', w.stopped_on_purpose ? 'Watchdog stopped' : 'Watchdog down'] : (WD_STATE[st.state] || ['ok', st.state || 'Watching GAZE']);
+  chip.className = `dl-chip wd-chip wd-pill ${cls}`;
+  chip.innerHTML = `<i></i>${esc(label)}`;
   chip.title = w.running ? 'The watchdog is running: it opens GAZE again if GAZE stops. Settings → Watchdog.'
     : `The watchdog isn't running, so nobody is watching GAZE.${w.stopped_on_purpose ? ' It was stopped on request.' : w.attempts ? ` GAZE tried to start it ${w.attempts} time${w.attempts === 1 ? '' : 's'}${w.error ? ': ' + w.error : ''}.` : ' GAZE will try to start it.'}${admin ? ' Click to start it now.' : ''}`;
   chip.style.cursor = !w.running && admin ? 'pointer' : 'default';
   chip.onclick = async () => {
     if (w.running) { if (admin) location.hash = '#settings/watchdog'; return; }
     if (!admin) return;
-    chip.disabled = true; chip.textContent = '🛡 Starting…';
+    chip.disabled = true; chip.innerHTML = '<i></i>Starting…';
     try { await api('api/watchdog/start', {method: 'POST'}); toast('Starting the watchdog…'); } catch (e) { toast(e.message, true); }
     chip.disabled = false; refreshStatus();
   };

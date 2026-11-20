@@ -215,7 +215,8 @@ pub fn summary(data: &Path) -> Value {
     let on_purpose = dir(data).join("stopped-on-purpose").exists();
     let installed = installed(data);
     let ask_install = cfg!(windows) && !installed && !data.join("watchdog-dont-ask").exists();
-    let running = installed && alive(&status(data));
+    let st = status(data);
+    let running = installed && alive(&st);
     let a = AUTO.lock().unwrap_or_else(|e| e.into_inner());
     let v = json!({
         "supported": cfg!(windows),
@@ -223,6 +224,8 @@ pub fn summary(data: &Path) -> Value {
         // The page offers to install it (a box with Install / No, and "don't ask me again").
         "ask_install": ask_install,
         "running": running,
+        // Its own state (watching, starting …): the title bar shows it like the Watchdog page does.
+        "status": st,
         "stopped_on_purpose": on_purpose,
         "down_seconds": (!running).then(|| a.down_since.map(|t| t.elapsed().as_secs())).flatten(),
         "attempts": a.attempts,

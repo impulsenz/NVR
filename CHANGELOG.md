@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## Unreleased
+- **Floor plan: journeys now show up.** The page hid every journey that had no drawable path (cameras not calibrated, or a single point), so the list stayed empty while the numbers above it counted them. All journeys are listed now; those with no path say "not on the map".
+- **Title-bar watchdog chip** now shows the same coloured pill and words as the Watchdog page (Watching GAZE, Starting…, …) instead of a grey shield.
+- **Settings pages:** denser forms, clearer section headings and a Save bar that stays in reach, on every section. Same settings.
+
 ## 1.7.16 — November 2026
 - **Timeline:** people are now violet (they were blue, the same as the time-lapse line); the time-lapse line is thicker, themed (day and night) and now also shows under the merged "All cameras" row and beside every vertical lane.
 - **Stream 1 / Stream 2:** the S1/S2 button is gone from the live pictures; full screen (which opens on stream 1) has the switch in its bottom bar, showing the stream on screen and switching both ways.
