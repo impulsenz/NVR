@@ -576,6 +576,9 @@ body.no-boxes .bxs { display: none; }
 
 /* Alerts page */
 .page-title { margin: 0 6px 0 0; font-size: 18px; }
+/* Recordings: the Back button sits under the title, above the camera selection, on a row of its own. */
+.tl-backrow { flex-basis: 100%; margin: -4px 0 0; }
+.tl-backrow:has(#tl-back[hidden]) { display: none; }
 .rc.new { box-shadow: 0 0 0 2px var(--accent); }
 .tag.newtag { background: var(--accent) !important; color: #fff; border-color: var(--accent) !important; font-weight: 700; letter-spacing: .5px; }
 /* The alert window: most of the screen, and always the same size (stepping

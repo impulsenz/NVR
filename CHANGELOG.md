@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings: the Back button moved** up under the page title, above the camera selection.
+
 ## 1.7.13 — November 2026
 - **The blue time-lapse line shows what is happening.** Footage the server has not made pictures of yet is striped and animated (being generated); pictures on the server that are still arriving pulse (loading from the drive or deep storage); solid blue is ready in memory. Before, unpictured footage simply had no line, which looked like part of it never loaded.
 - **The deep-storage spinner waits for you to stop.** It disappears while you drag along the timeline and comes back when you stop on a moment.
