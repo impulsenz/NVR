@@ -1961,7 +1961,7 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .tile-ctl .tc-ud button { padding: 0 8px; line-height: 14px; }
 .tile-ctl .tc-text { width: 170px; }
 .tile-ctl .tc-text::placeholder { color: rgba(255,255,255,.6); }
-.tile-ctl select option { color: #000; }
+.tile-ctl select option { background-color: var(--panel); color: var(--text); }
 .tile-ctl .siren-on { background: #dc2626; border-color: #dc2626; }
 
 /* Evidence Locker: the cases on the left, the open case on the right */
