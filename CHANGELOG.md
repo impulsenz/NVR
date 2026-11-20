@@ -1,5 +1,9 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings:** the loading spinner on footage from deep storage has no text any more.
+- **Evidence Locker export:** the ZIP is built before the browser gets the file (videos the browser can't play are converted first), which took minutes with nothing on screen, so "Export" looked dead. The dialog now stays open saying it is preparing, closes when the download starts, and shows an error if it fails.
+
 ## 1.7.22 — November 2026
 - **Fix (broke 1.7.20/1.7.21):** the Recordings timeline failed to draw (a variable used before it was defined), which also stopped the + / − zoom and the video from loading after scrubbing.
 

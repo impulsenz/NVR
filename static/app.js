@@ -5103,9 +5103,35 @@ function exportCaseDialog(action, name) {
   dlg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
   const lock = dlg.querySelector('#ex-lock'), pw = dlg.querySelector('#ex-pass');
   lock.onchange = () => { dlg.querySelector('#ex-pw').hidden = !lock.checked; pw.disabled = !lock.checked; if (lock.checked) pw.focus(); };
-  dlg.querySelector('form').onsubmit = (e) => {
+  // The ZIP is built before the download starts (H.265 videos are converted first), which can take minutes:
+  // the dialog stays, says so, and closes when the browser has the file (or shows what went wrong).
+  const form = dlg.querySelector('form');
+  const frame = document.createElement('iframe'); frame.name = 'ex-frame-' + Date.now(); frame.hidden = true; dlg.appendChild(frame);
+  form.target = frame.name;
+  let poll = null;
+  const busy = (on) => {
+    const go = form.querySelector('button[type=submit]'); go.disabled = on;
+    let st = dlg.querySelector('.ex-state');
+    if (!on) { if (st) st.remove(); return; }
+    if (!st) { st = document.createElement('div'); st.className = 'ex-state muted small'; st.style.marginTop = '8px'; form.querySelector('.actions').before(st); }
+    st.innerHTML = '<i class="spinner small"></i> Preparing the ZIP… converting videos and packing the files can take a few minutes (progress under System → Tasks). The download starts by itself; keep this page open.';
+  };
+  frame.addEventListener('load', () => {
+    let t = ''; try { t = (frame.contentDocument.body.textContent || '').trim(); } catch (_) {}
+    if (!t) return;
+    clearInterval(poll); busy(false); toast(t.slice(0, 300), true);
+  });
+  form.onsubmit = (e) => {
     if (lock.checked && pw.value.length < 6) { e.preventDefault(); toast('Use a password of at least 6 characters', true); return; }
-    setTimeout(close, 400);
+    const token = Math.random().toString(36).slice(2, 12);
+    let tk = form.querySelector('input[name=token]'); if (!tk) { tk = document.createElement('input'); tk.type = 'hidden'; tk.name = 'token'; form.appendChild(tk); }
+    tk.value = token;
+    busy(true);
+    const t0 = Date.now();
+    poll = setInterval(() => {
+      if (document.cookie.includes('gaze-export-' + token + '=1')) { clearInterval(poll); document.cookie = `gaze-export-${token}=; Max-Age=0; Path=/`; toast('The download has started'); close(); }
+      else if (Date.now() - t0 > 30 * 60000 || !dlg.isConnected) { clearInterval(poll); busy(false); }
+    }, 500);
   };
 }
 async function openSafeEditor() {
@@ -5580,7 +5606,7 @@ function buildTimelineVideos() {
     // Two players per camera: one plays while the next file loads in the
     // other, so moving from file to file doesn't blank the picture.
     el.innerHTML = `<video playsinline muted class="vid"></video><video playsinline muted class="vid" style="position:absolute;inset:0;visibility:hidden"></video><video playsinline muted class="vid" data-hls style="position:absolute;inset:0;visibility:hidden"></video>
-      <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div><div class="deep-load" hidden><i class="spinner"></i><span>Loading…</span></div>
+      <div class="sprite" hidden></div><div class="msg" hidden>No recorded footage at this time</div><div class="deep-load" hidden><i class="spinner"></i></div>
       ${tlOverlay(c)}`;
     el.querySelectorAll('.fs-go').forEach(b => b.onclick = (e) => { e.stopPropagation(); fullscreen(el); });
     el.querySelector('.tl-snd').onclick = (e) => {
@@ -5843,7 +5869,6 @@ setInterval(() => {
     // Not while the timeline is being dragged: it goes away as you move and comes back when you stop on a moment.
     // Footage moved to deep storage: a plain loading spinner; "from deep storage" only when that is a NAS.
     box.hidden = !(seg && seg.archived && loading && !tl.dragging);
-    const lbl = box.querySelector('span'); if (lbl) lbl.textContent = status && status.deep_remote ? 'Loading from deep storage…' : 'Loading…';
   }
 }, 120);
 const activeVideo = (el) => el._mode === 'hls' ? el._hlsV : el._vids[el._active];

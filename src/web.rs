@@ -3856,6 +3856,22 @@ struct ExportForm {
     /// "1": make videos a web browser can't play (H.265) playable.
     #[serde(default)]
     playable: String,
+    /// Chosen by the page: a cookie of this name is set when the ZIP is ready, so the page knows the download began.
+    #[serde(default)]
+    token: String,
+}
+
+/// Mark a finished export for the page that asked (see `ExportForm::token`).
+fn export_ready(mut r: Response, token: &str) -> Response {
+    if r.status().is_success()
+        && !token.is_empty()
+        && token.len() <= 40
+        && token.chars().all(|c| c.is_ascii_alphanumeric())
+        && let Ok(v) = header::HeaderValue::from_str(&format!("gaze-export-{token}=1; Path=/; Max-Age=120; SameSite=Lax"))
+    {
+        r.headers_mut().append(header::SET_COOKIE, v);
+    }
+    r
 }
 
 /// A GET request for the same address, for serving the finished file.
@@ -3872,7 +3888,8 @@ async fn cases_export_post(
 ) -> Response {
     let Some(c) = crate::cases::get(&id) else { return err(StatusCode::NOT_FOUND, "no such case") };
     let name = c.name.clone();
-    cases_zip(&m, &user, vec![c], name, download_request(&uri), Some(f.password).filter(|p| !p.is_empty()), f.playable == "1").await
+    let r = cases_zip(&m, &user, vec![c], name, download_request(&uri), Some(f.password).filter(|p| !p.is_empty()), f.playable == "1").await;
+    export_ready(r, &f.token)
 }
 
 async fn cases_export_all_post(State(m): App, user: Option<axum::Extension<CurrentUser>>, uri: axum::http::Uri, axum::Form(f): axum::Form<ExportForm>) -> Response {
@@ -3880,7 +3897,8 @@ async fn cases_export_all_post(State(m): App, user: Option<axum::Extension<Curre
     if all.is_empty() {
         return err(StatusCode::NOT_FOUND, "no cases to export");
     }
-    cases_zip(&m, &user, all, "Evidence Locker".into(), download_request(&uri), Some(f.password).filter(|p| !p.is_empty()), f.playable == "1").await
+    let r = cases_zip(&m, &user, all, "Evidence Locker".into(), download_request(&uri), Some(f.password).filter(|p| !p.is_empty()), f.playable == "1").await;
+    export_ready(r, &f.token)
 }
 
 /// A file kept in a case (only the case's own files, by name).
