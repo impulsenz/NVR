@@ -1,6 +1,7 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.17 — November 2026
+- **Recordings timeline:** bigger alert pictures on the merged row; Clip start / Clip end (and the case and export buttons) moved into the first controls row, giving the camera pictures the second row's height back.
 - **Floor plan: journeys now show up.** The page hid every journey that had no drawable path (cameras not calibrated, or a single point), so the list stayed empty while the numbers above it counted them. All journeys are listed now; those with no path say "not on the map".
 - **Title-bar watchdog chip** now shows the same coloured pill and words as the Watchdog page (Watching GAZE, Starting…, …) instead of a grey shield.
 - **Settings pages:** denser forms, clearer section headings and a Save bar that stays in reach, on every section. Same settings.
