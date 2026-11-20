@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Recordings: no more loading 10 minutes ahead.** Each camera now loads about 20 seconds ahead of the playhead (it was 10 minutes) and keeps 10 seconds of what was watched, and the page no longer asks the server to read the footage behind the playhead into memory. With many cameras on screen the old setting meant hundreds of Mbps of loading and gigabytes of memory. Going back or scrubbing now fetches from the disk instead of from memory.
+
 ## 1.7.3 — November 2026
 - **Recordings: the video comes before the time-lapse pictures.** Only the first two pages of each file's scrubbing pictures (about 3 MB a page) are fetched ahead of time (it was every page of every file in view, gigabytes at a time); the rest load when scrubbing reaches them. They are fetched only while Recordings is open, and wait while any camera's video list is being asked for or a playing camera has under 8 s loaded ahead.
 

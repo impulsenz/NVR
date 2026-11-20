@@ -5275,60 +5275,29 @@ async function preloadRecordings() {
 // again every few seconds, for every camera (1½ hours either side made
 // each one ~0.5 MB, most of what was downloaded).
 const HLS_WIN = 30 * 60000;
-// ---------- loading recordings: evenly, well ahead ----------
-// Every camera loads up to 10 minutes ahead (sub-stream and HD alike; a
-// browser holds at most ~150 MB per player, so HD may get less). All
-// cameras share one queue of downloads, a few at a time, and the camera
-// with the least loaded ahead always goes next: speeding up doesn't let
-// one camera take all the bandwidth while the others run dry. What's been
-// watched is kept (10 minutes back), and once every camera is loaded
-// ahead, GAZE reads the 10 minutes before the playhead from the disk or
-// NAS into its memory, so going back is quick too.
-const AHEAD_SECS = 600;
+// ---------- loading recordings: just ahead of the playhead ----------
+// Each camera loads only a short way ahead (a browser player needs a few
+// seconds to play smoothly) and keeps a little of what's been watched. It
+// used to load 10 minutes ahead, which with many cameras meant hundreds of
+// Mbps and gigabytes of memory; nothing is read in advance any more.
+const AHEAD_SECS = 20;
 function aheadSecs(el) {
   const v = el && el._hlsV; if (!v || !v.buffered) return 0;
   const t = v.currentTime;
   for (let i = 0; i < v.buffered.length; i++) if (v.buffered.start(i) <= t + 0.5 && t < v.buffered.end(i)) return v.buffered.end(i) - t;
   return 0;
 }
-// Evenly: a camera more than a minute ahead of the slowest one still
-// loading waits for it (its target is held back), so all cameras fill up
-// together, to 10 minutes each.
-setInterval(() => {
-  if (page !== 'recordings') return;
-  const els = [...document.querySelectorAll('#tl-videos .surface')].filter(el => el._mode === 'hls' && el._h);
-  if (!els.length) return;
-  // (A camera at the end of its footage, or full, isn't "still loading".)
-  const loading = els.map(el => ({el, a: aheadSecs(el)})).filter(x => x.a < AHEAD_SECS - 5 && !(x.el._h.to && tl.T + x.a * 1000 > Math.min(x.el._h.to, Date.now()) - 20000));
-  const slowest = loading.length ? Math.min(...loading.map(x => x.a)) : AHEAD_SECS;
-  for (const el of els) {
-    const want = Math.max(30, Math.min(AHEAD_SECS, slowest + 60));
-    if (el._h.hls.config.maxBufferLength !== want) el._h.hls.config.maxBufferLength = want;
-  }
-}, 1000);
 // The fewer cameras shown, the bigger each piece fetched (each camera's
 // player fetches one piece at a time): one camera alone loads much faster.
 function hlsPart() {
   const n = document.querySelectorAll('#tl-videos .surface').length;
   return n <= 1 ? 30 : n <= 4 ? 15 : 8;
 }
-// Everything loaded ahead: the server reads the footage behind the playhead
-// into its memory (each camera at most once a minute).
-setInterval(() => {
-  if (page !== 'recordings' || !tl.playing || document.hidden) return;
-  const els = [...document.querySelectorAll('#tl-videos .surface')].filter(el => el._mode === 'hls' && el._h);
-  if (!els.length || !els.every(el => aheadSecs(el) > AHEAD_SECS * 0.8 || (el._h.to && tl.T + aheadSecs(el) * 1000 > Math.min(el._h.to, Date.now()) - 30000))) return;
-  for (const el of els) {
-    if (el._warmAt && Date.now() - el._warmAt < 60000) continue;
-    el._warmAt = Date.now();
-    api('api/warm', {method: 'POST', json: {camera: el.dataset.cam, stream: tlQ(), from: new Date(tl.T - AHEAD_SECS * 1000).toISOString(), to: new Date(tl.T).toISOString()}}).catch(() => {});
-  }
-}, 5000);
 function hlsFor(el, cam) {
   if (el._h) return el._h;
   // Small holes in what's loaded (some cameras' recordings have them) are
   // stepped over by the player itself, quickly, instead of waiting.
-  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: AHEAD_SECS, maxMaxBufferLength: AHEAD_SECS, maxBufferSize: 150e6, backBufferLength: AHEAD_SECS, maxBufferHole: 2,
+  const hls = new hlsLib({autoStartLoad: false, maxBufferLength: AHEAD_SECS, maxMaxBufferLength: AHEAD_SECS, maxBufferSize: 150e6, backBufferLength: 10, maxBufferHole: 2,
     highBufferWatchdogPeriod: 1, nudgeMaxRetry: 10, nudgeOffset: 0.2,
     startFragPrefetch: true, enableWorker: true, fragLoadingMaxRetry: 2, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1, manifestLoadingTimeOut: 30000, levelLoadingTimeOut: 30000});
   hls.attachMedia(el._hlsV);
