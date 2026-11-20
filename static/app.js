@@ -2745,16 +2745,47 @@ class Player {
     const want = this.prevWant = t;
     const place = (w) => { p.style.left = Math.min(Math.max(x, w / 2 + 4), this.el.scrub.clientWidth - w / 2 - 4) + 'px'; };
     place(this.prevW || 192);
+    // Real moving pictures: a small hidden player of the same recording is
+    // moved to the pointer (as fast as it can seek) and shown over the
+    // time-lapse picture, which stands in until it has a frame.
+    this.previewVideo(t, place);
     const W = this.wallAt(t).getTime();
     scrubNeed(this.item.camera, W).then(() => {
       const f = scrubFind(this.item.camera, W);
       if (!f || this.prevWant !== want) return;
-      const m = f.m, a = m.aspect || m.tw / m.th || 16 / 9;
+      const m = f.m, a = this.prevAspect || m.aspect || m.tw / m.th || 16 / 9;
       const w = Math.round(Math.max(192, Math.min(m.tw || 256, this.surface.clientWidth / 3, 480))), h = Math.round(w / a);
-      Object.assign(this.el.pimg.style, {width: w + 'px', height: h + 'px'});
-      this.prevW = w; place(w);
+      if (this.prevVideoOk) return;
+      Object.assign(this.el.pimg.style, {width: w + 'px', height: h + 'px'}); this.prevW = w; place(w);
       scrubStyle(this.el.pimg, this.item.camera, W, w, h);
     });
+  }
+  previewVideo(t, place) {
+    if (this.tc || !this.item || !this.item.url) return;
+    let v = this.pvVideo;
+    if (!v) {
+      v = this.pvVideo = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.preload = 'auto'; v.className = 'pv-v'; v.style.visibility = 'hidden';
+      this.el.pimg.appendChild(v);
+      v.addEventListener('seeked', () => {
+        this.pvBusy = false;
+        if (Math.abs(this.pvTarget - v.currentTime) > 0.08) { this.pvBusy = true; v.currentTime = this.pvTarget; return; }
+        if (v.videoWidth) {
+          this.prevAspect = v.videoWidth / v.videoHeight;
+          const w = Math.round(Math.max(224, Math.min(this.surface.clientWidth / 3, 400))), h = Math.round(w / this.prevAspect);
+          Object.assign(this.el.pimg.style, {width: w + 'px', height: h + 'px', border: '0'});
+          this.prevW = w; this.prevVideoOk = true; place(w);
+          v.style.visibility = 'visible';
+        }
+      });
+    }
+    if (this.pvSrc !== this.item.url) {
+      this.pvSrc = this.item.url; this.prevVideoOk = false; v.style.visibility = 'hidden';
+      v.src = this.item.url;
+    }
+    this.pvTarget = t;
+    if (!this.pvBusy && v.readyState >= 1) { this.pvBusy = true; v.currentTime = t; }
+    else if (v.readyState < 1) v.addEventListener('loadedmetadata', () => { if (!this.pvBusy) { this.pvBusy = true; v.currentTime = this.pvTarget; } }, {once: true});
   }
   wireScrub() {
     const sc = this.el.scrub;
