@@ -212,8 +212,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/api/cases/{id}/items/{item}", put(cases_update_item).delete(cases_remove_item))
         .route("/api/cases/{id}/files/{name}", get(cases_file))
         .route("/api/timelapse-export", get(timelapse_export))
-        .route("/api/sprite/{id}/{kind}/{name}", get(sprite_info))
-        .route("/api/sprites-ready", post(sprites_ready))
+        .route("/api/scrub/{id}", get(scrub_hours))
         .route("/api/whatsnew", get(whats_new))
         .route("/api/probe", post(probe))
         .route("/api/fs", get(fs_list))
@@ -233,7 +232,7 @@ pub fn router(mgr: Arc<Manager>) -> Router {
         .route("/media/{id}/tl/{name}", get(serve_timeline_file))
         .route("/media/{id}/thumb/{name}", get(recording_thumb))
         .route("/media/{id}/play/{kind}/{name}", get(play_converted))
-        .route("/media/{id}/sprite/{kind}/{name}", get(sprite_image))
+        .route("/media/{id}/scrub/{h}/{n}", get(scrub_page))
         .route("/live/{id}/stream.mjpeg", get(live_mjpeg))
         .route("/live/{id}/audio.mp3", get(live_audio))
         .route("/live/{id}/frame.jpg", get(live_frame))
@@ -2912,8 +2911,10 @@ async fn remote_footage(State(m): App, req: Request, next: Next) -> Response {
     // server with its token, so it must never reach anything else there.
     let at = match seg.as_slice() {
         ["media", _, "rec" | "tl" | "events" | "thumb", _] => 1,
-        ["media", _, "play" | "sprite", "rec" | "clip" | "tl", _] => 1,
-        ["api", "sprite" | "hls-file", _, "rec" | "clip" | "tl", _] => 2,
+        ["media", _, "play", "rec" | "clip" | "tl", _] => 1,
+        ["media", _, "scrub", _, _] => 1,
+        ["api", "hls-file", _, "rec" | "clip" | "tl", _] => 2,
+        ["api", "scrub", _] => 2,
         ["api", "hls", _, "main" | "sub" | "main.m3u8" | "sub.m3u8"] => 2,
         ["api", "cameras", _, "events" | "recordings", _] => 2,
         _ => 0,
@@ -3989,18 +3990,6 @@ fn media_path(c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyh
 /// Only a couple of preview jobs at a time.
 static THUMB_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
-/// The preview's description is of the current kind (pictures stored in
-/// their own shape, one every `interval` seconds as set): otherwise it's
-/// made again.
-fn sprite_meta_current(meta: &std::path::Path, interval: u32) -> bool {
-    std::fs::read(meta)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<ffmpeg::SpriteInfo>(&b).ok())
-        // Made at an earlier picture interval: still used (only new footage
-        // follows a changed setting, unless it's remade on purpose).
-        .is_some_and(|i| i.aspect > 0.0 && i.interval > 0.0 && interval > 0)
-}
-
 fn fresh(cache: &std::path::Path, src: &std::path::Path) -> bool {
     let (Ok(c), Ok(s)) = (std::fs::metadata(cache), std::fs::metadata(src)) else {
         return false;
@@ -4028,338 +4017,6 @@ async fn recording_thumb(State(m): App, Path((id, name)): Path<(String, String)>
         }
     }
     serve_file(cache, req, None, false).await
-}
-
-/// The lock for building one file's preview (see `ensure_sprite`).
-fn sprite_lock(prefix: &std::path::Path) -> Arc<tokio::sync::Mutex<()>> {
-    static LOCKS: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = std::sync::LazyLock::new(Default::default);
-    let mut g = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
-    if g.len() > 4000 {
-        g.retain(|_, v| Arc::strong_count(v) > 1);
-    }
-    g.entry(prefix.to_path_buf()).or_default().clone()
-}
-
-async fn ensure_sprite(m: &Manager, c: &crate::manager::CameraRuntime, kind: &str, name: &str) -> anyhow::Result<(PathBuf, ffmpeg::SpriteInfo)> {
-    let src = media_path(c, kind, name)?;
-    let dir = src.parent().unwrap().join(".thumbs");
-    let prefix = dir.join(format!("{name}.sprite"));
-    let first = dir.join(format!("{name}.sprite-000.jpg"));
-    let meta = dir.join(format!("{name}.sprite.json"));
-    // Previews from before pictures were stored in their own shape are made again.
-    let every = m.config().storage.timelapse_seconds;
-    let load = || -> Option<ffmpeg::SpriteInfo> { sprite_meta_current(&meta, every).then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()).flatten() };
-    // The quick answer (already made) is looked up off the web server's
-    // threads: on a network drive each look at a file is a trip to the NAS.
-    let (ready, growing) = {
-        let (first, src, meta) = (first.clone(), src.clone(), meta.clone());
-        tokio::task::spawn_blocking(move || {
-            let load = || -> Option<ffmpeg::SpriteInfo> { sprite_meta_current(&meta, every).then(|| serde_json::from_slice(&std::fs::read(&meta).ok()?).ok()).flatten() };
-            if fresh(&first, &src)
-                && let Some(i) = load()
-            {
-                return (Some(i), false);
-            }
-            // The file still being recorded: show the preview made a minute
-            // or two ago straight away; the background job keeps it up to date.
-            let growing = std::fs::metadata(&src).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(120));
-            (if growing { load() } else { None }, growing)
-        })
-        .await
-        .unwrap_or((None, false))
-    };
-    if let Some(i) = ready {
-        return Ok((prefix, i));
-    }
-    // One build at a time for this file: a page and the background job asking for the same preview at once
-    // used to write into the same folder at the same time. The second one finds it made.
-    let file_lock = sprite_lock(&prefix);
-    let _one = file_lock.lock().await;
-    let _p = THUMB_JOBS.acquire().await;
-    // Made while waiting (another request for the same file), or a growing
-    // file's preview refreshed in the last few seconds: use that.
-    let just_made = std::fs::metadata(&meta).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(20));
-    if (fresh(&first, &src) || (growing && just_made))
-        && let Some(i) = load()
-    {
-        return Ok((prefix, i));
-    }
-    std::fs::create_dir_all(&dir)?;
-    // Made under a temporary name and then moved into place page by page,
-    // so the older preview keeps working while this one is made (a page
-    // holds the same moments in the same places, only more of them).
-    let before = load();
-    let staging = dir.join(format!("{name}.sprite-new"));
-    let page = |p: &std::path::Path, n: u32| PathBuf::from(format!("{}-{n:03}.jpg", p.display()));
-    let cfg = m.config();
-    let hw = ffmpeg::decode_args(&cfg.hardware, false);
-    // Put together from the pictures kept as it was recorded (no decoding;
-    // see picturelog); otherwise from the file.
-    let from_log = match (kind, storage::parse_start(name)) {
-        ("rec" | "tl", Some(start)) => {
-            let end = std::fs::metadata(&src).and_then(|x| x.modified()).ok().map(DateTime::<Local>::from);
-            let aspect = match before.as_ref().filter(|b| b.aspect > 0.0) {
-                Some(b) => b.aspect,
-                None => ffmpeg::display_aspect(&cfg.server.ffmpeg_path, &src).await.unwrap_or(16.0 / 9.0),
-            };
-            let (cam_dir, staging2, every) = (c.dir.clone(), staging.clone(), cfg.storage.timelapse_seconds as f64);
-            match end {
-                Some(end) if end > start => tokio::task::spawn_blocking(move || crate::picturelog::sprite(&cam_dir, start, end, every, aspect, &staging2)).await.ok().flatten(),
-                _ => None,
-            }
-        }
-        _ => None,
-    };
-    let made = match from_log {
-        Some(i) => Ok(i),
-        None => ffmpeg::sprite(&cfg.server.ffmpeg_path, &src, &staging, cfg.storage.timelapse_seconds as f64, &hw).await,
-    };
-    let info = match (made, before) {
-        // Fewer pictures than before (the end of a file being written
-        // couldn't be read this time), or none at all: keep the older one.
-        (Ok(i), Some(b)) if b.count > i.count => {
-            for n in 0..i.pages {
-                let _ = std::fs::remove_file(page(&staging, n));
-            }
-            return Ok((prefix, b));
-        }
-        (Err(_), Some(b)) => return Ok((prefix, b)),
-        (Err(e), None) => return Err(e),
-        (Ok(i), _) => i,
-    };
-    for n in 0..info.pages {
-        std::fs::rename(page(&staging, n), page(&prefix, n))?;
-    }
-    // What the pages hold (how many pictures, where): without it the
-    // preview isn't known to be there, and would be made again each time.
-    std::fs::write(&meta, serde_json::to_vec(&info)?)?;
-    // Pages beyond the new end (from an older, longer version).
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        let start = format!("{name}.sprite-");
-        for e in rd.flatten() {
-            let f = e.file_name().to_string_lossy().to_string();
-            if let Some(n) = f.strip_prefix(&start).and_then(|r| r.strip_suffix(".jpg")).and_then(|n| n.parse::<u32>().ok())
-                && n >= info.pages
-            {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
-    }
-    Ok((prefix, info))
-}
-
-/// "Rebuild previews" (System → Tasks): run the job now, even if
-/// preparing previews in advance is off.
-static PREBUILD_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
-static PREBUILD_FORCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// A file's time-lapse preview is made and up to date.
-fn preview_ready(c: &crate::manager::CameraRuntime, kind: &str, name: &str, every: u32) -> bool {
-    let Ok(src) = media_path(c, kind, name) else {
-        return false;
-    };
-    let first = src.parent().unwrap().join(".thumbs").join(format!("{name}.sprite-000.jpg"));
-    let meta = first.with_file_name(format!("{name}.sprite.json"));
-    fresh(&first, &src) && sprite_meta_current(&meta, every)
-}
-
-type PreviewTodo = (Arc<crate::manager::CameraRuntime>, &'static str, String, DateTime<Local>, DateTime<Local>);
-
-/// Files between `from` and `to` whose time-lapse preview is missing or out
-/// of date, newest first: the light timeline copies, the recordings of any
-/// time without a copy (e.g. while the copy was reconnecting) and alert clips.
-fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> Vec<PreviewTodo> {
-    let mut todo: Vec<PreviewTodo> = Vec::new();
-    let now = Local::now();
-    for c in m.cameras() {
-        let copies: Vec<_> = library::timeline_recordings(&c).into_iter().filter(|r| r.end >= from && r.start < to).collect();
-        for r in &copies {
-            todo.push((c.clone(), "tl", r.name.clone(), r.start, r.end));
-        }
-        for r in library::recordings(&c).iter().filter(|r| r.end >= from && r.start < to) {
-            // Skip the file still being written (it keeps growing).
-            if (now - r.end).num_seconds() < 30 {
-                continue;
-            }
-            let covered = copies.iter().any(|t| t.start <= r.start + chrono::Duration::seconds(5) && t.end >= r.end - chrono::Duration::seconds(5));
-            if !covered {
-                todo.push((c.clone(), "rec", r.name.clone(), r.start, r.end));
-            }
-        }
-        for e in c.events.between(from, to) {
-            if let Some(clip) = e.clip {
-                todo.push((c.clone(), "clip", clip, e.start, e.end));
-            }
-        }
-    }
-    let every = m.config().storage.timelapse_seconds;
-    todo.retain(|(c, kind, name, ..)| media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name, every));
-    todo.sort_by_key(|x| std::cmp::Reverse(x.3));
-    todo
-}
-
-/// Background job: keep the time-lapse previews of the last 24 hours ready
-/// (checked every 15 seconds, files still being recorded included), and go back over all older footage every ten
-/// minutes to make any preview that's missing (GAZE was busy or off, a file
-/// couldn't be read at the time …), a batch at a time while the computer
-/// is quiet. A file that fails is tried again later (a few times).
-pub async fn prebuild_timelapse(m: Arc<Manager>) {
-    // Let the cameras connect first.
-    tokio::select! {
-        _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
-        _ = PREBUILD_NOW.notified() => {}
-    }
-    let mut announced = false;
-    // Files that failed: (tries, when).
-    let mut failed: std::collections::HashMap<String, (u32, std::time::Instant)> = std::collections::HashMap::new();
-    let mut last_sweep: Option<std::time::Instant> = None;
-    // How long between looks for older footage without a preview: short while there is a backlog to get through.
-    let mut sweep_every = std::time::Duration::from_secs(600);
-    loop {
-        let mut built = 0usize;
-        // Switched off (Settings → Recording & storage): nothing is made.
-        if !crate::picturelog::enabled() {
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
-                _ = PREBUILD_NOW.notified() => {}
-            }
-            continue;
-        }
-        let force = PREBUILD_FORCE.swap(false, std::sync::atomic::Ordering::SeqCst);
-        {
-            let now = Local::now();
-            let day_ago = now - chrono::Duration::hours(24);
-            // Not again too soon after failing: 5 minutes, then longer each
-            // time (up to 6 hours); older footage at most 3 tries.
-            let retry_ok = |failed: &std::collections::HashMap<String, (u32, std::time::Instant)>, t: &PreviewTodo, old: bool| {
-                failed
-                    .get(&format!("{}/{}", t.0.cfg.id, t.2))
-                    .is_none_or(|(n, at)| (!old || *n < 3) && at.elapsed() >= std::time::Duration::from_secs((300u64 << (*n - 1).min(6)).min(6 * 3600)))
-            };
-            let recent: Vec<PreviewTodo> = missing_previews(&m, day_ago, now + chrono::Duration::minutes(5)).into_iter().filter(|t| force || retry_ok(&failed, t, false)).collect();
-            let sweep = force || recent.is_empty() && last_sweep.is_none_or(|t| t.elapsed() >= sweep_every);
-            let mut older: Vec<PreviewTodo> = if sweep {
-                last_sweep = Some(std::time::Instant::now());
-                missing_previews(&m, now - chrono::Duration::days(3650), day_ago).into_iter().filter(|t| force || retry_ok(&failed, t, true)).collect()
-            } else {
-                Vec::new()
-            };
-            // A batch at a time: new footage shouldn't wait behind a long backlog.
-            let backlog = older.len();
-            if sweep {
-                sweep_every = std::time::Duration::from_secs(if backlog > 60 { 90 } else { 600 });
-            }
-            if !force {
-                older.truncate(60);
-            }
-            for (part, list, title) in
-                [(0, recent, "Time-lapse previews (last 24 hours)".to_string()), (1, older, format!("Time-lapse previews — catching up on older footage ({backlog} missing)"))]
-            {
-                if list.is_empty() {
-                    continue;
-                }
-                let j = crate::jobs::start("previews", &title);
-                j.total(list.len() as u64);
-                for t in list {
-                    let (c, kind, name, start, end) = &t;
-                    j.waiting();
-                    if part == 0 {
-                        // Room to spare first, but never held up for long: the
-                        // newest footage should always be ready to scrub.
-                        crate::load::wait_for_cpu(90, std::time::Duration::from_secs(60)).await;
-                    } else if !force {
-                        // Older footage only while the computer is quiet.
-                        crate::load::wait_for_cpu(82, std::time::Duration::from_secs(120)).await;
-                        if crate::load::cpu() > 94 {
-                            break;
-                        }
-                    }
-                    j.pause_point().await;
-                    // Someone watching recordings: their video comes first
-                    // (making previews reads the recordings too — on a NAS
-                    // or a hard drive both would crawl).
-                    // The newest footage (the 24 hours, and the files still being recorded) is never held up: someone
-                    // scrubbing there needs exactly those. Older footage is made at a gentler pace while someone is
-                    // watching (a pause between files, not minutes of waiting, so the backlog does get made).
-                    if part != 0 && crate::vstore::watching() {
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    }
-                    j.step(format!(
-                        "{} — {} {}–{}",
-                        c.cfg.name,
-                        match *kind {
-                            "tl" => "timeline copy",
-                            "clip" => "alert clip",
-                            _ => "recording",
-                        },
-                        if part == 0 { start.format("%H:%M:%S").to_string() } else { start.format("%d/%m %H:%M:%S").to_string() },
-                        end.format("%H:%M:%S")
-                    ));
-                    // Let people scrubbing the timeline go first — the preview
-                    // may be made for them meanwhile: then it counts as done.
-                    let every = m.config().storage.timelapse_seconds;
-                    let ready = || preview_ready(c, kind, name, every);
-                    while THUMB_JOBS.available_permits() < 3 && !ready() {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    }
-                    if ready() {
-                        built += 1;
-                        j.done_one();
-                        continue;
-                    }
-                    if !announced {
-                        tracing::info!("preparing time-lapse previews in the background");
-                        announced = true;
-                    }
-                    let key = format!("{}/{}", c.cfg.id, name);
-                    match ensure_sprite(&m, c, kind, name).await {
-                        Ok((_, info)) => {
-                            failed.remove(&key);
-                            built += 1;
-                            // The pictures just made go by in Tasks.
-                            j.preview(json!({
-                                "url": format!("media/{}/sprite/{kind}/{name}?v={}&page=0", c.cfg.id, info.version),
-                                "columns": info.columns, "count": info.count.min(info.per_page),
-                                "tile": [info.tile_width, info.tile_height], "camera": c.cfg.name,
-                                "from": start, "every": info.interval,
-                            }));
-                            j.logged(format!("{} — {}–{} ({} pictures)", c.cfg.name, start.format("%H:%M:%S"), end.format("%H:%M:%S"), info.count));
-                        }
-                        Err(e) => {
-                            let n = failed.get(&key).map(|x| x.0).unwrap_or(0) + 1;
-                            if n == 1 {
-                                tracing::debug!("time-lapse preview of {name} failed: {e:#}");
-                            }
-                            failed.insert(key, (n, std::time::Instant::now()));
-                        }
-                    }
-                    j.done_one();
-                    // Spread over time, camera after camera, so the work
-                    // never comes all at once (no CPU spikes).
-                    if part == 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                    }
-                }
-            }
-            if failed.len() > 20_000 {
-                failed.clear();
-            }
-        }
-        // (Files still growing are redone every 15 s: only worth a line
-        // when a real batch was made.)
-        if built > 4 {
-            tracing::info!("time-lapse previews ready ({built} file(s) prepared)");
-        } else if built > 0 {
-            tracing::debug!("time-lapse previews brought up to date ({built} file(s))");
-        }
-        // Every 15 s: the files being recorded keep their previews up to
-        // date as they grow (made from the pictures motion detection keeps,
-        // so it's light), instead of waiting for each file to finish.
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
-            _ = PREBUILD_NOW.notified() => {}
-        }
-    }
 }
 
 // ---------- updates ----------
@@ -4560,9 +4217,12 @@ async fn rebuild_previews(State(m): App) -> Response {
         }
     }
     tracing::info!("previews cleared ({removed} folder(s)); making them again");
-    PREBUILD_FORCE.store(true, std::sync::atomic::Ordering::SeqCst);
-    PREBUILD_NOW.notify_one();
-    Json(json!({"ok": true, "message": "Previews cleared — the last 24 hours are being made again (see Tasks)"})).into_response()
+    for c in m.cameras() {
+        let _ = std::fs::remove_dir_all(crate::scrub::dir(&c.dir));
+    }
+    crate::scrub::forget();
+    crate::scrub::rebuild_now();
+    Json(json!({"ok": true, "message": "Previews cleared — being made again, newest first (see Tasks)"})).into_response()
 }
 
 /// Delete all saved footage (for testing): every recording, timeline copy,
@@ -4668,138 +4328,34 @@ async fn whats_new() -> Response {
     Json(json!({ "version": version, "text": text })).into_response()
 }
 
-#[derive(Deserialize)]
-struct ReadyReq {
-    camera: String,
-    /// (kind, file name) of each file.
-    files: Vec<(String, String)>,
-}
-
-/// Which of these files already have their time-lapse preview made (and
-/// its details), in one go — nothing is made here. The timeline asks this
-/// when it opens, so previews made before show at once after a reload.
-async fn sprites_ready(State(m): App, user: Option<axum::Extension<CurrentUser>>, Json(r): Json<ReadyReq>) -> Response {
-    if let Some(denied) = camera_denied(&user, &r.camera) {
-        return denied;
-    }
-    if !crate::picturelog::enabled() {
-        return Json(json!({})).into_response();
-    }
-    let c = camera!(m, r.camera);
-    let every = m.config().storage.timelapse_seconds;
-    // Up to 2000 files, each a few looks at the disk: on a network drive
-    // (NAS) that took minutes one after another and held up the web server.
-    // Now off its threads, many at a time, and remembered (ready previews
-    // for 10 minutes, not-yet-ready ones for 15 seconds).
-    type Seen = HashMap<String, (Instant, Option<serde_json::Value>)>;
-    static SEEN: std::sync::LazyLock<std::sync::Mutex<Seen>> = std::sync::LazyLock::new(Default::default);
-    let out = tokio::task::spawn_blocking(move || {
-        let files: Vec<(String, String)> = r.files.into_iter().take(2000).collect();
-        let key = |k: &str, n: &str| format!("{}|{k}/{n}", c.cfg.id);
-        let mut out = serde_json::Map::new();
-        let mut todo = Vec::new();
-        {
-            let seen = SEEN.locked();
-            for (kind, name) in files {
-                match seen.get(&key(&kind, &name)) {
-                    Some((t, Some(v))) if t.elapsed() < Duration::from_secs(600) => {
-                        out.insert(format!("{kind}/{name}"), v.clone());
-                    }
-                    Some((t, None)) if t.elapsed() < Duration::from_secs(15) => {}
-                    _ => todo.push((kind, name)),
-                }
-            }
-        }
-        let check = |kind: &str, name: &str| -> Option<serde_json::Value> {
-            if !preview_ready(&c, kind, name, every) {
-                return None;
-            }
-            let src = media_path(&c, kind, name).ok()?;
-            let meta = src.parent()?.join(".thumbs").join(format!("{name}.sprite.json"));
-            let info = serde_json::from_slice::<ffmpeg::SpriteInfo>(&std::fs::read(&meta).ok()?).ok()?;
-            Some(json!({"info": info, "url": format!("media/{}/sprite/{kind}/{name}?v={}&page=", c.cfg.id, info.version)}))
-        };
-        let found: Vec<((String, String), Option<serde_json::Value>)> = std::thread::scope(|sc| {
-            let per = todo.len().div_ceil(crate::load::DISK_READERS).max(1);
-            let hs: Vec<_> = todo
-                .chunks(per)
-                .map(|ch| {
-                    sc.spawn(|| {
-                        ch.iter()
-                            .map(|(k, n)| {
-                                let _t = crate::load::disk_slot();
-                                ((k.clone(), n.clone()), check(k, n))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
-        });
-        let mut seen = SEEN.locked();
-        if seen.len() > 50_000 {
-            seen.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(600));
-        }
-        for ((kind, name), v) in found {
-            if let Some(v) = &v {
-                out.insert(format!("{kind}/{name}"), v.clone());
-            }
-            seen.insert(key(&kind, &name), (Instant::now(), v));
-        }
-        out
-    })
-    .await
-    .unwrap_or_default();
-    Json(serde_json::Value::Object(out)).into_response()
-}
-
-async fn sprite_info(State(m): App, Path((id, kind, name)): Path<(String, String, String)>) -> Response {
-    if !crate::picturelog::enabled() {
-        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
-    }
-    let c = camera!(m, id);
-    match ensure_sprite(&m, &c, &kind, &name).await {
-        Ok((_, info)) => Json(json!({
-            "info": info,
-            "url": format!("media/{id}/sprite/{kind}/{name}?v={}&page=", info.version),
-        }))
-        .into_response(),
-        Err(e) => err(StatusCode::NOT_FOUND, format!("{e:#}")),
-    }
-}
+// ---------- scrub previews (scrub.rs) ----------
 
 #[derive(Deserialize)]
-struct PageQuery {
-    #[serde(default)]
-    page: u32,
+struct ScrubQuery {
+    from: i64,
+    to: i64,
 }
 
-async fn sprite_image(State(m): App, Path((id, kind, name)): Path<(String, String, String)>, Query(q): Query<PageQuery>, req: Request) -> Response {
+/// Which hours of a camera have time-lapse pictures, and which slots of them.
+async fn scrub_hours(State(m): App, Path(id): Path<String>, Query(q): Query<ScrubQuery>) -> Response {
     if !crate::picturelog::enabled() {
-        return err(StatusCode::NOT_FOUND, "time-lapse previews are switched off");
+        return Json(json!({ "cols": crate::scrub::COLS, "per_page": crate::scrub::PER_PAGE, "hours": [] })).into_response();
     }
     let c = camera!(m, id);
-    // A page already made is served as it is (pages are only ever written
-    // over with more pictures); making previews is for the info request.
-    if let Ok(src) = media_path(&c, &kind, &name) {
-        let file = src.parent().unwrap().join(".thumbs").join(format!("{name}.sprite-{:03}.jpg", q.page));
-        if file.is_file() {
-            let mut res = serve_file(file, req, None, false).await;
-            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=86400"));
-            return res;
-        }
+    let out = tokio::task::spawn_blocking(move || crate::scrub::describe(&c.cfg.id, &c.dir, q.from, q.to)).await.unwrap_or_default();
+    Json(out).into_response()
+}
+
+/// One page of pictures (its address carries the page's version, so it is cached for good).
+async fn scrub_page(State(m): App, Path((id, h, n)): Path<(String, i64, u32)>, req: Request) -> Response {
+    let c = camera!(m, id);
+    let file = crate::scrub::page_path(&c.dir, h, n);
+    if h % crate::scrub::HOUR_MS != 0 || !file.is_file() {
+        return err(StatusCode::NOT_FOUND, "no such page");
     }
-    match ensure_sprite(&m, &c, &kind, &name).await {
-        Ok((prefix, info)) if q.page < info.pages => {
-            let file = PathBuf::from(format!("{}-{:03}.jpg", prefix.display(), q.page));
-            let mut res = serve_file(file, req, None, false).await;
-            // Pages are versioned in their URL, so they can be cached for long.
-            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=86400"));
-            res
-        }
-        Ok(_) => err(StatusCode::NOT_FOUND, "no such page"),
-        Err(e) => err(StatusCode::NOT_FOUND, format!("{e:#}")),
-    }
+    let mut res = serve_file(file, req, None, false).await;
+    res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=31536000, immutable"));
+    res
 }
 
 // ---------- live ----------
@@ -6167,7 +5723,7 @@ pub struct CurrentUser(pub Arc<crate::users::User>);
 fn camera_in_path(path: &str) -> Option<&str> {
     let mut parts = path.trim_start_matches('/').split('/');
     match (parts.next()?, parts.next()?) {
-        ("api", "cameras") | ("api", "sprite") | ("api", "hls") | ("api", "hls-file") => parts.next(),
+        ("api", "cameras") | ("api", "scrub") | ("api", "hls") | ("api", "hls-file") => parts.next(),
         ("media", id) | ("live", id) | ("snapshot", id) => Some(id),
         _ => None,
     }
@@ -6234,7 +5790,7 @@ fn allowed(role: crate::users::Role, method: &axum::http::Method, path: &str) ->
         return true;
     }
     // Changes anyone signed in may make.
-    if path.starts_with("/api/alerts/") || path == "/api/dashboard" || path == "/api/sprites-ready" || path.starts_with("/api/auth/") {
+    if path.starts_with("/api/alerts/") || path == "/api/dashboard" || path.starts_with("/api/auth/") {
         return true;
     }
     // Operators may keep evidence: make cases and add to them (deleting a
@@ -6627,18 +6183,6 @@ async fn users_delete(State(m): App, Path(name): Path<String>, user: axum::Exten
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn one_preview_is_built_by_one_request_at_a_time() {
-        let p = std::path::Path::new("/x/.thumbs/cam_2026-11-19_10-00-00.mp4.sprite");
-        let (a, b) = (sprite_lock(p), sprite_lock(p));
-        assert!(Arc::ptr_eq(&a, &b), "the same file: the same lock");
-        let guard = a.lock().await;
-        assert!(b.try_lock().is_err(), "the second request waits");
-        drop(guard);
-        assert!(b.try_lock().is_ok());
-        assert!(!Arc::ptr_eq(&a, &sprite_lock(std::path::Path::new("/x/.thumbs/other.sprite"))));
-    }
-
     #[test]
     fn status_changes_are_sent_as_small_patches_that_rebuild_the_whole() {
         use serde_json::json;
@@ -6699,7 +6243,7 @@ mod tests {
         // The sign-in check keeps a restricted account away from other cameras on all these.
         for (p, want) in [
             ("/api/cameras/front/ptz/move", "front"),
-            ("/api/sprite/front/rec/x.mp4", "front"),
+            ("/api/scrub/front", "front"),
             ("/api/hls/front/main", "front"),
             ("/api/hls-file/front/rec/x.mp4.m3u8", "front"),
             ("/media/front/rec/x.mp4", "front"),
@@ -6922,7 +6466,6 @@ mod tests {
     fn viewers_can_load_previews_but_not_settings() {
         use crate::users::Role::*;
         let post = axum::http::Method::POST;
-        assert!(allowed(Viewer, &post, "/api/sprites-ready"));
         assert!(!allowed(Viewer, &post, "/api/settings"));
         // Only an administrator may restart GAZE (recording stops while it does).
         assert!(allowed(Admin, &post, "/api/restart"));

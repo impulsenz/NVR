@@ -852,16 +852,6 @@ fn write_sprite_page(p: &std::path::Path, tiles: &[Vec<u8>], (tw, th): (u32, u32
     Ok(())
 }
 
-/// All the pages for these pictures, as `<prefix>-000.jpg` …: (pictures, pages).
-pub fn write_sprite_pages(prefix: &std::path::Path, tiles: Vec<Vec<u8>>, tile: (u32, u32)) -> Result<(u32, u32)> {
-    let mut pages = 0;
-    for chunk in tiles.chunks(SPRITE_PER_PAGE as usize) {
-        write_sprite_page(&std::path::PathBuf::from(format!("{}-{pages:03}.jpg", prefix.display())), chunk, tile)?;
-        pages += 1;
-    }
-    Ok((tiles.len() as u32, pages))
-}
-
 /// An RGB picture that is (nearly) one flat colour: nothing a camera
 /// really shows, but what a frame that couldn't be decoded turns into.
 pub fn flat_picture(rgb: &[u8]) -> bool {

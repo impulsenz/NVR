@@ -58,6 +58,7 @@ mod recorder;
 mod relay;
 mod remote;
 mod rtmp;
+mod scrub;
 mod seen;
 mod siren;
 mod smart;
@@ -415,7 +416,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     if getffmpeg::MISSING.load(std::sync::atomic::Ordering::SeqCst) {
         tokio::spawn(getffmpeg::fetch_and_use(mgr.clone()));
     }
-    tokio::spawn(web::prebuild_timelapse(mgr.clone()));
+    tokio::spawn(scrub::run(mgr.clone()));
     tokio::spawn(finalize::run(mgr.clone()));
     tokio::spawn(discover::daily(mgr.clone()));
     tokio::spawn(identify::run(mgr.clone()));

@@ -178,7 +178,7 @@ pub fn localize(v: &mut serde_json::Value, imp: &Imported) {
 pub fn localize_text(s: &str, imp: &Imported) -> String {
     let (r, l) = (crate::library::enc(&imp.remote_id), crate::library::enc(&imp.id));
     let mut out = s.to_string();
-    for p in ["media/", "api/hls-file/", "api/hls/", "api/sprite/"] {
+    for p in ["media/", "api/hls-file/", "api/hls/", "api/scrub/"] {
         out = out.replace(&format!("{p}{r}/"), &format!("{p}{l}/"));
     }
     out
