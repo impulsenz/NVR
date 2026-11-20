@@ -1,6 +1,6 @@
 # What's new in GAZE
 
-## Unreleased
+## 1.7.10 — November 2026
 - **The camera window no longer polls for sound while closed.** After a camera's settings window had been opened once, the page asked the server what the camera hears every 1½ seconds for as long as it stayed open, even on an idle system. It now asks only while the window is open on its Audio tab.
 - **Code tidy-up:** every clippy warning fixed (there are none now), one possible crash on a camera deleted while being steered, and the whole source formatted with rustfmt (one commit, so history stays readable), with a check in the quality workflow so it stays that way.
 - **The page's status comes over one stream, as changes only.** It used to ask for 23 KB every 2 seconds, and the stats bar asked again every second. The live socket now pushes the status once a second as what changed (about 1 KB), the bottom stats bar is drawn from the same stream, and the free space on the recordings drive is asked of the disk at most every 10 seconds (it was every second: a trip to the NAS each time when the recordings are on one). Pages fall back to asking for it if the stream is down.
