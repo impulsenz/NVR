@@ -1,5 +1,10 @@
 # What's new in GAZE
 
+## Unreleased
+- **Moving along the timeline is smooth, and has no end.**
+  - **Smooth:** sliding the window (dragging past the top or bottom, the wheel) used to rebuild the whole timeline, horizontal one included though it was hidden, and every alert picture, on each frame: about 25 ms a frame with 8 cameras, with the odd 70 ms. Only the visible timeline is redrawn now, once per screen frame, and alert pictures are moved instead of being recreated: a steady 16.7 ms (60 frames a second) in the same test. Speed follows the clock instead of the frame rate, and the wheel moves by how far you turned it (a touchpad no longer jumps by a fixed step for each tiny event).
+  - **No end:** the timeline only held the date filter's range (last 24 hours by default) and stopped there, or snapped back to the same hour. Moving back past its start now loads the days before it (3 times the window, at least a day, at a time) without touching the playhead, the pictures or the window, and goes on until there is no footage. The date filter shows the range that has been loaded. The zoom is only how much you see at once.
+
 ## 1.7.14 — November 2026
 - **Loading the timeline after GAZE has been idle: much lighter, and no cameras left empty.** Three causes, all in what happens the first time you open footage after a quiet spell (a refresh looked fine because everything was by then cached or indexed):
   - **The page downloaded far too many time-lapse pages in the background** (up to 160 per camera, one camera's day after another: gigabytes, competing with the videos for the browser's few connections). It now fetches at most 8 per camera and 48 in all, nearest to the playhead first, one at a time with several cameras, never while a video is loading or you are dragging; every other page is still fetched the moment scrubbing reaches it, so scrubbing is unchanged.

@@ -5486,6 +5486,7 @@ async function loadTimeline() {
     if (rec.to.getTime() < now && first) tl.T = first;
   }
   tl.zoom = +$('tl-zoom').value;
+  tl.floor = null; tl.emptySteps = 0;  // (a new range: how far back there is footage is found out again)
   centerWindow();
   // Coming back (Back after watching an alert): the same moment and window.
   if (tl.restore) { if (tl.restore.T != null) tl.T = tl.restore.T; if (tl.restore.winStart != null) tl.winStart = tl.restore.winStart; tl.restore = null; }
@@ -6120,7 +6121,7 @@ $('tl-quality').value = tl.quality;
 // is switched off).
 $('tl-quality').onchange = (e) => { tl.quality = e.target.value; store.set('tl-quality', tl.quality); drawTimeline(); tlSync(true); };
 $('tl-zoom').onchange = (e) => { tl.zoom = +e.target.value; centerWindow(); drawTimeline(); prefetchSprites(); };
-$('tl-left').onclick = () => { tl.winStart -= tl.zoom * 500; drawTimeline(); prefetchSprites(); };
+$('tl-left').onclick = () => { tl.winStart = Math.max(tlMinStart(), tl.winStart - tl.zoom * 500); drawTimeline(); prefetchSprites(); tlExtendBack(); };
 $('tl-right').onclick = () => { tl.winStart += tl.zoom * 500; drawTimeline(); prefetchSprites(); };
 // One frame back or forward on every camera (pauses playback).
 const tlStep = (n) => {
@@ -6663,6 +6664,49 @@ function markAt(e) {
   }
   return best;
 }
+// ---- Moving along the timeline without limit ----
+// The timeline's data covers rec.from … rec.to (the date filter). Moving back past
+// its start loads the days before it (a day at a time, or more when zoomed out),
+// without touching the playhead, the pictures or the window: scrolling just keeps
+// going back. It stops where two such steps in a row find no footage at all.
+const TL_BACK_MIN = 864e5;
+function tlBackChunk() { return Math.max(TL_BACK_MIN, tl.zoom * 3000); }
+// The furthest the window may go back right now: to the start of what is loaded, plus a step of the next chunk (loaded as it is approached).
+function tlMinStart() { return tl.floor != null ? tl.floor : rec.from.getTime() - tlBackChunk(); }
+let tlExtending = false;
+async function tlExtendBack() {
+  if (tlExtending || tl.floor != null || tl.winStart == null) return;
+  tlExtending = true;
+  try {
+    while (tl.floor == null && tl.winStart < rec.from.getTime() + tl.zoom * 500 && page === 'recordings') {
+      const old = rec.from.getTime(), key = tlKey(), from = new Date(old - tlBackChunk());
+      const q = new URLSearchParams({from: from.toISOString(), to: new Date(Math.max(rec.to.getTime(), Date.now())).toISOString()});
+      if (rec.cameras.size) q.set('cameras', [...rec.cameras].join(','));
+      const d = await api('api/timeline?' + q);
+      if (tlKey() !== key) return;  // the filters changed meanwhile
+      const earlier = d.some(c => c.segments.some(x => Date.parse(x.start) < old) || c.events.some(e => Date.parse(e.start) < old));
+      tl.emptySteps = earlier ? 0 : (tl.emptySteps || 0) + 1;
+      if (tl.emptySteps >= 2) { tl.floor = old; break; }
+      tl.data = d; tl.loadedAt = Date.now();
+      rec.from = from; rec.last24 = false; rec.today = false; tl.key = tlKey();
+      renderFilters(); drawTimeline(); prefetchSprites();
+    }
+  } catch (e) { /* tried again at the next move */ }
+  finally { tlExtending = false; }
+}
+// While the window slides (dragging past an edge, the wheel, ◀ ▶): drawn once per screen
+// frame, and only the part that is shown (the vertical timeline doesn't rebuild the
+// horizontal one under it, which was most of the work of each frame).
+let slideQ = 0;
+function slideDraw() {
+  if (slideQ) return;
+  slideQ = requestAnimationFrame(() => {
+    slideQ = 0;
+    const v = $('vtl');
+    if (v && !v.hidden) drawVTimeline(); else drawTimeline();
+    tlExtendBack();
+  });
+}
 // Scrubbing the timeline shows sprite previews on every camera.
 (function wireTimeline() {
   const box = $('tl');
@@ -6688,12 +6732,14 @@ function markAt(e) {
     // Up to 4× at a pointer well past the edge: about two thirds of the view
     // a second at the edge itself.
     const speed = Math.sign(out) * Math.min(Math.abs(out) / EDGE, 4);
-    const min = Math.min(tl.winStart, rec.from.getTime()), max = Math.max(tl.winStart, Date.now() - span * 0.95);
-    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.012));
+    const min = Math.min(tl.winStart, tlMinStart()), max = Math.max(tl.winStart, Date.now() - span * 0.95);
+    // (By the clock, not by frames: the same speed whatever the screen's rate, and no jump after a slow frame.)
+    const now = performance.now(), dt = Math.min(50, now - (edgeStep.t || now)); edgeStep.t = now;
+    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.00072 * dt));
     if (ws !== tl.winStart) {
       tl.winStart = ws;
       tl.T = Math.min(ws + Math.min(Math.max((lastX - r.left) / r.width, 0), 1) * span, Date.now());
-      drawTimeline(); previewSoon(); knownPreviewsSoon();
+      slideDraw(); previewSoon(); knownPreviewsSoon();
     }
     edgeRaf = requestAnimationFrame(edgeStep);
   };
@@ -6869,7 +6915,7 @@ function drawVTimeline() {
     const n = g.evs.length, gi = tl.vgroups.push({cam: g.evs[0]._cam, evs: g.evs}) - 1, e0 = g.evs[0];
     const nm = (cam(e0._cam) || {}).name || e0._cam;
     const place = g.y > 94 ? 'transform:translateY(-100%)' : g.y < 4 ? 'transform:translateY(0)' : '';
-    thumbHtml += `<div class="vevt cat-${evCat(e0)}" data-g="${gi}" style="top:${g.y}%;${place}" title="${esc(nm)} · ${n > 1 ? n + ' alerts — click to see them all' : esc(e0.labels.map(l => l.label).join(', ')) + ' · ' + fmtTime(e0.start) + ' — click to watch'}">`
+    thumbHtml += `<div class="vevt cat-${evCat(e0)}" data-g="${gi}" data-k="${esc(e0._cam + '|' + e0.id + '|' + n)}" style="top:${g.y}%;${place}" title="${esc(nm)} · ${n > 1 ? n + ' alerts — click to see them all' : esc(e0.labels.map(l => l.label).join(', ')) + ' · ' + fmtTime(e0.start) + ' — click to watch'}">`
       + `<img loading="lazy" src="media/${enc(e0._cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
     g = null;
   };
@@ -6883,11 +6929,20 @@ function drawVTimeline() {
   const sel = hasIn && hasOut ? `<div class="vsel" style="top:${pct(tl.inT)}%;height:${pct(tl.outT) - pct(tl.inT)}%;left:54px;width:${lanesW + 8}px"><div class="vh in" title="Drag to change the clip start"></div><div class="vh out" title="Drag to change the clip end"></div></div>`
     : hasIn || hasOut ? `<div class="vsel vsel1" style="top:${pct(hasIn ? tl.inT : tl.outT)}%;left:54px;width:${lanesW + 8}px"><div class="vh ${hasIn ? 'in' : 'out'}"></div></div>` : '';
   const nowP = pct(Date.now());
+  // The alert pictures already on screen are kept and moved (a new picture element for every frame of a
+  // slide flashed and had to be decoded again), instead of being rebuilt with the rest.
+  const keep = new Map([...box.querySelectorAll('.vevt[data-k]')].map(x => [x.dataset.k, x]));
   box.innerHTML = `<div class="vheads" style="height:${HEAD}px">${heads}</div>
     <div class="vbar" id="vbar" style="top:${HEAD}px"><div class="vgrid" style="left:58px;width:${lanesW}px">${grid}</div><div class="vax">${axis}</div>${laneHtml}${sel}
       <div class="vevs" style="left:${58 + lanesW + 8}px">${thumbHtml}</div>
       ${nowP >= 0 && nowP <= 100 ? `<div class="vnow" style="top:${nowP}%;width:${lanesW + 12}px" title="Now"><em>NOW</em></div>` : ''}
       <div class="vhead" id="vhead"><em></em></div><div class="vhover" id="vhover" hidden><em></em></div></div>`;
+  for (const nd of box.querySelectorAll('.vevt[data-k]')) {
+    const old = keep.get(nd.dataset.k);
+    if (!old) continue;
+    old.style.cssText = nd.style.cssText; old.dataset.g = nd.dataset.g; old.title = nd.title;
+    nd.replaceWith(old);
+  }
   box.querySelectorAll('.vlab[data-cam]').forEach(b => { b.onpointerdown = (e) => e.stopPropagation(); b.onclick = (e) => { e.stopPropagation(); tlOnlyCamera(b.dataset.cam); }; });
   paintVStrips();
   drawVHead();
@@ -6927,12 +6982,13 @@ function drawVHead() {
     const out = lastY < r.top + EDGE ? lastY - (r.top + EDGE) : lastY > r.bottom - EDGE ? lastY - (r.bottom - EDGE) : 0;
     if (!out) return;
     const speed = Math.sign(out) * Math.min(Math.abs(out) / EDGE, 4);
-    const min = Math.min(tl.winStart, rec.from.getTime()), max = Math.max(tl.winStart, Date.now() - span * 0.95);
-    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.012));
+    const min = Math.min(tl.winStart, tlMinStart()), max = Math.max(tl.winStart, Date.now() - span * 0.95);
+    const now = performance.now(), dt = Math.min(50, now - (edgeStep.t || now)); edgeStep.t = now;
+    const ws = Math.max(min, Math.min(max, tl.winStart + speed * span * 0.00072 * dt));
     if (ws !== tl.winStart) {
       tl.winStart = ws;
       tl.T = Math.min(ws + Math.min(Math.max((lastY - r.top) / r.height, 0), 1) * span, Date.now());
-      drawTimeline(); previewSoon();
+      slideDraw(); previewSoon(); knownPreviewsSoon();
     }
     raf = requestAnimationFrame(edgeStep);
   };
@@ -6981,6 +7037,7 @@ function drawVHead() {
     cancelAnimationFrame(raf); raf = 0; lastY = null;
     document.querySelectorAll('#tl-videos video').forEach(v => { v._want = null; });
     cutSpriteDownloads();
+    drawTimeline(); tlExtendBack();
     tlSync(true); if (was) tlPlay(true);
     hideSpritesWhenReady().then(() => { if (page === 'recordings' && !tl.dragging) prefetchSprites(); });
   };
@@ -6988,9 +7045,11 @@ function drawVHead() {
   // The wheel moves along the timeline.
   box.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const span = tl.zoom * 1000, max = Math.max(tl.winStart, Date.now() - span * 0.95), min = Math.min(tl.winStart, rec.from.getTime());
-    tl.winStart = Math.max(min, Math.min(max, tl.winStart + Math.sign(e.deltaY) * span * 0.12));
-    drawTimeline(); prefetchSprites();
+    const span = tl.zoom * 1000, max = Math.max(tl.winStart, Date.now() - span * 0.95), min = Math.min(tl.winStart, tlMinStart());
+    // (A touchpad sends many small wheel events: move by what was asked, not a fixed step each.)
+    const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+    tl.winStart = Math.max(min, Math.min(max, tl.winStart + Math.max(-1, Math.min(1, dy / 300)) * span * 0.12));
+    slideDraw(); clearTimeout(slideDraw.t); slideDraw.t = setTimeout(() => { drawTimeline(); prefetchSprites(); }, 160);
   }, {passive: false});
 })();
 
