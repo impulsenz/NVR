@@ -5,6 +5,7 @@
 //! - Follow: when the AI finds a person (or another chosen kind) off-centre,
 //!   nudge the camera towards it; when it's gone, carry on roaming, or go
 //!   back (first roam preset, or the camera's home position).
+//!
 //! While the camera moves itself, its movement isn't counted as motion.
 
 use crate::sync::MutexExt;

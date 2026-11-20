@@ -319,6 +319,7 @@ fn detect_faces(plan: &Plan, f: &Frame) -> Result<Vec<Face>> {
     Ok(keep)
 }
 
+#[allow(clippy::too_many_arguments)] // two boxes, written out
 fn iou(ax: f32, ay: f32, aw: f32, ah: f32, bx: f32, by: f32, bw: f32, bh: f32) -> f32 {
     let x0 = ax.max(bx);
     let y0 = ay.max(by);
@@ -392,7 +393,9 @@ pub fn align_face(f: &Frame, marks: &[[f32; 2]; 5]) -> Vec<u8> {
 
 /// Plate boxes (pixels, with score) — the model's output already has
 /// overlapping boxes removed: rows of (batch, x1, y1, x2, y2, class, score).
-fn detect_plates(plan: &Plan, f: &Frame) -> Result<Vec<(f32, f32, f32, f32, f32)>> {
+type PlateBox = (f32, f32, f32, f32, f32);
+
+fn detect_plates(plan: &Plan, f: &Frame) -> Result<Vec<PlateBox>> {
     const S: usize = 384;
     let (img, r) = letterbox(f, S as u32);
     let mut data = vec![0f32; 3 * S * S];
@@ -480,6 +483,15 @@ pub fn plate_matches(a: &str, b: &str) -> bool {
     prev[m] <= 1
 }
 
+/// Scale a vector to length 1.
+pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+    for x in &mut v {
+        *x /= n;
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,13 +555,4 @@ mod tests {
         assert!(cos(&a, &b) < FACE_MATCH);
         std::fs::remove_dir_all(&data).ok();
     }
-}
-
-/// Scale a vector to length 1.
-pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
-    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-    for x in &mut v {
-        *x /= n;
-    }
-    v
 }

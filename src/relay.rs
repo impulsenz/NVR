@@ -91,6 +91,7 @@ pub struct Relay {
 }
 
 impl Relay {
+    #[allow(clippy::too_many_arguments)] // built once per camera stream, from the camera's settings
     pub fn new(
         name: &str,
         stream: (&str, bool),

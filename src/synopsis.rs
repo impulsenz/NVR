@@ -264,7 +264,9 @@ const SAMPLE_EVERY: &str = "1/90:round=up";
 
 /// The empty scene for each hour of `[from, ..)` (None where no footage), and
 /// the one shown in the video: the hour with the middle brightness.
-fn backgrounds(sources: &[Source], from: DateTime<Local>, ffmpeg: &str, pr: &Progress) -> Result<(Vec<Option<Vec<u8>>>, Vec<u8>)> {
+type Scenes = (Vec<Option<Vec<u8>>>, Vec<u8>);
+
+fn backgrounds(sources: &[Source], from: DateTime<Local>, ffmpeg: &str, pr: &Progress) -> Result<Scenes> {
     let last = sources.last().map(|s| s.start + CDuration::milliseconds((s.skip * 1000.0) as i64 + (s.dur * 1000.0) as i64)).unwrap_or(from);
     let nblocks = (((last - from).num_seconds() / BLOCK_SECS) + 1).max(1) as usize;
     let mut samples: Vec<Vec<Vec<u8>>> = vec![Vec::new(); nblocks];
@@ -283,7 +285,7 @@ fn backgrounds(sources: &[Source], from: DateTime<Local>, ffmpeg: &str, pr: &Pro
             k += 90.0;
             let b = (((at - from).num_seconds() / BLOCK_SECS).max(0) as usize).min(nblocks - 1);
             seen[b] += 1;
-            if seen[b] % strides[b] != 0 {
+            if !seen[b].is_multiple_of(strides[b]) {
                 continue;
             }
             samples[b].push(buf.clone());
@@ -396,7 +398,7 @@ impl Detector {
             return None;
         }
         // The scene follows slowly (about once a second): what stops moving becomes scene.
-        if self.n % ANALYSIS_FPS as u64 == 0 {
+        if self.n.is_multiple_of(ANALYSIS_FPS as u64) {
             for (b, s) in self.bg.iter_mut().zip(&small) {
                 *b += (*s as f32 - *b) * 0.02;
             }
@@ -1262,7 +1264,7 @@ pub fn make(req: &Request, sources: &[Source], ffmpeg: &str, out: &Path, classif
             if looks >= MAX_LOOKS_TOTAL && !notes.iter().any(|n| n.starts_with("Looked")) {
                 notes.push(format!("Looked at {MAX_LOOKS_TOTAL} pictures with the AI, the most for one summary: later objects may be missing."));
             }
-            if k % 40 == 0 && pr.cancelled() {
+            if k.is_multiple_of(40) && pr.cancelled() {
                 bail!("cancelled");
             }
         }
@@ -1300,7 +1302,7 @@ pub fn make(req: &Request, sources: &[Source], ffmpeg: &str, out: &Path, classif
             None => counts.push((o.label.clone(), 1)),
         }
     }
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts.sort_by_key(|x| std::cmp::Reverse(x.1));
     let meta = Meta {
         id: req.id.clone(),
         camera: req.camera.clone(),
@@ -1891,7 +1893,7 @@ mod tests {
     #[test]
     fn objects_from_different_times_share_the_timeline_without_covering_each_other() {
         // Three people crossing at the same height at 8:00, 12:00 and 17:00 (10 s each).
-        let tubes = vec![walker(0, 10.0, 100, 0), walker(4 * 3_600_000, 10.0, 100, 0), walker(9 * 3_600_000, 10.0, 100, 0)];
+        let tubes = [walker(0, 10.0, 100, 0), walker(4 * 3_600_000, 10.0, 100, 0), walker(9 * 3_600_000, 10.0, 100, 0)];
         let foots: Vec<Vec<Foot>> = tubes.iter().map(|t| footprint(t, 1.0)).collect();
         let (starts, len) = schedule(&foots, 0.0);
         // Same place: they can't all play at once, but each starts only after the
@@ -1900,7 +1902,7 @@ mod tests {
         assert!(starts[1] > 0 && starts[2] >= starts[1], "{starts:?}");
         assert!(len < 3 * foots[0].len(), "no saving: {len}");
         // Somewhere else on the picture they can play together.
-        let tubes = vec![walker(0, 10.0, 20, 0), walker(1000, 10.0, 280, 0)];
+        let tubes = [walker(0, 10.0, 20, 0), walker(1000, 10.0, 280, 0)];
         let foots: Vec<Vec<Foot>> = tubes.iter().map(|t| footprint(t, 1.0)).collect();
         let (starts, len) = schedule(&foots, 0.0);
         assert_eq!(starts, vec![0, 0]);
@@ -1916,7 +1918,7 @@ mod tests {
         assert_eq!(starts, vec![0, 0, 0], "nothing is in the way, so they all start at once");
         assert_eq!(len, foots[0].len(), "one person's time, not three");
         // Even a later tube slots into a gap left earlier (it is not queued after the others).
-        let tubes = vec![walker(0, 10.0, 100, 0), walker(3_600_000, 10.0, 100, 0), walker(7_200_000, 10.0, 250, 0)];
+        let tubes = [walker(0, 10.0, 100, 0), walker(3_600_000, 10.0, 100, 0), walker(7_200_000, 10.0, 250, 0)];
         let foots: Vec<Vec<Foot>> = tubes.iter().map(|t| footprint(t, 1.0)).collect();
         let (starts, _) = schedule(&foots, 0.0);
         assert_eq!(starts[2], 0, "the third is elsewhere on the picture: it starts with the first: {starts:?}");

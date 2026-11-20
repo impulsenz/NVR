@@ -5,6 +5,7 @@
 //! perspective. Four spots on that floor whose place on the plan is known fix
 //! the mapping exactly (a *homography*); every other spot on the same floor
 //! follows. Points are fractions of the picture / of the plan (0..1).
+#![allow(clippy::needless_range_loop)]  // small fixed matrices: indexed loops read like the maths
 
 pub type Pt = (f64, f64);
 

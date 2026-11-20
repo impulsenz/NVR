@@ -494,29 +494,7 @@ pub async fn install() -> Result<()> {
         with(|s| s.state = "installing".into());
         let (n2, e2) = (new.clone(), exe.clone());
         let swapped = tokio::task::spawn_blocking(move || swap_in(&n2, &e2)).await?;
-        if let Err(e) = swapped {
-            // Windows said no (the program file belongs to an administrator,
-            // or to the GAZE service, e.g. it was installed or last updated
-            // by one): ask once for permission (the usual Windows prompt, on
-            // this computer's screen) and let that do the swap.
-            #[cfg(windows)]
-            {
-                info!("update: {e:#} — asking Windows for permission");
-                let args = format!("--swap-update \"{}\" \"{}\"", new.display(), exe.display());
-                let code = tokio::task::spawn_blocking(move || crate::winservice::elevate(&args, true)).await?;
-                if code == Some(0) {
-                    return anyhow::Ok(());
-                }
-                bail!(
-                    "Windows didn't let GAZE replace its own program file ({}){}. Close any other copy of GAZE and try again, \
-                     or install it by hand: download GAZE.exe from the releases page and put it in place of the old one while GAZE is stopped.",
-                    exe.display(),
-                    if code.is_none() { " and the permission prompt was refused" } else { "" }
-                );
-            }
-            #[cfg(not(windows))]
-            return Err(e);
-        }
+        swapped?;
         anyhow::Ok(())
     }
     .await;

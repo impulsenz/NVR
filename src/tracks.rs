@@ -12,6 +12,7 @@
 //!
 //! Pieces, each testable on its own: `Tracker` (one camera: looks → walks),
 //! `signature` (clothing colour), `link` (walks → journeys), `Store` (files).
+#![allow(clippy::needless_range_loop)]  // small fixed arrays (colour bands, signatures): indexed loops read like the maths
 
 use crate::plan::{Plan, Tuning};
 use crate::sync::MutexExt;
@@ -28,9 +29,6 @@ pub struct Point(pub i64, pub f32, pub f32, pub f32, pub f32);
 impl Point {
     pub fn t(&self) -> i64 {
         self.0
-    }
-    pub fn xy(&self) -> (f32, f32) {
-        (self.1, self.2)
     }
 }
 
@@ -173,7 +171,7 @@ impl Tracker {
         let mut done = self.flush(cam, t_ms, tuning);
         // Every plausible pairing, nearest first, each walk and each person used once.
         let mut pairs: Vec<(f32, usize, usize)> = Vec::new();
-        let wanted = |o: &Obs| o.score >= tuning.min_score && tuning.labels.iter().any(|l| *l == o.label);
+        let wanted = |o: &Obs| o.score >= tuning.min_score && tuning.labels.contains(&o.label);
         for (i, o) in obs.iter().enumerate().filter(|(_, o)| wanted(o)) {
             let (fx, fy) = o.foot();
             for (j, tr) in self.open.iter().enumerate().filter(|(_, tr)| tr.label == o.label) {
@@ -373,7 +371,8 @@ pub fn link(tracks: &[Track], plan: &Plan) -> Vec<Journey> {
         }
     }
     edges.sort_by(|x, y| y.0.total_cmp(&x.0));
-    let (mut next, mut prev): (Vec<Option<(usize, f32)>>, Vec<Option<usize>>) = (vec![None; placed.len()], vec![None; placed.len()]);
+    type Links = (Vec<Option<(usize, f32)>>, Vec<Option<usize>>);
+    let (mut next, mut prev): Links = (vec![None; placed.len()], vec![None; placed.len()]);
     for (s, i, j) in edges {
         if next[i].is_none() && prev[j].is_none() {
             next[i] = Some((j, s));
@@ -576,7 +575,7 @@ pub fn observe(cam: &str, now_ms: i64, frame: &crate::imgutil::Frame, found: &[c
     let Some(t) = tuning() else { return };
     let obs: Vec<Obs> = found
         .iter()
-        .filter(|d| d.score >= t.min_score && t.labels.iter().any(|l| *l == d.label))
+        .filter(|d| d.score >= t.min_score && t.labels.contains(&d.label))
         .map(|d| Obs { label: d.label.clone(), score: d.score, x: d.x, y: d.y, w: d.w, h: d.h, sig: signature(frame, d.x, d.y, d.w, d.h) })
         .collect();
     let mut all = TRACKERS.locked();
@@ -706,7 +705,7 @@ mod tests {
         let t2 = Tuning { labels: vec!["person".into(), "dog".into()], ..tuning() };
         let mut tr = Tracker::default();
         for i in 0..4 {
-            tr.update("c", 1000 * i, &[dog.clone()], &t2);
+            tr.update("c", 1000 * i, std::slice::from_ref(&dog), &t2);
         }
         assert_eq!(tr.flush("c", 99_000, &t2).len(), 1);
     }

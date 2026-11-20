@@ -496,7 +496,7 @@ async fn status_value(m: &Arc<Manager>, user: &Option<axum::Extension<CurrentUse
             .filter(|j| j.kind == "download" && j.finished.is_none())
             .map(|j| json!({"title": j.title, "done": j.done, "total": j.total}))
             .collect::<Vec<_>>(),
-        "alerts_unseen": library::unseen_count(&m),
+        "alerts_unseen": library::unseen_count(m),
         "say_phrases": m.config().tts.phrases,
         "ffmpeg_missing": crate::getffmpeg::MISSING.load(std::sync::atomic::Ordering::SeqCst),
         "storage_unreachable": crate::storage::unreachable(),
@@ -1164,6 +1164,7 @@ fn state_interval() -> u32 {
 }
 
 /// The state, if the account may see its camera.
+#[allow(clippy::result_large_err)] // the error is the answer to send
 fn state_for(m: &Manager, user: &Option<axum::Extension<CurrentUser>>, id: &str) -> Result<crate::states::State, Response> {
     let Some(s) = m.states.get(id) else {
         return Err(err(StatusCode::NOT_FOUND, "no such state"));
@@ -1501,7 +1502,7 @@ async fn all_faces(State(m): App, user: Option<axum::Extension<CurrentUser>>, Qu
     let names: std::collections::HashMap<String, String> = m.cameras().iter().map(|c| (c.cfg.id.clone(), c.cfg.name.clone())).collect();
     let mut evs = recent_events(&m, q.days.unwrap_or(30).clamp(1, 365));
     evs.retain(|e| !e.faces.is_empty() && vis.as_ref().is_none_or(|v| v.contains(&e.camera)));
-    evs.sort_by(|a, b| b.start.cmp(&a.start));
+    evs.sort_by_key(|x| std::cmp::Reverse(x.start));
     let mut out = Vec::new();
     for e in &evs {
         for (i, f) in e.faces.iter().enumerate() {
@@ -1529,7 +1530,7 @@ async fn known_seen(State(m): App, user: Option<axum::Extension<CurrentUser>>) -
     let vis = visible(&user);
     let mut evs = recent_events(&m, 30);
     evs.retain(|e| vis.as_ref().is_none_or(|v| v.contains(&e.camera)));
-    evs.sort_by(|a, b| b.start.cmp(&a.start));
+    evs.sort_by_key(|x| std::cmp::Reverse(x.start));
     let mut out: std::collections::BTreeMap<String, Vec<serde_json::Value>> = Default::default();
     for e in &evs {
         for (i, f) in e.faces.iter().enumerate() {
@@ -1971,7 +1972,8 @@ async fn import_config_inner(m: &Arc<Manager>, q: ImportQuery, body: Body, tmp: 
         }
         out.flush().await?;
     }
-    let res = async {
+    
+    async {
         // Every file in the backup except the locker's (at most 500 MB unpacked).
         let tp = tmp.to_path_buf();
         let (is_zip, files, plain) = tokio::task::spawn_blocking(move || {
@@ -2061,8 +2063,7 @@ async fn import_config_inner(m: &Arc<Manager>, q: ImportQuery, body: Body, tmp: 
         }
         anyhow::Ok((n, restart, parts.join(", ")))
     }
-    .await;
-    res
+    .await
 }
 
 // ---------- cameras ----------
@@ -2320,7 +2321,8 @@ async fn ptz_move(State(m): App, Path(id): Path<String>, Json(mv): Json<PtzMove>
     let r = async {
         let t = ptz_target(&m, &id)?;
         let cfg = m.config();
-        let p = &cfg.cameras.iter().find(|c| c.id == id).unwrap().ptz;
+        // (The camera can be deleted between the two lookups.)
+        let p = &cfg.cameras.iter().find(|c| c.id == id).ok_or_else(|| anyhow::anyhow!("camera not found"))?.ptz;
         let (sx, sy) = (
             if p.invert_pan { -1.0 } else { 1.0 },
             if p.invert_tilt { -1.0 } else { 1.0 },
@@ -3218,7 +3220,7 @@ async fn remote_footage(State(m): App, req: Request, next: Next) -> Response {
     }
     let cfg = m.config();
     let id = if by_query {
-        query.split('&').find_map(|kv| kv.strip_prefix("camera=")).map(|v| percent_decode(v)).unwrap_or_default()
+        query.split('&').find_map(|kv| kv.strip_prefix("camera=")).map(percent_decode).unwrap_or_default()
     } else {
         percent_decode(seg[at])
     };
@@ -3297,13 +3299,12 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+        if b[i] == b'%' && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
                 out.push(v);
                 i += 3;
                 continue;
             }
-        }
         out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }
@@ -3675,7 +3676,7 @@ async fn cases_list(State(m): App, user: Option<axum::Extension<CurrentUser>>) -
             c.items.retain(|i| v.contains(&i.camera));
         }
     }
-    list.sort_by(|a, b| b.created.cmp(&a.created));
+    list.sort_by_key(|x| std::cmp::Reverse(x.created));
     Json(list).into_response()
 }
 
@@ -4623,7 +4624,7 @@ fn missing_previews(m: &Manager, from: DateTime<Local>, to: DateTime<Local>) -> 
     todo.retain(|(c, kind, name, ..)| {
         media_path(c, kind, name).is_ok() && !preview_ready(c, kind, name, every)
     });
-    todo.sort_by(|a, b| b.3.cmp(&a.3));
+    todo.sort_by_key(|x| std::cmp::Reverse(x.3));
     todo
 }
 
@@ -7340,7 +7341,7 @@ mod tests {
             let mut rest = path;
             while let Some(a) = rest.find('{') {
                 sample.push_str(&rest[..a]);
-                sample.push_str("x");
+                sample.push('x');
                 rest = &rest[rest.find('}').unwrap() + 1..];
             }
             sample.push_str(rest);

@@ -150,11 +150,10 @@ fn write_settings(data: &Path, s: &Settings) {
     let dir = dir_of(data);
     let _ = std::fs::create_dir_all(&dir);
     let tmp = dir.join("settings.toml.tmp");
-    if let Ok(t) = toml::to_string_pretty(s) {
-        if std::fs::write(&tmp, t).is_ok() {
+    if let Ok(t) = toml::to_string_pretty(s)
+        && std::fs::write(&tmp, t).is_ok() {
             let _ = std::fs::rename(&tmp, dir.join("settings.toml"));
         }
-    }
 }
 
 /// Switch watching on or off (the icon's menu).

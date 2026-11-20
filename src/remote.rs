@@ -181,11 +181,10 @@ pub fn localize(v: &mut serde_json::Value, imp: &Imported) {
             }
         }
         Value::Array(a) => a.iter_mut().for_each(|x| localize(x, imp)),
-        Value::String(s) => {
-            if s.starts_with("media/") || s.starts_with("api/") || s.starts_with("/media/") {
+        Value::String(s)
+            if (s.starts_with("media/") || s.starts_with("api/") || s.starts_with("/media/")) => {
                 *s = localize_text(s, imp);
             }
-        }
         _ => {}
     }
 }

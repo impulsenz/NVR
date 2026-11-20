@@ -35,11 +35,14 @@ struct Meta {
     at: Instant,
 }
 
+/// A block of a file kept in memory, and when it was last used.
+type CachedBlock = (Arc<Vec<u8>>, Instant);
+
 #[derive(Default)]
 struct State {
     files: HashMap<PathBuf, (Arc<File>, Instant)>,
     meta: HashMap<PathBuf, Meta>,
-    blocks: HashMap<(PathBuf, u64), (Arc<Vec<u8>>, Instant)>,
+    blocks: HashMap<(PathBuf, u64), CachedBlock>,
     bytes: u64,
     reading: HashSet<(PathBuf, u64)>,
 }

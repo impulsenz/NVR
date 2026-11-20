@@ -69,7 +69,7 @@ pub fn save_dismissed(data_dir: &Path, d: &Dismissed) -> anyhow::Result<()> {
 pub fn group_faces(events: &[Event], dismissed: &Dismissed) -> Vec<FaceGroup> {
     let gone: Vec<Vec<f32>> = dismissed.faces.iter().map(|p| unpack(p)).collect();
     let mut evs: Vec<&Event> = events.iter().collect();
-    evs.sort_by(|a, b| b.start.cmp(&a.start));
+    evs.sort_by_key(|x| std::cmp::Reverse(x.start));
     let mut groups: Vec<FaceGroup> = Vec::new();
     for e in evs {
         for (i, f) in e.faces.iter().enumerate() {
@@ -113,7 +113,7 @@ pub fn group_plates(
     known: impl Fn(&str) -> bool,
 ) -> Vec<PlateGroup> {
     let mut evs: Vec<&Event> = events.iter().collect();
-    evs.sort_by(|a, b| b.start.cmp(&a.start));
+    evs.sort_by_key(|x| std::cmp::Reverse(x.start));
     let mut groups: Vec<PlateGroup> = Vec::new();
     for e in evs {
         for p in &e.plates {

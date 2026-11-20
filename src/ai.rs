@@ -461,12 +461,9 @@ impl Ai {
         let mut s = self.status.locked();
         s.requests += 1;
         s.last_ms = Some(t.elapsed().as_millis() as u64);
-        match &res {
-            Err(AiError::Failed(e)) => {
-                s.failures += 1;
-                s.error = Some(format!("{e:#}"));
-            }
-            _ => {}
+        if let Err(AiError::Failed(e)) = &res {
+            s.failures += 1;
+            s.error = Some(format!("{e:#}"));
         }
         res
     }

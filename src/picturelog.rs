@@ -128,16 +128,14 @@ fn pick(kept: &[(i64, PathBuf)], start: i64, end: i64, interval: f64) -> Option<
     }
     // A missing moment: the picture before it.
     let mut last = None;
-    Some(
-        out.into_iter()
+    out.into_iter()
             .map(|x| {
                 if x.is_some() {
                     last.clone_from(&x);
                 }
                 x.or_else(|| last.clone())
             })
-            .collect::<Option<Vec<_>>>()?,
-    )
+            .collect::<Option<Vec<_>>>()
 }
 
 /// Time-lapse pages for a recording, put together from the kept pictures:

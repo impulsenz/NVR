@@ -319,7 +319,7 @@ pub fn search(mgr: &Manager, q: &Query) -> Vec<Item> {
             });
         }
     }
-    items.sort_by(|a, b| b.start.cmp(&a.start));
+    items.sort_by_key(|x| std::cmp::Reverse(x.start));
     items.truncate(q.limit);
     items
 }
@@ -419,8 +419,8 @@ pub fn timeline(
         // (One listing of the folder, not a check per clip.)
         let have = storage::names_in(rt.events.dir());
         for e in &events {
-            if let (Some(clip), Some(cs)) = (&e.clip, e.clip_start) {
-                if have.contains(clip) {
+            if let (Some(clip), Some(cs)) = (&e.clip, e.clip_start)
+                && have.contains(clip) {
                     let end = e.end + CDuration::seconds(rt.cfg.detect.post_seconds as i64);
                     segments.push(Segment {
                         start: cs,
@@ -432,7 +432,6 @@ pub fn timeline(
                         archived: false,
                     });
                 }
-            }
         }
         segments.sort_by_key(|s| s.start);
         out.push(CameraTimeline {

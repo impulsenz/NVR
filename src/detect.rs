@@ -367,7 +367,7 @@ async fn hd_frame(relay: &crate::relay::Relay, ffmpeg: &str) -> anyhow::Result<F
         .and_then(|i| Some((i.width?, i.height?)))
         .map(|(w, h)| relay.rotated(w, h))
         .ok_or_else(|| anyhow::anyhow!("main stream size not known"))?;
-    let w = sw.min(1920).max(2) & !1;
+    let w = sw.clamp(2, 1920) & !1;
     let h = ((w as f32 * sh as f32 / sw.max(1) as f32).round() as u32).max(2) & !1;
     let rgb = crate::relay::grab_rgb_live(relay, ffmpeg, w, h).await?;
     Ok(Frame { width: w, height: h, rgb: Arc::new(rgb) })
@@ -1496,13 +1496,11 @@ impl Detector {
             && a.animal_seen
             && a.event.labels.is_empty()
             && a.event.items.is_empty()
-        {
-            if a.qualified {
+            && a.qualified {
                 info!(target: "event", "[{}] motion was an animal that isn't watched for: alert dropped", self.cam.name);
                 self.store.delete(&a.event.id);
                 a.qualified = false;
             }
-        }
         if !a.qualified {
             if let Some(b) = &self.buffer {
                 b.release(&a.event.id);
@@ -1904,7 +1902,7 @@ impl MotionDetector {
         }
 
         let mut objects = self.objects(&changed);
-        objects.sort_by(|a, b| b.size.cmp(&a.size));
+        objects.sort_by_key(|x| std::cmp::Reverse(x.size));
         let biggest = objects.first().map(|o| o.size).unwrap_or(0);
         objects.retain(|o| o.size >= self.s.min_object_px.max(1));
         let raw = if self.masked {

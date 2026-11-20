@@ -78,8 +78,8 @@ pub async fn run(mgr: Arc<Manager>) {
                         actions: None,
                     });
                 }
-            } else if st.state == RelayState::Connected {
-                if let Some(since) = w.since.take()
+            } else if st.state == RelayState::Connected
+                && let Some(since) = w.since.take()
                     && std::mem::take(&mut w.told)
                 {
                     out.push(Message {
@@ -92,7 +92,6 @@ pub async fn run(mgr: Arc<Manager>) {
                         actions: None,
                     });
                 }
-            }
             // Not recording while it should be (and the camera itself is fine).
             let w = not_rec.entry(c.id.clone()).or_default();
             let failing = !down

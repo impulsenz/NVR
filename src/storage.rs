@@ -339,7 +339,8 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
 
     // Alerts may be kept longer (or shorter) than ordinary recordings.
     let alert_days_for = |days: u64| if cfg.storage.alert_retention_days > 0 { cfg.storage.alert_retention_days } else { days };
-    let mut cams: Vec<(String, PathBuf, u64, f64, Option<Arc<EventStore>>)> = cfg
+    type CameraPlan = (String, PathBuf, u64, f64, Option<Arc<EventStore>>);
+    let mut cams: Vec<CameraPlan> = cfg
         .cameras
         .iter()
         .map(|c| {
@@ -552,6 +553,47 @@ fn gb(x: f64) -> u64 {
     (x * 1024.0 * 1024.0 * 1024.0) as u64
 }
 
+/// Recordings folders that can't be reached right now (a NAS that's off,
+/// or a mapped drive letter that a Windows service can't see), checked
+/// every 30 s in the background (a look at a NAS that's away can take a
+/// while, so never while answering the page).
+static UNREACHABLE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub fn unreachable() -> Vec<String> {
+    UNREACHABLE.locked().clone()
+}
+
+pub async fn watch_roots(m: std::sync::Arc<crate::manager::Manager>) {
+    loop {
+        let cfg = m.config();
+        let mut roots: Vec<PathBuf> = vec![cfg.storage.dir.clone()];
+        for c in &cfg.cameras {
+            if c.remote.is_some() {
+                continue;
+            }
+            let d = PathBuf::from(c.storage_dir.trim());
+            if !c.storage_dir.trim().is_empty() && !roots.contains(&d) {
+                roots.push(d);
+            }
+        }
+        let bad = tokio::task::spawn_blocking(move || {
+            roots
+                .into_iter()
+                .filter(|r| std::fs::read_dir(r).is_err())
+                .map(|r| r.display().to_string())
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        let was = std::mem::replace(&mut *UNREACHABLE.locked(), bad.clone());
+        for b in bad.iter().filter(|b| !was.contains(b)) {
+            tracing::warn!("the recordings folder {b} can't be reached");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    }
+
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,45 +722,4 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&other).unwrap();
     }
-}
-
-/// Recordings folders that can't be reached right now (a NAS that's off,
-/// or a mapped drive letter that a Windows service can't see), checked
-/// every 30 s in the background (a look at a NAS that's away can take a
-/// while, so never while answering the page).
-static UNREACHABLE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-
-pub fn unreachable() -> Vec<String> {
-    UNREACHABLE.locked().clone()
-}
-
-pub async fn watch_roots(m: std::sync::Arc<crate::manager::Manager>) {
-    loop {
-        let cfg = m.config();
-        let mut roots: Vec<PathBuf> = vec![cfg.storage.dir.clone()];
-        for c in &cfg.cameras {
-            if c.remote.is_some() {
-                continue;
-            }
-            let d = PathBuf::from(c.storage_dir.trim());
-            if !c.storage_dir.trim().is_empty() && !roots.contains(&d) {
-                roots.push(d);
-            }
-        }
-        let bad = tokio::task::spawn_blocking(move || {
-            roots
-                .into_iter()
-                .filter(|r| std::fs::read_dir(r).is_err())
-                .map(|r| r.display().to_string())
-                .collect::<Vec<_>>()
-        })
-        .await
-        .unwrap_or_default();
-        let was = std::mem::replace(&mut *UNREACHABLE.locked(), bad.clone());
-        for b in bad.iter().filter(|b| !was.contains(b)) {
-            tracing::warn!("the recordings folder {b} can't be reached");
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-    }
-
 }

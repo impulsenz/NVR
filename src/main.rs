@@ -480,7 +480,7 @@ async fn run(path: &std::path::Path, with_tray: bool) -> Result<()> {
     hls::init(&std::path::absolute(&mgr.data_dir).unwrap_or(mgr.data_dir.clone()));
     {
         // Saved indexes of recordings long deleted: tidied once a day.
-        let keep = mgr.config().storage.retention_days.max(30) as u64 + 30;
+        let keep = mgr.config().storage.retention_days.max(30) + 30;
         tokio::spawn(async move {
             loop {
                 let _ = tokio::task::spawn_blocking(move || hls::tidy_store(keep)).await;

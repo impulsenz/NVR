@@ -246,7 +246,6 @@ mod tests {
             y: 0.0,
             w,
             h,
-            ..Default::default()
         };
         assert_eq!(
             s.filter_at(vec![car(0.40, 0.20, 0.08)], &kinds, after, t0)
@@ -285,7 +284,6 @@ mod tests {
             y: 0.5,
             w: 0.2,
             h: 0.2,
-            ..Default::default()
         }
     }
 

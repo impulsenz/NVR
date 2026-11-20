@@ -186,7 +186,7 @@ pub fn repair_dir(dir: &Path, hours: u64) -> usize {
                 recent.push((t, p));
             }
         }
-        recent.sort_by(|a, b| b.0.cmp(&a.0));
+        recent.sort_by_key(|x| std::cmp::Reverse(x.0));
         for (_, p) in recent.into_iter().take(4) {
             if repair(&p) {
                 fixed += 1;

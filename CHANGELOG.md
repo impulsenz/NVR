@@ -1,6 +1,8 @@
 # What's new in GAZE
 
 ## Unreleased
+- **The camera window no longer polls for sound while closed.** After a camera's settings window had been opened once, the page asked the server what the camera hears every 1½ seconds for as long as it stayed open, even on an idle system. It now asks only while the window is open on its Audio tab.
+- **Code tidy-up:** every clippy warning fixed (there are none now), one possible crash on a camera deleted while being steered, and the whole source formatted with rustfmt (one commit, so history stays readable), with a check in the quality workflow so it stays that way.
 - **The page's status comes over one stream, as changes only.** It used to ask for 23 KB every 2 seconds, and the stats bar asked again every second. The live socket now pushes the status once a second as what changed (about 1 KB), the bottom stats bar is drawn from the same stream, and the free space on the recordings drive is asked of the disk at most every 10 seconds (it was every second: a trip to the NAS each time when the recordings are on one). Pages fall back to asking for it if the stream is down.
 - **The watchdog is in the title bar.** When it is installed, a small 🛡 shows it is running; if it isn't, a red "Watchdog down" button starts it when clicked. GAZE also starts it again by itself (after 45 seconds without it, three tries, two minutes apart; not if you stopped it on request), and writes all of it in the log: when it stopped, each attempt, why one failed, when it was running again.
 - **A box offers to install the watchdog** when it isn't installed (administrators, Windows): Install, No thanks, and "Don't ask me again" (remembered for every browser).

@@ -379,7 +379,7 @@ pub async fn refresh_pictures(mgr: Arc<Manager>, days: i64) {
             }
         }
     }
-    todo.sort_by(|a, b| b.1.start.cmp(&a.1.start));
+    todo.sort_by_key(|x| std::cmp::Reverse(x.1.start));
     let job = crate::jobs::start(
         "previews",
         format!("Sharper alert pictures (last {days} days)"),
@@ -672,7 +672,7 @@ pub async fn run(mgr: Arc<Manager>) {
                             .any(|b| b.label == "person" || VEHICLES.contains(&b.label.as_str()))
                     })
                     .collect();
-                todo.sort_by(|a, b| b.start.cmp(&a.start));
+                todo.sort_by_key(|x| std::cmp::Reverse(x.start));
                 todo.truncate(20);
                 if todo.is_empty() {
                     continue;

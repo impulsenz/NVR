@@ -4008,7 +4008,14 @@ function wireSoundDetect(camId) {
       : st.error ? `<span class="err">Not listening: ${esc(st.error)}</span>`
       : `Hearing now: ${st.now.map(([n, v]) => `${esc(n)} ${Math.round(v * 100)}%`).join(' · ') || '…'}${st.last_heard ? ` — last alert: <b>${esc(st.last_heard)}</b> at ${fmtTime(new Date(st.last_at))}` : ''}`;
   };
-  const tick = () => { if (!box.isConnected) return; api('api/sound').then(paint).catch(() => {}); setTimeout(tick, 1500); };
+  // Asked for only while the camera window is open on its Audio tab (it kept asking every 1½ s for as long as
+  // the page was open, once the window had been opened: the closed window's content is still on the page).
+  const tab = box.closest('[data-tab]'), dlg = $('cam-dialog');
+  const tick = () => {
+    if (!box.isConnected) return;
+    if (dlg.open && tab && !tab.hidden) api('api/sound').then(paint).catch(() => {});
+    setTimeout(tick, 1500);
+  };
   tick();
 }
 

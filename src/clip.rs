@@ -183,7 +183,7 @@ impl Clip {
         let r = f.resize(w, h);
         let (x0, y0) = ((w as usize - SIZE) / 2, (h as usize - SIZE) / 2);
         const MEAN: [f32; 3] = [0.481_454_66, 0.457_827_5, 0.408_210_73];
-        const STD: [f32; 3] = [0.268_629_54, 0.261_302_58, 0.275_777_1];
+        const STD: [f32; 3] = [0.268_629_54, 0.261_302_6, 0.275_777_1];
         let mut data = vec![0f32; 3 * SIZE * SIZE];
         for y in 0..SIZE {
             for x in 0..SIZE {
@@ -202,7 +202,7 @@ impl Clip {
     /// piece of the scene that matters can be anywhere in the picture.
     pub fn region(&self, f: &crate::imgutil::Frame) -> Result<Vec<f32>> {
         const MEAN: [f32; 3] = [0.481_454_66, 0.457_827_5, 0.408_210_73];
-        const STD: [f32; 3] = [0.268_629_54, 0.261_302_58, 0.275_777_1];
+        const STD: [f32; 3] = [0.268_629_54, 0.261_302_6, 0.275_777_1];
         let r = f.resize(SIZE as u32, SIZE as u32);
         let mut data = vec![0f32; 3 * SIZE * SIZE];
         for y in 0..SIZE {
