@@ -52,6 +52,7 @@ mod onvif_events;
 mod siren;
 mod sound;
 mod clip;
+mod describe;
 mod overview;
 mod ptz_auto;
 mod recog;

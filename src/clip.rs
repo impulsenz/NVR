@@ -318,7 +318,7 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
         for rt in mgr.cameras() {
             for e in rt.events.between(now - chrono::Duration::days(30), now - chrono::Duration::seconds(60)) {
                 if let Some(t) = &e.thumb
-                    && e.meaning.as_ref().map(|m| &m.thumb) != Some(t)
+                    && !e.meaning.as_ref().is_some_and(|m| &m.thumb == t && m.ver >= crate::events::MEANING_VERSION)
                 {
                     todo.push((rt.clone(), e.id.clone(), t.clone(), e.start));
                 }
@@ -340,9 +340,11 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
             }
             crate::load::wait_for_cpu(85, Duration::from_secs(60)).await;
             let (c2, path) = (c.clone(), rt.events.dir().join(&thumb));
-            let v = tokio::task::spawn_blocking(move || -> Result<Vec<f32>> { c2.picture(&crate::imgutil::decode_jpeg(&std::fs::read(path)?)?) }).await;
+            let (ev, cam_name) = (rt.events.get(&id), rt.cfg.name.clone());
+            let t2 = thumb.clone();
+            let v = tokio::task::spawn_blocking(move || -> Result<crate::events::Meaning> { meaning_of(&c2, &path, t2, ev.as_ref(), &cam_name) }).await;
             match v {
-                Ok(Ok(v)) => rt.events.set_meaning(&id, crate::events::Meaning { thumb, v: crate::known::pack(&v) }),
+                Ok(Ok(m)) => rt.events.set_meaning(&id, m),
                 Ok(Err(e)) => tracing::debug!("description search: {id}: {e:#}"),
                 Err(_) => {}
             }
@@ -357,24 +359,103 @@ pub async fn run(mgr: Arc<crate::manager::Manager>) {
     }
 }
 
+/// What an alert picture means: the picture as a whole, a close-up of each
+/// thing found in it (or both sides of it, which the whole-picture reading
+/// cuts off), and words for what it shows.
+fn meaning_of(c: &Clip, path: &Path, thumb: String, e: Option<&crate::events::Event>, camera: &str) -> Result<crate::events::Meaning> {
+    use crate::events::{MEANING_VERSION, Meaning, MeaningPart};
+    let frame = crate::imgutil::decode_jpeg(&std::fs::read(path)?)?;
+    let v = c.picture(&frame)?;
+    let (fw, fh) = (frame.width as f32, frame.height as f32);
+    let mut parts: Vec<MeaningPart> = Vec::new();
+    let mut crops: Vec<(String, crate::imgutil::Frame)> = Vec::new();
+    if let Some(e) = e {
+        let mut boxes: Vec<&crate::events::SeenBox> = e.boxes.iter().filter(|b| b.score >= 0.4 && b.label != "motion" && b.w > 0.0 && b.h > 0.0).collect();
+        boxes.sort_by(|a, b| (b.w * b.h).total_cmp(&(a.w * a.h)));
+        for b in boxes.into_iter().take(4) {
+            // A little around it, so it is seen in its place.
+            let (px, py) = (b.w * 0.12, b.h * 0.12);
+            let (x, y, w, h) = (((b.x - px) * fw).max(0.0), ((b.y - py) * fh).max(0.0), (b.w + 2.0 * px) * fw, (b.h + 2.0 * py) * fh);
+            if w >= 24.0 && h >= 24.0 {
+                crops.push((crate::ai::canon(&b.label).to_string(), crate::recog::crop(&frame, x, y, w, h)));
+            }
+        }
+    }
+    if crops.is_empty() {
+        crops.push(("left".into(), crate::recog::crop(&frame, 0.0, 0.0, fw * 0.45, fh)));
+        crops.push(("right".into(), crate::recog::crop(&frame, fw * 0.55, 0.0, fw * 0.45, fh)));
+    }
+    for (label, crop) in crops {
+        if let Ok(p) = c.region(&crop) {
+            parts.push(MeaningPart { label, v: crate::known::pack(&p) });
+        }
+    }
+    let d = e.map(|e| crate::describe::describe(e, &frame, camera)).unwrap_or_default();
+    Ok(Meaning { thumb, v: crate::known::pack(&v), ver: MEANING_VERSION, parts, words: d.words, text: d.text })
+}
+
 /// Plain descriptions any picture fits a little: a picture is a match when
 /// it fits the words looked for better than all of these (CLIP's raw
 /// closeness is small and much the same for every picture, so it's only
 /// meaningful compared with something).
 const NEUTRAL: [&str; 4] = ["a photo of something", "a photo of a place", "a security camera photo", "a blank picture"];
 
-/// Alerts whose picture matches `query`: (camera, alert id, how sure 0–1),
-/// best first, and how many pictures were looked at. With no clear match,
-/// the closest few (`closest` = true). Only cameras in `allowed` (None: all).
-pub async fn search(mgr: &crate::manager::Manager, allowed: Option<&[String]>, query: &str, days: i64) -> Result<(Vec<(String, String, f32)>, usize, bool)> {
+/// The picture's judgement (`share`, `clear`) adjusted by the plain facts of
+/// the question: `known` of its words are facts the description knows (red,
+/// vehicle, night …), `hit` of them are in the alert's description, `other`
+/// are not facts at all (“carrying a box”: only the picture can tell).
+fn with_words(share: f32, clear: bool, known: usize, hit: usize, other: usize) -> (f32, bool) {
+    if known == 0 {
+        return (share, clear);
+    }
+    if hit == known && other == 0 {
+        // Everything asked is a plain fact and the alert has all of it.
+        (share.max(0.6), true)
+    } else if hit == known {
+        // The facts fit; the rest is for the picture.
+        ((share * 1.5).min(0.99), clear)
+    } else if hit == 0 && other == 0 {
+        // A word that matters is nowhere in it.
+        (share * 0.3, false)
+    } else {
+        (share * (0.6 + 0.4 * hit as f32 / known as f32), clear)
+    }
+}
+
+/// One alert that matches a description.
+pub struct Hit {
+    pub camera: String,
+    pub id: String,
+    /// How sure, 0 to 1.
+    pub score: f32,
+    /// The words of its description that fit the question (red, vehicle, night …).
+    pub why: Vec<String>,
+    /// What the alert shows, as a sentence.
+    pub text: String,
+}
+
+/// Alerts that match `query`, best first, and how many were looked at. With
+/// no clear match, the closest few (`closest` = true). Only cameras in
+/// `allowed` (None: all).
+///
+/// A match is judged three ways, the best counting: the alert picture as a
+/// whole, a close-up of each thing found in it (and both sides of the
+/// picture), and the words describing it (`describe.rs`: colours, vehicle,
+/// person, night …), which settle the parts of a question that are plain
+/// facts, leaving the rest (“carrying a box”) to the pictures.
+pub async fn search(mgr: &crate::manager::Manager, allowed: Option<&[String]>, query: &str, days: i64) -> Result<(Vec<Hit>, usize, bool)> {
     let q = query.trim();
     anyhow::ensure!(!q.is_empty(), "type what you're looking for");
     anyhow::ensure!(ready(&models_dir(mgr)), "description search is still downloading its model");
     let c = model(&models_dir(mgr)).await?;
-    // CLIP matches "a photo of …" best.
-    let text = if q.to_lowercase().starts_with("a photo") { q.to_string() } else { format!("a photo of {q}") };
+    // CLIP matches "a photo of …" best; two ways of saying it, averaged.
+    let (t1, t2) = if q.to_lowercase().starts_with("a photo") { (q.to_string(), q.to_string()) } else { (format!("a photo of {q}"), format!("a security camera photo of {q}")) };
     let c2 = c.clone();
-    let w = tokio::task::spawn_blocking(move || c2.words(&text)).await??;
+    let w = tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
+        let (a, b) = (c2.words(&t1)?, c2.words(&t2)?);
+        Ok(unit(a.iter().zip(&b).map(|(x, y)| x + y).collect()))
+    })
+    .await??;
     let neutral = {
         static N: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
         let c3 = c.clone();
@@ -383,8 +464,17 @@ pub async fn search(mgr: &crate::manager::Manager, allowed: Option<&[String]>, q
             .clone()
     };
     let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    // As CLIP decides between descriptions (×100, softmax): the share the
+    // words get against the plain ones; clear when they beat every one.
+    let judge = |v: &[f32]| -> (f32, bool, f32) {
+        let q = 100.0 * dot(v, &w);
+        let others: Vec<f32> = neutral.iter().map(|n| 100.0 * dot(v, n)).collect();
+        let top = others.iter().copied().fold(q, f32::max);
+        let share = (q - top).exp() / (std::iter::once(q).chain(others.iter().copied()).map(|x| (x - top).exp()).sum::<f32>());
+        (share, others.iter().all(|&o| q > o) && share >= 0.3, q)
+    };
     let now = chrono::Local::now();
-    let mut hits = Vec::new();
+    let mut hits: Vec<(Hit, bool, f32)> = Vec::new();
     let mut looked = 0;
     for rt in mgr.cameras() {
         if allowed.is_some_and(|a| !a.contains(&rt.cfg.id)) {
@@ -393,33 +483,55 @@ pub async fn search(mgr: &crate::manager::Manager, allowed: Option<&[String]>, q
         for e in rt.events.between(now - chrono::Duration::days(days.clamp(1, 3650)), now) {
             let Some(m) = &e.meaning else { continue };
             looked += 1;
-            let v = crate::known::unpack(&m.v);
-            // As CLIP decides between descriptions (×100, softmax): the
-            // share the words get against the plain ones.
-            let q = 100.0 * dot(&v, &w);
-            let others: Vec<f32> = neutral.iter().map(|n| 100.0 * dot(&v, n)).collect();
-            let top = others.iter().copied().fold(q, f32::max);
-            let share = (q - top).exp() / (std::iter::once(q).chain(others.iter().copied()).map(|x| (x - top).exp()).sum::<f32>());
-            let clear = others.iter().all(|&o| q > o) && share >= 0.3;
-            hits.push((rt.cfg.id.clone(), e.id.clone(), share, clear, q));
+            let mut best = judge(&crate::known::unpack(&m.v));
+            for p in &m.parts {
+                let j = judge(&crate::known::unpack(&p.v));
+                if j.0 > best.0 {
+                    best = j;
+                }
+            }
+            let (mut share, mut clear, qv) = best;
+            let mut why = Vec::new();
+            if !m.words.is_empty() {
+                let (known, hit, other, matched) = crate::describe::match_terms(q, &m.words);
+                why = matched;
+                (share, clear) = with_words(share, clear, known, hit, other);
+            }
+            hits.push((Hit { camera: rt.cfg.id.clone(), id: e.id.clone(), score: share, why, text: m.text.clone() }, clear, qv));
         }
     }
-    let closest = !hits.iter().any(|h| h.3);
+    let closest = !hits.iter().any(|h| h.1);
     if closest {
         // Nothing clearly: the few that come nearest.
-        hits.sort_by(|a, b| b.4.total_cmp(&a.4));
+        hits.sort_by(|a, b| b.2.total_cmp(&a.2));
         hits.truncate(12);
     } else {
-        hits.retain(|h| h.3);
-        hits.sort_by(|a, b| b.2.total_cmp(&a.2));
+        hits.retain(|h| h.1);
+        hits.sort_by(|a, b| b.0.score.total_cmp(&a.0.score));
         hits.truncate(500);
     }
-    Ok((hits.into_iter().map(|h| (h.0, h.1, h.2)).collect(), looked, closest))
+    Ok((hits.into_iter().map(|h| h.0).collect(), looked, closest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_plain_facts_of_a_question_settle_what_the_picture_cannot() {
+        // “red car”: both facts in the alert's words: a match, however the picture reads.
+        assert_eq!(with_words(0.1, false, 2, 2, 0), (0.6, true));
+        // “white car” where it is red: not there at all, however small the doubt.
+        let (s, c) = with_words(0.5, true, 2, 1, 0);
+        assert!(s < 0.5 && c, "half of it fits: {s}");
+        let (s, c) = with_words(0.5, true, 1, 0, 0);
+        assert!(s < 0.2 && !c, "the word isn't there: {s}");
+        // “someone carrying a box”: the person fits, the box is the picture's to judge.
+        let (s, c) = with_words(0.4, true, 1, 1, 2);
+        assert!(s > 0.4 && c);
+        // Nothing the descriptions know: unchanged.
+        assert_eq!(with_words(0.4, true, 0, 0, 3), (0.4, true));
+    }
 
     #[test]
     fn splits_words_like_clip() {

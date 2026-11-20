@@ -411,12 +411,17 @@ button.save-bad { animation: savebad .6s ease; border-color: var(--red, #e74c3c)
 .ctl-lane .head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; pointer-events: none; z-index: 3; box-shadow: 0 0 4px rgba(0,0,0,.6); }
 .ctl-lane .preview { bottom: 52px; }
 .tl-row .ev { cursor: pointer; }
-/* Merged: one tall line, the footage along its bottom and big alert pictures above it */
-.tl-row.merged { height: 124px; }
+/* Merged: one tall line, the footage along its bottom and big alert pictures above it.
+   Looks like the vertical line turned on its side: the same green footage bar, the same coloured
+   alert bars on its edge, the same pictures with a coloured frame. */
+.tl-row.merged { height: 150px; }
 .tl-row.merged .label { align-self: center; display: flex; align-items: center; gap: 6px; font-weight: 600; }
-.tl-row.merged .seg { top: auto; bottom: 10px; height: 14px; }
-.tl-row.merged .ev { top: auto; bottom: 6px; height: 22px; }
-.tl-row.merged .evt { top: 6px; width: 96px; height: 54px; }
+.tl-row.merged .lane { border: 1px solid var(--border); border-radius: 6px; }
+.tl-row.merged .seg { top: auto; bottom: 12px; height: 18px; border-radius: 3px; background: linear-gradient(180deg, #3f7f56, #2d5a3a); min-width: 2px; }
+.tl-row.merged .seg.clip { background: linear-gradient(180deg, #8b6fd6, #6a4fb8); }
+.tl-row.merged .ev { top: auto; bottom: 21px; height: 9px; min-width: 3px; border-radius: 0; background: var(--evc, #f59e0b); opacity: .95; }
+.tl-row.merged .ev.cat-person { --evc: #60a5fa; } .tl-row.merged .ev.cat-vehicle { --evc: #fbbf24; } .tl-row.merged .ev.cat-animal { --evc: #34d399; } .tl-row.merged .ev.cat-package { --evc: #f472b6; } .tl-row.merged .ev.cat-motion { --evc: #f59e0b; }
+.tl-row.merged .evt { top: 8px; width: 120px; height: 68px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
 .tl-row .ev .ic { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); font-size: 15px; cursor: pointer; padding: 2px; }
 .tl-row .ev.hot { outline: 2px solid #fff; outline-offset: 1px; z-index: 3; background: rgba(167,139,250,.9); }
 .tl-row .ev.motion.hot { background: rgba(245,158,11,.9); }
@@ -1443,12 +1448,17 @@ select option, select optgroup { background-color: var(--panel); color: var(--te
 @keyframes prunesweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes prunebob { 50% { transform: translate(-50%, -62%); opacity: .6; } }
 
-/* Recordings: each camera's outline says what it shows — blue: the
-   time-lapse (scrubbing), green: the recorded video, loaded. */
-#tl-videos .surface::after { content: ''; position: absolute; inset: 0; border: 2px solid transparent; border-radius: inherit; pointer-events: none; z-index: 6; transition: border-color .25s ease, box-shadow .25s ease; }
-#tl-videos .surface.src-tl::after { border-color: #38bdf8; box-shadow: inset 0 0 10px rgba(56,189,248,.35); }
-#tl-videos .surface.src-sub::after { border-color: #45b06c; box-shadow: inset 0 0 10px rgba(69,176,108,.35); }
-#tl-videos .surface.src-hd::after { border-color: #8b6fd6; box-shadow: inset 0 0 10px rgba(139,111,214,.4); }
+/* Recordings: each camera's outline says what it shows, so it can be read at a glance —
+   blue: the time-lapse (scrubbing), green: the recorded video, purple: full quality (HD) video. */
+#tl-videos .surface { --src: transparent; --src-glow: transparent; }
+#tl-videos .surface.src-tl { --src: #0ea5e9; --src-glow: rgba(14, 165, 233, .55); }
+#tl-videos .surface.src-sub { --src: #22c55e; --src-glow: rgba(34, 197, 94, .5); }
+#tl-videos .surface.src-hd { --src: #a855f7; --src-glow: rgba(168, 85, 247, .55); }
+#tl-videos .surface::after { content: ''; position: absolute; inset: 0; border: 4px solid var(--src); border-radius: inherit; pointer-events: none; z-index: 6; box-shadow: inset 0 0 22px var(--src-glow); transition: border-color .25s ease, box-shadow .25s ease; }
+#tl-videos .surface::before { content: ''; position: absolute; left: 4px; bottom: 4px; z-index: 7; padding: 2px 9px 2px 8px; border-radius: 0 8px 0 0; background: var(--src); color: #fff; font: 700 11px/1.3 var(--font, system-ui, sans-serif); letter-spacing: .06em; pointer-events: none; opacity: 0; transition: opacity .25s ease; }
+#tl-videos .surface.src-tl::before { content: '⏩ TIME-LAPSE'; opacity: 1; }
+#tl-videos .surface.src-sub::before { content: '● RECORDED'; opacity: 1; }
+#tl-videos .surface.src-hd::before { content: '● RECORDED · HD'; opacity: 1; }
 
 /* Recordings: what each camera has loaded (a light strip over its footage)
    and, at the playhead, a moving stripe while it waits for its video. */
@@ -1898,6 +1908,9 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .heat-hours.big .hh-bars { height: 80px; }
 .heat-hours i { flex: 1; min-height: 1px; background: var(--heat-2); border-radius: 2px 2px 0 0; opacity: .8; }
 .heat-hours i.peak { background: var(--heat-5); opacity: 1; }
+.heat-hours i.has { cursor: pointer; }
+.heat-hours i.has:hover { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+.heat-review { margin-left: auto; }
 .hh-ax { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
 .heat-detail { display: grid; grid-template-columns: max-content 300px; justify-content: start; gap: 14px; align-items: start; }
 .heat-detail .heat-card { max-width: 100%; }
@@ -1979,3 +1992,8 @@ dialog.syn-dlg { width: min(860px, 96vw); }
 .ev-empty { text-align: center; padding: 34px 16px; }
 .ev-empty-ic { font-size: 40px; }
 @media (max-width: 900px) { .ev-layout { grid-template-columns: minmax(0, 1fr); } .ev-side { position: static; max-height: 240px; } }
+
+/* Alert cards: what GAZE sees in the alert, in words (description search) */
+.rc-desc { padding: 6px 8px 8px; font-size: 12px; line-height: 1.35; color: var(--muted); }
+.rc-why { display: block; margin-top: 3px; }
+.rc-why i { font-style: normal; font-size: 11px; background: var(--accent2); border: 1px solid var(--accent); color: var(--text); border-radius: 9px; padding: 0 7px; margin-right: 4px; }

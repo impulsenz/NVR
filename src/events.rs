@@ -87,13 +87,35 @@ pub struct Event {
 }
 
 /// An alert picture's meaning for description search.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Meaning {
     /// The picture it's of (a newer picture is looked at again).
     pub thumb: String,
-    /// 512 numbers, packed.
+    /// 512 numbers, packed: the picture's middle (as the picture model sees it).
+    pub v: String,
+    /// How it was made: 2 adds close-ups and words; older ones are made again.
+    #[serde(default)]
+    pub ver: u32,
+    /// Close-ups of each thing found (or the two sides of the picture, which
+    /// the picture's middle leaves out), as numbers like `v`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<MeaningPart>,
+    /// What the alert shows, as words (see `describe.rs`) and as a sentence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+}
+
+/// A close-up of one thing in an alert picture.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct MeaningPart {
+    pub label: String,
     pub v: String,
 }
+
+/// Version of `Meaning` the code makes now.
+pub const MEANING_VERSION: u32 = 2;
 
 /// An alert's kinds with every vehicle kind as one "vehicle".
 fn canon_labels(e: &mut Event) {

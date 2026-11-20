@@ -5989,7 +5989,7 @@ async fn describe_search(State(m): App, user: Option<axum::Extension<CurrentUser
     match crate::clip::search(&m, vis.as_deref(), &q.q, q.days.unwrap_or(30)).await {
         Ok((hits, looked, closest)) => Json(json!({
             "closest": closest,
-            "hits": hits.iter().map(|(c, id, s)| json!({"camera": c, "id": id, "score": s})).collect::<Vec<_>>(),
+            "hits": hits.iter().map(|h| json!({"camera": h.camera, "id": h.id, "score": h.score, "why": h.why, "text": h.text})).collect::<Vec<_>>(),
             "looked": looked,
             "waiting": crate::clip::STATUS.locked().waiting,
         }))

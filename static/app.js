@@ -1854,7 +1854,7 @@ function planMapPicker() {
 // ======================================================================
 const PAGES = ['live', 'recordings', 'heat', 'plan', 'evidence', 'system', 'settings'];
 // A notification link: #alerts?open=<camera>~<alert id> opens that alert.
-let openAlertId = null, lastNavPage = null;
+let openAlertId = null, lastNavPage = null, keepAlertFilters = false;
 function route() {
   const [h, q] = (location.hash.slice(1) || 'live').split('?');
   const want = q && new URLSearchParams(q).get('open');
@@ -1867,7 +1867,8 @@ function route() {
   page = PAGES.includes(p) ? p : 'live';
   const navPage = p0 === 'alerts' ? 'alerts' : page;
   // Coming back to Alerts from anywhere else: the filters start afresh.
-  if (navPage === 'alerts' && lastNavPage && lastNavPage !== 'alerts') resetAlertFilters();
+  if (navPage === 'alerts' && lastNavPage && lastNavPage !== 'alerts' && !keepAlertFilters) resetAlertFilters();
+  keepAlertFilters = false;
   lastNavPage = navPage;
   if (typeof wall !== 'undefined' && wall && (page !== 'live' || sub)) exitWall();
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === navPage));
@@ -2980,6 +2981,47 @@ const LAYOUTS = [
   {id: '3+', name: '3 big + small below', big: 3, make: (n) => [SLOT(0, 0, 4, 4), SLOT(4, 0, 4, 4), SLOT(8, 0, 4, 4), ...rowsOf(4, n - 3, 3)]},
   {id: '4+', name: '4 big + small below', big: 4, make: (n) => [SLOT(0, 0, 6, 6), SLOT(6, 0, 6, 6), SLOT(0, 6, 6, 6), SLOT(6, 6, 6, 6), ...rowsOf(12, n - 4, 3)]},
 ];
+// Filling the dead space. A layout's own spots keep their shape (that is what its picture promises); the
+// cameras beyond them are laid in rows that reach the full width (not a last row left half empty), with
+// pictures as near the layout's own small size as that allows; and where a layout has more spots than there
+// are cameras, the pictures beside a gap grow into it (every picture stays 16:9: a square on the grid).
+function restRows(y0, m, w0) {
+  // How m cameras split into rows of 1, 2, 3, 4 or 6 pictures (each row exactly 12 columns wide).
+  const cost = (k) => k * Math.abs(12 / k - w0) + (k === 1 ? 40 : 0) + 1;
+  const best = Array(m + 1).fill(null); best[0] = {c: 0, rows: []};
+  for (let i = 1; i <= m; i++) for (const k of [1, 2, 3, 4, 6]) if (i - k >= 0 && best[i - k]) {
+    const c = best[i - k].c + cost(k);
+    if (!best[i] || c < best[i].c) best[i] = {c, rows: [...best[i - k].rows, k]};
+  }
+  const out = []; let y = y0;
+  for (const k of (best[m] ? best[m].rows : [m]).slice().sort((a, b) => a - b)) { const w = 12 / k; for (let j = 0; j < k; j++) out.push(SLOT(j * w, y, w, w)); y += w; }
+  return out;
+}
+function growInto(spots, tall) {
+  // (One or two cameras fill the width, however tall that makes them.)
+  const H = Math.max(tall ? 12 : 0, ...spots.map(t => t.y + t.h));
+  const free = (x, y, w, h, skip) => spots.every((t, i) => i === skip || t.x + t.w <= x || x + w <= t.x || t.y + t.h <= y || y + h <= t.y);
+  for (let guard = 0, grew = true; grew && guard < 60; guard++) {
+    grew = false;
+    // The smallest first: the big ones keep their size.
+    for (const i of spots.map((_, k) => k).sort((a, b) => spots[a].w * spots[a].h - spots[b].w * spots[b].h)) {
+      const t = spots[i];
+      for (const [dx, dy] of [[0, 0], [-1, 0], [0, -1], [-1, -1]]) {
+        const x = t.x + dx, y = t.y + dy, w = t.w + 1, h = t.h + 1;
+        if (x < 0 || y < 0 || x + w > 12 || y + h > H || !free(x, y, w, h, i)) continue;
+        Object.assign(t, {x, y, w, h}); grew = true; break;
+      }
+    }
+  }
+  return spots;
+}
+function fitSpots(L, n) {
+  const own = L.make(0).length, raw = L.make(n);
+  if (n <= own) return growInto(raw.slice(0, n).map(t => ({...t})), n <= 2);
+  const mine = raw.slice(0, own).map(t => ({...t}));
+  const y0 = mine.length ? Math.max(...mine.map(t => t.y + t.h)) : 0;
+  return growInto([...mine, ...restRows(y0, n - own, (raw[own] || {w: 3}).w)]);
+}
 // The cameras in the order they fill a layout's spots: the biggest
 // pictures now first (so a camera you made big stays big), then top to
 // bottom, left to right.
@@ -3008,7 +3050,7 @@ $('dash-layouts').onclick = () => {
   // Hovering a layout shows it on the cameras behind (moving away goes back
   // to the one picked, or the one in use).
   const before = layout.map(t => ({...t}));
-  const shown = (L) => { const spots = L.make(n); return order.map((c, i) => spots[i] ? {camera: c.id, ...spots[i]} : null).filter(Boolean); };
+  const shown = (L) => { const spots = fitSpots(L, n); return order.map((c, i) => spots[i] ? {camera: c.id, ...spots[i]} : null).filter(Boolean); };
   const preview = (L) => { layout = L ? shown(L) : before.map(t => ({...t})); placeTiles(); };
   const close = () => { if (!applied) preview(null); dlg.close(); dlg.remove(); };
   let applied = false;
@@ -3033,7 +3075,7 @@ $('dash-layouts').onclick = () => {
     // The chosen cameras first, the rest in their usual order.
     const chosen = [...dlg.querySelectorAll('#lay-big select')].map(s => s.value).filter((v, i, a) => a.indexOf(v) === i);
     const seq = [...chosen.map(id => order.find(c => c.id === id)), ...order.filter(c => !chosen.includes(c.id))];
-    const spots = pick.make(n);
+    const spots = fitSpots(pick, n);
     layout = seq.map((c, i) => ({camera: c.id, ...spots[i]}));
     applied = true;
     close();
@@ -4618,6 +4660,12 @@ function renderRecordings() {
         <div class="tools">${it.download ? `<a class="btn small" href="${esc(it.download)}" title="Download" onclick="event.stopPropagation()">⇩</a>` : ''}<button type="button" class="small admin-only" data-a="del" title="Delete this alert and its clip">✕</button></div>
         <div class="play">${it.play ? '▶' : it.pending ? '⏳' : ''}</div>
         <div class="cap"><span class="l">${hdAi(it.event)}<b>${esc(it.camera_name)}</b><span class="ago" data-t="${esc(it.start)}">${cardAgo(it.start)}</span></span><span class="t">${fmtDay(it.start)}<br>${fmtTime(it.start)} · ${fmtDur(dur)}</span></div></div>`;
+    // What the alert shows, in words (the same words the description search reads), and, in a search,
+    // which of them fit what was asked.
+    {
+      const mm = it.event && it.event.meaning, hit = rec.describe && it.event && rec.describe.hits.find(h => h.id === it.event.id);
+      if ((mm && mm.text) || hit) card.insertAdjacentHTML('beforeend', `<div class="rc-desc" title="What GAZE sees in this alert. Search finds alerts by these words and by the picture.">${mm && mm.text ? esc(mm.text) : ''}${hit && hit.why && hit.why.length ? `<span class="rc-why">${hit.why.map(w => `<i>${esc(w)}</i>`).join('')}</span>` : ''}</div>`);
+    }
     card.title = `${it.camera_name} — ${fmtDate(it.start)}${it.size ? ' — ' + fmtBytes(it.size) : ''}${it.event && it.event.notes && it.event.notes.length ? '\n' + it.event.notes.join('\n') : ''}`;
     card.onclick = () => playItem(it, card);
     card.querySelector('[data-a=del]').onclick = async (e) => {
@@ -6016,7 +6064,7 @@ function drawTimeline() {
       const st = cam(c.camera); if (st && st.recorder && st.recorder.state === 'recording') recOn = true;
     }
     const nEv = evs.filter(e => { const t = new Date(e.start).getTime(); return t >= W0 && t <= W0 + span; }).length;
-    const lane = solidBars(pieces, 15000 / span * 100, 'div', 'seg') + evMarks(evs, pct, '', '', lanePx, tl.groups, 100);
+    const lane = solidBars(pieces, 15000 / span * 100, 'div', 'seg') + evMarks(evs, pct, '', '', lanePx, tl.groups, 126);
     rows = `<div class="tl-row merged"><span class="label"><i class="dot ${recOn ? 'on' : ''}" title="${recOn ? 'Recording' : 'Not recording'}"></i><span class="nm">All cameras</span>${nEv ? `<span class="n" title="Alerts in view">${nEv}</span>` : ''}</span><div class="lanes"><div class="lane"><div class="tl-grid">${grid}</div>${lane}<div class="tl-buf"></div></div></div></div>`;
   }
   for (const c of mergedNow ? [] : shownCams) {
@@ -10505,12 +10553,27 @@ function fitHeatDetail() {
   if (side) side.style.maxHeight = (room + head.offsetHeight) + 'px';
 }
 window.addEventListener('resize', () => { if (page === 'heat') fitHeatDetail(); });
+// The Alerts page for what the heat map shows: this camera, this kind of thing, the period chosen, and
+// (for a bar) that hour of the day.
+function heatToAlerts(camId, hour) {
+  const k = heat.kind;
+  const types = k === 'people' ? ['person'] : k === 'vehicles' ? ['vehicle'] : k === 'pets' ? ['dog', 'cat'] : k === 'objects' ? ['person', 'vehicle', 'dog', 'cat'] : k.startsWith('label:') ? [k.slice(6)] : [];   // motion: every kind
+  const p2 = (n) => String(n).padStart(2, '0');
+  Object.assign(rec, {cameras: new Set([camId]), types: new Set(types), seen: '', who: '', backView: null, prevCameras: null, today: false,
+    todFrom: hour == null ? '' : p2(hour) + ':00', todTo: hour == null ? '' : p2(hour) + ':59'});
+  if (heat.days <= 1) { rec.from = last24From(); rec.last24 = true; }
+  else { const f = new Date(); f.setHours(0, 0, 0, 0); rec.from = new Date(f.getTime() - (heat.days - 1) * 864e5); rec.last24 = false; }
+  rec.to = endOfDay(new Date());
+  keepAlertFilters = true;
+  location.hash = '#alerts';
+}
 const heatHour = (h) => String(h).padStart(2, '0') + ':00';
 // 24 bars, one per hour of the day, for the kind shown (the busiest one marked).
-function heatHours(hourly, big) {
+function heatHours(hourly, big, camId) {
   const mx = Math.max(1, ...hourly), peak = hourly.indexOf(Math.max(...hourly));
-  const bars = hourly.map((v, h) => `<i class="${v && h === peak ? 'peak' : ''}" style="height:${v ? Math.max(4, Math.round(v / mx * 100)) : 0}%" title="${heatHour(h)}–${heatHour((h + 1) % 24)}: ${v.toLocaleString()}"></i>`).join('');
-  return `<div class="heat-hours ${big ? 'big' : ''}"><div class="hh-bars">${bars}</div><div class="hh-ax"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div></div>`;
+  // A bar with something in it can be clicked: the alerts of that hour of the day, for this camera and kind, open for review.
+  const bars = hourly.map((v, h) => `<i class="${v && h === peak ? 'peak' : ''} ${v ? 'has' : ''}" ${v ? `data-h="${h}"` : ''} style="height:${v ? Math.max(4, Math.round(v / mx * 100)) : 0}%" title="${heatHour(h)}–${heatHour((h + 1) % 24)}: ${v.toLocaleString()}${v ? ' — click to review these alerts' : ''}"></i>`).join('');
+  return `<div class="heat-hours ${big ? 'big' : ''}" data-cam="${esc(camId || '')}"><div class="hh-bars">${bars}</div><div class="hh-ax"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div></div>`;
 }
 function renderHeat() {
   const root = $('heat-root'), d = heat.data; if (!root || !d) return;
@@ -10541,14 +10604,14 @@ function renderHeat() {
   const card = (c) => `<article class="heat-card ${c.heat.detections ? '' : 'quiet'}" data-cam="${esc(c.camera)}">
       <div class="heat-head"><b>${esc(c.name)}</b><span class="spacer"></span>${actions(c)}</div>
       ${stage(c)}
-      <div class="heat-foot"><div class="heat-stats">${stat(c)}</div>${c.heat.detections ? heatHours(c.heat.hourly) : ''}</div>
+      <div class="heat-foot"><div class="heat-stats">${stat(c)}${c.heat.detections ? `<button type="button" class="small heat-review" data-cam="${esc(c.camera)}" title="Open the alerts behind this, to review them">Review alerts →</button>` : ''}</div>${c.heat.detections ? heatHours(c.heat.hourly, false, c.camera) : ''}</div>
     </article>`;
   const detail = (c) => {
     const h = c.heat, top = h.labels.slice(0, 10), mx = Math.max(1, ...h.counts);
     return `<div class="heat-detail"><article class="heat-card" data-cam="${esc(c.camera)}"><div class="heat-head"><b>${esc(c.name)}</b><span class="spacer"></span>${actions(c)}</div>${stage(c)}</article>
       <aside class="heat-side">
-        <div class="card"><h3>This camera</h3><div class="heat-stats col">${stat(c)}</div></div>
-        <div class="card"><h3>When it happens${tip('Detections by hour of the day, over the period chosen. The busiest hour is marked.')}</h3>${h.detections ? heatHours(h.hourly, true) : '<span class="muted small">Nothing yet.</span>'}</div>
+        <div class="card"><h3>This camera</h3><div class="heat-stats col">${stat(c)}</div>${h.detections ? `<button type="button" class="small primary heat-review" data-cam="${esc(c.camera)}" style="margin-top:8px">Review these alerts →</button>` : ''}</div>
+        <div class="card"><h3>When it happens${tip('Detections by hour of the day, over the period chosen. The busiest hour is marked.')}</h3>${h.detections ? heatHours(h.hourly, true, c.camera) : '<span class="muted small">Nothing yet.</span>'}</div>
         <div class="card"><h3>What the AI saw${tip('Every kind of object recognised in the period. Click one to see only where it was.')}</h3>${top.length ? top.map((l, i) => `<button type="button" class="heat-bar ${(one === l || heat.kind === l) ? 'on' : ''}" data-l="${esc(l)}"><span>${l === 'pets' ? '🐾 cats and dogs' : `${labelIcon(l)} ${esc(l)}`}</span><i style="width:${Math.max(3, Math.round(h.counts[i] / mx * 100))}%"></i><em>${h.counts[i].toLocaleString()}</em></button>`).join('') : '<span class="muted small">No objects recognised yet.</span>'}</div>
       </aside></div>`;
   };
@@ -10588,6 +10651,9 @@ function renderHeat() {
   root.querySelectorAll('.heat-cam').forEach(b => b.onclick = () => { const k = b.dataset.cam; heat.off.has(k) ? heat.off.delete(k) : heat.off.add(k); store.set('heat-off', [...heat.off]); renderHeat(); });
   if ($('ht-allcams')) $('ht-allcams').onclick = () => { heat.off.clear(); store.set('heat-off', []); renderHeat(); };
   root.querySelectorAll('.heat-bar').forEach(b => b.onclick = () => { heat.kind = b.dataset.l === 'pets' ? 'pets' : 'label:' + b.dataset.l; store.set('heat-kind', heat.kind); reload(); });
+  // Click a bar (an hour of the day) or "Review alerts": the Alerts page opens on just those alerts.
+  root.querySelectorAll('.heat-hours i[data-h]').forEach(b => b.onclick = (e) => { e.stopPropagation(); heatToAlerts(b.closest('.heat-hours').dataset.cam, +b.dataset.h); });
+  root.querySelectorAll('.heat-review').forEach(b => b.onclick = (e) => { e.stopPropagation(); heatToAlerts(b.dataset.cam, null); });
   root.querySelectorAll('[data-open]').forEach(el => el.onclick = () => { location.hash = '#heat/' + enc(el.dataset.open); });
   root.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openCameraDialog(b.dataset.edit));
   root.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => { await openCameraDialog(b.dataset.ign); const t = document.querySelector('#c-tabs [data-t="detection"]'); if (t) t.click(); });
