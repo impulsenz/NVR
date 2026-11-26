@@ -164,7 +164,6 @@ fn close_idle(st: &mut State) {
 }
 
 /// The file was replaced or deleted: forget what's kept of it.
-#[allow(dead_code)]
 pub fn forget(path: &Path) {
     let mut st = ST.locked();
     st.files.remove(path);

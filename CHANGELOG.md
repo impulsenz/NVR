@@ -1,6 +1,8 @@
 # What's new in GAZE
 
 ## Unreleased
+- **Playback no longer stutters while old footage is cleared or moved to deep storage.** Every deleted or moved recording used to let go of **every** open video file (so playing recordings had to open their files again, slow on a NAS) and to forget **every** remembered folder listing (so the next Recordings request read all the camera folders again: "/api/recordings took 6–14 s"). With short files (10 s) that happened about once a second. Now only that one file is let go of and taken out of its folder's list, and the cached previews of deleted files are removed in batches.
+- **Clean-up counted a folder twice** when a camera's folder was given as a full path and the default folder as a relative one (the log showed "could not delete … cannot find the file" for those): the same folder is now recognised however it is written.
 - **Recordings:** the alert pictures on the timeline load at low priority, so the camera videos get the browser's connections first.
 
 ## 1.7.25 — November 2026

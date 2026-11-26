@@ -41,17 +41,13 @@ pub fn valid_component(s: &str) -> bool {
 /// The recordings in a folder, newest first. Kept for a few seconds:
 /// reading the details of thousands of files takes a while (on Windows
 /// especially), and pages ask for them often (alerts, timelines).
+type ListCache = HashMap<PathBuf, (std::time::Instant, std::sync::Arc<Vec<Recording>>)>;
+static LIST_CACHE: std::sync::Mutex<Option<ListCache>> = std::sync::Mutex::new(None);
+
 pub fn list(dir: &Path) -> Vec<Recording> {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    type Cache = HashMap<PathBuf, (std::time::Instant, std::sync::Arc<Vec<Recording>>)>;
-    static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
     {
-        let mut c = CACHE.locked();
+        let mut c = LIST_CACHE.locked();
         let map = c.get_or_insert_with(HashMap::new);
-        if FORGET.swap(false, std::sync::atomic::Ordering::Relaxed) {
-            map.clear();
-        }
         if let Some((t, v)) = map.get(dir)
             && t.elapsed() < std::time::Duration::from_secs(5)
         {
@@ -59,7 +55,7 @@ pub fn list(dir: &Path) -> Vec<Recording> {
         }
     }
     let v = list_now(dir);
-    let mut c = CACHE.locked();
+    let mut c = LIST_CACHE.locked();
     let map = c.get_or_insert_with(HashMap::new);
     map.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(60));
     map.insert(dir.to_path_buf(), (std::time::Instant::now(), std::sync::Arc::new(v.clone())));
@@ -68,27 +64,34 @@ pub fn list(dir: &Path) -> Vec<Recording> {
 
 /// The names of the files in a folder (one listing, kept a few seconds):
 /// cheaper than checking files one by one on a network drive.
+type NamesCache = HashMap<PathBuf, (std::time::Instant, Arc<std::collections::HashSet<String>>)>;
+static NAMES_CACHE: std::sync::LazyLock<std::sync::Mutex<NamesCache>> = std::sync::LazyLock::new(Default::default);
+
 pub fn names_in(dir: &Path) -> std::sync::Arc<std::collections::HashSet<String>> {
-    use std::collections::{HashMap, HashSet};
-    use std::sync::{Arc, Mutex};
-    type Cache = HashMap<PathBuf, (std::time::Instant, Arc<HashSet<String>>)>;
-    static CACHE: std::sync::LazyLock<Mutex<Cache>> = std::sync::LazyLock::new(Default::default);
-    if let Some((t, v)) = CACHE.locked().get(dir)
+    use std::collections::HashSet;
+    if let Some((t, v)) = NAMES_CACHE.locked().get(dir)
         && t.elapsed() < std::time::Duration::from_secs(5)
     {
         return v.clone();
     }
     let v: Arc<HashSet<String>> = Arc::new(std::fs::read_dir(dir).map(|rd| rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect()).unwrap_or_default());
-    let mut c = CACHE.locked();
+    let mut c = NAMES_CACHE.locked();
     c.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(60));
     c.insert(dir.to_path_buf(), (std::time::Instant::now(), v.clone()));
     v
 }
 
-/// A recording was deleted: the folders are read afresh next time.
-static FORGET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-fn forget_lists() {
-    FORGET.store(true, std::sync::atomic::Ordering::Relaxed);
+/// A recording was deleted: it is taken out of what is remembered of its folder (the other folders, and the rest of
+/// this one, stay as they are: reading thousands of files again for every deleted one made everything slow).
+fn list_removed(dir: &Path, name: &str) {
+    if let Some((_, v)) = LIST_CACHE.locked().get_or_insert_with(HashMap::new).get_mut(dir) {
+        *v = Arc::new(v.iter().filter(|r| r.name != name).cloned().collect());
+    }
+    if let Some((_, v)) = NAMES_CACHE.locked().get_mut(dir) {
+        let mut n = (**v).clone();
+        n.remove(name);
+        *v = Arc::new(n);
+    }
 }
 
 /// The recordings in a folder, read now.
@@ -240,21 +243,46 @@ pub fn migrate_flat_files(root: &Path, camera_ids: &[String]) {
     }
 }
 
-/// Remove a recording and its cached previews.
+/// Recordings deleted lately whose cached previews are still to be removed, per folder: removed together (one look at
+/// the previews folder for many files, not one for each: a clean-up or a move to deep storage deletes hundreds).
+type PendingThumbs = (std::time::Instant, HashMap<PathBuf, std::collections::HashSet<String>>);
+static PENDING_THUMBS: std::sync::LazyLock<std::sync::Mutex<PendingThumbs>> = std::sync::LazyLock::new(|| std::sync::Mutex::new((std::time::Instant::now(), HashMap::new())));
+
+/// Remove a recording; its cached previews follow in a batch. Only this file is let go of and forgotten: players of
+/// other recordings are not disturbed (every deletion used to drop every open file and every remembered folder).
 pub fn delete_recording(dir: &Path, name: &str) -> std::io::Result<()> {
-    crate::vstore::close_all();
-    std::fs::remove_file(dir.join(name))?;
-    forget_lists();
-    // Cached preview pictures: "<name>.jpg", "<name>.sprite-000.jpg", "<name>.sprite.json", ...
-    if let Ok(rd) = std::fs::read_dir(dir.join(".thumbs")) {
-        let start = format!("{name}.");
+    let path = dir.join(name);
+    crate::vstore::forget(&path);
+    std::fs::remove_file(&path)?;
+    list_removed(dir, name);
+    let due = {
+        let mut p = PENDING_THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+        p.1.entry(dir.to_path_buf()).or_default().insert(name.to_string());
+        p.1.values().map(|v| v.len()).sum::<usize>() >= 40 || p.0.elapsed() > std::time::Duration::from_secs(20)
+    };
+    if due {
+        flush_pending_thumbs();
+    }
+    Ok(())
+}
+
+/// Remove the cached previews of the recordings deleted lately ("<name>.jpg", "<name>.sprite-000.jpg" …).
+pub fn flush_pending_thumbs() {
+    let pending = {
+        let mut p = PENDING_THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+        p.0 = std::time::Instant::now();
+        std::mem::take(&mut p.1)
+    };
+    for (dir, names) in pending {
+        let Ok(rd) = std::fs::read_dir(dir.join(".thumbs")) else { continue };
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with(&start) {
+            let f = e.file_name().to_string_lossy().to_string();
+            // The recording's name is whatever comes before one of the dots.
+            if f.match_indices('.').any(|(i, _)| names.contains(&f[..i])) {
                 let _ = std::fs::remove_file(e.path());
             }
         }
     }
-    Ok(())
 }
 
 /// Something retention may delete.
@@ -304,7 +332,12 @@ pub fn timeline_dir(camera_dir: &Path) -> PathBuf {
 }
 
 pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize {
-    crate::vstore::close_all();
+    let removed = cleanup_inner(cfg, stores);
+    flush_pending_thumbs();
+    removed
+}
+
+fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize {
     let now = Local::now();
     let mut removed = 0;
     let mut all: Vec<Candidate> = Vec::new();
@@ -325,7 +358,8 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
     if let Ok(rd) = std::fs::read_dir(&cfg.storage.dir) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir() && !cams.iter().any(|c| c.1 == p) {
+            let same = |a: &Path, b: &Path| a == b || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y);
+            if p.is_dir() && !cams.iter().any(|c| same(&c.1, &p)) {
                 let id = e.file_name().to_string_lossy().to_string();
                 cams.push((id, p, cfg.storage.retention_days, 0.0, None));
             }
@@ -673,5 +707,32 @@ mod tests {
         assert_eq!(u.used_bytes, 2 << 20);
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&other).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_recording_leaves_the_other_folders_lists_and_clears_its_previews() {
+        let base = std::env::temp_dir().join(format!("gaze-del-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (a, b) = (base.join("a"), base.join("b"));
+        for d in [&a, &b] {
+            std::fs::create_dir_all(d.join(".thumbs")).unwrap();
+            for n in 0..3 {
+                std::fs::write(d.join(format!("cam_2026-11-19_10-0{n}-00.mp4")), b"x").unwrap();
+            }
+        }
+        let gone = "cam_2026-11-19_10-01-00.mp4";
+        for f in [format!("{gone}.jpg"), format!("{gone}.sprite-000.jpg"), format!("{gone}.sprite.json"), "cam_2026-11-19_10-02-00.mp4.jpg".to_string()] {
+            std::fs::write(a.join(".thumbs").join(f), b"x").unwrap();
+        }
+        assert_eq!((list(&a).len(), list(&b).len()), (3, 3));
+        // A file of b appears on disk after it was listed: a's deletion must not make b be read again.
+        std::fs::write(b.join("cam_2026-11-19_10-09-00.mp4"), b"x").unwrap();
+        delete_recording(&a, gone).unwrap();
+        assert_eq!(list(&a).len(), 2, "the deleted one is gone from a's list");
+        assert_eq!(list(&b).len(), 3, "b's remembered list was left alone");
+        flush_pending_thumbs();
+        let left: Vec<String> = std::fs::read_dir(a.join(".thumbs")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(left, vec!["cam_2026-11-19_10-02-00.mp4.jpg".to_string()], "only the other recording's preview is left");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
