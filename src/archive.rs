@@ -43,6 +43,13 @@ pub fn due(dir: &Path, plan: &ArchivePlan, now: DateTime<Local>) -> Vec<Recordin
     storage::list(dir).into_iter().skip(1).filter(|r| r.end < cutoff && r.end < settled).collect()
 }
 
+/// Everything but the newest recording (it may still be written), settled for a minute, whatever its age: what the
+/// mover takes when the local disk needs room (see `storage::cleanup`: footage is never deleted for room before it was moved).
+pub fn due_now(dir: &Path, now: DateTime<Local>) -> Vec<Recording> {
+    let settled = now - CDuration::seconds(60);
+    storage::list(dir).into_iter().skip(1).filter(|r| r.end < settled).collect()
+}
+
 /// Copy a recording's cached previews (`.thumbs/<name>.*`) next to where the recording went, the pages
 /// first and the file that says they are complete last. Returns how many were copied.
 pub fn copy_previews(from_dir: &Path, to_dir: &Path, name: &str) -> usize {
@@ -203,10 +210,14 @@ pub async fn run(mgr: Arc<Manager>) {
             continue;
         }
         STATUS.locked().running = true;
+        let urgent = storage::take_urgent_move();
         'cams: for cam in &cfg.cameras {
             let Some(plan) = cfg.archive_for(cam) else { continue };
             let dir = cfg.camera_dir(cam);
-            let todo = due(&dir, &plan, Local::now());
+            // The local disk short of room (or the clean-up asked to hurry): move the oldest files now, whatever
+            // their age, and stop once there is room again.
+            let hurry = urgent || storage::room_needed(&cfg, &dir).is_some_and(|(free, reserve, _)| free < reserve);
+            let todo = if hurry { due_now(&dir, Local::now()) } else { due(&dir, &plan, Local::now()) };
             if todo.is_empty() {
                 continue;
             }
@@ -234,6 +245,12 @@ pub async fn run(mgr: Arc<Manager>) {
                         st.moved_files += 1;
                         st.moved_bytes += r.size;
                         st.last_error = None;
+                        drop(st);
+                        // Enough room again: the rest moves when it is due.
+                        if hurry && storage::room_needed(&cfg, &dir).is_some_and(|(free, _, target)| free >= target) {
+                            info!("[{}] deep storage: the local disk has room again", cam.name);
+                            break;
+                        }
                     }
                     Err(e) => {
                         let msg = format!("{e:#}");

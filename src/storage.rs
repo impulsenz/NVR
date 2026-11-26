@@ -298,6 +298,9 @@ struct Candidate {
     /// Part of an alert still within the alerts' keep time: kept past the
     /// recordings' own, and deleted last when space runs out.
     alert: bool,
+    /// A recording of a camera whose older footage goes to deep storage: it is only deleted for room once it has been
+    /// moved there (a move takes it off this disk; it is never deleted before).
+    needs_copy: bool,
 }
 
 impl Candidate {
@@ -340,6 +343,8 @@ pub fn cleanup(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize
 fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usize {
     let now = Local::now();
     let mut removed = 0;
+    // Footage that was kept because it has not been moved to deep storage yet, while room is needed.
+    let mut held_back = false;
     let mut all: Vec<Candidate> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
 
@@ -390,7 +395,13 @@ fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usi
             .into_iter()
             .zip(ends.into_iter().skip(1))
             .filter(|(r, end)| !locked(r.start, *end))
-            .map(|(r, end)| Candidate { start: r.start, size: r.size, alert: in_alert(r.start, end), item: Item::File { dir: dir.clone(), name: r.name } })
+            .map(|(r, end)| Candidate {
+                start: r.start,
+                size: r.size,
+                alert: in_alert(r.start, end),
+                needs_copy: archived.contains(&id),
+                item: Item::File { dir: dir.clone(), name: r.name },
+            })
             .collect();
         // The timeline copy ages out with the recordings.
         let tdir = timeline_dir(&dir);
@@ -402,6 +413,7 @@ fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usi
             start: r.start,
             size: r.size,
             alert: false,
+            needs_copy: false,
             item: Item::File { dir: tdir.clone(), name: r.name },
         }));
         if let Some(store) = &store {
@@ -411,7 +423,13 @@ fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usi
                 }
                 if let Some(clip) = &e.clip {
                     let size = std::fs::metadata(store.dir().join(clip)).map(|m| m.len()).unwrap_or(0);
-                    cands.push(Candidate { start: e.start, size, alert: alert_cutoff.is_none_or(|c| e.end >= c), item: Item::Clip { store: store.clone(), id: e.id.clone() } });
+                    cands.push(Candidate {
+                        start: e.start,
+                        size,
+                        alert: alert_cutoff.is_none_or(|c| e.end >= c),
+                        needs_copy: false,
+                        item: Item::Clip { store: store.clone(), id: e.id.clone() },
+                    });
                 }
             }
             // Alerts (pictures, details) past the alerts' keep time.
@@ -445,7 +463,10 @@ fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usi
             let mut used = camera_usage(&id, &dir).used_bytes;
             let mut rest = Vec::new();
             for c in kept {
-                if used > limit && c.delete("camera storage limit reached") {
+                if used > limit && c.needs_copy {
+                    held_back = true;
+                    rest.push(c);
+                } else if used > limit && c.delete("camera storage limit reached") {
                     used = used.saturating_sub(c.size);
                     removed += 1;
                 } else {
@@ -458,20 +479,29 @@ fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usi
     }
 
     all.sort_by_key(|c| (c.alert, c.start));
-    let mut all = all.into_iter().peekable();
-    if cfg.storage.max_storage_gb > 0.0 {
-        let limit = gb(cfg.storage.max_storage_gb);
-        let mut used: u64 = dirs.iter().map(|d| camera_usage("", d).used_bytes).sum();
-        while used > limit {
-            let Some(c) = all.next() else { break };
-            if c.delete("total storage limit reached") {
-                used = used.saturating_sub(c.size);
-                removed += 1;
+    let mut rest: Vec<Candidate> = Vec::new();
+    {
+        let mut all = all.into_iter();
+        if cfg.storage.max_storage_gb > 0.0 {
+            let limit = gb(cfg.storage.max_storage_gb);
+            let mut used: u64 = dirs.iter().map(|d| camera_usage("", d).used_bytes).sum();
+            while used > limit {
+                let Some(c) = all.next() else { break };
+                if c.needs_copy {
+                    held_back = true;
+                    rest.push(c);
+                } else if c.delete("total storage limit reached") {
+                    used = used.saturating_sub(c.size);
+                    removed += 1;
+                } else {
+                    rest.push(c);
+                }
             }
         }
+        rest.extend(all);
+        rest.sort_by_key(|c| (c.alert, c.start));
     }
     {
-        let rest: Vec<Candidate> = all.collect();
         // Check each disk the cameras use.
         let mut by_disk: HashMap<u64, Vec<&Candidate>> = HashMap::new();
         for c in &rest {
@@ -501,6 +531,28 @@ fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usi
                     break;
                 }
                 clearing = true;
+                if c.needs_copy {
+                    // Not moved to deep storage yet: never deleted for room. The mover is asked to move the oldest
+                    // files now (see `archive::run`); only when the disk is about to be completely full (recording
+                    // would stop) is the oldest footage given up, loudly.
+                    held_back = true;
+                    let emergency = gb(0.5).max(total / 400);
+                    if free.is_some_and(|f| f < emergency) {
+                        warn!(
+                            "DISK ALMOST FULL: deleting {} that was not moved to deep storage, to keep recording",
+                            dir.join(match &c.item {
+                                Item::File { name, .. } => name.as_str(),
+                                _ => "",
+                            })
+                            .display()
+                        );
+                        if c.delete("disk almost full — deep storage could not take it in time") {
+                            removed += 1;
+                            pruned(&dir);
+                        }
+                    }
+                    continue;
+                }
                 if c.delete("keeping room free on the disk") {
                     removed += 1;
                     pruned(&dir);
@@ -508,7 +560,27 @@ fn cleanup_inner(cfg: &Config, stores: &HashMap<String, Arc<EventStore>>) -> usi
             }
         }
     }
+    if held_back {
+        // Footage kept for deep storage while the disk needs room: move it now, oldest first.
+        URGENT_MOVE.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::archive::RUN_NOW.notify_one();
+    }
     removed
+}
+
+/// Set when the clean-up kept footage that deep storage still has to take in, because the disk needs room.
+static URGENT_MOVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Does the deep-storage mover have to hurry (and was told so since last asked)?
+pub fn take_urgent_move() -> bool {
+    URGENT_MOVE.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// (free bytes, bytes wanted free, bytes to reach once clearing starts) of the disk holding `dir`.
+pub fn room_needed(cfg: &Config, dir: &Path) -> Option<(u64, u64, u64)> {
+    let (free, total) = crate::sysmon::disk_space(dir)?;
+    let reserve = gb(cfg.storage.min_free_gb).max(gb(2.0)).max(total / 100);
+    Some((free, reserve, reserve + gb(1.0).max(total / 200)))
 }
 
 /// Cameras whose oldest footage was just deleted to make room (by their
@@ -734,5 +806,40 @@ mod tests {
         let left: Vec<String> = std::fs::read_dir(a.join(".thumbs")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(left, vec!["cam_2026-11-19_10-02-00.mp4.jpg".to_string()], "only the other recording's preview is left");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn footage_is_not_deleted_for_room_before_it_was_moved_to_deep_storage() {
+        let root = std::env::temp_dir().join(format!("nvr-nodel-{}", std::process::id()));
+        let deep = std::env::temp_dir().join(format!("nvr-nodel-deep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&deep);
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut cfg = Config::default();
+        cfg.storage.dir = root.clone();
+        // More free room wanted than any disk has: the disk always "needs room".
+        cfg.storage.min_free_gb = 1.0e9;
+        cfg.storage.retention_days = 0;
+        cfg.storage.archive.enabled = true;
+        cfg.storage.archive.dir = deep.clone();
+        cfg.cameras.push(CameraConfig { id: "with".into(), url: "x".into(), ..Default::default() });
+        cfg.cameras.push(CameraConfig { id: "without".into(), url: "x".into(), archive_mode: "off".into(), ..Default::default() });
+        let base = Local::now() - CDuration::hours(5);
+        for c in &cfg.cameras {
+            let d = cfg.camera_dir(c);
+            std::fs::create_dir_all(&d).unwrap();
+            for m in 0..4 {
+                let t = base + CDuration::minutes(m * 5);
+                std::fs::write(d.join(format!("{}_{}.mp4", c.id, t.format("%Y-%m-%d_%H-%M-%S"))), b"x").unwrap();
+            }
+        }
+        cleanup(&cfg, &HashMap::new());
+        let with = list(&cfg.camera_dir(&cfg.cameras[0])).len();
+        let without = list(&cfg.camera_dir(&cfg.cameras[1])).len();
+        assert_eq!(with, 4, "nothing is deleted before deep storage has it");
+        assert_eq!(without, 1, "a camera without deep storage keeps only its newest file");
+        assert!(take_urgent_move(), "the mover is asked to hurry");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&deep);
     }
 }
