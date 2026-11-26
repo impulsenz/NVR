@@ -3912,7 +3912,7 @@ function evMarks(events, pct, attrs = '', cam = '', lanePx = 800, groups = [], t
     const e0 = group.evs[0], x = group.x, n = group.evs.length, gi = groups.push({cam: e0._cam || cam, evs: group.evs}) - 1;
     const shift = x > 96 ? 'transform:translateX(-100%)' : '';
     out += `<div class="evt cat-${evCat(e0)}" data-g="${gi}" style="left:${x}%;${shift}" title="${n > 1 ? n + ' alerts — click to see them all' : esc(e0.labels.map(l => l.label).join(', ')) + ' · ' + fmtTime(e0.start) + ' — click to watch'}">`
-      + `<img loading="lazy" src="media/${enc(e0._cam || cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
+      + `<img loading="lazy" decoding="async" fetchpriority="low" src="media/${enc(e0._cam || cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
     group = null;
   };
   for (const e of events.filter(e => e.labels.length && e.thumb).sort((p, q) => new Date(p.start) - new Date(q.start))) {
@@ -7130,7 +7130,7 @@ function drawVTimeline() {
     const nm = (cam(e0._cam) || {}).name || e0._cam;
     const place = g.y > 94 ? 'transform:translateY(-100%)' : g.y < 4 ? 'transform:translateY(0)' : '';
     thumbHtml += `<div class="vevt cat-${evCat(e0)}" data-g="${gi}" data-k="${esc(e0._cam + '|' + e0.id + '|' + n)}" style="top:${g.y}%;${place}" title="${esc(nm)} · ${n > 1 ? n + ' alerts — click to see them all' : esc(e0.labels.map(l => l.label).join(', ')) + ' · ' + fmtTime(e0.start) + ' — click to watch'}">`
-      + `<img loading="lazy" src="media/${enc(e0._cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
+      + `<img loading="lazy" decoding="async" fetchpriority="low" src="media/${enc(e0._cam)}/events/${enc(e0.thumb)}" alt="">${n > 1 ? `<b class="n">${n}</b>` : `<span class="ic">${labelIcon(e0.labels[0].label)}</span>`}</div>`;
     g = null;
   };
   for (const t of thumbs) {
