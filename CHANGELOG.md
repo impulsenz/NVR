@@ -1,5 +1,8 @@
 # What's new in GAZE
 
+## Unreleased
+- **Dependency fix:** `url` 2.5.8 → 2.5.9 (advisory RUSTSEC-2026-0592, a stack overflow on nested `blob:` addresses), which made the Security workflow fail on 1.7.26. `chrono` is reported as unmaintained (a warning that is allowed, no fix exists yet).
+
 ## 1.7.26 — November 2026
 - **Footage is never deleted off the local disk before deep storage has it.** For cameras whose older footage goes to deep storage, the clean-up no longer deletes recordings for room (free-space reserve, size limits): when the disk needs room it asks the mover to **move the oldest files now**, whatever their age (copied and checked, then taken off the disk), and stops once there is room again. Only if the disk is almost completely full (under 0.5 GB or 0.25 %), because deep storage could not take the files in time (a NAS that is off, full or slow), is the oldest footage given up, with a "DISK ALMOST FULL" warning in the log, since a full disk stops recording. Cameras without deep storage behave as before.
 - **Playback no longer stutters while old footage is cleared or moved to deep storage.** Every deleted or moved recording used to let go of **every** open video file (so playing recordings had to open their files again, slow on a NAS) and to forget **every** remembered folder listing (so the next Recordings request read all the camera folders again: "/api/recordings took 6–14 s"). With short files (10 s) that happened about once a second. Now only that one file is let go of and taken out of its folder's list, and the cached previews of deleted files are removed in batches.
